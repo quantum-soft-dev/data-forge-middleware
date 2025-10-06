@@ -1,6 +1,9 @@
 package com.bitbi.dfm.contract;
 
+import com.bitbi.dfm.auth.application.TokenService;
+import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +13,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -28,11 +32,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(TestSecurityConfig.class)
+@Sql("/test-data.sql")
 @DisplayName("Batch API Contract Tests")
 class BatchContractTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private TokenService tokenService;
 
     private static final String BATCH_START_ENDPOINT = "/api/v1/batch/start";
     private static final String BATCH_UPLOAD_ENDPOINT = "/api/v1/batch/{batchId}/upload";
@@ -40,8 +48,16 @@ class BatchContractTest {
     private static final String BATCH_FAIL_ENDPOINT = "/api/v1/batch/{batchId}/fail";
     private static final String BATCH_CANCEL_ENDPOINT = "/api/v1/batch/{batchId}/cancel";
 
-    private static final String MOCK_JWT_TOKEN = "mock.jwt.token";
     private static final String MOCK_BATCH_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+    private String jwtToken;
+
+    @BeforeEach
+    void setUp() {
+        // Generate real JWT token for store-01.example.com site
+        JwtToken token = tokenService.generateToken("store-01.example.com", "valid-secret-uuid");
+        jwtToken = token.token();
+    }
 
     /**
      * Test Case 1: Start new batch should return batchId.
@@ -56,7 +72,7 @@ class BatchContractTest {
     void shouldCreateNewBatchWhenAuthenticatedClientRequests() throws Exception {
         // When: POST /api/v1/batch/start with Bearer token
         mockMvc.perform(post(BATCH_START_ENDPOINT)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN)
+                        .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 200 OK with batchId
@@ -93,7 +109,7 @@ class BatchContractTest {
     void shouldRejectBatchStartWhenActiveBatchExists() throws Exception {
         // When: POST /api/v1/batch/start (assuming active batch exists)
         mockMvc.perform(post(BATCH_START_ENDPOINT)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN)
+                        .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 409 Conflict
@@ -134,7 +150,7 @@ class BatchContractTest {
         mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, MOCK_BATCH_ID)
                         .file(file1)
                         .file(file2)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN))
+                        .header("Authorization", "Bearer " + jwtToken))
 
                 // Then: 200 OK with upload summary
                 .andExpect(status().isOk())
@@ -164,7 +180,7 @@ class BatchContractTest {
         // When: POST /api/v1/batch/{batchId}/upload
         mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, MOCK_BATCH_ID)
                         .file(duplicateFile)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN))
+                        .header("Authorization", "Bearer " + jwtToken))
 
                 // Then: 400 Bad Request
                 .andExpect(status().isBadRequest())
@@ -192,7 +208,7 @@ class BatchContractTest {
         // When: POST /api/v1/batch/{batchId}/upload with non-existent batchId
         mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, nonExistentBatchId)
                         .file(file)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN))
+                        .header("Authorization", "Bearer " + jwtToken))
 
                 // Then: 404 Not Found
                 .andExpect(status().isNotFound())
@@ -214,7 +230,7 @@ class BatchContractTest {
     void shouldCompleteBatchWhenFilesUploaded() throws Exception {
         // When: POST /api/v1/batch/{batchId}/complete
         mockMvc.perform(post(BATCH_COMPLETE_ENDPOINT, MOCK_BATCH_ID)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN)
+                        .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 200 OK with completion summary
@@ -235,7 +251,7 @@ class BatchContractTest {
     void shouldRejectCompletionWhenBatchAlreadyCompleted() throws Exception {
         // When: POST /api/v1/batch/{batchId}/complete on completed batch
         mockMvc.perform(post(BATCH_COMPLETE_ENDPOINT, MOCK_BATCH_ID)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN)
+                        .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 400 Bad Request
@@ -260,7 +276,7 @@ class BatchContractTest {
         String requestBody = "{\"reason\":\"Critical error during processing\"}";
 
         mockMvc.perform(post(BATCH_FAIL_ENDPOINT, MOCK_BATCH_ID)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN)
+                        .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
 
@@ -284,7 +300,7 @@ class BatchContractTest {
     void shouldCancelBatchWhenClientRequests() throws Exception {
         // When: POST /api/v1/batch/{batchId}/cancel
         mockMvc.perform(post(BATCH_CANCEL_ENDPOINT, MOCK_BATCH_ID)
-                        .header("Authorization", "Bearer " + MOCK_JWT_TOKEN)
+                        .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 200 OK with CANCELLED status
