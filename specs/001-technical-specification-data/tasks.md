@@ -103,8 +103,8 @@
 
 ## Phase 3.10: Application Layer - Scheduled Tasks (2 tasks)
 
-- [ ] T053 [P] Implement BatchTimeoutScheduler in batch/application/BatchTimeoutScheduler.java with @Scheduled cron (every 5 minutes) to mark expired batches as NOT_COMPLETED
-- [ ] T054 [P] Implement PartitionScheduler in error/application/PartitionScheduler.java with @Scheduled monthly task to create error_logs partitions one month in advance
+- [X] T053 [P] Implement BatchTimeoutScheduler in batch/application/BatchTimeoutScheduler.java with @Scheduled cron (every 5 minutes) to mark expired batches as NOT_COMPLETED
+- [X] T054 [P] Implement PartitionScheduler in error/application/PartitionScheduler.java with @Scheduled monthly task to create error_logs partitions one month in advance
 
 ## Phase 3.11: Presentation Layer - Controllers (6 tasks)
 
