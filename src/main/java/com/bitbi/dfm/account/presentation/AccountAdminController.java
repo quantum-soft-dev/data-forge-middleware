@@ -105,6 +105,13 @@ public class AccountAdminController {
         try {
             Account account = accountService.getAccount(accountId);
             Map<String, Object> response = createAccountResponse(account);
+
+            // Add statistics to the response
+            Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
+            response.put("sitesCount", statistics.get("sitesCount"));
+            response.put("totalBatches", statistics.get("totalBatches"));
+            response.put("totalUploadedFiles", statistics.get("totalFiles"));
+
             return ResponseEntity.ok(response);
 
         } catch (AccountService.AccountNotFoundException e) {

@@ -197,7 +197,7 @@ class AdminContractTest {
     void shouldCreateSiteWhenAdminAuthenticated() throws Exception {
         String requestBody = """
                 {
-                  "domain": "store-01.example.com",
+                  "domain": "store-101.example.com",
                   "displayName": "Store #1"
                 }
                 """;
@@ -213,7 +213,7 @@ class AdminContractTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.accountId").value(MOCK_ACCOUNT_ID))
-                .andExpect(jsonPath("$.domain").value("store-01.example.com"))
+                .andExpect(jsonPath("$.domain").value("store-101.example.com"))
                 .andExpect(jsonPath("$.displayName").value("Store #1"))
                 .andExpect(jsonPath("$.clientSecret").exists())
                 .andExpect(jsonPath("$.isActive").value(true))
