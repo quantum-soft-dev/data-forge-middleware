@@ -85,10 +85,10 @@
 
 ## Phase 3.8: Infrastructure Layer - S3 & Security (4 tasks)
 
-- [ ] T041 [P] Implement S3FileStorageService in upload/infrastructure/S3FileStorageService.java with 3-retry logic and multipart upload support
-- [ ] T042 [P] Create S3Configuration in upload/infrastructure/S3Configuration.java with LocalStack support for dev/test
-- [ ] T043 Implement JwtTokenProvider in auth/infrastructure/JwtTokenProvider.java with HMAC-SHA256 signing and claims (siteId, accountId, domain)
-- [ ] T044 Implement KeycloakSecurityConfig in auth/infrastructure/KeycloakSecurityConfig.java with SecurityFilterChain for admin endpoints (ROLE_ADMIN)
+- [X] T041 [P] Implement S3FileStorageService in upload/infrastructure/S3FileStorageService.java with 3-retry logic and multipart upload support
+- [X] T042 [P] Create S3Configuration in upload/infrastructure/S3Configuration.java with LocalStack support for dev/test
+- [X] T043 Implement JwtTokenProvider in auth/infrastructure/JwtTokenProvider.java with HMAC-SHA256 signing and claims (siteId, accountId, domain)
+- [X] T044 Implement KeycloakSecurityConfig in auth/infrastructure/KeycloakSecurityConfig.java with SecurityFilterChain for admin endpoints (ROLE_ADMIN)
 
 ## Phase 3.9: Application Layer - Use Cases & Services (8 tasks)
 

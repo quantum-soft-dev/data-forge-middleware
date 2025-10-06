@@ -1,0 +1,92 @@
+package com.bitbi.dfm.auth.infrastructure;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.web.SecurityFilterChain;
+
+/**
+ * Security configuration with Keycloak OAuth2 integration.
+ * <p>
+ * Configures two authentication mechanisms:
+ * 1. JWT tokens for client API endpoints (/api/v1/*)
+ * 2. Keycloak OAuth2 for admin endpoints (/admin/*)
+ * </p>
+ *
+ * <p>Admin endpoints require ROLE_ADMIN granted by Keycloak.</p>
+ *
+ * @author Data Forge Team
+ * @version 1.0.0
+ */
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class KeycloakSecurityConfig {
+
+    /**
+     * Configure security filter chain.
+     * <p>
+     * Public endpoints:
+     * - POST /api/v1/auth/token (Basic Auth)
+     * - /actuator/health, /actuator/info
+     * - /swagger-ui/**, /v3/api-docs/**
+     * </p>
+     * <p>
+     * Protected endpoints:
+     * - /api/v1/** (JWT token - custom authentication)
+     * - /admin/** (Keycloak OAuth2 with ROLE_ADMIN)
+     * </p>
+     */
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                // Public endpoints
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
+
+                // Admin endpoints - require Keycloak ROLE_ADMIN
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+
+                // Client API endpoints - require custom JWT authentication
+                .requestMatchers("/api/v1/**").authenticated()
+
+                // All other endpoints require authentication
+                .anyRequest().authenticated()
+            )
+            // Keycloak OAuth2 Resource Server for admin endpoints
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Convert Keycloak JWT roles to Spring Security authorities.
+     * <p>
+     * Maps Keycloak realm roles to ROLE_* authorities.
+     * Example: "admin" role becomes "ROLE_ADMIN"
+     * </p>
+     */
+    @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtGrantedAuthoritiesConverter grantedAuthoritiesConverter = new JwtGrantedAuthoritiesConverter();
+        grantedAuthoritiesConverter.setAuthorityPrefix("ROLE_");
+        grantedAuthoritiesConverter.setAuthoritiesClaimName("realm_access.roles");
+
+        JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
+        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(grantedAuthoritiesConverter);
+
+        return jwtAuthenticationConverter;
+    }
+}
