@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -17,10 +18,24 @@ public interface ErrorLogRepository {
 
     ErrorLog save(ErrorLog errorLog);
 
+    Optional<ErrorLog> findById(UUID errorId);
+
+    List<ErrorLog> findByBatchId(UUID batchId);
+
+    List<ErrorLog> findBySiteId(UUID siteId);
+
     Page<ErrorLog> findBySiteId(UUID siteId, Pageable pageable);
 
     Page<ErrorLog> findByTypeAndOccurredAtBetween(String type, LocalDateTime start,
                                                     LocalDateTime end, Pageable pageable);
 
     List<ErrorLog> exportByFilters(UUID siteId, String type, LocalDateTime start, LocalDateTime end);
+
+    long countByBatchId(UUID batchId);
+
+    long countBySiteId(UUID siteId);
+
+    long countBySiteIds(List<UUID> siteIds);
+
+    long count();
 }

@@ -3,6 +3,7 @@ package com.bitbi.dfm.account.domain;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -41,6 +42,13 @@ public interface AccountRepository {
      * @return page of accounts
      */
     Page<Account> findAll(Pageable pageable);
+
+    /**
+     * Find all active accounts.
+     *
+     * @return list of active accounts
+     */
+    List<Account> findAllActive();
 
     /**
      * Save account (create or update).

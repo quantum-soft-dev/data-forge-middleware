@@ -26,7 +26,15 @@ public interface BatchRepository {
 
     Batch save(Batch batch);
 
+    long countByAccountId(UUID accountId);
+
+    long countBySiteId(UUID siteId);
+
+    long countActiveBatches();
+
     int countActiveBatchesByAccountId(UUID accountId);
+
+    long count();
 
     void deleteById(UUID id);
 }

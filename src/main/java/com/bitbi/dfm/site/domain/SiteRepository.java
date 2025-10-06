@@ -18,6 +18,12 @@ public interface SiteRepository {
 
     List<Site> findByAccountId(UUID accountId);
 
+    List<Site> findActiveByAccountId(UUID accountId);
+
+    long countByAccountId(UUID accountId);
+
+    long count();
+
     Site save(Site site);
 
     boolean existsByDomain(String domain);

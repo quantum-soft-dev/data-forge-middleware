@@ -18,5 +18,13 @@ public interface UploadedFileRepository {
 
     boolean existsByBatchIdAndOriginalFileName(UUID batchId, String fileName);
 
+    long countByBatchId(UUID batchId);
+
+    long countByAccountId(UUID accountId);
+
+    long countBySiteId(UUID siteId);
+
+    long count();
+
     UploadedFile save(UploadedFile file);
 }

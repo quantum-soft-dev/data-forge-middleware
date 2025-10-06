@@ -92,14 +92,14 @@
 
 ## Phase 3.9: Application Layer - Use Cases & Services (8 tasks)
 
-- [ ] T045 [P] Implement AccountService in account/application/AccountService.java with CRUD operations and AccountDeactivatedEvent publishing
-- [ ] T046 [P] Implement SiteService in site/application/SiteService.java with clientSecret generation and cascade deactivation listener
-- [ ] T047 Implement BatchLifecycleService in batch/application/BatchLifecycleService.java (start, complete, fail, cancel) with status transition validation
-- [ ] T048 Implement FileUploadService in upload/application/FileUploadService.java with multipart handling, S3 upload, and checksum calculation
-- [ ] T049 [P] Implement ErrorLoggingService in error/application/ErrorLoggingService.java with batch hasErrors flag update
-- [ ] T050 [P] Implement TokenService in auth/application/TokenService.java for JWT generation and validation
-- [ ] T051 [P] Implement AccountStatisticsService in account/application/AccountStatisticsService.java for admin stats queries
-- [ ] T052 [P] Implement ErrorLogExportService in error/application/ErrorLogExportService.java for CSV export
+- [X] T045 [P] Implement AccountService in account/application/AccountService.java with CRUD operations and AccountDeactivatedEvent publishing
+- [X] T046 [P] Implement SiteService in site/application/SiteService.java with clientSecret generation and cascade deactivation listener
+- [X] T047 Implement BatchLifecycleService in batch/application/BatchLifecycleService.java (start, complete, fail, cancel) with status transition validation
+- [X] T048 Implement FileUploadService in upload/application/FileUploadService.java with multipart handling, S3 upload, and checksum calculation
+- [X] T049 [P] Implement ErrorLoggingService in error/application/ErrorLoggingService.java with batch hasErrors flag update
+- [X] T050 [P] Implement TokenService in auth/application/TokenService.java for JWT generation and validation
+- [X] T051 [P] Implement AccountStatisticsService in account/application/AccountStatisticsService.java for admin stats queries
+- [X] T052 [P] Implement ErrorLogExportService in error/application/ErrorLogExportService.java for CSV export
 
 ## Phase 3.10: Application Layer - Scheduled Tasks (2 tasks)
 
