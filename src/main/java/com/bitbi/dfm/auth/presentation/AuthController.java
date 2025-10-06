@@ -2,6 +2,7 @@ package com.bitbi.dfm.auth.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -45,14 +46,16 @@ public class AuthController {
      */
     @PostMapping("/token")
     public ResponseEntity<Map<String, Object>> generateToken(
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            HttpServletRequest request) {
 
         logger.debug("Token generation request received");
 
         if (authHeader == null || !authHeader.startsWith("Basic ")) {
             logger.warn("Missing or invalid Authorization header");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(createErrorResponse("Missing or invalid Authorization header"));
+                    .body(createErrorResponse(HttpStatus.UNAUTHORIZED, "Unauthorized",
+                            "Missing or invalid Authorization header", request.getRequestURI()));
         }
 
         try {
@@ -65,7 +68,8 @@ public class AuthController {
             if (parts.length != 2) {
                 logger.warn("Invalid Basic Auth format");
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(createErrorResponse("Invalid credentials format"));
+                        .body(createErrorResponse(HttpStatus.UNAUTHORIZED, "Unauthorized",
+                                "Invalid credentials format", request.getRequestURI()));
             }
 
             String domain = parts[0];
@@ -76,7 +80,7 @@ public class AuthController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("token", token.token());
-            response.put("expiresAt", token.expiresAt().toString());
+            response.put("expiresIn", token.getExpirationDuration());
             response.put("tokenType", "Bearer");
 
             logger.info("Token generated successfully: domain={}", domain);
@@ -85,23 +89,29 @@ public class AuthController {
         } catch (TokenService.AuthenticationException e) {
             logger.warn("Authentication failed: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(createErrorResponse("Invalid credentials"));
+                    .body(createErrorResponse(HttpStatus.UNAUTHORIZED, "Unauthorized",
+                            "Invalid credentials", request.getRequestURI()));
 
         } catch (IllegalArgumentException e) {
             logger.warn("Invalid Basic Auth encoding: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse("Invalid Authorization header encoding"));
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request",
+                            "Invalid Authorization header encoding", request.getRequestURI()));
 
         } catch (Exception e) {
             logger.error("Unexpected error during token generation", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Internal server error"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error",
+                            "Internal server error", request.getRequestURI()));
         }
     }
 
-    private Map<String, Object> createErrorResponse(String message) {
-        Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
-        return error;
+    private Map<String, Object> createErrorResponse(HttpStatus status, String error, String message, String path) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", status.value());
+        response.put("error", error);
+        response.put("message", message);
+        response.put("path", path);
+        return response;
     }
 }

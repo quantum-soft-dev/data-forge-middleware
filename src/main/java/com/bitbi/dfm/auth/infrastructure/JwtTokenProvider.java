@@ -29,13 +29,13 @@ import java.util.UUID;
 public class JwtTokenProvider {
 
     private final SecretKey secretKey;
-    private final long expirationMinutes;
+    private final long expirationSeconds;
 
     public JwtTokenProvider(
             @Value("${jwt.secret}") String secret,
-            @Value("${jwt.expiration-minutes:60}") long expirationMinutes) {
+            @Value("${jwt.expiration-seconds:3600}") long expirationSeconds) {
         this.secretKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
-        this.expirationMinutes = expirationMinutes;
+        this.expirationSeconds = expirationSeconds;
     }
 
     /**
@@ -47,8 +47,6 @@ public class JwtTokenProvider {
      * @return JWT token with claims
      */
     public JwtToken generateToken(UUID siteId, UUID accountId, String domain) {
-        long expirationSeconds = expirationMinutes * 60;
-
         String tokenString = Jwts.builder()
                 .subject(siteId.toString())
                 .claim("siteId", siteId.toString())
