@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+    url: jdbc:tc:postgresql:16-alpine:///dfm_test
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        show_sql: false
+        format_sql: false
+
+s3:
+  endpoint: http://localhost:4566
+  region: us-east-1
+  bucket-name: data-forge-test-bucket
+  access-key: test
+  secret-key: test
+  path-style-access-enabled: true
+
+logging:
+  level:
+    root: WARN
+    com.bitbi.dfm: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+    org.testcontainers: INFO
