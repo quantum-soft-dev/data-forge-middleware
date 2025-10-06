@@ -69,10 +69,10 @@
 
 ## Phase 3.6: Domain Services & Events (4 tasks)
 
-- [ ] T031 [P] Implement BatchTimeoutPolicy domain service in batch/domain/BatchTimeoutPolicy.java for timeout calculation
-- [ ] T032 [P] Implement PartitionManager domain service in error/domain/PartitionManager.java for partition creation
-- [ ] T033 [P] Implement AuthenticationService domain service in auth/domain/AuthenticationService.java for credential validation
-- [ ] T034 [P] Create domain events (AccountDeactivatedEvent, BatchStartedEvent, BatchCompletedEvent, BatchExpiredEvent, ErrorLoggedEvent) in shared/domain/events/
+- [X] T031 [P] Implement BatchTimeoutPolicy domain service in batch/domain/BatchTimeoutPolicy.java for timeout calculation
+- [X] T032 [P] Implement PartitionManager domain service in error/domain/PartitionManager.java for partition creation
+- [X] T033 [P] Implement AuthenticationService domain service in auth/domain/AuthenticationService.java for credential validation
+- [X] T034 [P] Create domain events (AccountDeactivatedEvent, BatchStartedEvent, BatchCompletedEvent, BatchExpiredEvent, ErrorLoggedEvent) in shared/domain/events/
 
 ## Phase 3.7: Infrastructure Layer - JPA & Persistence (6 tasks)
 
