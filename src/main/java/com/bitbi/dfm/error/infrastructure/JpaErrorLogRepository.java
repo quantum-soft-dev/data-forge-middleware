@@ -35,6 +35,27 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
     Page<ErrorLog> findBySiteId(UUID siteId, Pageable pageable);
 
     /**
+     * Find errors by site and type with pagination.
+     *
+     * @param siteId site identifier
+     * @param type error type
+     * @param pageable pagination parameters
+     * @return page of error logs
+     */
+    @Query("SELECT e FROM ErrorLog e WHERE e.siteId = :siteId AND e.type = :type ORDER BY e.occurredAt DESC")
+    Page<ErrorLog> findBySiteIdAndType(UUID siteId, String type, Pageable pageable);
+
+    /**
+     * Find errors by type with pagination.
+     *
+     * @param type error type
+     * @param pageable pagination parameters
+     * @return page of error logs
+     */
+    @Query("SELECT e FROM ErrorLog e WHERE e.type = :type ORDER BY e.occurredAt DESC")
+    Page<ErrorLog> findByType(String type, Pageable pageable);
+
+    /**
      * Find errors by type and date range with pagination.
      * <p>
      * Efficiently uses partition pruning when date range is within single month.
@@ -87,8 +108,8 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
     @Query("SELECT e FROM ErrorLog e " +
             "WHERE (:siteId IS NULL OR e.siteId = :siteId) " +
             "AND (:type IS NULL OR e.type = :type) " +
-            "AND (:start IS NULL OR e.occurredAt >= :start) " +
-            "AND (:end IS NULL OR e.occurredAt < :end) " +
+            "AND (CAST(:start AS timestamp) IS NULL OR e.occurredAt >= :start) " +
+            "AND (CAST(:end AS timestamp) IS NULL OR e.occurredAt < :end) " +
             "ORDER BY e.occurredAt DESC")
     List<ErrorLog> exportByFilters(UUID siteId, String type, LocalDateTime start, LocalDateTime end);
 

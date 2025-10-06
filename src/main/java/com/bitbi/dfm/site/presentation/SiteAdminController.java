@@ -128,7 +128,7 @@ public class SiteAdminController {
      * @return list of sites
      */
     @GetMapping("/admin/accounts/{accountId}/sites")
-    public ResponseEntity<Map<String, Object>> listSitesByAccount(@PathVariable("accountId") UUID accountId) {
+    public ResponseEntity<?> listSitesByAccount(@PathVariable("accountId") UUID accountId) {
         try {
             List<Site> sites = siteService.listSitesByAccount(accountId);
 
@@ -136,11 +136,7 @@ public class SiteAdminController {
                     .map(site -> createSiteResponse(site, false))
                     .collect(Collectors.toList());
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("sites", siteList);
-            response.put("total", siteList.size());
-
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(siteList);
 
         } catch (Exception e) {
             logger.error("Error listing sites: accountId={}", accountId, e);

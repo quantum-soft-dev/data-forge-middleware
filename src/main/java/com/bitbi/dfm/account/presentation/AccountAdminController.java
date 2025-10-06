@@ -108,7 +108,7 @@ public class AccountAdminController {
 
             // Add statistics to the response
             Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
-            response.put("sitesCount", statistics.get("sitesCount"));
+            response.put("sitesCount", statistics.get("totalSites"));
             response.put("totalBatches", statistics.get("totalBatches"));
             response.put("totalUploadedFiles", statistics.get("totalFiles"));
 
@@ -251,6 +251,40 @@ public class AccountAdminController {
             logger.error("Error deactivating account: accountId={}", accountId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorResponse("Failed to deactivate account"));
+        }
+    }
+
+    /**
+     * Get account statistics (admin endpoint).
+     * <p>
+     * GET /admin/accounts/{id}/stats
+     * </p>
+     *
+     * @param accountId account identifier
+     * @return account statistics formatted for admin UI
+     */
+    @GetMapping("/{id}/stats")
+    public ResponseEntity<Map<String, Object>> getAccountStats(@PathVariable("id") UUID accountId) {
+        try {
+            Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
+
+            // Map to expected admin response format
+            Map<String, Object> response = new HashMap<>();
+            response.put("accountId", statistics.get("accountId"));
+            response.put("sitesCount", statistics.get("totalSites"));
+            response.put("activeSites", statistics.get("activeSites"));
+            response.put("totalBatches", statistics.get("totalBatches"));
+            response.put("completedBatches", 0); // TODO: Add to service
+            response.put("failedBatches", 0); // TODO: Add to service
+            response.put("totalFiles", statistics.get("totalFiles"));
+            response.put("totalStorageSize", 0L); // TODO: Add to service
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            logger.error("Error getting account statistics: accountId={}", accountId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorResponse("Failed to retrieve statistics"));
         }
     }
 

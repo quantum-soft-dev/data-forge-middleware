@@ -38,4 +38,10 @@ public interface ErrorLogRepository {
     long countBySiteIds(List<UUID> siteIds);
 
     long count();
+
+    Page<ErrorLog> findBySiteIdAndType(UUID siteId, String type, Pageable pageable);
+
+    Page<ErrorLog> findByType(String type, Pageable pageable);
+
+    Page<ErrorLog> findAll(Pageable pageable);
 }

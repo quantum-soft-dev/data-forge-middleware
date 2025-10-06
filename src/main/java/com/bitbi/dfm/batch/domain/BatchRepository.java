@@ -37,4 +37,12 @@ public interface BatchRepository {
     long count();
 
     void deleteById(UUID id);
+
+    Page<Batch> findBySiteId(UUID siteId, Pageable pageable);
+
+    Page<Batch> findByStatus(BatchStatus status, Pageable pageable);
+
+    Page<Batch> findAll(Pageable pageable);
+
+    boolean existsById(UUID id);
 }

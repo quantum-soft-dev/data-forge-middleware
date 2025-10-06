@@ -98,4 +98,24 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      */
     @Query("SELECT COUNT(b) FROM Batch b WHERE b.accountId = :accountId AND b.status = 'IN_PROGRESS'")
     int countActiveBatchesByAccountId(UUID accountId);
+
+    /**
+     * Find batches by site with pagination.
+     *
+     * @param siteId site identifier
+     * @param pageable pagination parameters
+     * @return page of batches
+     */
+    @Query("SELECT b FROM Batch b WHERE b.siteId = :siteId ORDER BY b.startedAt DESC")
+    Page<Batch> findBySiteId(UUID siteId, Pageable pageable);
+
+    /**
+     * Find batches by status with pagination.
+     *
+     * @param status batch status
+     * @param pageable pagination parameters
+     * @return page of batches
+     */
+    @Query("SELECT b FROM Batch b WHERE b.status = :status ORDER BY b.startedAt DESC")
+    Page<Batch> findByStatus(BatchStatus status, Pageable pageable);
 }
