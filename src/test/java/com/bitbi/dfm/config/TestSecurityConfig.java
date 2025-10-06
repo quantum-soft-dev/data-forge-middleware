@@ -3,19 +3,25 @@ package com.bitbi.dfm.config;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.convert.converter.Converter;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Test security configuration that mocks OAuth2/Keycloak authentication.
@@ -49,41 +55,80 @@ public class TestSecurityConfig {
     @Primary
     public JwtDecoder jwtDecoder() {
         return token -> {
-            Map<String, Object> claims;
             List<String> roles;
+            String subject;
+            String email;
+            String username;
 
             if ("mock.admin.jwt.token".equals(token)) {
                 roles = List.of("ADMIN");
-                claims = Map.of(
-                    "sub", "admin-user",
-                    "realm_access", Map.of("roles", roles),
-                    "email", "admin@test.com",
-                    "preferred_username", "admin"
-                );
+                subject = "admin-user";
+                email = "admin@test.com";
+                username = "admin";
             } else if ("mock.user.jwt.token".equals(token)) {
                 roles = List.of("USER");
-                claims = Map.of(
-                    "sub", "regular-user",
-                    "realm_access", Map.of("roles", roles),
-                    "email", "user@test.com",
-                    "preferred_username", "user"
-                );
+                subject = "regular-user";
+                email = "user@test.com";
+                username = "user";
             } else {
                 // Invalid token - no roles
-                claims = Map.of(
-                    "sub", "unknown",
-                    "realm_access", Map.of("roles", List.<String>of())
-                );
+                roles = List.of();
+                subject = "unknown";
+                email = "unknown@test.com";
+                username = "unknown";
             }
 
             return Jwt.withTokenValue(token)
                     .header("alg", "none")
                     .header("typ", "JWT")
-                    .claims(c -> c.putAll(claims))
+                    .subject(subject)
+                    .claim("email", email)
+                    .claim("preferred_username", username)
+                    .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
                     .expiresAt(Instant.now().plusSeconds(3600))
                     .build();
         };
+    }
+
+    /**
+     * Custom JWT authorities converter for Keycloak realm roles.
+     * <p>
+     * Extracts roles from nested "realm_access.roles" claim and converts them
+     * to Spring Security authorities with "ROLE_" prefix.
+     * </p>
+     */
+    private Converter<Jwt, Collection<GrantedAuthority>> jwtGrantedAuthoritiesConverter() {
+        return jwt -> {
+            Map<String, Object> realmAccess = jwt.getClaim("realm_access");
+            if (realmAccess == null) {
+                return Collections.emptyList();
+            }
+
+            @SuppressWarnings("unchecked")
+            List<String> roles = (List<String>) realmAccess.get("roles");
+            if (roles == null) {
+                return Collections.emptyList();
+            }
+
+            return roles.stream()
+                    .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
+                    .collect(Collectors.toList());
+        };
+    }
+
+    /**
+     * JWT authentication converter for tests.
+     * <p>
+     * Converts JWT claims to Spring Security authorities using custom converter.
+     * </p>
+     */
+    @Bean
+    @Primary
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
+        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(jwtGrantedAuthoritiesConverter());
+        return jwtAuthenticationConverter;
     }
 
     /**
@@ -116,8 +161,13 @@ public class TestSecurityConfig {
                 // All other endpoints require authentication
                 .anyRequest().authenticated()
             )
-            // Use mocked JWT decoder
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(jwtDecoder())));
+            // Use mocked JWT decoder with authentication converter
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt
+                    .decoder(jwtDecoder())
+                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
+                )
+            );
 
         return http.build();
     }

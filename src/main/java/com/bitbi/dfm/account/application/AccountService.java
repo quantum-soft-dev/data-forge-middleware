@@ -6,6 +6,8 @@ import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -91,6 +93,17 @@ public class AccountService {
     @Transactional(readOnly = true)
     public List<Account> listActiveAccounts() {
         return accountRepository.findAllActive();
+    }
+
+    /**
+     * List all accounts with pagination.
+     *
+     * @param pageable pagination parameters
+     * @return paginated list of accounts
+     */
+    @Transactional(readOnly = true)
+    public Page<Account> listAccounts(Pageable pageable) {
+        return accountRepository.findAll(pageable);
     }
 
     /**

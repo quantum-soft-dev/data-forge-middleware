@@ -5,6 +5,10 @@ import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.account.domain.Account;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -116,25 +120,46 @@ public class AccountAdminController {
     }
 
     /**
-     * List all active accounts.
+     * List all active accounts with pagination.
      * <p>
-     * GET /admin/accounts
+     * GET /admin/accounts?page=0&size=20&sort=createdAt,desc
      * </p>
      *
-     * @return list of accounts
+     * @param page page number (default: 0)
+     * @param size page size (default: 20)
+     * @param sort sort field and direction (default: createdAt,desc)
+     * @return paginated list of accounts
      */
     @GetMapping
-    public ResponseEntity<Map<String, Object>> listAccounts() {
+    public ResponseEntity<Map<String, Object>> listAccounts(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt,desc") String sort) {
         try {
-            List<Account> accounts = accountService.listActiveAccounts();
+            // Parse sort parameter
+            String[] sortParams = sort.split(",");
+            String sortField = sortParams[0];
+            Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
+                    ? Sort.Direction.ASC
+                    : Sort.Direction.DESC;
 
-            List<Map<String, Object>> accountList = accounts.stream()
+            // Create pageable
+            Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+
+            // Get paginated accounts
+            Page<Account> accountPage = accountService.listAccounts(pageable);
+
+            // Convert to response
+            List<Map<String, Object>> accountList = accountPage.getContent().stream()
                     .map(this::createAccountResponse)
                     .collect(Collectors.toList());
 
             Map<String, Object> response = new HashMap<>();
-            response.put("accounts", accountList);
-            response.put("total", accountList.size());
+            response.put("content", accountList);
+            response.put("page", accountPage.getNumber());
+            response.put("size", accountPage.getSize());
+            response.put("totalElements", accountPage.getTotalElements());
+            response.put("totalPages", accountPage.getTotalPages());
 
             return ResponseEntity.ok(response);
 
