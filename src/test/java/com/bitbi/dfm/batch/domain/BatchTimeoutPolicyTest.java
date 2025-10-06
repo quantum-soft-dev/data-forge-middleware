@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for BatchTimeoutPolicy.
@@ -83,17 +84,16 @@ class BatchTimeoutPolicyTest {
     }
 
     @Test
-    @DisplayName("Should handle zero timeout correctly")
-    void shouldHandleZeroTimeout() {
-        // Given
-        BatchTimeoutPolicy zeroTimeoutPolicy = new BatchTimeoutPolicy(0);
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+    @DisplayName("Should reject zero or negative timeout")
+    void shouldRejectZeroOrNegativeTimeout() {
+        // When & Then
+        assertThatThrownBy(() -> new BatchTimeoutPolicy(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Timeout must be positive");
 
-        // When
-        boolean expired = zeroTimeoutPolicy.isExpired(batch);
-
-        // Then - even with zero timeout, freshly created batch should evaluate based on actual time
-        assertThat(expired).isFalse();
+        assertThatThrownBy(() -> new BatchTimeoutPolicy(-1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Timeout must be positive");
     }
 
     @Test
