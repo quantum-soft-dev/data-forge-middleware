@@ -1,0 +1,138 @@
+package com.bitbi.dfm.site.domain;
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.Objects;
+import java.util.UUID;
+
+/**
+ * Site aggregate root representing a data source location.
+ * <p>
+ * A site belongs to an account and owns authentication credentials for uploads.
+ * </p>
+ *
+ * @author Data Forge Team
+ * @version 1.0.0
+ */
+@Entity
+@Table(name = "sites")
+@Getter
+@NoArgsConstructor
+public class Site {
+
+    @Id
+    @Column(name = "id", updatable = false, nullable = false)
+    private UUID id;
+
+    @Column(name = "account_id", nullable = false)
+    private UUID accountId;
+
+    @Column(name = "domain", nullable = false, unique = true, length = 255)
+    private String domain;
+
+    @Column(name = "client_secret", nullable = false, length = 255)
+    private String clientSecret;
+
+    @Column(name = "display_name", nullable = false, length = 255)
+    private String displayName;
+
+    @Column(name = "is_active", nullable = false)
+    private Boolean isActive;
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+
+    protected Site(UUID id, UUID accountId, String domain, String clientSecret,
+                   String displayName, Boolean isActive, LocalDateTime createdAt, LocalDateTime updatedAt) {
+        this.id = id;
+        this.accountId = accountId;
+        this.domain = domain;
+        this.clientSecret = clientSecret;
+        this.displayName = displayName;
+        this.isActive = isActive;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
+    }
+
+    public static Site create(UUID accountId, String domain, String displayName) {
+        Objects.requireNonNull(accountId, "AccountId cannot be null");
+        Objects.requireNonNull(domain, "Domain cannot be null");
+        Objects.requireNonNull(displayName, "DisplayName cannot be null");
+
+        if (domain.isBlank()) {
+            throw new IllegalArgumentException("Domain cannot be blank");
+        }
+        if (displayName.isBlank()) {
+            throw new IllegalArgumentException("DisplayName cannot be blank");
+        }
+
+        UUID id = UUID.randomUUID();
+        String clientSecret = UUID.randomUUID().toString();
+        LocalDateTime now = LocalDateTime.now();
+
+        return new Site(id, accountId, domain.toLowerCase().trim(), clientSecret,
+                displayName.trim(), true, now, now);
+    }
+
+    public void updateDisplayName(String newDisplayName) {
+        Objects.requireNonNull(newDisplayName, "DisplayName cannot be null");
+        if (newDisplayName.isBlank()) {
+            throw new IllegalArgumentException("DisplayName cannot be blank");
+        }
+        this.displayName = newDisplayName.trim();
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void deactivate() {
+        if (!this.isActive) {
+            throw new IllegalStateException("Site is already deactivated");
+        }
+        this.isActive = false;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void activate() {
+        if (this.isActive) {
+            throw new IllegalStateException("Site is already active");
+        }
+        this.isActive = true;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public boolean canAuthenticate() {
+        return this.isActive;
+    }
+
+    public SiteCredentials getCredentials() {
+        return new SiteCredentials(domain, clientSecret);
+    }
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (updatedAt == null) updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Site site)) return false;
+        return Objects.equals(id, site.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+}

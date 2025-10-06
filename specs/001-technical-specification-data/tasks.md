@@ -56,16 +56,16 @@
 
 ## Phase 3.5: Domain Layer - Entities & Aggregates (10 tasks)
 
-- [ ] T021 [P] Implement Account aggregate root in account/domain/Account.java with soft delete and email validation invariants
-- [ ] T022 [P] Implement Site aggregate root in site/domain/Site.java with credentials generation and domain uniqueness invariants
-- [ ] T023 [P] Implement Batch aggregate root in batch/domain/Batch.java with status transitions and one-active-per-site invariant
-- [ ] T024 [P] Implement UploadedFile entity in upload/domain/UploadedFile.java with checksum and filename uniqueness logic
-- [ ] T025 [P] Implement ErrorLog entity in error/domain/ErrorLog.java with JSONB metadata support
-- [ ] T026 [P] Create BatchStatus enum in batch/domain/BatchStatus.java (IN_PROGRESS, COMPLETED, NOT_COMPLETED, FAILED, CANCELLED)
-- [ ] T027 [P] Create SiteCredentials value object in site/domain/SiteCredentials.java
-- [ ] T028 [P] Create FileChecksum value object in upload/domain/FileChecksum.java with MD5 algorithm
-- [ ] T029 [P] Create JwtToken value object in auth/domain/JwtToken.java with expiration logic
-- [ ] T030 [P] Define all repository interfaces (AccountRepository, SiteRepository, BatchRepository, UploadedFileRepository, ErrorLogRepository)
+- [X] T021 [P] Implement Account aggregate root in account/domain/Account.java with soft delete and email validation invariants
+- [X] T022 [P] Implement Site aggregate root in site/domain/Site.java with credentials generation and domain uniqueness invariants
+- [X] T023 [P] Implement Batch aggregate root in batch/domain/Batch.java with status transitions and one-active-per-site invariant
+- [X] T024 [P] Implement UploadedFile entity in upload/domain/UploadedFile.java with checksum and filename uniqueness logic
+- [X] T025 [P] Implement ErrorLog entity in error/domain/ErrorLog.java with JSONB metadata support
+- [X] T026 [P] Create BatchStatus enum in batch/domain/BatchStatus.java (IN_PROGRESS, COMPLETED, NOT_COMPLETED, FAILED, CANCELLED)
+- [X] T027 [P] Create SiteCredentials value object in site/domain/SiteCredentials.java
+- [X] T028 [P] Create FileChecksum value object in upload/domain/FileChecksum.java with MD5 algorithm
+- [X] T029 [P] Create JwtToken value object in auth/domain/JwtToken.java with expiration logic
+- [X] T030 [P] Define all repository interfaces (AccountRepository, SiteRepository, BatchRepository, UploadedFileRepository, ErrorLogRepository)
 
 ## Phase 3.6: Domain Services & Events (4 tasks)
 
