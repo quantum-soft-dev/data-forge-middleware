@@ -55,6 +55,24 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
                                                     LocalDateTime end, Pageable pageable);
 
     /**
+     * Find errors by batch ID.
+     *
+     * @param batchId batch identifier
+     * @return list of error logs
+     */
+    @Query("SELECT e FROM ErrorLog e WHERE e.batchId = :batchId ORDER BY e.occurredAt DESC")
+    List<ErrorLog> findByBatchId(UUID batchId);
+
+    /**
+     * Find errors by site ID.
+     *
+     * @param siteId site identifier
+     * @return list of error logs
+     */
+    @Query("SELECT e FROM ErrorLog e WHERE e.siteId = :siteId ORDER BY e.occurredAt DESC")
+    List<ErrorLog> findBySiteId(UUID siteId);
+
+    /**
      * Export errors by filters without pagination.
      * <p>
      * Used for CSV export functionality.
@@ -73,4 +91,31 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
             "AND (:end IS NULL OR e.occurredAt < :end) " +
             "ORDER BY e.occurredAt DESC")
     List<ErrorLog> exportByFilters(UUID siteId, String type, LocalDateTime start, LocalDateTime end);
+
+    /**
+     * Count errors by batch ID.
+     *
+     * @param batchId batch identifier
+     * @return number of errors
+     */
+    @Query("SELECT COUNT(e) FROM ErrorLog e WHERE e.batchId = :batchId")
+    long countByBatchId(UUID batchId);
+
+    /**
+     * Count errors by site ID.
+     *
+     * @param siteId site identifier
+     * @return number of errors
+     */
+    @Query("SELECT COUNT(e) FROM ErrorLog e WHERE e.siteId = :siteId")
+    long countBySiteId(UUID siteId);
+
+    /**
+     * Count errors by multiple site IDs.
+     *
+     * @param siteIds list of site identifiers
+     * @return number of errors
+     */
+    @Query("SELECT COUNT(e) FROM ErrorLog e WHERE e.siteId IN :siteIds")
+    long countBySiteIds(List<UUID> siteIds);
 }

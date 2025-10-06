@@ -8,7 +8,8 @@
       "Bash(docker exec:*)",
       "Bash(./gradlew:*)",
       "Bash(gradle wrapper:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(xargs cat:*)"
     ],
     "deny": [],
     "ask": []

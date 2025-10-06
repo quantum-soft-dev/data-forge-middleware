@@ -42,4 +42,31 @@ public interface JpaUploadedFileRepository extends JpaRepository<UploadedFile, U
      */
     @Query("SELECT COUNT(f) > 0 FROM UploadedFile f WHERE f.batchId = :batchId AND f.originalFileName = :fileName")
     boolean existsByBatchIdAndOriginalFileName(UUID batchId, String fileName);
+
+    /**
+     * Count files by batch ID.
+     *
+     * @param batchId batch identifier
+     * @return number of files
+     */
+    @Query("SELECT COUNT(f) FROM UploadedFile f WHERE f.batchId = :batchId")
+    long countByBatchId(UUID batchId);
+
+    /**
+     * Count files by account ID (joins through batches table).
+     *
+     * @param accountId account identifier
+     * @return number of files
+     */
+    @Query("SELECT COUNT(f) FROM UploadedFile f JOIN Batch b ON f.batchId = b.id WHERE b.accountId = :accountId")
+    long countByAccountId(UUID accountId);
+
+    /**
+     * Count files by site ID (joins through batches table).
+     *
+     * @param siteId site identifier
+     * @return number of files
+     */
+    @Query("SELECT COUNT(f) FROM UploadedFile f JOIN Batch b ON f.batchId = b.id WHERE b.siteId = :siteId")
+    long countBySiteId(UUID siteId);
 }

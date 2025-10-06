@@ -28,6 +28,9 @@ public class Batch {
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
 
+    @Column(name = "account_id", nullable = false)
+    private UUID accountId;
+
     @Column(name = "site_id", nullable = false)
     private UUID siteId;
 
@@ -56,10 +59,11 @@ public class Batch {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    protected Batch(UUID id, UUID siteId, BatchStatus status, String s3Path,
+    protected Batch(UUID id, UUID accountId, UUID siteId, BatchStatus status, String s3Path,
                     Integer uploadedFilesCount, Long totalSize, Boolean hasErrors,
                     LocalDateTime startedAt, LocalDateTime completedAt, LocalDateTime createdAt) {
         this.id = id;
+        this.accountId = accountId;
         this.siteId = siteId;
         this.status = status;
         this.s3Path = s3Path;
@@ -80,7 +84,7 @@ public class Batch {
         LocalDateTime now = LocalDateTime.now();
         String s3Path = generateS3Path(accountId, domain, now);
 
-        return new Batch(id, siteId, BatchStatus.IN_PROGRESS, s3Path,
+        return new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
                 0, 0L, false, now, null, now);
     }
 

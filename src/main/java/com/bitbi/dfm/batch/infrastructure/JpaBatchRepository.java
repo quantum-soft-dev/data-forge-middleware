@@ -62,6 +62,32 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
     Page<Batch> findBySiteIdAndStatus(UUID siteId, BatchStatus status, Pageable pageable);
 
     /**
+     * Count all batches for account.
+     *
+     * @param accountId account identifier
+     * @return number of batches
+     */
+    @Query("SELECT COUNT(b) FROM Batch b WHERE b.accountId = :accountId")
+    long countByAccountId(UUID accountId);
+
+    /**
+     * Count batches by site ID.
+     *
+     * @param siteId site identifier
+     * @return number of batches
+     */
+    @Query("SELECT COUNT(b) FROM Batch b WHERE b.siteId = :siteId")
+    long countBySiteId(UUID siteId);
+
+    /**
+     * Count all active IN_PROGRESS batches across all sites.
+     *
+     * @return number of active batches
+     */
+    @Query("SELECT COUNT(b) FROM Batch b WHERE b.status = 'IN_PROGRESS'")
+    long countActiveBatches();
+
+    /**
      * Count active IN_PROGRESS batches for account.
      * <p>
      * Used to enforce account-level active batch limit.
@@ -70,8 +96,6 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      * @param accountId account identifier
      * @return number of active batches
      */
-    @Query("SELECT COUNT(b) FROM Batch b " +
-            "JOIN Site s ON b.siteId = s.id " +
-            "WHERE s.accountId = :accountId AND b.status = 'IN_PROGRESS'")
+    @Query("SELECT COUNT(b) FROM Batch b WHERE b.accountId = :accountId AND b.status = 'IN_PROGRESS'")
     int countActiveBatchesByAccountId(UUID accountId);
 }

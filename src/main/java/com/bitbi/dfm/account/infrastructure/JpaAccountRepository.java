@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -49,4 +50,12 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
      */
     @Override
     Page<Account> findAll(Pageable pageable);
+
+    /**
+     * Find all active accounts.
+     *
+     * @return list of active accounts
+     */
+    @Query("SELECT a FROM Account a WHERE a.isActive = true ORDER BY a.createdAt DESC")
+    List<Account> findAllActive();
 }
