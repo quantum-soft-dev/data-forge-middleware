@@ -76,12 +76,12 @@
 
 ## Phase 3.7: Infrastructure Layer - JPA & Persistence (6 tasks)
 
-- [ ] T035 [P] Implement JpaAccountRepository in account/infrastructure/JpaAccountRepository.java with custom queries
-- [ ] T036 [P] Implement JpaSiteRepository in site/infrastructure/JpaSiteRepository.java with @EntityGraph for account fetching
-- [ ] T037 Implement JpaBatchRepository in batch/infrastructure/JpaBatchRepository.java with findActiveBySiteId and findExpiredBatches queries
-- [ ] T038 [P] Implement JpaUploadedFileRepository in upload/infrastructure/JpaUploadedFileRepository.java with duplicate filename check
-- [ ] T039 [P] Implement JpaErrorLogRepository in error/infrastructure/JpaErrorLogRepository.java with partitioned table support and JSONB queries
-- [ ] T040 Run integration tests to validate repository implementations with Testcontainers
+- [X] T035 [P] Implement JpaAccountRepository in account/infrastructure/JpaAccountRepository.java with custom queries
+- [X] T036 [P] Implement JpaSiteRepository in site/infrastructure/JpaSiteRepository.java with @EntityGraph for account fetching
+- [X] T037 Implement JpaBatchRepository in batch/infrastructure/JpaBatchRepository.java with findActiveBySiteId and findExpiredBatches queries
+- [X] T038 [P] Implement JpaUploadedFileRepository in upload/infrastructure/JpaUploadedFileRepository.java with duplicate filename check
+- [X] T039 [P] Implement JpaErrorLogRepository in error/infrastructure/JpaErrorLogRepository.java with partitioned table support and JSONB queries
+- [X] T040 Run integration tests to validate repository implementations with Testcontainers
 
 ## Phase 3.8: Infrastructure Layer - S3 & Security (4 tasks)
 
