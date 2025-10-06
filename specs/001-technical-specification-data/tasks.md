@@ -117,10 +117,10 @@
 
 ## Phase 3.12: Presentation Layer - Shared Components (4 tasks)
 
-- [ ] T061 Implement GlobalExceptionHandler in shared/exception/GlobalExceptionHandler.java with @RestControllerAdvice for standardized error responses
-- [ ] T062 [P] Create ErrorResponse DTO in shared/exception/ErrorResponse.java with timestamp, status, error, message, path fields
-- [ ] T063 [P] Implement OpenApiConfiguration in shared/config/OpenApiConfiguration.java with Swagger UI and security schemes (Basic Auth, Bearer JWT)
-- [ ] T064 [P] Implement ActuatorConfiguration in shared/config/ActuatorConfiguration.java with custom health indicators for DB and S3
+- [X] T061 Implement GlobalExceptionHandler in shared/exception/GlobalExceptionHandler.java with @RestControllerAdvice for standardized error responses
+- [X] T062 [P] Create ErrorResponse DTO in shared/exception/ErrorResponse.java with timestamp, status, error, message, path fields
+- [X] T063 [P] Implement OpenApiConfiguration in shared/config/OpenApiConfiguration.java with Swagger UI and security schemes (Basic Auth, Bearer JWT)
+- [X] T064 [P] Implement ActuatorConfiguration in shared/config/ActuatorConfiguration.java with custom health indicators for DB and S3
 
 ## Phase 3.13: Observability & Metrics (3 tasks)
 
