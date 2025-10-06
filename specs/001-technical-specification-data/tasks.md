@@ -132,15 +132,15 @@
 
 - [ ] T068 Run all contract tests (T012-T014) and verify they pass with implementations
 - [ ] T069 Run all integration tests (T015-T020) with Testcontainers and verify quickstart scenarios work end-to-end
-- [ ] T070 [P] Write unit tests for BatchTimeoutPolicy in batch/domain/BatchTimeoutPolicyTest.java
-- [ ] T071 [P] Write unit tests for S3FileStorageService retry logic in upload/infrastructure/S3FileStorageServiceTest.java
+- [X] T070 [P] Write unit tests for BatchTimeoutPolicy in batch/domain/BatchTimeoutPolicyTest.java
+- [X] T071 [P] Write unit tests for S3FileStorageService retry logic in upload/infrastructure/S3FileStorageServiceTest.java
 - [ ] T072 Measure JaCoCo code coverage and ensure ≥80% per module
 - [ ] T073 Run performance tests with Apache Bench to validate <1000ms p95 latency for non-upload endpoints
 
 ## Phase 3.15: Documentation & Finalization (4 tasks)
 
-- [ ] T074 [P] Create comprehensive README.md at repository root with Prerequisites, Setup, Running, Testing, API Docs, Contributing sections
-- [ ] T075 [P] Update CLAUDE.md with final tech stack and recent implementation decisions
+- [X] T074 [P] Create comprehensive README.md at repository root with Prerequisites, Setup, Running, Testing, API Docs, Contributing sections
+- [X] T075 [P] Update CLAUDE.md with final tech stack and recent implementation decisions
 - [ ] T076 [P] Generate OpenAPI spec JSON/YAML from annotations and publish to docs/
 - [ ] T077 Execute all 6 quickstart.md scenarios manually and verify success criteria (all health checks pass, metrics collected, S3 files uploaded)
 
