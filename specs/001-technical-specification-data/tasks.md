@@ -108,12 +108,12 @@
 
 ## Phase 3.11: Presentation Layer - Controllers (6 tasks)
 
-- [ ] T055 Implement AuthController in auth/presentation/AuthController.java for POST /api/v1/auth/token with Basic Auth
-- [ ] T056 Implement BatchController in batch/presentation/BatchController.java for /api/v1/batch/* endpoints (start, upload, complete, fail, cancel) with JWT auth
-- [ ] T057 Implement FileUploadController in upload/presentation/FileUploadController.java for POST /api/v1/batch/{id}/upload with multipart file handling
-- [ ] T058 Implement ErrorLogController in error/presentation/ErrorLogController.java for POST /api/v1/error/{batchId}
-- [ ] T059 [P] Implement AccountAdminController in account/presentation/AccountAdminController.java for /admin/accounts/* with Keycloak auth
-- [ ] T060 [P] Implement SiteAdminController in site/presentation/SiteAdminController.java for /admin/accounts/{id}/sites and /admin/sites/{id} with Keycloak auth
+- [X] T055 Implement AuthController in auth/presentation/AuthController.java for POST /api/v1/auth/token with Basic Auth
+- [X] T056 Implement BatchController in batch/presentation/BatchController.java for /api/v1/batch/* endpoints (start, upload, complete, fail, cancel) with JWT auth
+- [X] T057 Implement FileUploadController in upload/presentation/FileUploadController.java for POST /api/v1/batch/{id}/upload with multipart file handling
+- [X] T058 Implement ErrorLogController in error/presentation/ErrorLogController.java for POST /api/v1/error/{batchId}
+- [X] T059 [P] Implement AccountAdminController in account/presentation/AccountAdminController.java for /admin/accounts/* with Keycloak auth
+- [X] T060 [P] Implement SiteAdminController in site/presentation/SiteAdminController.java for /admin/accounts/{id}/sites and /admin/sites/{id} with Keycloak auth
 
 ## Phase 3.12: Presentation Layer - Shared Components (4 tasks)
 
