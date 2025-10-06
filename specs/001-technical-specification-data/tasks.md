@@ -124,9 +124,9 @@
 
 ## Phase 3.13: Observability & Metrics (3 tasks)
 
-- [ ] T065 [P] Implement MetricsConfiguration in shared/config/MetricsConfiguration.java with custom Micrometer counters (batch.started, batch.completed, files.uploaded, error.logged)
-- [ ] T066 [P] Configure Logback with JSON formatting in src/main/resources/logback-spring.xml with MDC support for batchId/siteId context
-- [ ] T067 Create S3HealthIndicator in shared/health/S3HealthIndicator.java implementing HealthIndicator with bucket connectivity check
+- [X] T065 [P] Implement MetricsConfiguration in shared/config/MetricsConfiguration.java with custom Micrometer counters (batch.started, batch.completed, files.uploaded, error.logged)
+- [X] T066 [P] Configure Logback with JSON formatting in src/main/resources/logback-spring.xml with MDC support for batchId/siteId context
+- [X] T067 Create S3HealthIndicator in shared/health/S3HealthIndicator.java implementing HealthIndicator with bucket connectivity check
 
 ## Phase 3.14: Validation & Testing (6 tasks)
 
