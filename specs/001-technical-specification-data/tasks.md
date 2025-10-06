@@ -47,12 +47,12 @@
 
 ## Phase 3.4: Integration Tests First (TDD - MUST FAIL) (6 tasks)
 
-- [ ] T015 [P] Write AuthenticationIntegrationTest.java with Testcontainers for Scenario 1 (client authentication and token acquisition)
-- [ ] T016 [P] Write BatchLifecycleIntegrationTest.java with Testcontainers for Scenario 2 (batch start, IN_PROGRESS status, S3 path validation, duplicate prevention)
-- [ ] T017 [P] Write FileUploadIntegrationTest.java with LocalStack S3 for Scenario 3 (multipart upload, checksum, duplicate filename rejection)
-- [ ] T018 [P] Write BatchCompletionIntegrationTest.java for Scenario 4 (batch completion, status transition, upload prevention after completion)
-- [ ] T019 [P] Write ErrorLoggingIntegrationTest.java for Scenario 5 (error recording, batch hasErrors flag, JSONB metadata)
-- [ ] T020 [P] Write BatchTimeoutIntegrationTest.java for Scenario 6 (timeout scheduler, NOT_COMPLETED status transition)
+- [X] T015 [P] Write AuthenticationIntegrationTest.java with Testcontainers for Scenario 1 (client authentication and token acquisition)
+- [X] T016 [P] Write BatchLifecycleIntegrationTest.java with Testcontainers for Scenario 2 (batch start, IN_PROGRESS status, S3 path validation, duplicate prevention)
+- [X] T017 [P] Write FileUploadIntegrationTest.java with LocalStack S3 for Scenario 3 (multipart upload, checksum, duplicate filename rejection)
+- [X] T018 [P] Write BatchCompletionIntegrationTest.java for Scenario 4 (batch completion, status transition, upload prevention after completion)
+- [X] T019 [P] Write ErrorLoggingIntegrationTest.java for Scenario 5 (error recording, batch hasErrors flag, JSONB metadata)
+- [X] T020 [P] Write BatchTimeoutIntegrationTest.java for Scenario 6 (timeout scheduler, NOT_COMPLETED status transition)
 
 ## Phase 3.5: Domain Layer - Entities & Aggregates (10 tasks)
 
