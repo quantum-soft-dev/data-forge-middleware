@@ -60,7 +60,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run tests
-        run: ./gradlew test integrationTest --no-daemon --parallel
+        run: ./gradlew test --no-daemon
 
       - name: Generate test report
         if: always()

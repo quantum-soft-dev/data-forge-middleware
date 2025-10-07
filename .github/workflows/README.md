@@ -15,7 +15,7 @@ Automated CI/CD pipeline for the Data Forge Middleware project with conditional 
 **Branches:** `main`, `release`, `develop`
 
 **Jobs executed:**
-1. ✅ **Test** - Unit tests + Integration tests with Testcontainers
+1. ✅ **Test** - All tests (unit + integration) with Testcontainers
 2. 🔍 **Code Quality** - Checkstyle, SpotBugs analysis
 3. 🔒 **Security Scan** - OWASP Dependency Check
 4. 🏗️ **Build** - Gradle build (production JAR)
@@ -26,7 +26,7 @@ Automated CI/CD pipeline for the Data Forge Middleware project with conditional 
 **Branches:** `feature/*`, `bugfix/*`, `hotfix/*`, and all others
 
 **Jobs executed:**
-1. ✅ **Test** - Unit tests + Integration tests with Testcontainers
+1. ✅ **Test** - All tests (unit + integration) with Testcontainers
 
 ## Required Secrets
 
