@@ -1,5 +1,7 @@
 package com.bitbi.dfm.auth.application;
 
+import com.bitbi.dfm.account.domain.Account;
+import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.auth.infrastructure.JwtTokenProvider;
 import com.bitbi.dfm.site.domain.Site;
@@ -27,10 +29,12 @@ public class TokenService {
     private static final Logger logger = LoggerFactory.getLogger(TokenService.class);
 
     private final SiteRepository siteRepository;
+    private final AccountRepository accountRepository;
     private final JwtTokenProvider jwtTokenProvider;
 
-    public TokenService(SiteRepository siteRepository, JwtTokenProvider jwtTokenProvider) {
+    public TokenService(SiteRepository siteRepository, AccountRepository accountRepository, JwtTokenProvider jwtTokenProvider) {
         this.siteRepository = siteRepository;
+        this.accountRepository = accountRepository;
         this.jwtTokenProvider = jwtTokenProvider;
     }
 
@@ -55,7 +59,17 @@ public class TokenService {
 
         // Validate site is active
         if (!site.getIsActive()) {
-            throw new AuthenticationException("Site is not active");
+            logger.warn("Site is not active: domain={}", domain);
+            throw new AuthenticationException("Invalid credentials");
+        }
+
+        // Validate parent account is active
+        Account account = accountRepository.findById(site.getAccountId())
+                .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
+
+        if (!account.getIsActive()) {
+            logger.warn("Parent account is not active: accountId={}, domain={}", account.getId(), domain);
+            throw new AuthenticationException("Invalid credentials");
         }
 
         // Validate clientSecret

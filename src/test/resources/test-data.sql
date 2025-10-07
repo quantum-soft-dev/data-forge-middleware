@@ -34,6 +34,16 @@ VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 INSERT INTO sites (id, account_id, domain, client_secret, display_name, is_active, created_at, updated_at)
 VALUES ('0199bab0-ca3b-e41c-5521-2f4b33fda8b6', '0199bab1-fad2-bf76-c478-eae1f61e1c17', 'store-03.example.com', 'batch-test-secret', 'Store 03', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP);
 
+-- Sites for AuthenticationIntegrationTest
+INSERT INTO sites (id, account_id, domain, client_secret, display_name, is_active, created_at, updated_at)
+VALUES ('0199bab0-1111-1111-1111-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'test-store.example.com', 'test-client-secret-uuid', 'Test Store', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP);
+
+INSERT INTO sites (id, account_id, domain, client_secret, display_name, is_active, created_at, updated_at)
+VALUES ('0199bab0-2222-2222-2222-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'inactive-store.example.com', 'inactive-secret', 'Inactive Store', false, '2025-10-01 00:00:00', CURRENT_TIMESTAMP);
+
+INSERT INTO sites (id, account_id, domain, client_secret, display_name, is_active, created_at, updated_at)
+VALUES ('0199bab0-3333-3333-3333-333333333333', '0199bab2-3cbd-cc95-a989-57ba51d258c8', 'orphaned-store.example.com', 'orphaned-secret', 'Orphaned Store (inactive parent)', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP);
+
 -- Test batches
 -- MOCK_BATCH_ID - COMPLETED to allow new batches to start for the same site
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
