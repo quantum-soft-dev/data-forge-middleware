@@ -72,8 +72,8 @@ public class TokenService {
             throw new AuthenticationException("Invalid credentials");
         }
 
-        // Validate clientSecret
-        if (!site.getCredentials().matches(domain, clientSecret)) {
+        // Validate clientSecret using bcrypt
+        if (!site.verifySecret(clientSecret)) {
             logger.warn("Invalid clientSecret for domain: {}", domain);
             throw new AuthenticationException("Invalid credentials");
         }

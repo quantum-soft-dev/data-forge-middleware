@@ -33,8 +33,8 @@ public class Site {
     @Column(name = "domain", nullable = false, unique = true, length = 255)
     private String domain;
 
-    @Column(name = "client_secret", nullable = false, length = 255)
-    private String clientSecret;
+    @Column(name = "client_secret_hash", nullable = false, length = 60)
+    private String clientSecretHash;
 
     @Column(name = "display_name", nullable = false, length = 255)
     private String displayName;
@@ -48,22 +48,23 @@ public class Site {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
-    protected Site(UUID id, UUID accountId, String domain, String clientSecret,
+    protected Site(UUID id, UUID accountId, String domain, String clientSecretHash,
                    String displayName, Boolean isActive, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.accountId = accountId;
         this.domain = domain;
-        this.clientSecret = clientSecret;
+        this.clientSecretHash = clientSecretHash;
         this.displayName = displayName;
         this.isActive = isActive;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
 
-    public static Site create(UUID accountId, String domain, String displayName) {
+    public static Site create(UUID accountId, String domain, String displayName, String clientSecretHash) {
         Objects.requireNonNull(accountId, "AccountId cannot be null");
         Objects.requireNonNull(domain, "Domain cannot be null");
         Objects.requireNonNull(displayName, "DisplayName cannot be null");
+        Objects.requireNonNull(clientSecretHash, "ClientSecretHash cannot be null");
 
         if (domain.isBlank()) {
             throw new IllegalArgumentException("Domain cannot be blank");
@@ -71,12 +72,14 @@ public class Site {
         if (displayName.isBlank()) {
             throw new IllegalArgumentException("DisplayName cannot be blank");
         }
+        if (clientSecretHash.isBlank()) {
+            throw new IllegalArgumentException("ClientSecretHash cannot be blank");
+        }
 
         UUID id = UUID.randomUUID();
-        String clientSecret = UUID.randomUUID().toString();
         LocalDateTime now = LocalDateTime.now();
 
-        return new Site(id, accountId, domain.toLowerCase().trim(), clientSecret,
+        return new Site(id, accountId, domain.toLowerCase().trim(), clientSecretHash,
                 displayName.trim(), true, now, now);
     }
 
@@ -109,8 +112,8 @@ public class Site {
         return this.isActive;
     }
 
-    public SiteCredentials getCredentials() {
-        return new SiteCredentials(domain, clientSecret);
+    public boolean verifySecret(String providedSecret) {
+        return new SiteCredentials(domain, clientSecretHash).verifySecret(providedSecret);
     }
 
     @PrePersist

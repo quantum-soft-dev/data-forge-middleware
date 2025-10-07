@@ -1,7 +1,6 @@
 package com.bitbi.dfm.auth.domain;
 
 import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.site.domain.SiteCredentials;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
@@ -53,9 +52,13 @@ public class AuthenticationService {
             return false;
         }
 
-        // Validate credentials match
-        SiteCredentials credentials = site.getCredentials();
-        return credentials.matches(providedDomain, providedSecret);
+        // Validate domain matches (case-insensitive)
+        if (!site.getDomain().equalsIgnoreCase(providedDomain)) {
+            return false;
+        }
+
+        // Validate secret using bcrypt
+        return site.verifySecret(providedSecret);
     }
 
     /**

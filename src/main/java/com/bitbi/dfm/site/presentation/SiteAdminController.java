@@ -68,9 +68,9 @@ public class SiteAdminController {
 
             logger.info("Creating site: accountId={}, domain={}, displayName={}", accountId, domain, displayName);
 
-            Site site = siteService.createSite(accountId, domain, displayName);
+            SiteService.SiteCreationResult result = siteService.createSite(accountId, domain, displayName);
 
-            Map<String, Object> response = createSiteResponse(site, true);
+            Map<String, Object> response = createSiteCreationResponse(result);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (SiteService.SiteAlreadyExistsException e) {
@@ -103,7 +103,7 @@ public class SiteAdminController {
     public ResponseEntity<Map<String, Object>> getSite(@PathVariable("id") UUID siteId) {
         try {
             Site site = siteService.getSite(siteId);
-            Map<String, Object> response = createSiteResponse(site, false);
+            Map<String, Object> response = createSiteResponse(site);
             return ResponseEntity.ok(response);
 
         } catch (SiteService.SiteNotFoundException e) {
@@ -133,7 +133,7 @@ public class SiteAdminController {
             List<Site> sites = siteService.listSitesByAccount(accountId);
 
             List<Map<String, Object>> siteList = sites.stream()
-                    .map(site -> createSiteResponse(site, false))
+                    .map(this::createSiteResponse)
                     .collect(Collectors.toList());
 
             return ResponseEntity.ok(siteList);
@@ -172,7 +172,7 @@ public class SiteAdminController {
 
             Site site = siteService.updateSite(siteId, displayName);
 
-            Map<String, Object> response = createSiteResponse(site, false);
+            Map<String, Object> response = createSiteResponse(site);
             return ResponseEntity.ok(response);
 
         } catch (SiteService.SiteNotFoundException e) {
@@ -244,7 +244,23 @@ public class SiteAdminController {
         }
     }
 
-    private Map<String, Object> createSiteResponse(Site site, boolean includeClientSecret) {
+    private Map<String, Object> createSiteCreationResponse(SiteService.SiteCreationResult result) {
+        Map<String, Object> response = new HashMap<>();
+        Site site = result.site();
+
+        response.put("id", site.getId());
+        response.put("accountId", site.getAccountId());
+        response.put("domain", site.getDomain());
+        response.put("displayName", site.getDisplayName());
+        response.put("isActive", site.getIsActive());
+        response.put("createdAt", site.getCreatedAt().toString());
+        response.put("updatedAt", site.getUpdatedAt().toString());
+        response.put("clientSecret", result.plaintextSecret()); // Only shown at creation
+
+        return response;
+    }
+
+    private Map<String, Object> createSiteResponse(Site site) {
         Map<String, Object> response = new HashMap<>();
         response.put("id", site.getId());
         response.put("accountId", site.getAccountId());
@@ -253,10 +269,7 @@ public class SiteAdminController {
         response.put("isActive", site.getIsActive());
         response.put("createdAt", site.getCreatedAt().toString());
         response.put("updatedAt", site.getUpdatedAt().toString());
-
-        if (includeClientSecret) {
-            response.put("clientSecret", site.getClientSecret());
-        }
+        // clientSecret never returned after creation for security
 
         return response;
     }

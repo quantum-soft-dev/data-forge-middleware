@@ -1,6 +1,7 @@
 package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
 import org.slf4j.Logger;
@@ -37,23 +38,38 @@ public class SiteService {
     /**
      * Create new site for account.
      *
-     * @param accountId account identifier
-     * @param domain    site domain (must be unique)
-     * @return created site with generated clientSecret
+     * @param accountId   account identifier
+     * @param domain      site domain (must be unique)
+     * @param displayName site display name
+     * @return SiteCreationResult with site and plaintext clientSecret (only shown once)
      * @throws SiteAlreadyExistsException if domain already exists
      */
-    public Site createSite(UUID accountId, String domain, String displayName) {
+    public SiteCreationResult createSite(UUID accountId, String domain, String displayName) {
         logger.info("Creating new site: accountId={}, domain={}, displayName={}", accountId, domain, displayName);
 
         if (siteRepository.findByDomain(domain).isPresent()) {
             throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
         }
 
-        Site site = Site.create(accountId, domain, displayName);
+        // Generate plaintext secret and bcrypt hash
+        String[] secretPair = SiteCredentials.generateWithHash(domain);
+        String plaintextSecret = secretPair[0];
+        String hashedSecret = secretPair[1];
+
+        Site site = Site.create(accountId, domain, displayName, hashedSecret);
         Site saved = siteRepository.save(site);
 
         logger.info("Site created successfully: id={}, domain={}", saved.getId(), saved.getDomain());
-        return saved;
+        return new SiteCreationResult(saved, plaintextSecret);
+    }
+
+    /**
+     * Result of site creation containing site entity and plaintext secret.
+     *
+     * @param site            created site entity
+     * @param plaintextSecret plaintext clientSecret (only returned once at creation)
+     */
+    public record SiteCreationResult(Site site, String plaintextSecret) {
     }
 
     /**
