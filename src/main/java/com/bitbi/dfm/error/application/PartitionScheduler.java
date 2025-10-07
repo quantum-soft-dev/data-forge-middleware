@@ -81,6 +81,59 @@ public class PartitionScheduler {
     }
 
     /**
+     * Drop old error_logs partitions beyond retention period.
+     * <p>
+     * Runs on the 1st day of each month at 01:00:00 (after partition creation).
+     * Cron expression: 0 0 1 1 * * (1 AM on the first day of every month)
+     * Retention: 24 months (2 years)
+     * </p>
+     */
+    @Scheduled(cron = "0 0 1 1 * *")
+    public void dropOldPartitions() {
+        final int RETENTION_MONTHS = 24;
+        YearMonth cutoffMonth = YearMonth.now().minusMonths(RETENTION_MONTHS);
+
+        logger.info("Checking for partitions older than {} months (cutoff: {})",
+                   RETENTION_MONTHS, cutoffMonth);
+
+        dropPartition(cutoffMonth);
+    }
+
+    /**
+     * Drop partition for specific year-month.
+     *
+     * @param yearMonth year-month to drop partition for
+     */
+    public void dropPartition(YearMonth yearMonth) {
+        String partitionName = "error_logs_" + yearMonth.format(PARTITION_NAME_FORMATTER);
+
+        try {
+            // First check if partition exists
+            String checkSql = String.format(
+                    "SELECT EXISTS (SELECT 1 FROM pg_tables WHERE tablename = '%s')",
+                    partitionName
+            );
+
+            Boolean exists = jdbcTemplate.queryForObject(checkSql, Boolean.class);
+
+            if (Boolean.TRUE.equals(exists)) {
+                logger.info("Dropping old partition: {} (retention policy: 24 months)", partitionName);
+
+                String dropSql = String.format("DROP TABLE IF EXISTS %s", partitionName);
+                jdbcTemplate.execute(dropSql);
+
+                logger.info("Successfully dropped partition: {}", partitionName);
+            } else {
+                logger.debug("Partition does not exist, skipping: {}", partitionName);
+            }
+
+        } catch (Exception e) {
+            // Log error but don't fail - partition might not exist or be in use
+            logger.error("Failed to drop partition: {}, error: {}", partitionName, e.getMessage(), e);
+        }
+    }
+
+    /**
      * Initialize partitions for current and next month.
      * <p>
      * Called on application startup to ensure partitions exist.
