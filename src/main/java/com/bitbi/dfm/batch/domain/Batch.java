@@ -59,6 +59,10 @@ public class Batch {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     protected Batch(UUID id, UUID accountId, UUID siteId, BatchStatus status, String s3Path,
                     Integer uploadedFilesCount, Long totalSize, Boolean hasErrors,
                     LocalDateTime startedAt, LocalDateTime completedAt, LocalDateTime createdAt) {
@@ -73,6 +77,7 @@ public class Batch {
         this.startedAt = startedAt;
         this.completedAt = completedAt;
         this.createdAt = createdAt;
+        // version is automatically managed by JPA
     }
 
     public static Batch start(UUID accountId, UUID siteId, String domain) {

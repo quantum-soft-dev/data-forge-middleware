@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import jakarta.persistence.OptimisticLockException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -69,6 +70,10 @@ public class BatchTimeoutScheduler {
             try {
                 batchLifecycleService.markBatchNotCompleted(batch.getId());
                 successCount++;
+            } catch (OptimisticLockException e) {
+                // Another scheduler instance already updated this batch - this is expected
+                logger.debug("Batch already updated by another instance: batchId={}", batch.getId());
+                successCount++; // Count as success since batch was processed
             } catch (Exception e) {
                 logger.error("Failed to mark batch as NOT_COMPLETED: batchId={}, error={}",
                            batch.getId(), e.getMessage(), e);
