@@ -56,7 +56,7 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
     // OpenAPI/Swagger
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.3")
 
     // Metrics (managed by Spring Boot)
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")

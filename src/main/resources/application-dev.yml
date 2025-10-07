@@ -33,6 +33,16 @@ jwt:
 batch:
   timeout-minutes: 60
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: alpha
+    tagsSorter: alpha
+
 logging:
   level:
     root: INFO

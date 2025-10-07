@@ -54,7 +54,7 @@ public class KeycloakSecurityConfig {
                 // Public endpoints
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
 
                 // Admin endpoints - require Keycloak ROLE_ADMIN
                 .requestMatchers("/admin/**").hasRole("ADMIN")
