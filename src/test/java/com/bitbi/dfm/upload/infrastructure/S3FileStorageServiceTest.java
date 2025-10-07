@@ -125,7 +125,7 @@ class S3FileStorageServiceTest {
     }
 
     @Test
-    @DisplayName("Should calculate MD5 checksum correctly")
+    @DisplayName("Should calculate SHA-256 checksum correctly")
     void shouldCalculateChecksum() {
         // Given
         MultipartFile file = new MockMultipartFile(
@@ -140,8 +140,8 @@ class S3FileStorageServiceTest {
 
         // Then
         assertThat(checksum).isNotNull();
-        assertThat(checksum).hasSize(32); // MD5 hex string is 32 characters
-        assertThat(checksum).matches("[a-f0-9]{32}"); // Hex format
+        assertThat(checksum).hasSize(64); // SHA-256 hex string is 64 characters
+        assertThat(checksum).matches("[a-f0-9]{64}"); // Hex format
     }
 
     @Test
@@ -189,7 +189,7 @@ class S3FileStorageServiceTest {
     }
 
     @Test
-    @DisplayName("Should retry with delay between attempts")
+    @DisplayName("Should retry with exponential backoff delay between attempts")
     void shouldDelayBetweenRetries() {
         // Given
         MultipartFile file = new MockMultipartFile(
@@ -218,8 +218,9 @@ class S3FileStorageServiceTest {
 
         // Then
         assertThat(result).isEqualTo(s3Path + fileName);
-        // Should have at least 2 seconds delay (2 retries * 1 second)
-        assertThat(duration).isGreaterThanOrEqualTo(2000);
+        // With exponential backoff: attempt 1 (100-200ms) + attempt 2 (200-300ms) = 300-500ms minimum
+        assertThat(duration).isGreaterThanOrEqualTo(300);
+        assertThat(duration).isLessThan(1000); // Should be much less than old 2000ms fixed delay
         verify(s3Client, times(3)).putObject(any(PutObjectRequest.class), any(RequestBody.class));
     }
 }

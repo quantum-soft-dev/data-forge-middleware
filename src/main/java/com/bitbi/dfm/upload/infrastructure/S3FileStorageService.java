@@ -32,7 +32,8 @@ public class S3FileStorageService {
 
     private static final Logger logger = LoggerFactory.getLogger(S3FileStorageService.class);
     private static final int MAX_RETRIES = 3;
-    private static final long RETRY_DELAY_MS = 1000;
+    private static final long BASE_DELAY_MS = 100; // Base delay for exponential backoff
+    private static final long MAX_DELAY_MS = 5000; // Maximum delay cap
 
     private final S3Client s3Client;
     private final String bucketName;
@@ -80,7 +81,10 @@ public class S3FileStorageService {
                     throw new FileStorageException(
                             "Failed to upload file to S3 after " + MAX_RETRIES + " attempts: " + fileName, e);
                 }
-                sleep(RETRY_DELAY_MS);
+                // Exponential backoff with jitter
+                long delay = calculateBackoffDelay(attempt);
+                logger.debug("Retrying after {} ms", delay);
+                sleep(delay);
 
             } catch (IOException e) {
                 throw new FileStorageException("Failed to read file content: " + fileName, e);
@@ -91,27 +95,30 @@ public class S3FileStorageService {
     }
 
     /**
-     * Calculate MD5 checksum for file.
+     * Calculate SHA-256 checksum for file.
+     * <p>
+     * Uses SHA-256 instead of MD5 for stronger integrity verification.
+     * </p>
      *
      * @param file multipart file
-     * @return hex-encoded MD5 checksum
+     * @return hex-encoded SHA-256 checksum
      * @throws FileStorageException if checksum calculation fails
      */
     public String calculateChecksum(MultipartFile file) {
         try (InputStream inputStream = file.getInputStream()) {
-            MessageDigest md5 = MessageDigest.getInstance("MD5");
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
             byte[] buffer = new byte[8192];
             int bytesRead;
 
             while ((bytesRead = inputStream.read(buffer)) != -1) {
-                md5.update(buffer, 0, bytesRead);
+                sha256.update(buffer, 0, bytesRead);
             }
 
-            byte[] digest = md5.digest();
+            byte[] digest = sha256.digest();
             return HexFormat.of().formatHex(digest);
 
         } catch (NoSuchAlgorithmException e) {
-            throw new FileStorageException("MD5 algorithm not available", e);
+            throw new FileStorageException("SHA-256 algorithm not available", e);
         } catch (IOException e) {
             throw new FileStorageException("Failed to read file for checksum calculation", e);
         }
@@ -135,6 +142,32 @@ public class S3FileStorageService {
             }
             throw new FileStorageException("Failed to check file existence: " + s3Key, e);
         }
+    }
+
+    /**
+     * Calculate exponential backoff delay with jitter.
+     * <p>
+     * Formula: min(BASE_DELAY * 2^(attempt-1) + random(0, BASE_DELAY), MAX_DELAY)
+     * </p>
+     * <p>
+     * Example delays:
+     * - Attempt 1: 100-200ms
+     * - Attempt 2: 200-300ms
+     * - Attempt 3: 400-500ms
+     * </p>
+     *
+     * @param attempt current retry attempt (1-based)
+     * @return delay in milliseconds
+     */
+    private long calculateBackoffDelay(int attempt) {
+        // Exponential backoff: base * 2^(attempt-1)
+        long exponentialDelay = BASE_DELAY_MS * (1L << (attempt - 1));
+
+        // Add jitter: random value between 0 and BASE_DELAY_MS
+        long jitter = (long) (Math.random() * BASE_DELAY_MS);
+
+        // Cap at MAX_DELAY_MS
+        return Math.min(exponentialDelay + jitter, MAX_DELAY_MS);
     }
 
     private void sleep(long milliseconds) {
