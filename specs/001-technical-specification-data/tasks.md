@@ -136,6 +136,14 @@
 - [X] T071 [P] Write unit tests for S3FileStorageService retry logic in upload/infrastructure/S3FileStorageServiceTest.java
 - [X] T072 Measure JaCoCo code coverage and ensure ≥80% per module
 - [ ] T073 Run performance tests with Apache Bench to validate <1000ms p95 latency for non-upload endpoints
+- [X] T073.1 Fix JWT authentication filter for /api/v1/** endpoints (add JwtAuthenticationFilter before OAuth2 filter)
+- [X] T073.2 Add authorization checks in controllers to verify site ownership (AuthorizationHelper + verifySiteOwnership)
+- [X] T073.3 Fix batch counter updates in FileUploadService (call batch.incrementFileCount after upload)
+- [X] T073.4 Add startup validation for JWT secret (SecurityConfigValidator with fail-fast)
+- [X] T073.5 Align file size limits between Spring multipart (128MB) and service layer
+- [X] T073.6 Verify missing index on batches.account_id (already present in V6 migration)
+- [X] T073.7 Fix race condition in concurrent batch limit (use countActiveBatchesByAccountIdWithLock with FOR UPDATE)
+- [X] T073.8 Separate S3 upload from database transaction (validate first, upload S3, then commit metadata in new transaction)
 
 ## Phase 3.15: Documentation & Finalization (4 tasks)
 

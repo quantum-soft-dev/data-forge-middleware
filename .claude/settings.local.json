@@ -19,7 +19,10 @@
       "Bash(docker-compose:*)",
       "Bash(docker rm:*)",
       "Read(//private/tmp/**)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(/dev/null 2)",
+      "Bash(1 sleep 1 ps aux)",
+      "Bash(xargs:*)"
     ],
     "deny": [],
     "ask": []
