@@ -35,8 +35,8 @@ class AuthenticationServiceTest {
         String secret = "secret123";
 
         when(mockSite.canAuthenticate()).thenReturn(true);
-        when(mockSite.getCredentials()).thenReturn(mock(com.bitbi.dfm.site.domain.SiteCredentials.class));
-        when(mockSite.getCredentials().matches(domain, secret)).thenReturn(true);
+        when(mockSite.getDomain()).thenReturn(domain);
+        when(mockSite.verifySecret(secret)).thenReturn(true);
 
         // When
         boolean result = authenticationService.validateCredentials(mockSite, domain, secret, true);
@@ -44,7 +44,8 @@ class AuthenticationServiceTest {
         // Then
         assertTrue(result);
         verify(mockSite, times(1)).canAuthenticate();
-        verify(mockSite, times(2)).getCredentials();
+        verify(mockSite, times(1)).getDomain();
+        verify(mockSite, times(1)).verifySecret(secret);
     }
 
     @Test
@@ -62,7 +63,8 @@ class AuthenticationServiceTest {
         // Then
         assertFalse(result);
         verify(mockSite, times(1)).canAuthenticate();
-        verify(mockSite, never()).getCredentials();
+        verify(mockSite, never()).getDomain();
+        verify(mockSite, never()).verifySecret(anyString());
     }
 
     @Test
@@ -80,7 +82,8 @@ class AuthenticationServiceTest {
         // Then
         assertFalse(result);
         verify(mockSite, times(1)).canAuthenticate();
-        verify(mockSite, never()).getCredentials();
+        verify(mockSite, never()).getDomain();
+        verify(mockSite, never()).verifySecret(anyString());
     }
 
     @Test
@@ -91,8 +94,8 @@ class AuthenticationServiceTest {
         String secret = "wrong-secret";
 
         when(mockSite.canAuthenticate()).thenReturn(true);
-        when(mockSite.getCredentials()).thenReturn(mock(com.bitbi.dfm.site.domain.SiteCredentials.class));
-        when(mockSite.getCredentials().matches(domain, secret)).thenReturn(false);
+        when(mockSite.getDomain()).thenReturn(domain);
+        when(mockSite.verifySecret(secret)).thenReturn(false);
 
         // When
         boolean result = authenticationService.validateCredentials(mockSite, domain, secret, true);
@@ -100,7 +103,8 @@ class AuthenticationServiceTest {
         // Then
         assertFalse(result);
         verify(mockSite, times(1)).canAuthenticate();
-        verify(mockSite, times(2)).getCredentials();
+        verify(mockSite, times(1)).getDomain();
+        verify(mockSite, times(1)).verifySecret(secret);
     }
 
     @Test

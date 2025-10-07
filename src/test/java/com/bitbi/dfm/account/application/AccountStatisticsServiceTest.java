@@ -53,8 +53,8 @@ class AccountStatisticsServiceTest {
         UUID site1Id = UUID.randomUUID();
         UUID site2Id = UUID.randomUUID();
 
-        Site site1 = Site.create(accountId, "site1.example.com", "Site 1");
-        Site site2 = Site.create(accountId, "site2.example.com", "Site 2");
+        Site site1 = Site.createForTesting(accountId, "site1.example.com", "Site 1");
+        Site site2 = Site.createForTesting(accountId, "site2.example.com", "Site 2");
         List<Site> sites = Arrays.asList(site1, site2);
         List<UUID> siteIds = Arrays.asList(site1Id, site2Id);
 
@@ -279,9 +279,9 @@ class AccountStatisticsServiceTest {
     void shouldGetAccountStatisticsWithMultipleSites() {
         // Given
         UUID accountId = UUID.randomUUID();
-        Site site1 = Site.create(accountId, "site1.example.com", "Site 1");
-        Site site2 = Site.create(accountId, "site2.example.com", "Site 2");
-        Site site3 = Site.create(accountId, "site3.example.com", "Site 3");
+        Site site1 = Site.createForTesting(accountId, "site1.example.com", "Site 1");
+        Site site2 = Site.createForTesting(accountId, "site2.example.com", "Site 2");
+        Site site3 = Site.createForTesting(accountId, "site3.example.com", "Site 3");
         List<Site> allSites = Arrays.asList(site1, site2, site3);
         List<Site> activeSites = Arrays.asList(site1, site3);
 

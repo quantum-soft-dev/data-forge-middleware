@@ -22,7 +22,10 @@
       "Bash(timeout:*)",
       "Bash(/dev/null 2)",
       "Bash(1 sleep 1 ps aux)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)"
     ],
     "deny": [],
     "ask": []

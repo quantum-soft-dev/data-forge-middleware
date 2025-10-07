@@ -83,6 +83,21 @@ public class Site {
                 displayName.trim(), true, now, now);
     }
 
+    /**
+     * Create site with generated bcrypt hash for testing purposes.
+     * WARNING: Only use in test code.
+     *
+     * @param accountId   account identifier
+     * @param domain      site domain
+     * @param displayName site display name
+     * @return created site with auto-generated bcrypt hash
+     */
+    public static Site createForTesting(UUID accountId, String domain, String displayName) {
+        String[] secretPair = SiteCredentials.generateWithHash(domain);
+        String hashedSecret = secretPair[1]; // Use only hash, discard plaintext
+        return create(accountId, domain, displayName, hashedSecret);
+    }
+
     public void updateDisplayName(String newDisplayName) {
         Objects.requireNonNull(newDisplayName, "DisplayName cannot be null");
         if (newDisplayName.isBlank()) {

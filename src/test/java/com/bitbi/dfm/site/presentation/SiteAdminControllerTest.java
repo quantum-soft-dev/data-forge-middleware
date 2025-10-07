@@ -39,7 +39,7 @@ class SiteAdminControllerTest {
         testSiteId = UUID.randomUUID();
         testAccountId = UUID.randomUUID();
 
-        testSite = Site.create(testAccountId, "test.example.com", "Test Site");
+        testSite = Site.createForTesting(testAccountId, "test.example.com", "Test Site");
     }
 
     @Test
@@ -50,8 +50,9 @@ class SiteAdminControllerTest {
         request.put("domain", "test.example.com");
         request.put("displayName", "Test Site");
 
+        SiteService.SiteCreationResult result = new SiteService.SiteCreationResult(testSite, "test-secret-plaintext");
         when(siteService.createSite(testAccountId, "test.example.com", "Test Site"))
-                .thenReturn(testSite);
+                .thenReturn(result);
 
         // When
         ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
@@ -62,6 +63,7 @@ class SiteAdminControllerTest {
         assertEquals(testSite.getDomain(), response.getBody().get("domain"));
         assertEquals(testSite.getDisplayName(), response.getBody().get("displayName"));
         assertTrue(response.getBody().containsKey("clientSecret"));
+        assertEquals("test-secret-plaintext", response.getBody().get("clientSecret"));
         verify(siteService, times(1)).createSite(testAccountId, "test.example.com", "Test Site");
     }
 
@@ -229,8 +231,8 @@ class SiteAdminControllerTest {
     @DisplayName("Should list sites by account successfully")
     void shouldListSitesByAccountSuccessfully() {
         // Given
-        Site site1 = Site.create(testAccountId, "site1.example.com", "Site 1");
-        Site site2 = Site.create(testAccountId, "site2.example.com", "Site 2");
+        Site site1 = Site.createForTesting(testAccountId, "site1.example.com", "Site 1");
+        Site site2 = Site.createForTesting(testAccountId, "site2.example.com", "Site 2");
         List<Site> sites = Arrays.asList(site1, site2);
 
         when(siteService.listSitesByAccount(testAccountId)).thenReturn(sites);
