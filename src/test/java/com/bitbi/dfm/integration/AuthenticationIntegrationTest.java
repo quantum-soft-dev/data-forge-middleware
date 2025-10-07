@@ -1,15 +1,7 @@
 package com.bitbi.dfm.integration;
 
-import com.bitbi.dfm.config.TestSecurityConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Base64;
 
@@ -25,16 +17,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * @see <a href="specs/001-technical-specification-data/quickstart.md">Quickstart Scenario 1</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@Sql("/test-data.sql")
 @DisplayName("Scenario 1: Client Authentication Integration Test")
-class AuthenticationIntegrationTest {
-
-    @Autowired
-    private MockMvc mockMvc;
+class AuthenticationIntegrationTest extends BaseIntegrationTest {
 
     /**
      * Scenario 1: Client Authentication and Token Acquisition

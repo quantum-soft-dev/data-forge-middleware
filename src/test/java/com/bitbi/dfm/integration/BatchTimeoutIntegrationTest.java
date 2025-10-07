@@ -2,11 +2,6 @@ package com.bitbi.dfm.integration;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -17,25 +12,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Tests timeout scheduler that marks expired IN_PROGRESS batches as NOT_COMPLETED.
  * </p>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
 @DisplayName("Scenario 6: Batch Timeout Integration Test")
-class BatchTimeoutIntegrationTest {
-
-    @Autowired
-    private MockMvc mockMvc;
-
-    private static final String MOCK_JWT = "Bearer mock.jwt.token";
-    private static final String MOCK_ADMIN_JWT = "Bearer mock.admin.jwt.token";
+class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
 
     @Test
     @DisplayName("Should mark expired batch as NOT_COMPLETED")
     void shouldMarkExpiredBatchAsNotCompleted() throws Exception {
         // Given: Batch created and left in IN_PROGRESS
         String batchResponse = mockMvc.perform(post("/api/v1/batch/start")
-                        .header("Authorization", MOCK_JWT))
-                .andExpect(status().isOk())
+                        .header("Authorization", generateTestToken()))
+                .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -62,18 +48,18 @@ class BatchTimeoutIntegrationTest {
     void shouldAllowNewBatchAfterTimeout() throws Exception {
         // Given: Previous batch timed out and marked NOT_COMPLETED
         mockMvc.perform(post("/api/v1/batch/start")
-                        .header("Authorization", MOCK_JWT))
-                .andExpect(status().isOk());
+                        .header("Authorization", generateTestToken()))
+                .andExpect(status().isCreated());
 
         // Simulate timeout
         // (Batch status changed from IN_PROGRESS to NOT_COMPLETED)
 
         // When: Start new batch
         mockMvc.perform(post("/api/v1/batch/start")
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: Success (no IN_PROGRESS conflict)
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.batchId").exists());
     }
 
@@ -82,8 +68,8 @@ class BatchTimeoutIntegrationTest {
     void shouldNotTimeoutCompletedBatch() throws Exception {
         // Given: Batch completed before timeout
         String batchResponse = mockMvc.perform(post("/api/v1/batch/start")
-                        .header("Authorization", MOCK_JWT))
-                .andExpect(status().isOk())
+                        .header("Authorization", generateTestToken()))
+                .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

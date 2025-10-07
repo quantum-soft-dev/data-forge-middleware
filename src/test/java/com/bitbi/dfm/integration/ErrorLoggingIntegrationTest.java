@@ -2,12 +2,7 @@ package com.bitbi.dfm.integration;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -18,16 +13,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Tests error recording, batch hasErrors flag, and JSONB metadata storage.
  * </p>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
 @DisplayName("Scenario 5: Error Logging Integration Test")
-class ErrorLoggingIntegrationTest {
+class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    private static final String MOCK_JWT = "Bearer mock.jwt.token";
     private static final String MOCK_BATCH_ID = "test-batch-id";
 
     @Test
@@ -52,7 +40,7 @@ class ErrorLoggingIntegrationTest {
 
         // When: POST /api/v1/error/{batchId}
         mockMvc.perform(post("/api/v1/error/{batchId}", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT)
+                        .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
 
@@ -78,7 +66,7 @@ class ErrorLoggingIntegrationTest {
 
         // When: Log error
         mockMvc.perform(post("/api/v1/error/{batchId}", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT)
+                        .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
                 .andExpect(status().isNoContent());
@@ -101,7 +89,7 @@ class ErrorLoggingIntegrationTest {
 
         // When: POST /api/v1/error (no batchId)
         mockMvc.perform(post("/api/v1/error")
-                        .header("Authorization", MOCK_JWT)
+                        .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
 
@@ -123,7 +111,7 @@ class ErrorLoggingIntegrationTest {
 
         // When: Log error
         mockMvc.perform(post("/api/v1/error/{batchId}", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT)
+                        .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
                 .andExpect(status().isNoContent());

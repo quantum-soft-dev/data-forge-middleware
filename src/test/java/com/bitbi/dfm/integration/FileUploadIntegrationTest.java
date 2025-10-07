@@ -2,12 +2,7 @@ package com.bitbi.dfm.integration;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -18,16 +13,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Tests multipart upload, checksum calculation, S3 storage, and duplicate filename rejection.
  * </p>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
 @DisplayName("Scenario 3: File Upload Integration Test")
-class FileUploadIntegrationTest {
+class FileUploadIntegrationTest extends BaseIntegrationTest {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    private static final String MOCK_JWT = "Bearer mock.jwt.token";
     private static final String MOCK_BATCH_ID = "test-batch-id";
 
     @Test
@@ -47,7 +35,7 @@ class FileUploadIntegrationTest {
         mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file1)
                         .file(file2)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: Success with upload summary
                 .andExpect(status().isOk())
@@ -73,7 +61,7 @@ class FileUploadIntegrationTest {
         // First upload succeeds
         mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Attempt duplicate upload
@@ -84,7 +72,7 @@ class FileUploadIntegrationTest {
 
         mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(duplicate)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: 400 Bad Request
                 .andExpect(status().isBadRequest())
@@ -103,7 +91,7 @@ class FileUploadIntegrationTest {
         // When: Retry upload with same filename
         mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: Success (no duplicate check for failed uploads)
                 .andExpect(status().isOk())

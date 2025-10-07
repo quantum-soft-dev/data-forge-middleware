@@ -2,12 +2,7 @@ package com.bitbi.dfm.integration;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -19,16 +14,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * and prevention of uploads after completion.
  * </p>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
 @DisplayName("Scenario 4: Batch Completion Integration Test")
-class BatchCompletionIntegrationTest {
+class BatchCompletionIntegrationTest extends BaseIntegrationTest {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    private static final String MOCK_JWT = "Bearer mock.jwt.token";
     private static final String MOCK_BATCH_ID = "test-batch-id";
 
     @Test
@@ -37,7 +25,7 @@ class BatchCompletionIntegrationTest {
         // Given: Batch with uploaded files
         // When: POST /api/v1/batch/{batchId}/complete
         mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: Batch completed
                 .andExpect(status().isOk())
@@ -56,7 +44,7 @@ class BatchCompletionIntegrationTest {
     void shouldPreventFileUploadAfterBatchCompletion() throws Exception {
         // Given: Completed batch
         mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Attempt to upload file
@@ -67,7 +55,7 @@ class BatchCompletionIntegrationTest {
 
         mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: 400 Bad Request
                 .andExpect(status().isBadRequest())
@@ -79,12 +67,12 @@ class BatchCompletionIntegrationTest {
     void shouldPreventDoubleCompletion() throws Exception {
         // Given: Already completed batch
         mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Attempt to complete again
         mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: 400 Bad Request
                 .andExpect(status().isBadRequest())
@@ -96,15 +84,15 @@ class BatchCompletionIntegrationTest {
     void shouldAllowNewBatchAfterCompletion() throws Exception {
         // Given: Previous batch completed
         mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Start new batch
         mockMvc.perform(post("/api/v1/batch/start")
-                        .header("Authorization", MOCK_JWT))
+                        .header("Authorization", generateTestToken()))
 
                 // Then: Success (no more IN_PROGRESS conflict)
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.batchId").exists());
     }
 }
