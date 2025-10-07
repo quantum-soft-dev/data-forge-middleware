@@ -70,19 +70,47 @@ public enum BatchStatus {
 
     /**
      * Validate transition from this status to target status.
+     * <p>
+     * Explicit state machine validation enforcing allowed transitions only:
+     * - IN_PROGRESS → COMPLETED
+     * - IN_PROGRESS → NOT_COMPLETED
+     * - IN_PROGRESS → FAILED
+     * - IN_PROGRESS → CANCELLED
+     * All other transitions are forbidden.
+     * </p>
      *
      * @param targetStatus the desired target status
      * @throws IllegalStateException if transition is not allowed
      */
     public void validateTransition(BatchStatus targetStatus) {
+        // Check if attempting to transition from terminal state
         if (this.isTerminal()) {
             throw new IllegalStateException(
                     String.format("Cannot transition from terminal status %s to %s", this, targetStatus)
             );
         }
 
-        if (this == IN_PROGRESS && targetStatus == IN_PROGRESS) {
-            throw new IllegalStateException("Batch is already IN_PROGRESS");
+        // Check if attempting to stay in same state
+        if (this == targetStatus) {
+            throw new IllegalStateException(
+                    String.format("Invalid transition: already in status %s", this)
+            );
+        }
+
+        // Explicit state machine validation for IN_PROGRESS
+        if (this == IN_PROGRESS) {
+            boolean isValidTransition = targetStatus == COMPLETED ||
+                                       targetStatus == NOT_COMPLETED ||
+                                       targetStatus == FAILED ||
+                                       targetStatus == CANCELLED;
+
+            if (!isValidTransition) {
+                throw new IllegalStateException(
+                        String.format("Invalid transition from %s to %s. " +
+                                     "Allowed: COMPLETED, NOT_COMPLETED, FAILED, CANCELLED",
+                                     this, targetStatus)
+                );
+            }
         }
     }
 }
