@@ -16,7 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Scenario 3: File Upload Integration Test")
 class FileUploadIntegrationTest extends BaseIntegrationTest {
 
-    private static final String MOCK_BATCH_ID = "test-batch-id";
+    private static final String MOCK_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
 
     @Test
     @DisplayName("Should upload files to S3 with checksum validation")

@@ -98,7 +98,7 @@ public class FileUploadController {
         } catch (FileUploadService.InvalidBatchStatusException e) {
             logger.warn("Invalid batch status: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Batch is not accepting uploads"));
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Cannot upload files to completed batch"));
 
         } catch (FileUploadService.DuplicateFileException e) {
             logger.warn("Duplicate filename: {}", e.getMessage());

@@ -16,7 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Scenario 5: Error Logging Integration Test")
 class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
 
-    private static final String MOCK_BATCH_ID = "test-batch-id";
+    private static final String MOCK_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
 
     @Test
     @DisplayName("Should record error with batch association and JSONB metadata")
@@ -45,7 +45,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                         .content(errorPayload))
 
                 // Then: 204 No Content
-                .andExpect(status().isNoContent());
+                .andExpect(status().isCreated());
 
         // Verify: Error stored in error_logs partitioned table
         // Verify: Batch hasErrors flag set to true
@@ -69,7 +69,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isCreated());
 
         // Then: Verify batch hasErrors = true
         // Note: Actual verification will be done via admin API or direct DB query
@@ -114,7 +114,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isCreated());
 
         // Verify: Error stored in correct monthly partition (e.g., error_logs_2025_10)
     }

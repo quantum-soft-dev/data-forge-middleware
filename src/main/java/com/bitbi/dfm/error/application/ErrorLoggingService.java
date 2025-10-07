@@ -78,6 +78,44 @@ public class ErrorLoggingService {
     }
 
     /**
+     * Log standalone error without batch association.
+     * <p>
+     * Used for errors that occur outside of batch processing context,
+     * such as configuration errors, startup errors, or authentication errors.
+     * </p>
+     *
+     * @param siteId   site identifier
+     * @param type     error type (e.g., "ConfigurationError", "AuthenticationError")
+     * @param message  error message
+     * @param metadata optional error metadata (stored as JSONB)
+     * @return created error log
+     */
+    public ErrorLog logStandaloneError(UUID siteId, String type, String message, Map<String, Object> metadata) {
+        logger.debug("Logging standalone error: siteId={}, type={}, message={}",
+                    siteId, type, message);
+
+        ErrorLog errorLog = ErrorLog.create(siteId, null, type, type, message, null, null, metadata);
+        ErrorLog saved = errorLogRepository.save(errorLog);
+
+        logger.info("Standalone error logged successfully: errorId={}, siteId={}, type={}",
+                   saved.getId(), siteId, type);
+
+        return saved;
+    }
+
+    /**
+     * Log standalone error without metadata.
+     *
+     * @param siteId  site identifier
+     * @param type    error type
+     * @param message error message
+     * @return created error log
+     */
+    public ErrorLog logStandaloneError(UUID siteId, String type, String message) {
+        return logStandaloneError(siteId, type, message, null);
+    }
+
+    /**
      * Get error log by ID.
      *
      * @param errorId error identifier

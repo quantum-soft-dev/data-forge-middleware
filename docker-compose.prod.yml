@@ -1,0 +1,131 @@
+version: '3.9'
+
+# Production Docker Compose Configuration
+# This extends the base docker-compose.yml with production-specific settings
+
+services:
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "work_mem=1310kB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "max_worker_processes=4"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "max_parallel_workers=4"
+      - "-c"
+      - "max_parallel_maintenance_workers=2"
+
+  keycloak:
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-changeme_in_production}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-changeme_in_production}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-keycloak.yourdomain.com}
+      KC_HOSTNAME_STRICT: true
+      KC_HOSTNAME_STRICT_HTTPS: true
+      KC_PROXY: edge
+      KC_HTTP_ENABLED: false
+      KC_HTTPS_PORT: 8443
+    command:
+      - start
+      - --optimized
+      - --import-realm
+    volumes:
+      - keycloak_data_prod:/opt/keycloak/data
+    # In production, use SSL certificates
+    # - ./certs/keycloak.crt:/opt/keycloak/conf/server.crt.pem:ro
+    # - ./certs/keycloak.key:/opt/keycloak/conf/server.key.pem:ro
+
+  dfm-backend:
+    restart: unless-stopped
+    environment:
+      # Override with production settings
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_PASSWORD: ${DFM_DB_PASSWORD:-changeme_in_production}
+      JWT_SECRET: ${JWT_SECRET:-changeme_must_be_256_bits_minimum}
+
+      # Production AWS S3 (not LocalStack)
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-dfm-prod-uploads}
+
+      # Keycloak with production hostname
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak.yourdomain.com/realms/dfm}
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-https://keycloak.yourdomain.com/realms/dfm/protocol/openid-connect/certs}
+
+      # Production logging
+      LOGGING_LEVEL_ROOT: WARN
+      LOGGING_LEVEL_COM_BITBI_DFM: INFO
+
+      # JVM settings for production
+      JAVA_OPTS: >-
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75.0
+        -XX:InitialRAMPercentage=50.0
+        -XX:+UseG1GC
+        -XX:MaxGCPauseMillis=200
+        -XX:+UseStringDeduplication
+        -XX:+OptimizeStringConcat
+        -XX:+HeapDumpOnOutOfMemoryError
+        -XX:HeapDumpPath=/tmp/heapdump.hprof
+        -Djava.security.egd=file:/dev/./urandom
+        -Dspring.backgroundpreinitializer.ignore=true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    # In production, use SSL and proper DNS
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.dfm.rule=Host(`api.yourdomain.com`)"
+    #   - "traefik.http.routers.dfm.tls=true"
+    #   - "traefik.http.routers.dfm.tls.certresolver=letsencrypt"
+
+volumes:
+  postgres_data_prod:
+    driver: local
+  keycloak_data_prod:
+    driver: local
+
+networks:
+  dfm-network:
+    driver: bridge
+
+# Note: LocalStack is not included in production
+# Use real AWS S3 instead

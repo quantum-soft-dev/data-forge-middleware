@@ -10,7 +10,16 @@
       "Bash(gradle wrapper:*)",
       "Bash(chmod:*)",
       "Bash(xargs cat:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(open:*)",
+      "Bash(paste:*)",
+      "Bash(awk:*)",
+      "Bash(docker logs:*)",
+      "Bash(curl:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker rm:*)",
+      "Read(//private/tmp/**)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

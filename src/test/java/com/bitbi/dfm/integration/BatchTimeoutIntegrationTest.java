@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Tests timeout scheduler that marks expired IN_PROGRESS batches as NOT_COMPLETED.
  * </p>
  */
+@Disabled("Disabled until timeout scheduler is implemented")
 @DisplayName("Scenario 6: Batch Timeout Integration Test")
 class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
 

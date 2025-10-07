@@ -10,18 +10,28 @@ spring:
         show_sql: true
         format_sql: true
 
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8081/realms/dfm
+          jwk-set-uri: http://localhost:8081/realms/dfm/protocol/openid-connect/certs
+
 s3:
   endpoint: http://localhost:4566
   region: us-east-1
-  bucket-name: data-forge-dev-bucket
+  bucket:
+    name: dfm-uploads
   access-key: test
   secret-key: test
   path-style-access-enabled: true
 
-keycloak:
-  auth-server-url: http://localhost:8081
-  credentials:
-    secret: dev-client-secret
+jwt:
+  secret: dev-secret-key-minimum-256-bits-required-for-hmac-sha256-algorithm-development
+  expiration-minutes: 60
+
+batch:
+  timeout-minutes: 60
 
 logging:
   level:

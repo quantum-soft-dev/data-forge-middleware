@@ -92,7 +92,7 @@ public class FileUploadService {
 
         // Check for duplicate filename
         if (uploadedFileRepository.existsByBatchIdAndOriginalFileName(batchId, fileName)) {
-            throw new DuplicateFileException("File with name already exists in batch: " + fileName);
+            throw new DuplicateFileException("File '" + fileName + "' already exists in this batch");
         }
 
         // Calculate checksum before upload

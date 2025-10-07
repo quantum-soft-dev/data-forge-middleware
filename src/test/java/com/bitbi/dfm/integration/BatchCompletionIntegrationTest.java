@@ -17,19 +17,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Scenario 4: Batch Completion Integration Test")
 class BatchCompletionIntegrationTest extends BaseIntegrationTest {
 
-    private static final String MOCK_BATCH_ID = "test-batch-id";
+    private static final String IN_PROGRESS_MOCK_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
 
     @Test
     @DisplayName("Should complete batch and transition to COMPLETED status")
     void shouldCompleteBatchAndTransitionToCompletedStatus() throws Exception {
         // Given: Batch with uploaded files
         // When: POST /api/v1/batch/{batchId}/complete
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
 
                 // Then: Batch completed
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.batchId").value(MOCK_BATCH_ID))
+                .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_MOCK_BATCH_ID))
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.completedAt").exists())
                 .andExpect(jsonPath("$.uploadedFilesCount").isNumber())
@@ -43,7 +43,7 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should prevent file upload after batch completion")
     void shouldPreventFileUploadAfterBatchCompletion() throws Exception {
         // Given: Completed batch
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
@@ -53,7 +53,7 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
                 "late content".getBytes()
         );
 
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
+        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", IN_PROGRESS_MOCK_BATCH_ID)
                         .file(file)
                         .header("Authorization", generateTestToken()))
 
@@ -66,24 +66,24 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should prevent double completion")
     void shouldPreventDoubleCompletion() throws Exception {
         // Given: Already completed batch
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Attempt to complete again
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
 
                 // Then: 400 Bad Request
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Batch is already completed"));
+                .andExpect(jsonPath("$.message").value("Cannot complete batch in status COMPLETED (expected IN_PROGRESS): batchId=" + IN_PROGRESS_MOCK_BATCH_ID));
     }
 
     @Test
     @DisplayName("Should allow new batch after completion")
     void shouldAllowNewBatchAfterCompletion() throws Exception {
         // Given: Previous batch completed
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 

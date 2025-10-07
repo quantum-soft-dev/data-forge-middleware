@@ -1,4 +1,6 @@
-version: '3.9'
+# Development Docker Compose Configuration
+# This configuration includes only infrastructure services (PostgreSQL, Keycloak, LocalStack)
+# Run dfm-backend from IntelliJ IDEA for debugging
 
 services:
   postgres:
@@ -12,7 +14,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_dev:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d dfm && pg_isready -U postgres -d keycloak"]
@@ -23,17 +25,17 @@ services:
       - dfm-network
 
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:stable
     container_name: dfm-localstack
     environment:
       SERVICES: s3
       DEFAULT_REGION: us-east-1
-      DATA_DIR: /tmp/localstack/data
+      DATA_DIR: /var/lib/localstack
       DEBUG: 1
     ports:
       - "4566:4566"
     volumes:
-      - localstack_data:/tmp/localstack
+      - localstack_data_dev:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
@@ -71,71 +73,45 @@ services:
     ports:
       - "8081:8080"
     volumes:
-      - keycloak_data:/opt/keycloak/data
+      - keycloak_data_dev:/opt/keycloak/data
       - ./docker/keycloak/dfm-realm.json:/opt/keycloak/data/import/dfm-realm.json:ro
     depends_on:
       postgres:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    networks:
-      - dfm-network
-
-  dfm-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
-    container_name: dfm-backend
-    environment:
-      # Spring profiles
-      SPRING_PROFILES_ACTIVE: prod
-      # Database
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dfm
-      SPRING_DATASOURCE_USERNAME: dfm
-      SPRING_DATASOURCE_PASSWORD: dfm_password
-      # S3
-      AWS_S3_ENDPOINT: http://localstack:4566
-      AWS_S3_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-      AWS_S3_BUCKET_NAME: dfm-uploads
-      # Keycloak
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/dfm
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/dfm/protocol/openid-connect/certs
-      # JWT
-      JWT_SECRET: change-this-secret-in-production-minimum-256-bits-required-for-hmac-sha256-algorithm
-      JWT_EXPIRATION: 86400
-      # Logging
-      LOGGING_LEVEL_ROOT: INFO
-      LOGGING_LEVEL_COM_BITBI_DFM: DEBUG
-    ports:
-      - "8080:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      localstack:
-        condition: service_healthy
-      keycloak:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s
     networks:
       - dfm-network
 
 volumes:
-  postgres_data:
-  localstack_data:
-  keycloak_data:
+  postgres_data_dev:
+    driver: local
+  localstack_data_dev:
+    driver: local
+  keycloak_data_dev:
+    driver: local
 
 networks:
   dfm-network:
     driver: bridge
+
+# Usage Instructions:
+# 1. Start infrastructure services:
+#    docker-compose -f docker-compose.dev.yml up -d
+#
+# 2. Wait for services to be healthy:
+#    docker-compose -f docker-compose.dev.yml ps
+#
+# 3. Create S3 bucket in LocalStack:
+#    aws --endpoint-url=http://localhost:4566 s3 mb s3://dfm-uploads
+#
+# 4. Run dfm-backend from IntelliJ IDEA with profile 'dev':
+#    - Edit Run Configuration
+#    - Add VM options: -Dspring.profiles.active=dev
+#    - Or set Active profiles: dev
+#
+# 5. Application will connect to:
+#    - PostgreSQL: localhost:5432/dfm (user: dfm, password: dfm_password)
+#    - Keycloak: http://localhost:8081 (admin/admin)
+#    - LocalStack S3: http://localhost:4566
+#
+# 6. Stop infrastructure:
+#    docker-compose -f docker-compose.dev.yml down

@@ -23,6 +23,65 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 
 ## Quick Start
 
+### Option 1: Development with IntelliJ IDEA (Recommended)
+
+Run infrastructure services in Docker and DFM from IDE for debugging:
+
+```bash
+# Start infrastructure (PostgreSQL, Keycloak, LocalStack)
+./scripts/docker-dev.sh start
+
+# Or manually
+docker-compose -f docker-compose.dev.yml up -d
+```
+
+Then in IntelliJ IDEA:
+1. Open Run Configuration
+2. Set **Active profiles**: `dev`
+3. Run or Debug the application
+
+Infrastructure services:
+- **PostgreSQL**: localhost:5432 (user: `postgres`, password: `postgres`, database: `dfm`)
+- **Keycloak**: http://localhost:8081 (admin/admin, realm: dfm)
+- **LocalStack S3**: http://localhost:4566 (bucket: dfm-uploads)
+
+**Stop infrastructure:**
+```bash
+./scripts/docker-dev.sh stop
+```
+
+See [docker-compose.dev.yml](docker-compose.dev.yml) for configuration details.
+
+### Option 2: Full Docker Stack
+
+The easiest way to run the complete stack:
+
+```bash
+# Start all services (PostgreSQL, Keycloak, LocalStack S3, DFM Backend)
+docker-compose up -d
+
+# Check services are healthy
+docker-compose ps
+
+# View logs
+docker-compose logs -f dfm-backend
+```
+
+Services will be available at:
+- **Application API**: http://localhost:8080
+- **Swagger UI**: http://localhost:8080/swagger-ui.html
+- **Keycloak Admin**: http://localhost:8081 (admin/admin)
+- **PostgreSQL**: localhost:5432 (databases: `dfm`, `keycloak`)
+- **LocalStack S3**: http://localhost:4566
+
+**Pre-configured Keycloak users:**
+- Admin: `admin` / `admin` (ROLE_ADMIN)
+- User: `user` / `user` (ROLE_USER)
+
+See [docker/README.md](docker/README.md) for detailed Docker configuration.
+
+### Option 2: Manual Setup
+
 ### 1. Clone and Build
 
 ```bash

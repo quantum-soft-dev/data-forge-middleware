@@ -38,6 +38,50 @@ public class ErrorLogController {
     }
 
     /**
+     * Log standalone error without batch association.
+     * <p>
+     * POST /api/v1/error
+     * Used for errors that occur outside of batch processing context.
+     * </p>
+     *
+     * @param request    error details (type, message, metadata)
+     * @param authHeader Authorization header with Bearer token
+     * @return 204 No Content
+     */
+    @PostMapping
+    public ResponseEntity<Void> logStandaloneError(
+            @RequestBody Map<String, Object> request,
+            @RequestHeader("Authorization") String authHeader) {
+
+        try {
+            UUID siteId = extractSiteId(authHeader);
+
+            String type = (String) request.get("type");
+            String message = (String) request.get("message");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> metadata = (Map<String, Object>) request.get("metadata");
+
+            if (type == null || type.isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+            }
+
+            if (message == null || message.isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+            }
+
+            logger.debug("Logging standalone error: siteId={}, type={}", siteId, type);
+
+            errorLoggingService.logStandaloneError(siteId, type, message, metadata);
+
+            return ResponseEntity.noContent().build();
+
+        } catch (Exception e) {
+            logger.error("Error logging standalone error", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
      * Log error for batch.
      * <p>
      * POST /api/v1/error/{batchId}
