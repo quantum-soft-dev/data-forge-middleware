@@ -35,13 +35,14 @@ INSERT INTO sites (id, account_id, domain, client_secret, display_name, is_activ
 VALUES ('0199bab0-ca3b-e41c-5521-2f4b33fda8b6', '0199bab1-fad2-bf76-c478-eae1f61e1c17', 'store-03.example.com', 'batch-test-secret', 'Store 03', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP);
 
 -- Test batches
--- Batch with ID used by BatchContractTest (set to COMPLETED to allow tests to start new batches)
+-- MOCK_BATCH_ID - COMPLETED to allow new batches to start for the same site
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'COMPLETED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/', 0, 0, false, '2025-10-05 10:00:00', '2025-10-05 10:00:00', '2025-10-05 10:30:00');
 
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('c3d4e5f6-a7b8-9012-cdef-123456789012', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'b2c3d4e5-f6a7-8901-bcde-f12345678901', 'COMPLETED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/', 5, 5120, false, '2025-10-05 14:30:00', '2025-10-05 14:30:00', '2025-10-05 15:30:00');
 
+-- IN_PROGRESS_BATCH_ID - Used by completion tests (can be completed by test #7, then rejected in test #8)
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('0199bab2-8d63-8563-8340-edbf1c11c778', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/', 1, 1024, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL);
 

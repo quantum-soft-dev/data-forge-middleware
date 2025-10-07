@@ -39,69 +39,86 @@ public class FileUploadController {
     }
 
     /**
-     * Upload file to batch.
+     * Upload files to batch.
      * <p>
      * POST /api/v1/batch/{id}/upload
      * Content-Type: multipart/form-data
      * </p>
      *
      * @param batchId    batch identifier
-     * @param file       multipart file to upload
+     * @param files      multipart files to upload
      * @param authHeader Authorization header with Bearer token
-     * @return uploaded file metadata response
+     * @return upload summary response
      */
     @PostMapping("/{id}/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(
             @PathVariable("id") UUID batchId,
-            @RequestParam("file") MultipartFile file,
+            @RequestParam("files") MultipartFile[] files,
             @RequestHeader("Authorization") String authHeader) {
 
         try {
             extractSiteId(authHeader); // Validate authentication
 
-            logger.info("Uploading file to batch: batchId={}, filename={}, size={} bytes",
-                       batchId, file.getOriginalFilename(), file.getSize());
+            logger.info("Uploading {} files to batch: batchId={}", files.length, batchId);
 
-            if (file.isEmpty()) {
+            if (files.length == 0) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("File cannot be empty"));
+                        .body(createErrorResponse(HttpStatus.BAD_REQUEST, "No files provided"));
             }
 
-            UploadedFile uploadedFile = fileUploadService.uploadFile(batchId, file);
+            java.util.List<Map<String, Object>> uploadedFiles = new java.util.ArrayList<>();
 
-            Map<String, Object> response = createFileResponse(uploadedFile);
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+            for (MultipartFile file : files) {
+                if (file.isEmpty()) {
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .body(createErrorResponse(HttpStatus.BAD_REQUEST, "File cannot be empty"));
+                }
+
+                UploadedFile uploadedFile = fileUploadService.uploadFile(batchId, file);
+
+                Map<String, Object> fileInfo = new HashMap<>();
+                fileInfo.put("fileName", uploadedFile.getOriginalFileName());
+                fileInfo.put("fileSize", uploadedFile.getFileSize());
+                fileInfo.put("uploadedAt", uploadedFile.getUploadedAt().toString());
+                uploadedFiles.add(fileInfo);
+            }
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "OK");
+            response.put("uploadedFiles", uploadedFiles.size());
+            response.put("files", uploadedFiles);
+
+            return ResponseEntity.ok(response);
 
         } catch (FileUploadService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Batch not found"));
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
 
         } catch (FileUploadService.InvalidBatchStatusException e) {
             logger.warn("Invalid batch status: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse("Batch is not accepting uploads"));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Batch is not accepting uploads"));
 
         } catch (FileUploadService.DuplicateFileException e) {
             logger.warn("Duplicate filename: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
         } catch (FileUploadService.FileSizeExceededException e) {
             logger.warn("File size exceeded: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
-                    .body(createErrorResponse(e.getMessage()));
+                    .body(createErrorResponse(HttpStatus.PAYLOAD_TOO_LARGE, e.getMessage()));
 
         } catch (FileUploadService.InvalidFileException e) {
             logger.warn("Invalid file: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse(e.getMessage()));
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
         } catch (Exception e) {
-            logger.error("Error uploading file: batchId={}, filename={}",
-                       batchId, file.getOriginalFilename(), e);
+            logger.error("Error uploading files: batchId={}", batchId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to upload file"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to upload files"));
         }
     }
 
@@ -130,7 +147,7 @@ public class FileUploadController {
             // Verify file belongs to batch
             if (!file.getBatchId().equals(batchId)) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(createErrorResponse("File not found in batch"));
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "File not found in batch"));
             }
 
             Map<String, Object> response = createFileResponse(file);
@@ -139,12 +156,12 @@ public class FileUploadController {
         } catch (FileUploadService.FileNotFoundException e) {
             logger.warn("File not found: {}", fileId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("File not found"));
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "File not found"));
 
         } catch (Exception e) {
             logger.error("Error getting file: fileId={}", fileId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve file"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to retrieve file"));
         }
     }
 
@@ -173,9 +190,11 @@ public class FileUploadController {
         return response;
     }
 
-    private Map<String, Object> createErrorResponse(String message) {
+    private Map<String, Object> createErrorResponse(HttpStatus status, String message) {
         Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
+        error.put("status", status.value());
+        error.put("error", status.getReasonPhrase());
+        error.put("message", message);
         return error;
     }
 }

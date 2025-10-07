@@ -3,6 +3,7 @@ package com.bitbi.dfm.contract;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.config.TestS3Config;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
+@Import({TestSecurityConfig.class, TestS3Config.class})
 @Sql("/test-data.sql")
 @DisplayName("Batch API Contract Tests")
 class BatchContractTest {
@@ -49,8 +50,10 @@ class BatchContractTest {
     private static final String BATCH_CANCEL_ENDPOINT = "/api/v1/batch/{batchId}/cancel";
 
     private static final String MOCK_BATCH_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    private static final String IN_PROGRESS_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
 
     private String jwtToken;
+
 
     @BeforeEach
     void setUp() {
@@ -70,13 +73,18 @@ class BatchContractTest {
     @Test
     @DisplayName("Should create new batch when authenticated client requests")
     void shouldCreateNewBatchWhenAuthenticatedClientRequests() throws Exception {
+
+        JwtToken token = tokenService.generateToken("store-03.example.com", "batch-test-secret");
+        final var jwtToken = token.token();
+
+
         // When: POST /api/v1/batch/start with Bearer token
         mockMvc.perform(post(BATCH_START_ENDPOINT)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
-                // Then: 200 OK with batchId
-                .andExpect(status().isOk())
+                // Then: 201 CREATED with batchId
+                .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.batchId").exists())
                 .andExpect(jsonPath("$.batchId").isString());
@@ -147,7 +155,7 @@ class BatchContractTest {
         );
 
         // When: POST /api/v1/batch/{batchId}/upload
-        mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, MOCK_BATCH_ID)
+        mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, IN_PROGRESS_BATCH_ID)
                         .file(file1)
                         .file(file2)
                         .header("Authorization", "Bearer " + jwtToken))
@@ -229,14 +237,14 @@ class BatchContractTest {
     @DisplayName("Should complete batch when files uploaded")
     void shouldCompleteBatchWhenFilesUploaded() throws Exception {
         // When: POST /api/v1/batch/{batchId}/complete
-        mockMvc.perform(post(BATCH_COMPLETE_ENDPOINT, MOCK_BATCH_ID)
+        mockMvc.perform(post(BATCH_COMPLETE_ENDPOINT, IN_PROGRESS_BATCH_ID)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 200 OK with completion summary
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.batchId").value(MOCK_BATCH_ID))
+                .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_BATCH_ID))
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.completedAt").exists())
                 .andExpect(jsonPath("$.uploadedFilesCount").isNumber())
@@ -275,7 +283,8 @@ class BatchContractTest {
         // When: POST /api/v1/batch/{batchId}/fail
         String requestBody = "{\"reason\":\"Critical error during processing\"}";
 
-        mockMvc.perform(post(BATCH_FAIL_ENDPOINT, MOCK_BATCH_ID)
+
+        mockMvc.perform(post(BATCH_FAIL_ENDPOINT, IN_PROGRESS_BATCH_ID)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -283,7 +292,7 @@ class BatchContractTest {
                 // Then: 200 OK with FAILED status
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.batchId").value(MOCK_BATCH_ID))
+                .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_BATCH_ID))
                 .andExpect(jsonPath("$.status").value("FAILED"));
     }
 
@@ -299,14 +308,14 @@ class BatchContractTest {
     @DisplayName("Should cancel batch when client requests")
     void shouldCancelBatchWhenClientRequests() throws Exception {
         // When: POST /api/v1/batch/{batchId}/cancel
-        mockMvc.perform(post(BATCH_CANCEL_ENDPOINT, MOCK_BATCH_ID)
+        mockMvc.perform(post(BATCH_CANCEL_ENDPOINT, IN_PROGRESS_BATCH_ID)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
                 // Then: 200 OK with CANCELLED status
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.batchId").value(MOCK_BATCH_ID))
+                .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_BATCH_ID))
                 .andExpect(jsonPath("$.status").value("CANCELLED"));
     }
 }

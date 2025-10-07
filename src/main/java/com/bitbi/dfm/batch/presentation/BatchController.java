@@ -49,8 +49,7 @@ public class BatchController {
      */
     @PostMapping("/start")
     public ResponseEntity<Map<String, Object>> startBatch(
-            @RequestHeader("Authorization") String authHeader,
-            @RequestBody Map<String, String> request) {
+            @RequestHeader("Authorization") String authHeader) {
 
         try {
             UUID siteId = extractSiteId(authHeader);
@@ -67,17 +66,17 @@ public class BatchController {
         } catch (BatchLifecycleService.ActiveBatchExistsException e) {
             logger.warn("Active batch exists: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse("Site already has an active batch"));
+                    .body(createErrorResponse(HttpStatus.CONFLICT, "Site already has an active batch"));
 
         } catch (BatchLifecycleService.ConcurrentBatchLimitException e) {
             logger.warn("Concurrent batch limit exceeded: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body(createErrorResponse(e.getMessage()));
+                    .body(createErrorResponse(HttpStatus.TOO_MANY_REQUESTS, e.getMessage()));
 
         } catch (Exception e) {
             logger.error("Error starting batch", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to start batch"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to start batch"));
         }
     }
 
@@ -109,17 +108,17 @@ public class BatchController {
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Batch not found"));
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
 
         } catch (BatchLifecycleService.InvalidBatchStatusException e) {
             logger.warn("Invalid batch status: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
         } catch (Exception e) {
             logger.error("Error completing batch: batchId={}", batchId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to complete batch"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to complete batch"));
         }
     }
 
@@ -151,17 +150,17 @@ public class BatchController {
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Batch not found"));
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
 
         } catch (BatchLifecycleService.InvalidBatchStatusException e) {
             logger.warn("Invalid batch status: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
         } catch (Exception e) {
             logger.error("Error failing batch: batchId={}", batchId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to fail batch"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to fail batch"));
         }
     }
 
@@ -193,17 +192,17 @@ public class BatchController {
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Batch not found"));
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
 
         } catch (BatchLifecycleService.InvalidBatchStatusException e) {
             logger.warn("Invalid batch status: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
         } catch (Exception e) {
             logger.error("Error cancelling batch: batchId={}", batchId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to cancel batch"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to cancel batch"));
         }
     }
 
@@ -233,12 +232,12 @@ public class BatchController {
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Batch not found"));
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
 
         } catch (Exception e) {
             logger.error("Error getting batch: batchId={}", batchId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve batch"));
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to retrieve batch"));
         }
     }
 
@@ -257,6 +256,7 @@ public class BatchController {
     private Map<String, Object> createBatchResponse(Batch batch) {
         Map<String, Object> response = new HashMap<>();
         response.put("id", batch.getId());
+        response.put("batchId", batch.getId());
         response.put("siteId", batch.getSiteId());
         response.put("status", batch.getStatus().name());
         response.put("s3Path", batch.getS3Path());
@@ -271,8 +271,14 @@ public class BatchController {
     }
 
     private Map<String, Object> createErrorResponse(String message) {
+        return createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, message);
+    }
+
+    private Map<String, Object> createErrorResponse(HttpStatus status, String message) {
         Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
+        error.put("status", status.value());
+        error.put("error", status.getReasonPhrase());
+        error.put("message", message);
         return error;
     }
 }

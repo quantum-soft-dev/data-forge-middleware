@@ -75,7 +75,7 @@ public class Batch {
         this.createdAt = createdAt;
     }
 
-    public static Batch start(UUID siteId, UUID accountId, String domain) {
+    public static Batch start(UUID accountId, UUID siteId, String domain) {
         Objects.requireNonNull(siteId, "SiteId cannot be null");
         Objects.requireNonNull(accountId, "AccountId cannot be null");
         Objects.requireNonNull(domain, "Domain cannot be null");
