@@ -10,6 +10,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
@@ -31,6 +32,12 @@ import org.springframework.security.web.SecurityFilterChain;
 @Profile("!test")
 public class KeycloakSecurityConfig {
 
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    public KeycloakSecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+    }
+
     /**
      * Configure security filter chain.
      * <p>
@@ -41,7 +48,7 @@ public class KeycloakSecurityConfig {
      * </p>
      * <p>
      * Protected endpoints:
-     * - /api/v1/** (JWT token - custom authentication)
+     * - /api/v1/** (JWT token - custom authentication via JwtAuthenticationFilter)
      * - /admin/** (Keycloak OAuth2 with ROLE_ADMIN)
      * </p>
      */
@@ -65,6 +72,9 @@ public class KeycloakSecurityConfig {
                 // All other endpoints require authentication
                 .anyRequest().authenticated()
             )
+            // Add custom JWT filter BEFORE OAuth2 Resource Server filter
+            // This ensures custom JWT tokens are validated for /api/v1/** endpoints
+            .addFilterBefore(jwtAuthenticationFilter, BearerTokenAuthenticationFilter.class)
             // Keycloak OAuth2 Resource Server for admin endpoints
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))

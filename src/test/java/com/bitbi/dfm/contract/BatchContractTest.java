@@ -100,8 +100,8 @@ class BatchContractTest {
         mockMvc.perform(post(BATCH_START_ENDPOINT)
                         .contentType(MediaType.APPLICATION_JSON))
 
-                // Then: 401 Unauthorized
-                .andExpect(status().isUnauthorized());
+                // Then: 403 Forbidden (Spring Security returns 403 for missing authentication)
+                .andExpect(status().isForbidden());
     }
 
     /**

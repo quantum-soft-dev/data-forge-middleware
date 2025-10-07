@@ -1,5 +1,8 @@
 package com.bitbi.dfm.config;
 
+import com.bitbi.dfm.auth.application.TokenService;
+import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -14,6 +17,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
 import java.time.Instant;
@@ -41,6 +45,9 @@ import java.util.stream.Collectors;
 @EnableWebSecurity
 @EnableMethodSecurity
 public class TestSecurityConfig {
+
+    @Autowired(required = false)
+    private TokenService tokenService;
 
     /**
      * Mock JWT decoder for testing.
@@ -132,41 +139,77 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for tests.
+     * JWT authentication filter for test environment.
      * <p>
-     * Simplified configuration that allows:
-     * - Public access to /api/v1/auth/token, actuator, swagger
-     * - ROLE_ADMIN required for /admin/**
-     * - Authentication required for /api/v1/**
+     * Uses real TokenService to validate JWT tokens in tests.
+     * </p>
+     */
+    @Bean
+    public JwtAuthenticationFilter jwtAuthenticationFilter() {
+        if (tokenService == null) {
+            throw new IllegalStateException("TokenService not available for JwtAuthenticationFilter");
+        }
+        return new JwtAuthenticationFilter(tokenService);
+    }
+
+    /**
+     * Security filter chain for admin endpoints with OAuth2 Resource Server.
+     * <p>
+     * Higher priority (@Order(1)) to match /admin/** first.
+     * </p>
+     */
+    @Bean
+    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/admin/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().hasRole("ADMIN")
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt
+                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
+                )
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Security filter chain for client API endpoints with custom JWT filter.
+     * <p>
+     * Lower priority (default order) to match after admin filter chain.
      * </p>
      */
     @Bean
     @Primary
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain clientApiSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(jwtAuthenticationFilter(), BearerTokenAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    /**
+     * Default security filter chain for remaining endpoints.
+     */
+    @Bean
+    public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Public endpoints
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
-
-                // Admin endpoints - require ROLE_ADMIN
-                .requestMatchers("/admin/**").hasRole("ADMIN")
-
-                // Client API endpoints - require authentication
-                .requestMatchers("/api/v1/**").authenticated()
-
-                // All other endpoints require authentication
                 .anyRequest().authenticated()
-            )
-            // Use mocked JWT decoder with authentication converter
-            .oauth2ResourceServer(oauth2 -> oauth2
-                .jwt(jwt -> jwt
-                    .decoder(jwtDecoder())
-                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
-                )
             );
 
         return http.build();

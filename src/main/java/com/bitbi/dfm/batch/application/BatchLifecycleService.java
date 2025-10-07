@@ -63,8 +63,9 @@ public class BatchLifecycleService {
             throw new ActiveBatchExistsException("Site already has an active batch: " + siteId);
         }
 
-        // Enforce concurrent batch limit per account
-        long activeBatchCount = batchRepository.countActiveBatchesByAccountId(accountId);
+        // Enforce concurrent batch limit per account with pessimistic lock
+        // This prevents race conditions by locking the count query
+        int activeBatchCount = batchRepository.countActiveBatchesByAccountIdWithLock(accountId);
         if (activeBatchCount >= MAX_CONCURRENT_BATCHES_PER_ACCOUNT) {
             throw new ConcurrentBatchLimitException(
                     "Account exceeded concurrent batch limit: " + activeBatchCount + "/" + MAX_CONCURRENT_BATCHES_PER_ACCOUNT);

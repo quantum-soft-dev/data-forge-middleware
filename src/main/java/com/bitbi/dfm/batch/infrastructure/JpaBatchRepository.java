@@ -91,6 +91,7 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      * Count active IN_PROGRESS batches for account.
      * <p>
      * Used to enforce account-level active batch limit.
+     * Note: This method has a race condition. Use countActiveBatchesByAccountIdWithLock for atomic operations.
      * </p>
      *
      * @param accountId account identifier
@@ -98,6 +99,20 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      */
     @Query("SELECT COUNT(b) FROM Batch b WHERE b.accountId = :accountId AND b.status = 'IN_PROGRESS'")
     int countActiveBatchesByAccountId(UUID accountId);
+
+    /**
+     * Count active IN_PROGRESS batches for account with pessimistic lock.
+     * <p>
+     * Uses FOR UPDATE lock on the batches table to prevent race conditions during batch creation.
+     * The lock is acquired by selecting the rows first, then counting them.
+     * Should be called within a transaction.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @return number of active batches
+     */
+    @Query(value = "SELECT COUNT(*) FROM (SELECT id FROM batches WHERE account_id = :accountId AND status = 'IN_PROGRESS' FOR UPDATE) AS locked_batches", nativeQuery = true)
+    int countActiveBatchesByAccountIdWithLock(UUID accountId);
 
     /**
      * Find batches by site with pagination.

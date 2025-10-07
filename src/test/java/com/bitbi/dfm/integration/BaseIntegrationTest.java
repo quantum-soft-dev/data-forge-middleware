@@ -41,13 +41,14 @@ public abstract class BaseIntegrationTest {
     /**
      * Generate JWT token for test site.
      * <p>
-     * Default site: test-store.example.com with secret test-client-secret-uuid
+     * Default site: store-01.example.com (the site that owns test batches)
+     * Site ID: 0199baac-f852-753f-6fc3-7c994fc38654
      * </p>
      *
      * @return Bearer token string
      */
     protected String generateTestToken() {
-        return generateToken("test-store.example.com", "test-client-secret-uuid");
+        return generateToken("store-01.example.com", "valid-secret-uuid");
     }
 
     /**

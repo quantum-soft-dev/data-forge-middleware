@@ -34,6 +34,8 @@ public interface BatchRepository {
 
     int countActiveBatchesByAccountId(UUID accountId);
 
+    int countActiveBatchesByAccountIdWithLock(UUID accountId);
+
     long count();
 
     void deleteById(UUID id);

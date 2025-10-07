@@ -1,8 +1,8 @@
 package com.bitbi.dfm.batch.presentation;
 
-import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -17,7 +17,7 @@ import java.util.UUID;
  * REST controller for batch lifecycle operations.
  * <p>
  * Provides endpoints for batch management: start, complete, fail, cancel.
- * All endpoints require JWT authentication.
+ * All endpoints require JWT authentication and verify site ownership.
  * </p>
  *
  * @author Data Forge Team
@@ -30,11 +30,11 @@ public class BatchController {
     private static final Logger logger = LoggerFactory.getLogger(BatchController.class);
 
     private final BatchLifecycleService batchLifecycleService;
-    private final TokenService tokenService;
+    private final AuthorizationHelper authorizationHelper;
 
-    public BatchController(BatchLifecycleService batchLifecycleService, TokenService tokenService) {
+    public BatchController(BatchLifecycleService batchLifecycleService, AuthorizationHelper authorizationHelper) {
         this.batchLifecycleService = batchLifecycleService;
-        this.tokenService = tokenService;
+        this.authorizationHelper = authorizationHelper;
     }
 
     /**
@@ -48,13 +48,13 @@ public class BatchController {
      * @return created batch response
      */
     @PostMapping("/start")
-    public ResponseEntity<Map<String, Object>> startBatch(
-            @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<Map<String, Object>> startBatch() {
 
         try {
-            UUID siteId = extractSiteId(authHeader);
-            UUID accountId = tokenService.extractAccountId(extractToken(authHeader));
-            String domain = tokenService.extractDomain(extractToken(authHeader));
+            // Get authenticated site/account/domain from security context
+            UUID siteId = authorizationHelper.getAuthenticatedSiteId();
+            UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+            String domain = authorizationHelper.getAuthenticatedDomain();
 
             logger.info("Starting batch: siteId={}, domain={}", siteId, domain);
 
@@ -62,6 +62,11 @@ public class BatchController {
 
             Map<String, Object> response = createBatchResponse(batch);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch start: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
 
         } catch (BatchLifecycleService.ActiveBatchExistsException e) {
             logger.warn("Active batch exists: {}", e.getMessage());
@@ -92,18 +97,26 @@ public class BatchController {
      */
     @PostMapping("/{id}/complete")
     public ResponseEntity<Map<String, Object>> completeBatch(
-            @PathVariable("id") UUID batchId,
-            @RequestHeader("Authorization") String authHeader) {
+            @PathVariable("id") UUID batchId) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
-
             logger.info("Completing batch: batchId={}", batchId);
 
-            Batch batch = batchLifecycleService.completeBatch(batchId);
+            // Get batch first to verify ownership
+            Batch batch = batchLifecycleService.getBatch(batchId);
+
+            // Verify site ownership
+            authorizationHelper.verifySiteOwnership(batch.getSiteId());
+
+            batch = batchLifecycleService.completeBatch(batchId);
 
             Map<String, Object> response = createBatchResponse(batch);
             return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch completion: batchId={}, {}", batchId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
 
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
@@ -134,18 +147,26 @@ public class BatchController {
      */
     @PostMapping("/{id}/fail")
     public ResponseEntity<Map<String, Object>> failBatch(
-            @PathVariable("id") UUID batchId,
-            @RequestHeader("Authorization") String authHeader) {
+            @PathVariable("id") UUID batchId) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
-
             logger.info("Failing batch: batchId={}", batchId);
 
-            Batch batch = batchLifecycleService.failBatch(batchId);
+            // Get batch first to verify ownership
+            Batch batch = batchLifecycleService.getBatch(batchId);
+
+            // Verify site ownership
+            authorizationHelper.verifySiteOwnership(batch.getSiteId());
+
+            batch = batchLifecycleService.failBatch(batchId);
 
             Map<String, Object> response = createBatchResponse(batch);
             return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch fail: batchId={}, {}", batchId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
 
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
@@ -176,18 +197,26 @@ public class BatchController {
      */
     @PostMapping("/{id}/cancel")
     public ResponseEntity<Map<String, Object>> cancelBatch(
-            @PathVariable("id") UUID batchId,
-            @RequestHeader("Authorization") String authHeader) {
+            @PathVariable("id") UUID batchId) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
-
             logger.info("Cancelling batch: batchId={}", batchId);
 
-            Batch batch = batchLifecycleService.cancelBatch(batchId);
+            // Get batch first to verify ownership
+            Batch batch = batchLifecycleService.getBatch(batchId);
+
+            // Verify site ownership
+            authorizationHelper.verifySiteOwnership(batch.getSiteId());
+
+            batch = batchLifecycleService.cancelBatch(batchId);
 
             Map<String, Object> response = createBatchResponse(batch);
             return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch cancel: batchId={}, {}", batchId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
 
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
@@ -218,16 +247,22 @@ public class BatchController {
      */
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> getBatch(
-            @PathVariable("id") UUID batchId,
-            @RequestHeader("Authorization") String authHeader) {
+            @PathVariable("id") UUID batchId) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
-
+            // Get batch
             Batch batch = batchLifecycleService.getBatch(batchId);
+
+            // Verify site ownership
+            authorizationHelper.verifySiteOwnership(batch.getSiteId());
 
             Map<String, Object> response = createBatchResponse(batch);
             return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch access: batchId={}, {}", batchId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
 
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);
@@ -239,18 +274,6 @@ public class BatchController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to retrieve batch"));
         }
-    }
-
-    private UUID extractSiteId(String authHeader) {
-        String token = extractToken(authHeader);
-        return tokenService.validateToken(token);
-    }
-
-    private String extractToken(String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new IllegalArgumentException("Invalid Authorization header");
-        }
-        return authHeader.substring("Bearer ".length());
     }
 
     private Map<String, Object> createBatchResponse(Batch batch) {
