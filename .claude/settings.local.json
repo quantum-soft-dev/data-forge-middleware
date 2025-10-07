@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.specify/scripts/bash/setup-plan.sh:*)",
+      "Bash(.specify/scripts/bash/update-agent-context.sh:*)",
+      "Bash(.specify/scripts/bash/check-prerequisites.sh:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker exec:*)",
+      "Bash(./gradlew:*)",
+      "Bash(gradle wrapper:*)",
+      "Bash(chmod:*)",
+      "Bash(xargs cat:*)",
+      "Bash(cat:*)",
+      "Bash(open:*)",
+      "Bash(paste:*)",
+      "Bash(awk:*)",
+      "Bash(docker logs:*)",
+      "Bash(curl:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker rm:*)",
+      "Read(//private/tmp/**)",
+      "Bash(timeout:*)",
+      "Bash(/dev/null 2)",
+      "Bash(1 sleep 1 ps aux)",
+      "Bash(xargs:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

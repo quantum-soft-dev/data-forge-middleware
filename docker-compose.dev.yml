@@ -1,0 +1,117 @@
+# Development Docker Compose Configuration
+# This configuration includes only infrastructure services (PostgreSQL, Keycloak, LocalStack)
+# Run dfm-backend from IntelliJ IDEA for debugging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dfm-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # Multiple databases will be created via init script
+      POSTGRES_MULTIPLE_DATABASES: dfm,keycloak
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dfm && pg_isready -U postgres -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dfm-network
+
+  localstack:
+    image: localstack/localstack:stable
+    container_name: dfm-localstack
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+      DATA_DIR: /var/lib/localstack
+      DEBUG: 1
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data_dev:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dfm-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.0
+    container_name: dfm-keycloak
+    environment:
+      # Admin credentials
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # Database configuration
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak_password
+      KC_DB_SCHEMA: public
+      # HTTP configuration
+      KC_HTTP_PORT: 8080
+      KC_HTTP_ENABLED: true
+      KC_HOSTNAME_STRICT: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KC_PROXY: edge
+      # Health checks
+      KC_HEALTH_ENABLED: true
+      KC_METRICS_ENABLED: true
+    command:
+      - start-dev
+      - --import-realm
+    ports:
+      - "8081:8080"
+    volumes:
+      - keycloak_data_dev:/opt/keycloak/data
+      - ./docker/keycloak/dfm-realm.json:/opt/keycloak/data/import/dfm-realm.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dfm-network
+
+volumes:
+  postgres_data_dev:
+    driver: local
+  localstack_data_dev:
+    driver: local
+  keycloak_data_dev:
+    driver: local
+
+networks:
+  dfm-network:
+    driver: bridge
+
+# Usage Instructions:
+# 1. Start infrastructure services:
+#    docker-compose -f docker-compose.dev.yml up -d
+#
+# 2. Wait for services to be healthy:
+#    docker-compose -f docker-compose.dev.yml ps
+#
+# 3. Create S3 bucket in LocalStack:
+#    aws --endpoint-url=http://localhost:4566 s3 mb s3://dfm-uploads
+#
+# 4. Run dfm-backend from IntelliJ IDEA with profile 'dev':
+#    - Edit Run Configuration
+#    - Add VM options: -Dspring.profiles.active=dev
+#    - Or set Active profiles: dev
+#
+# 5. Application will connect to:
+#    - PostgreSQL: localhost:5432/dfm (user: dfm, password: dfm_password)
+#    - Keycloak: http://localhost:8081 (admin/admin)
+#    - LocalStack S3: http://localhost:4566
+#
+# 6. Stop infrastructure:
+#    docker-compose -f docker-compose.dev.yml down

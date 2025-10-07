@@ -1,0 +1,71 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+  datasource:
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+    url: jdbc:tc:postgresql:16-alpine:///dfm_test
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        show_sql: false
+        format_sql: false
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8081/realms/dfm-test
+          jwk-set-uri: http://localhost:8081/realms/dfm-test/protocol/openid-connect/certs
+
+s3:
+  endpoint: http://localhost:4566
+  region: us-east-1
+  bucket:
+    name: data-forge-test-bucket
+  access-key: test
+  secret-key: test
+  path-style-access-enabled: true
+
+# Batch Configuration for tests
+batch:
+  timeout:
+    minutes: 60
+  max:
+    active:
+      per-account: 10
+
+# Upload Configuration for tests
+upload:
+  max:
+    file-size-mb: 128
+    files-per-batch: 1000
+  retry:
+    attempts: 3
+    delay-ms: 1000
+
+# JWT Configuration for tests
+jwt:
+  secret: test-secret-key-for-unit-tests-at-least-256-bits-long-hmac-sha256
+  expiration-seconds: 86400
+
+# Keycloak Configuration for tests (disabled)
+keycloak:
+  realm: dfm-test
+  auth-server-url: http://localhost:8081
+  resource: dfm-backend-test
+  credentials:
+    secret: test-client-secret
+  use-resource-role-mappings: false
+  bearer-only: true
+
+logging:
+  level:
+    root: WARN
+    com.bitbi.dfm: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+    org.testcontainers: INFO

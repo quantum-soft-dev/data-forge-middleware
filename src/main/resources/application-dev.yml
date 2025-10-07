@@ -1,0 +1,53 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/dfm
+    username: postgres
+    password: postgres
+
+  jpa:
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8081/realms/dfm
+          jwk-set-uri: http://localhost:8081/realms/dfm/protocol/openid-connect/certs
+
+s3:
+  endpoint: http://localhost:4566
+  region: us-east-1
+  bucket:
+    name: dfm-uploads
+  access-key: test
+  secret-key: test
+  path-style-access-enabled: true
+
+jwt:
+  secret: dev-secret-key-minimum-256-bits-required-for-hmac-sha256-algorithm-development
+  expiration-minutes: 60
+
+batch:
+  timeout-minutes: 60
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: alpha
+    tagsSorter: alpha
+
+logging:
+  level:
+    root: INFO
+    com.bitbi.dfm: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE

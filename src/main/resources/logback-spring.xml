@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- Console Appender for development with readable format and MDC context -->
+    <springProfile name="dev,test">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %X{batchId:-} %X{siteId:-} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+        <logger name="com.bitbi.dfm" level="DEBUG"/>
+    </springProfile>
+
+    <!-- JSON Console Appender for production with MDC support -->
+    <springProfile name="prod">
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdc>true</includeMdc>
+                <includeContext>true</includeContext>
+                <includeCallerData>false</includeCallerData>
+                <includeMdcKeyName>batchId</includeMdcKeyName>
+                <includeMdcKeyName>siteId</includeMdcKeyName>
+                <includeMdcKeyName>accountId</includeMdcKeyName>
+                <fieldNames>
+                    <timestamp>@timestamp</timestamp>
+                    <version>[ignore]</version>
+                    <logger>logger</logger>
+                    <thread>thread</thread>
+                    <level>level</level>
+                    <levelValue>[ignore]</levelValue>
+                </fieldNames>
+                <customFields>{"application":"data-forge-middleware"}</customFields>
+            </encoder>
+        </appender>
+
+        <!-- File Appender with rolling policy -->
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/data-forge-middleware.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/data-forge-middleware.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+                <timeBasedFileNamingAndTriggeringPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+                    <maxFileSize>100MB</maxFileSize>
+                </timeBasedFileNamingAndTriggeringPolicy>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>3GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdc>true</includeMdc>
+                <includeContext>true</includeContext>
+                <customFields>{"application":"data-forge-middleware"}</customFields>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+            <appender-ref ref="FILE"/>
+        </root>
+        <logger name="com.bitbi.dfm" level="INFO"/>
+    </springProfile>
+
+    <!-- Reduce noise from Spring Framework -->
+    <logger name="org.springframework.web" level="WARN"/>
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="INFO"/>
+</configuration>
