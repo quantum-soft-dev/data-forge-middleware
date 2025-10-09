@@ -3,6 +3,7 @@ package com.bitbi.dfm.error.presentation;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.error.domain.ErrorLog;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogResponseDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -174,14 +175,15 @@ class ErrorLogControllerTest {
                 .thenReturn(errorLog);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(errorLog.getId(), response.getBody().get("id"));
-        assertEquals(errorLog.getBatchId(), response.getBody().get("batchId"));
-        assertEquals(errorLog.getSiteId(), response.getBody().get("siteId"));
+        ErrorLogResponseDto body = (ErrorLogResponseDto) response.getBody();
+        assertEquals(errorLog.getId(), body.id());
+        assertEquals(errorLog.getBatchId(), body.batchId());
+        assertEquals(errorLog.getSiteId(), body.siteId());
 
         verify(tokenService).validateToken(testToken);
         verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), any());
@@ -197,12 +199,14 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertTrue(response.getBody().containsKey("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertTrue(body.containsKey("error"));
 
         verify(errorLoggingService, never()).logError(any(), any(), any(), any(), any());
     }
@@ -218,12 +222,14 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Error type is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Error type is required", body.get("error"));
     }
 
     @Test
@@ -236,12 +242,14 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertTrue(response.getBody().containsKey("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertTrue(body.containsKey("error"));
     }
 
     @Test
@@ -255,12 +263,14 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Error message is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Error message is required", body.get("error"));
     }
 
     @Test
@@ -276,12 +286,14 @@ class ErrorLogControllerTest {
                 .thenThrow(new RuntimeException("Database error"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to log error", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to log error", body.get("error"));
     }
 
     @Test
@@ -294,14 +306,15 @@ class ErrorLogControllerTest {
         when(errorLoggingService.getErrorLog(errorId)).thenReturn(errorLog);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getErrorLog(errorId, testAuthHeader);
+        ResponseEntity<?> response = controller.getErrorLog(errorId, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(errorLog.getId(), response.getBody().get("id"));
-        assertEquals(errorLog.getBatchId(), response.getBody().get("batchId"));
-        assertEquals(errorLog.getSiteId(), response.getBody().get("siteId"));
+        ErrorLogResponseDto body = (ErrorLogResponseDto) response.getBody();
+        assertEquals(errorLog.getId(), body.id());
+        assertEquals(errorLog.getBatchId(), body.batchId());
+        assertEquals(errorLog.getSiteId(), body.siteId());
 
         verify(tokenService).validateToken(testToken);
         verify(errorLoggingService).getErrorLog(errorId);
@@ -318,12 +331,14 @@ class ErrorLogControllerTest {
                 .thenThrow(new ErrorLoggingService.ErrorLogNotFoundException("Error log not found: " + errorId));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getErrorLog(errorId, testAuthHeader);
+        ResponseEntity<?> response = controller.getErrorLog(errorId, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Error log not found", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Error log not found", body.get("error"));
     }
 
     @Test
@@ -337,12 +352,14 @@ class ErrorLogControllerTest {
                 .thenThrow(new RuntimeException("Database error"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getErrorLog(errorId, testAuthHeader);
+        ResponseEntity<?> response = controller.getErrorLog(errorId, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to retrieve error log", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to retrieve error log", body.get("error"));
     }
 
     @Test
@@ -394,12 +411,13 @@ class ErrorLogControllerTest {
                 .thenReturn(errorLog);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertTrue(response.getBody().containsKey("metadata"));
+        ErrorLogResponseDto body = (ErrorLogResponseDto) response.getBody();
+        assertNotNull(body.metadata());
 
         verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), eq(metadata));
     }
@@ -419,7 +437,7 @@ class ErrorLogControllerTest {
                 .thenReturn(errorLog);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.logError(testBatchId, request, testAuthHeader);
+        ResponseEntity<?> response = controller.logError(testBatchId, request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
@@ -441,20 +459,21 @@ class ErrorLogControllerTest {
         when(errorLoggingService.getErrorLog(errorId)).thenReturn(errorLog);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getErrorLog(errorId, testAuthHeader);
+        ResponseEntity<?> response = controller.getErrorLog(errorId, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertTrue(response.getBody().containsKey("id"));
-        assertTrue(response.getBody().containsKey("batchId"));
-        assertTrue(response.getBody().containsKey("siteId"));
-        assertTrue(response.getBody().containsKey("type"));
-        assertTrue(response.getBody().containsKey("title"));
-        assertTrue(response.getBody().containsKey("message"));
-        assertTrue(response.getBody().containsKey("stackTrace"));
-        assertTrue(response.getBody().containsKey("clientVersion"));
-        assertTrue(response.getBody().containsKey("metadata"));
-        assertTrue(response.getBody().containsKey("occurredAt"));
+        ErrorLogResponseDto body = (ErrorLogResponseDto) response.getBody();
+        assertNotNull(body.id());
+        assertNotNull(body.batchId());
+        assertNotNull(body.siteId());
+        assertNotNull(body.type());
+        assertNotNull(body.title());
+        assertNotNull(body.message());
+        assertNotNull(body.stackTrace());
+        assertNotNull(body.clientVersion());
+        assertNotNull(body.metadata());
+        assertNotNull(body.occurredAt());
     }
 }

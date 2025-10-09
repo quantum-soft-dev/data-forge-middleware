@@ -16,6 +16,8 @@ Auto-generated from all feature plans. Last updated: 2025-10-06
 - **SpringDoc OpenAPI** - API documentation (Swagger UI)
 - **JUnit 5 + Mockito** - Unit testing
 - **Testcontainers** - Integration testing
+- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security (JWT + OAuth2 Resource Server), Lombok, Jackson (002-additions-to-backend)
+- PostgreSQL 16 (via Spring Data JPA) (002-additions-to-backend)
 
 ## Project Structure
 

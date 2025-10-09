@@ -3,6 +3,7 @@ package com.bitbi.dfm.site.presentation;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.site.application.SiteService;
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -70,7 +71,17 @@ public class SiteAdminController {
 
             SiteService.SiteCreationResult result = siteService.createSite(accountId, domain, displayName);
 
-            Map<String, Object> response = createSiteCreationResponse(result);
+            // Special response for site creation - includes plaintext secret (one-time only)
+            SiteResponseDto dto = SiteResponseDto.fromEntity(result.site());
+            Map<String, Object> response = new HashMap<>();
+            response.put("id", dto.id());
+            response.put("accountId", dto.accountId());
+            response.put("domain", dto.domain());
+            response.put("name", dto.name());
+            response.put("isActive", dto.isActive());
+            response.put("createdAt", dto.createdAt());
+            response.put("clientSecret", result.plaintextSecret()); // Only shown at creation
+
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (SiteService.SiteAlreadyExistsException e) {
@@ -100,10 +111,10 @@ public class SiteAdminController {
      * @return site response
      */
     @GetMapping("/admin/sites/{id}")
-    public ResponseEntity<Map<String, Object>> getSite(@PathVariable("id") UUID siteId) {
+    public ResponseEntity<?> getSite(@PathVariable("id") UUID siteId) {
         try {
             Site site = siteService.getSite(siteId);
-            Map<String, Object> response = createSiteResponse(site);
+            SiteResponseDto response = SiteResponseDto.fromEntity(site);
             return ResponseEntity.ok(response);
 
         } catch (SiteService.SiteNotFoundException e) {
@@ -132,8 +143,8 @@ public class SiteAdminController {
         try {
             List<Site> sites = siteService.listSitesByAccount(accountId);
 
-            List<Map<String, Object>> siteList = sites.stream()
-                    .map(this::createSiteResponse)
+            List<SiteResponseDto> siteList = sites.stream()
+                    .map(SiteResponseDto::fromEntity)
                     .collect(Collectors.toList());
 
             return ResponseEntity.ok(siteList);
@@ -156,7 +167,7 @@ public class SiteAdminController {
      * @return updated site response
      */
     @PutMapping("/admin/sites/{id}")
-    public ResponseEntity<Map<String, Object>> updateSite(
+    public ResponseEntity<?> updateSite(
             @PathVariable("id") UUID siteId,
             @RequestBody Map<String, String> request) {
 
@@ -172,7 +183,7 @@ public class SiteAdminController {
 
             Site site = siteService.updateSite(siteId, displayName);
 
-            Map<String, Object> response = createSiteResponse(site);
+            SiteResponseDto response = SiteResponseDto.fromEntity(site);
             return ResponseEntity.ok(response);
 
         } catch (SiteService.SiteNotFoundException e) {
@@ -242,36 +253,6 @@ public class SiteAdminController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorResponse("Failed to retrieve statistics"));
         }
-    }
-
-    private Map<String, Object> createSiteCreationResponse(SiteService.SiteCreationResult result) {
-        Map<String, Object> response = new HashMap<>();
-        Site site = result.site();
-
-        response.put("id", site.getId());
-        response.put("accountId", site.getAccountId());
-        response.put("domain", site.getDomain());
-        response.put("displayName", site.getDisplayName());
-        response.put("isActive", site.getIsActive());
-        response.put("createdAt", site.getCreatedAt().toString());
-        response.put("updatedAt", site.getUpdatedAt().toString());
-        response.put("clientSecret", result.plaintextSecret()); // Only shown at creation
-
-        return response;
-    }
-
-    private Map<String, Object> createSiteResponse(Site site) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", site.getId());
-        response.put("accountId", site.getAccountId());
-        response.put("domain", site.getDomain());
-        response.put("displayName", site.getDisplayName());
-        response.put("isActive", site.getIsActive());
-        response.put("createdAt", site.getCreatedAt().toString());
-        response.put("updatedAt", site.getUpdatedAt().toString());
-        // clientSecret never returned after creation for security
-
-        return response;
     }
 
     private Map<String, Object> createErrorResponse(String message) {

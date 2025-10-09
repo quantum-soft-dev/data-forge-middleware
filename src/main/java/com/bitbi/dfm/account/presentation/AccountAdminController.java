@@ -3,6 +3,7 @@ package com.bitbi.dfm.account.presentation;
 import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.account.domain.Account;
+import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -52,7 +53,7 @@ public class AccountAdminController {
      * @return created account response
      */
     @PostMapping
-    public ResponseEntity<Map<String, Object>> createAccount(@RequestBody Map<String, String> request) {
+    public ResponseEntity<?> createAccount(@RequestBody Map<String, String> request) {
         try {
             String email = request.get("email");
             String name = request.get("name");
@@ -71,7 +72,7 @@ public class AccountAdminController {
 
             Account account = accountService.createAccount(email, name);
 
-            Map<String, Object> response = createAccountResponse(account);
+            AccountResponseDto response = AccountResponseDto.fromEntity(account);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (AccountService.AccountAlreadyExistsException e) {
@@ -101,13 +102,21 @@ public class AccountAdminController {
      * @return account response
      */
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getAccount(@PathVariable("id") UUID accountId) {
+    public ResponseEntity<?> getAccount(@PathVariable("id") UUID accountId) {
         try {
             Account account = accountService.getAccount(accountId);
-            Map<String, Object> response = createAccountResponse(account);
+            AccountResponseDto dto = AccountResponseDto.fromEntity(account);
 
             // Add statistics to the response
             Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
+
+            // Build extended response with DTO fields + statistics
+            Map<String, Object> response = new HashMap<>();
+            response.put("id", dto.id());
+            response.put("email", dto.email());
+            response.put("name", dto.name());
+            response.put("isActive", dto.isActive());
+            response.put("createdAt", dto.createdAt());
             response.put("sitesCount", statistics.get("totalSites"));
             response.put("totalBatches", statistics.get("totalBatches"));
             response.put("totalUploadedFiles", statistics.get("totalFiles"));
@@ -157,8 +166,8 @@ public class AccountAdminController {
             Page<Account> accountPage = accountService.listAccounts(pageable);
 
             // Convert to response
-            List<Map<String, Object>> accountList = accountPage.getContent().stream()
-                    .map(this::createAccountResponse)
+            List<AccountResponseDto> accountList = accountPage.getContent().stream()
+                    .map(AccountResponseDto::fromEntity)
                     .collect(Collectors.toList());
 
             Map<String, Object> response = new HashMap<>();
@@ -188,7 +197,7 @@ public class AccountAdminController {
      * @return updated account response
      */
     @PutMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> updateAccount(
+    public ResponseEntity<?> updateAccount(
             @PathVariable("id") UUID accountId,
             @RequestBody Map<String, String> request) {
 
@@ -204,7 +213,7 @@ public class AccountAdminController {
 
             Account account = accountService.updateAccount(accountId, name);
 
-            Map<String, Object> response = createAccountResponse(account);
+            AccountResponseDto response = AccountResponseDto.fromEntity(account);
             return ResponseEntity.ok(response);
 
         } catch (AccountService.AccountNotFoundException e) {
@@ -329,17 +338,6 @@ public class AccountAdminController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorResponse("Failed to retrieve statistics"));
         }
-    }
-
-    private Map<String, Object> createAccountResponse(Account account) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", account.getId());
-        response.put("email", account.getEmail());
-        response.put("name", account.getName());
-        response.put("isActive", account.getIsActive());
-        response.put("createdAt", account.getCreatedAt().toString());
-        response.put("updatedAt", account.getUpdatedAt().toString());
-        return response;
     }
 
     private Map<String, Object> createErrorResponse(String message) {

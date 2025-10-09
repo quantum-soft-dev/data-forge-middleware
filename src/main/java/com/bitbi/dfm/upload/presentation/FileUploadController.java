@@ -3,6 +3,7 @@ package com.bitbi.dfm.upload.presentation;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.upload.application.FileUploadService;
 import com.bitbi.dfm.upload.domain.UploadedFile;
+import com.bitbi.dfm.upload.presentation.dto.FileUploadResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -134,7 +135,7 @@ public class FileUploadController {
      * @return file metadata response
      */
     @GetMapping("/{batchId}/files/{fileId}")
-    public ResponseEntity<Map<String, Object>> getFile(
+    public ResponseEntity<?> getFile(
             @PathVariable("batchId") UUID batchId,
             @PathVariable("fileId") UUID fileId,
             @RequestHeader("Authorization") String authHeader) {
@@ -150,7 +151,7 @@ public class FileUploadController {
                         .body(createErrorResponse(HttpStatus.NOT_FOUND, "File not found in batch"));
             }
 
-            Map<String, Object> response = createFileResponse(file);
+            FileUploadResponseDto response = FileUploadResponseDto.fromEntity(file);
             return ResponseEntity.ok(response);
 
         } catch (FileUploadService.FileNotFoundException e) {
@@ -175,19 +176,6 @@ public class FileUploadController {
             throw new IllegalArgumentException("Invalid Authorization header");
         }
         return authHeader.substring("Bearer ".length());
-    }
-
-    private Map<String, Object> createFileResponse(UploadedFile file) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", file.getId());
-        response.put("batchId", file.getBatchId());
-        response.put("originalFileName", file.getOriginalFileName());
-        response.put("s3Key", file.getS3Key());
-        response.put("fileSize", file.getFileSize());
-        response.put("contentType", file.getContentType());
-        response.put("checksum", file.getChecksum());
-        response.put("uploadedAt", file.getUploadedAt().toString());
-        return response;
     }
 
     private Map<String, Object> createErrorResponse(HttpStatus status, String message) {

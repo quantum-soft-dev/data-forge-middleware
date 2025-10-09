@@ -25,7 +25,8 @@
       "Bash(xargs:*)",
       "Bash(gh run list:*)",
       "Bash(gh pr view:*)",
-      "Bash(gh pr checks:*)"
+      "Bash(gh pr checks:*)",
+      "Bash(npm run dev:*)"
     ],
     "deny": [],
     "ask": []
