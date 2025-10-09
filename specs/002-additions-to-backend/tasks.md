@@ -874,10 +874,10 @@ Use real Spring Security context (not mocked).
 Use Testcontainers for PostgreSQL if needed.
 
 **Acceptance Criteria**:
-- [ ] 5 test methods
-- [ ] Uses @SpringBootTest
-- [ ] Tests dual authentication on GET endpoints
-- [ ] Verifies both JWT and Keycloak work on client endpoints
+- [X] 5 test methods
+- [X] Uses @SpringBootTest
+- [X] Tests dual authentication on GET endpoints
+- [~] Verifies both JWT and Keycloak work on client endpoints (JWT tests pass; Keycloak tests document expected behavior but fail due to TestSecurityConfig limitation)
 
 **FR Mapping**: FR-005
 
