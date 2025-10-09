@@ -273,12 +273,12 @@ Test cases:
 Mock Batch entity with all fields, call fromEntity(), assert all DTO fields match.
 
 **Acceptance Criteria**:
-- [ ] Test class in correct package
-- [ ] Uses JUnit 5 (@Test annotation)
-- [ ] 3 test methods covering all scenarios
-- [ ] Asserts all 10 DTO fields
-- [ ] Verifies completedAt null handling
-- [ ] Verifies status enum→string conversion
+- [X] Test class in correct package
+- [X] Uses JUnit 5 (@Test annotation)
+- [X] 3 test methods covering all scenarios
+- [X] Asserts all 10 DTO fields
+- [X] Verifies completedAt null handling
+- [X] Verifies status enum→string conversion
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -395,10 +395,10 @@ Test cases:
 3. fromEntity_shouldIncludeJsonbMetadata()
 
 **Acceptance Criteria**:
-- [ ] 3 test methods
-- [ ] Asserts all 7 fields
-- [ ] Verifies metadata Map handling
-- [ ] Tests pass after T011 implementation
+- [X] 3 test methods
+- [X] Asserts all 7 fields
+- [X] Verifies metadata Map handling
+- [X] Tests pass after T011 implementation
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
