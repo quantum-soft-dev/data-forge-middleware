@@ -1,48 +1,36 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version Change: 1.0.0 → 1.1.0
+Version Change: 1.1.0 → 1.1.1
 
-Type: MINOR - New section added (Frontend/UI Principles)
+Type: PATCH - Git workflow clarification added
 
 Modified Sections:
-- None (existing backend principles unchanged)
+- Development Standards: Added "Git Workflow Standards" subsection
 
 Added Sections:
-- Section "Frontend Core Principles" (Principles VIII-XVI)
-  * VIII. Feature-Sliced Design (FSD Architecture)
-  * IX. Type Safety First (TypeScript Strict Mode)
-  * X. React Query for Server State
-  * XI. TDD for Frontend (70% Unit, 20% Integration, 10% E2E)
-  * XII. Keycloak SSO Integration
-  * XIII. Component Composition over Prop Drilling
-  * XIV. Form Validation with Zod
-  * XV. Performance & Bundle Optimization
-  * XVI. Accessibility & Security
-- Section "Frontend Development Standards"
-- Section "Frontend Testing Requirements"
-- Section "Frontend Code Quality Requirements"
+- "Git Workflow Standards" with branch naming conventions (feature/**, bugfix/**, hotfix/**)
 
 Removed Sections:
 - None
 
 Templates Requiring Updates:
 ✅ .specify/memory/constitution.md - Updated
-⚠️ .specify/templates/plan-template.md - Review: Add UI/Frontend planning sections
-⚠️ .specify/templates/spec-template.md - Review: Add UI component specifications
-⚠️ .specify/templates/tasks-template.md - Review: Add frontend task categories (UI, E2E tests)
+✅ .specify/templates/plan-template.md - Already compatible (uses [###-feature-name] pattern)
+✅ .specify/templates/spec-template.md - Already compatible (uses [###-feature-name] pattern)
+✅ .specify/templates/tasks-template.md - No branch references, no changes needed
+✅ .claude/commands/*.md - No git branch logic, no changes needed
 
 Follow-up TODOs:
-- Consider adding UI-specific quickstart scenarios to template
-- Evaluate if frontend and backend should have separate constitution files for clarity
-- Add ADR template reference for frontend architecture decisions
+- None (all templates already follow compatible patterns)
 
 Bump Rationale:
-MINOR version increment justified because:
-1. New principles added (VIII-XVI for frontend)
-2. No changes to existing backend principles (I-VII remain unchanged)
-3. Backward compatible - backend development unaffected
-4. Material expansion of governance scope to cover full-stack development
+PATCH version increment justified because:
+1. Codifies existing practice (README.md already shows feature/ prefix)
+2. Clarification of workflow standards, not new principle
+3. No changes to core principles (I-XVI unchanged)
+4. No governance changes
+5. Templates already compatible with this naming scheme
 -->
 
 # Data Forge Middleware Constitution
@@ -118,6 +106,26 @@ All components MUST meet WCAG 2.1 AA standards. Use semantic HTML. Provide ARIA 
 **Rationale**: Accessibility is a legal requirement in many jurisdictions and improves UX for all users. Security vulnerabilities like XSS can compromise user data and trust.
 
 ## Development Standards
+
+### Git Workflow Standards
+
+All git branches MUST follow these naming conventions:
+
+- **feature/\*\***: New features, enhancements, or functionality additions
+  - Examples: `feature/user-authentication`, `feature/002-additions-to-backend`
+- **bugfix/\*\***: Bug fixes identified during development or testing
+  - Examples: `bugfix/login-validation`, `bugfix/null-pointer-batch-service`
+- **hotfix/\*\***: Critical production fixes requiring immediate deployment
+  - Examples: `hotfix/security-patch`, `hotfix/s3-connection-leak`
+
+**Branch Creation**:
+```bash
+git checkout -b feature/my-feature-name
+git checkout -b bugfix/issue-description
+git checkout -b hotfix/critical-fix
+```
+
+**Rationale**: Consistent branch naming enables automated CI/CD workflows, clarifies intent in pull requests, and provides clear audit trails. Feature branches typically merge to `main` or `develop`, bugfixes to `develop`, and hotfixes directly to `main` with backport to `develop`.
 
 ### Backend Code Quality Requirements
 - Java 21 language features allowed (records, pattern matching, text blocks)
@@ -245,5 +253,6 @@ All PRs MUST verify:
 - [ ] Security requirements satisfied (auth, validation, no secrets in code)
 - [ ] Performance targets met (backend <1000ms p95, frontend bundle <500KB)
 - [ ] Documentation updated (README, ADR if applicable, code comments for complex logic)
+- [ ] Git branch naming follows standards (feature/**, bugfix/**, hotfix/**)
 
-**Version**: 1.1.0 | **Ratified**: 2025-10-06 | **Last Amended**: 2025-10-09
+**Version**: 1.1.1 | **Ratified**: 2025-10-06 | **Last Amended**: 2025-10-09
