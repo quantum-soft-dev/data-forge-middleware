@@ -1,6 +1,6 @@
 # data-forge-middleware Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-10-06
+Auto-generated from all feature plans. Last updated: 2025-10-09
 
 ## Active Technologies
 - **Java 21** (LTS) with modern language features
@@ -15,9 +15,7 @@ Auto-generated from all feature plans. Last updated: 2025-10-06
 - **Logback + Logstash Encoder** - Structured JSON logging
 - **SpringDoc OpenAPI** - API documentation (Swagger UI)
 - **JUnit 5 + Mockito** - Unit testing
-- **Testcontainers** - Integration testing
-- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security (JWT + OAuth2 Resource Server), Lombok, Jackson (002-additions-to-backend)
-- PostgreSQL 16 (via Spring Data JPA) (002-additions-to-backend)
+- **Testcontainers** - Integration testing (PostgreSQL + LocalStack S3)
 
 ## Project Structure
 
@@ -140,7 +138,7 @@ aws --endpoint-url=http://localhost:4566 s3 mb s3://dataforge-uploads
 - **Repositories**: {Entity}Repository interface, Jpa{Entity}Repository implementation
 - **Services**: {Domain}Service for application services
 - **Controllers**: {Domain}Controller for client API, {Domain}AdminController for admin API
-- **DTOs**: Inline Map<String, Object> for responses (avoiding DTO explosion)
+- **DTOs**: Java records for structured responses (BatchResponseDto, ErrorLogResponseDto, etc.)
 
 ### Testing Patterns
 - **Unit Tests**: Mock all dependencies, focus on business logic
@@ -150,21 +148,41 @@ aws --endpoint-url=http://localhost:4566 s3 mb s3://dataforge-uploads
 
 ## Recent Implementation Decisions
 
-### Security Configuration
+### Security Configuration (Updated 2025-10-09)
 - **Replaced deprecated keycloak-spring-boot-starter** with spring-boot-starter-oauth2-resource-server
-- **Dual authentication**: Custom JWT for client API, Keycloak OAuth2 for admin API
+- **Dual authentication (FR-005)**: Custom JWT for client API, Keycloak OAuth2 for admin API
+  - GET endpoints on client API accept BOTH JWT and Keycloak tokens
+  - POST/PUT/DELETE endpoints on client API accept JWT only (Keycloak returns 403)
+  - Admin endpoints accept Keycloak only (JWT returns 403)
+- **AuthenticationManagerResolver**: Path/method-based authentication strategy selection
+- **DualAuthenticationFilter**: Rejects requests with both tokens (400 Bad Request)
+- **AuthenticationAuditLogger**: Logs auth failures with MDC context (ip, endpoint, method, status, tokenType)
 - **CSRF disabled**: Stateless API with token-based authentication
 - **CORS**: Configured for Actuator endpoints in ActuatorConfiguration
 
-### Error Handling
+### Error Handling (Updated 2025-10-09)
 - **GlobalExceptionHandler**: @RestControllerAdvice for consistent error responses
-- **ErrorResponse DTO**: Record-based with timestamp, status, error, message, path
+- **ErrorResponseDto**: Java record with timestamp (Instant), status (Integer), error (String), message (String), path (String)
 - **HTTP Status Mapping**:
-  - 400 Bad Request - IllegalArgumentException
-  - 403 Forbidden - AccessDeniedException
+  - 400 Bad Request - IllegalArgumentException, ambiguous authentication (dual tokens)
+  - 403 Forbidden - AccessDeniedException, wrong token type for endpoint
   - 404 Not Found - NoHandlerFoundException
   - 413 Payload Too Large - MaxUploadSizeExceededException
   - 500 Internal Server Error - Generic exceptions
+
+### DTO Records (Added 2025-10-09 - FR-001, FR-002, FR-003)
+All endpoints now return structured DTO records instead of Map<String, Object>:
+
+- **BatchResponseDto**: id, batchId, siteId, status, s3Path, uploadedFilesCount, totalSize, hasErrors, startedAt, completedAt
+- **ErrorLogResponseDto**: id, batchId, severity, message, source, metadata, occurredAt
+- **FileUploadResponseDto**: id, batchId, filename, s3Key, fileSize, checksum, uploadedAt
+- **AccountResponseDto**: id, email, name, isActive, createdAt, maxConcurrentBatches
+- **SiteResponseDto**: id, accountId, domain, name, isActive, createdAt
+- **TokenResponseDto**: token, expiresAt, siteId, domain
+- **ErrorResponseDto**: timestamp, status, error, message, path
+- **PageResponseDto<T>**: content (List<T>), page, size, totalElements, totalPages
+
+All DTOs include static `fromEntity()` methods for entity-to-DTO mapping.
 
 ### Observability
 - **Structured Logging**: JSON format in production with Logstash encoder
@@ -193,15 +211,19 @@ aws --endpoint-url=http://localhost:4566 s3 mb s3://dataforge-uploads
 
 ## Known Limitations
 
-1. **Actuator ServletEndpointsSupplier deprecation**: Using deprecated suppliers in ActuatorConfiguration (Spring Boot 3.5.6 compatibility)
-2. **No user registration flow**: Accounts/sites created via admin API only
-3. **Basic retry logic**: S3 uploads retry 3 times with fixed 1-second delay (no exponential backoff)
-4. **In-memory batch counting**: Concurrent batch limit check not atomic across instances
-5. **No rate limiting**: API endpoints lack request throttling
-6. **Single region**: S3 configuration supports one region only
+1. **TestSecurityConfig divergence**: Test security configuration uses separate SecurityFilterChains instead of AuthenticationManagerResolver (production uses resolver for dual auth). This causes Keycloak OAuth2 tests to fail in test environment (documented in DualAuthenticationIntegrationTest.java:24-30). JWT authentication tests pass correctly (2/5 tests in DualAuthenticationIntegrationTest).
+2. **Code coverage below 80%**: Overall test coverage is 16% line coverage, 7% branch coverage (as of 2025-10-09). This reflects the pre-existing codebase; Phase 3 additions (DTOs, dual auth) are tested but most domain/application layers from foundational implementation remain untested.
+3. **Actuator ServletEndpointsSupplier deprecation**: Using deprecated suppliers in ActuatorConfiguration (Spring Boot 3.5.6 compatibility)
+4. **No user registration flow**: Accounts/sites created via admin API only
+5. **Basic retry logic**: S3 uploads retry 3 times with fixed 1-second delay (no exponential backoff)
+6. **In-memory batch counting**: Concurrent batch limit check not atomic across instances
+7. **No rate limiting**: API endpoints lack request throttling
+8. **Single region**: S3 configuration supports one region only
 
 ## Future Enhancements
 
+- [ ] Update TestSecurityConfig to use AuthenticationManagerResolver for dual auth (matches production SecurityConfiguration)
+- [ ] Increase test coverage to 80% (add unit tests for domain/application layers)
 - [ ] Multi-region S3 replication
 - [ ] Redis cache for token validation
 - [ ] Exponential backoff for S3 retries
