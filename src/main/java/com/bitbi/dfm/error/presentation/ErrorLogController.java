@@ -3,6 +3,7 @@ package com.bitbi.dfm.error.presentation;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.error.domain.ErrorLog;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -93,7 +94,7 @@ public class ErrorLogController {
      * @return created error log response
      */
     @PostMapping("/{batchId}")
-    public ResponseEntity<Map<String, Object>> logError(
+    public ResponseEntity<?> logError(
             @PathVariable("batchId") UUID batchId,
             @RequestBody Map<String, Object> request,
             @RequestHeader("Authorization") String authHeader) {
@@ -120,7 +121,7 @@ public class ErrorLogController {
 
             ErrorLog errorLog = errorLoggingService.logError(batchId, siteId, type, message, metadata);
 
-            Map<String, Object> response = createErrorLogResponse(errorLog);
+            ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (Exception e) {
@@ -141,7 +142,7 @@ public class ErrorLogController {
      * @return error log response
      */
     @GetMapping("/log/{errorId}")
-    public ResponseEntity<Map<String, Object>> getErrorLog(
+    public ResponseEntity<?> getErrorLog(
             @PathVariable("errorId") UUID errorId,
             @RequestHeader("Authorization") String authHeader) {
 
@@ -150,7 +151,7 @@ public class ErrorLogController {
 
             ErrorLog errorLog = errorLoggingService.getErrorLog(errorId);
 
-            Map<String, Object> response = createErrorLogResponse(errorLog);
+            ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
             return ResponseEntity.ok(response);
 
         } catch (ErrorLoggingService.ErrorLogNotFoundException e) {
@@ -175,21 +176,6 @@ public class ErrorLogController {
             throw new IllegalArgumentException("Invalid Authorization header");
         }
         return authHeader.substring("Bearer ".length());
-    }
-
-    private Map<String, Object> createErrorLogResponse(ErrorLog errorLog) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", errorLog.getId());
-        response.put("batchId", errorLog.getBatchId());
-        response.put("siteId", errorLog.getSiteId());
-        response.put("type", errorLog.getType());
-        response.put("title", errorLog.getTitle());
-        response.put("message", errorLog.getMessage());
-        response.put("stackTrace", errorLog.getStackTrace());
-        response.put("clientVersion", errorLog.getClientVersion());
-        response.put("metadata", errorLog.getMetadata());
-        response.put("occurredAt", errorLog.getOccurredAt().toString());
-        return response;
     }
 
     private Map<String, Object> createErrorResponse(String message) {

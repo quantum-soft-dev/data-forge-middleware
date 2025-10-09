@@ -118,7 +118,6 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.name").exists())
                 .andExpect(jsonPath("$.isActive").exists())
                 .andExpect(jsonPath("$.createdAt").exists())
-                .andExpect(jsonPath("$.updatedAt").exists())
                 .andExpect(jsonPath("$.sitesCount").isNumber())
                 .andExpect(jsonPath("$.totalBatches").isNumber())
                 .andExpect(jsonPath("$.totalUploadedFiles").isNumber());
@@ -214,7 +213,7 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.accountId").value(MOCK_ACCOUNT_ID))
                 .andExpect(jsonPath("$.domain").value("store-101.example.com"))
-                .andExpect(jsonPath("$.displayName").value("Store #1"))
+                .andExpect(jsonPath("$.name").value("Store #1"))
                 .andExpect(jsonPath("$.clientSecret").exists())
                 .andExpect(jsonPath("$.isActive").value(true))
                 .andExpect(jsonPath("$.createdAt").exists());

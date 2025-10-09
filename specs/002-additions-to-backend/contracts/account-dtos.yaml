@@ -1,0 +1,41 @@
+openapi: 3.0.3
+info:
+  title: Account DTOs
+  version: 1.0.0
+  description: OpenAPI schema definitions for Account response DTOs
+
+components:
+  schemas:
+    AccountResponseDto:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - isActive
+        - createdAt
+        - maxConcurrentBatches
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique account identifier
+        email:
+          type: string
+          format: email
+          description: Account email address
+        name:
+          type: string
+          description: Account name
+        isActive:
+          type: boolean
+          description: Whether the account is active
+        createdAt:
+          type: string
+          format: date-time
+          description: When the account was created
+        maxConcurrentBatches:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: Maximum number of concurrent batches allowed

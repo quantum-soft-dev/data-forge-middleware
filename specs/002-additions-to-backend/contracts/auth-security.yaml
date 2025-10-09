@@ -1,0 +1,175 @@
+openapi: 3.0.3
+info:
+  title: Authentication & Security DTOs
+  version: 1.0.0
+  description: OpenAPI schema definitions for authentication DTOs and security rules
+
+components:
+  schemas:
+    TokenResponseDto:
+      type: object
+      required:
+        - token
+        - expiresAt
+        - siteId
+        - domain
+      properties:
+        token:
+          type: string
+          description: JWT token string
+        expiresAt:
+          type: string
+          format: date-time
+          description: Token expiration timestamp
+        siteId:
+          type: string
+          format: uuid
+          description: Site ID extracted from token claims
+        domain:
+          type: string
+          description: Domain extracted from token claims
+
+    ErrorResponseDto:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: When the error occurred
+        status:
+          type: integer
+          description: HTTP status code
+        error:
+          type: string
+          description: HTTP status reason phrase
+        message:
+          type: string
+          description: Error message (generic for auth failures per FR-014)
+        path:
+          type: string
+          description: Request path that caused the error
+
+  securitySchemes:
+    JwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Internal JWT for client applications (24-hour expiration)
+
+    KeycloakAuth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/token
+          scopes: {}
+      description: Keycloak OAuth2 for admin access (requires ROLE_ADMIN)
+
+paths:
+  /api/v1/batch/{id}:
+    get:
+      summary: Get batch status
+      description: Dual authentication - accepts both JWT and Keycloak tokens (FR-005)
+      operationId: getBatch
+      security:
+        - JwtAuth: []
+        - KeycloakAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Batch details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponseDto'
+        '400':
+          description: Dual tokens detected (FR-015)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '403':
+          description: Wrong token type or unauthorized (FR-007)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '404':
+          description: Batch not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+
+  /api/v1/batch/start:
+    post:
+      summary: Start new batch
+      description: JWT only authentication - Keycloak tokens rejected with 403 (FR-006, FR-007)
+      operationId: startBatch
+      security:
+        - JwtAuth: []
+      responses:
+        '201':
+          description: Batch created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponseDto'
+        '400':
+          description: Dual tokens detected (FR-015)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '403':
+          description: Keycloak token not allowed on POST (FR-007)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '409':
+          description: Active batch already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '429':
+          description: Concurrent batch limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+
+  /api/v1/admin/accounts:
+    get:
+      summary: List all accounts (admin endpoint)
+      description: Keycloak only authentication - JWT tokens rejected (FR-008, FR-009)
+      operationId: listAccounts
+      security:
+        - KeycloakAuth: []
+      responses:
+        '200':
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountResponseDto'
+        '403':
+          description: JWT token not allowed on admin endpoints (FR-009)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'

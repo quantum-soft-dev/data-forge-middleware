@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.presentation.dto.BatchResponseDto;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,7 @@ public class BatchController {
      * @return created batch response
      */
     @PostMapping("/start")
-    public ResponseEntity<Map<String, Object>> startBatch() {
+    public ResponseEntity<?> startBatch() {
 
         try {
             // Get authenticated site/account/domain from security context
@@ -60,7 +61,7 @@ public class BatchController {
 
             Batch batch = batchLifecycleService.startBatch(accountId, siteId, domain);
 
-            Map<String, Object> response = createBatchResponse(batch);
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (AuthorizationHelper.UnauthorizedException e) {
@@ -96,7 +97,7 @@ public class BatchController {
      * @return completed batch response
      */
     @PostMapping("/{id}/complete")
-    public ResponseEntity<Map<String, Object>> completeBatch(
+    public ResponseEntity<?> completeBatch(
             @PathVariable("id") UUID batchId) {
 
         try {
@@ -110,7 +111,7 @@ public class BatchController {
 
             batch = batchLifecycleService.completeBatch(batchId);
 
-            Map<String, Object> response = createBatchResponse(batch);
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.ok(response);
 
         } catch (AuthorizationHelper.UnauthorizedException e) {
@@ -146,7 +147,7 @@ public class BatchController {
      * @return failed batch response
      */
     @PostMapping("/{id}/fail")
-    public ResponseEntity<Map<String, Object>> failBatch(
+    public ResponseEntity<?> failBatch(
             @PathVariable("id") UUID batchId) {
 
         try {
@@ -160,7 +161,7 @@ public class BatchController {
 
             batch = batchLifecycleService.failBatch(batchId);
 
-            Map<String, Object> response = createBatchResponse(batch);
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.ok(response);
 
         } catch (AuthorizationHelper.UnauthorizedException e) {
@@ -196,7 +197,7 @@ public class BatchController {
      * @return cancelled batch response
      */
     @PostMapping("/{id}/cancel")
-    public ResponseEntity<Map<String, Object>> cancelBatch(
+    public ResponseEntity<?> cancelBatch(
             @PathVariable("id") UUID batchId) {
 
         try {
@@ -210,7 +211,7 @@ public class BatchController {
 
             batch = batchLifecycleService.cancelBatch(batchId);
 
-            Map<String, Object> response = createBatchResponse(batch);
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.ok(response);
 
         } catch (AuthorizationHelper.UnauthorizedException e) {
@@ -246,7 +247,7 @@ public class BatchController {
      * @return batch response
      */
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getBatch(
+    public ResponseEntity<?> getBatch(
             @PathVariable("id") UUID batchId) {
 
         try {
@@ -256,7 +257,7 @@ public class BatchController {
             // Verify site ownership
             authorizationHelper.verifySiteOwnership(batch.getSiteId());
 
-            Map<String, Object> response = createBatchResponse(batch);
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.ok(response);
 
         } catch (AuthorizationHelper.UnauthorizedException e) {
@@ -274,23 +275,6 @@ public class BatchController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to retrieve batch"));
         }
-    }
-
-    private Map<String, Object> createBatchResponse(Batch batch) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", batch.getId());
-        response.put("batchId", batch.getId());
-        response.put("siteId", batch.getSiteId());
-        response.put("status", batch.getStatus().name());
-        response.put("s3Path", batch.getS3Path());
-        response.put("uploadedFilesCount", batch.getUploadedFilesCount());
-        response.put("totalSize", batch.getTotalSize());
-        response.put("hasErrors", batch.getHasErrors());
-        response.put("startedAt", batch.getStartedAt().toString());
-        if (batch.getCompletedAt() != null) {
-            response.put("completedAt", batch.getCompletedAt().toString());
-        }
-        return response;
     }
 
     private Map<String, Object> createErrorResponse(String message) {

@@ -23,13 +23,19 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * <p>Admin endpoints require ROLE_ADMIN granted by Keycloak.</p>
  *
+ * <p><b>DEPRECATED:</b> Replaced by SecurityConfiguration with dual authentication support (FR-005 through FR-009).</p>
+ * <p>This configuration is kept for backward compatibility but is disabled by default.</p>
+ * <p>To use the legacy configuration, activate the 'legacy-security' profile.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
+ * @deprecated Replaced by {@link com.bitbi.dfm.shared.config.SecurityConfiguration}
  */
+@Deprecated
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
-@Profile("!test")
+@Profile("legacy-security")
 public class KeycloakSecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;

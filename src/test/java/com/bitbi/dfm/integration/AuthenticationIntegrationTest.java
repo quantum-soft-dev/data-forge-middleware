@@ -44,8 +44,9 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 // Then: 200 OK with valid JWT token
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.token").exists())
-                .andExpect(jsonPath("$.expiresIn").value(86400))
-                .andExpect(jsonPath("$.tokenType").value("Bearer"));
+                .andExpect(jsonPath("$.expiresAt").exists())
+                .andExpect(jsonPath("$.siteId").exists())
+                .andExpect(jsonPath("$.domain").exists());
 
         // Verify: JWT token contains expected claims (siteId, accountId, domain)
         // Note: Full JWT validation will be done in domain layer tests

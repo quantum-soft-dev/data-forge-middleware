@@ -3,6 +3,7 @@ package com.bitbi.dfm.site.presentation;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.site.application.SiteService;
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -55,15 +56,17 @@ class SiteAdminControllerTest {
                 .thenReturn(result);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(testSite.getDomain(), response.getBody().get("domain"));
-        assertEquals(testSite.getDisplayName(), response.getBody().get("displayName"));
-        assertTrue(response.getBody().containsKey("clientSecret"));
-        assertEquals("test-secret-plaintext", response.getBody().get("clientSecret"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals(testSite.getDomain(), body.get("domain"));
+        assertEquals(testSite.getDisplayName(), body.get("name"));
+        assertTrue(body.containsKey("clientSecret"));
+        assertEquals("test-secret-plaintext", body.get("clientSecret"));
         verify(siteService, times(1)).createSite(testAccountId, "test.example.com", "Test Site");
     }
 
@@ -75,12 +78,14 @@ class SiteAdminControllerTest {
         request.put("displayName", "Test Site");
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Domain is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Domain is required", body.get("error"));
         verify(siteService, never()).createSite(any(), any(), any());
     }
 
@@ -93,12 +98,14 @@ class SiteAdminControllerTest {
         request.put("displayName", "Test Site");
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Domain is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Domain is required", body.get("error"));
     }
 
     @Test
@@ -109,12 +116,14 @@ class SiteAdminControllerTest {
         request.put("domain", "test.example.com");
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Display name is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Display name is required", body.get("error"));
     }
 
     @Test
@@ -129,12 +138,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new SiteService.SiteAlreadyExistsException("Site already exists"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Site already exists", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Site already exists", body.get("error"));
     }
 
     @Test
@@ -149,12 +160,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new IllegalArgumentException("Invalid domain format"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Invalid domain format", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Invalid domain format", body.get("error"));
     }
 
     @Test
@@ -169,12 +182,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new RuntimeException("Database error"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.createSite(testAccountId, request);
+        ResponseEntity<?> response = controller.createSite(testAccountId, request);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to create site", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to create site", body.get("error"));
     }
 
     @Test
@@ -184,14 +199,14 @@ class SiteAdminControllerTest {
         when(siteService.getSite(testSiteId)).thenReturn(testSite);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getSite(testSiteId);
+        ResponseEntity<?> response = controller.getSite(testSiteId);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(testSite.getDomain(), response.getBody().get("domain"));
-        assertEquals(testSite.getDisplayName(), response.getBody().get("displayName"));
-        assertFalse(response.getBody().containsKey("clientSecret"));
+        SiteResponseDto body = (SiteResponseDto) response.getBody();
+        assertEquals(testSite.getDomain(), body.domain());
+        assertEquals(testSite.getDisplayName(), body.name());
         verify(siteService, times(1)).getSite(testSiteId);
     }
 
@@ -203,12 +218,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new SiteService.SiteNotFoundException("Site not found"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getSite(testSiteId);
+        ResponseEntity<?> response = controller.getSite(testSiteId);
 
         // Then
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Site not found", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Site not found", body.get("error"));
     }
 
     @Test
@@ -219,12 +236,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new RuntimeException("Database error"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getSite(testSiteId);
+        ResponseEntity<?> response = controller.getSite(testSiteId);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to retrieve site", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to retrieve site", body.get("error"));
     }
 
     @Test
@@ -246,10 +265,10 @@ class SiteAdminControllerTest {
         assertTrue(response.getBody() instanceof List);
 
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> siteList = (List<Map<String, Object>>) response.getBody();
+        List<SiteResponseDto> siteList = (List<SiteResponseDto>) response.getBody();
         assertEquals(2, siteList.size());
-        assertEquals("site1.example.com", siteList.get(0).get("domain"));
-        assertEquals("site2.example.com", siteList.get(1).get("domain"));
+        assertEquals("site1.example.com", siteList.get(0).domain());
+        assertEquals("site2.example.com", siteList.get(1).domain());
         verify(siteService, times(1)).listSitesByAccount(testAccountId);
     }
 
@@ -282,7 +301,7 @@ class SiteAdminControllerTest {
         when(siteService.updateSite(testSiteId, "Updated Site")).thenReturn(testSite);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.updateSite(testSiteId, request);
+        ResponseEntity<?> response = controller.updateSite(testSiteId, request);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
@@ -297,12 +316,14 @@ class SiteAdminControllerTest {
         Map<String, String> request = new HashMap<>();
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.updateSite(testSiteId, request);
+        ResponseEntity<?> response = controller.updateSite(testSiteId, request);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Display name is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Display name is required", body.get("error"));
         verify(siteService, never()).updateSite(any(), any());
     }
 
@@ -317,12 +338,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new SiteService.SiteNotFoundException("Site not found"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.updateSite(testSiteId, request);
+        ResponseEntity<?> response = controller.updateSite(testSiteId, request);
 
         // Then
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Site not found", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Site not found", body.get("error"));
     }
 
     @Test
@@ -333,12 +356,14 @@ class SiteAdminControllerTest {
         request.put("displayName", "  ");
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.updateSite(testSiteId, request);
+        ResponseEntity<?> response = controller.updateSite(testSiteId, request);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Display name is required", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Display name is required", body.get("error"));
         verify(siteService, never()).updateSite(any(), any());
     }
 
@@ -353,12 +378,14 @@ class SiteAdminControllerTest {
                 .thenThrow(new RuntimeException("Database error"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.updateSite(testSiteId, request);
+        ResponseEntity<?> response = controller.updateSite(testSiteId, request);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to update site", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to update site", body.get("error"));
     }
 
     @Test
@@ -368,7 +395,7 @@ class SiteAdminControllerTest {
         doNothing().when(siteService).deactivateSite(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.deactivateSite(testSiteId);
+        ResponseEntity<?> response = controller.deactivateSite(testSiteId);
 
         // Then
         assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
@@ -384,12 +411,14 @@ class SiteAdminControllerTest {
                 .when(siteService).deactivateSite(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.deactivateSite(testSiteId);
+        ResponseEntity<?> response = controller.deactivateSite(testSiteId);
 
         // Then
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Site not found", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Site not found", body.get("error"));
     }
 
     @Test
@@ -400,12 +429,14 @@ class SiteAdminControllerTest {
                 .when(siteService).deactivateSite(testSiteId);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.deactivateSite(testSiteId);
+        ResponseEntity<?> response = controller.deactivateSite(testSiteId);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to deactivate site", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to deactivate site", body.get("error"));
     }
 
     @Test
@@ -419,13 +450,15 @@ class SiteAdminControllerTest {
         when(accountStatisticsService.getSiteStatistics(testSiteId)).thenReturn(stats);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getSiteStatistics(testSiteId);
+        ResponseEntity<?> response = controller.getSiteStatistics(testSiteId);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(10, response.getBody().get("totalBatches"));
-        assertEquals(5, response.getBody().get("totalErrors"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals(10, body.get("totalBatches"));
+        assertEquals(5, body.get("totalErrors"));
         verify(accountStatisticsService, times(1)).getSiteStatistics(testSiteId);
     }
 
@@ -437,11 +470,13 @@ class SiteAdminControllerTest {
                 .thenThrow(new RuntimeException("Database error"));
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.getSiteStatistics(testSiteId);
+        ResponseEntity<?> response = controller.getSiteStatistics(testSiteId);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals("Failed to retrieve statistics", response.getBody().get("error"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals("Failed to retrieve statistics", body.get("error"));
     }
 }
