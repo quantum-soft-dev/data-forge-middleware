@@ -1,5 +1,6 @@
 package com.bitbi.dfm.shared.exception;
 
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
+
+import java.time.Instant;
 
 /**
  * Global exception handler for standardized error responses.
@@ -30,13 +33,14 @@ public class GlobalExceptionHandler {
      * Handle IllegalArgumentException (400 Bad Request).
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgument(
+    public ResponseEntity<ErrorResponseDto> handleIllegalArgument(
             IllegalArgumentException ex,
             HttpServletRequest request) {
 
         logger.warn("Bad request: {}", ex.getMessage());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.BAD_REQUEST.value(),
                 "Bad Request",
                 ex.getMessage(),
@@ -50,16 +54,17 @@ public class GlobalExceptionHandler {
      * Handle AccessDeniedException (403 Forbidden).
      */
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDenied(
+    public ResponseEntity<ErrorResponseDto> handleAccessDenied(
             AccessDeniedException ex,
             HttpServletRequest request) {
 
         logger.warn("Access denied: {}", ex.getMessage());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.FORBIDDEN.value(),
                 "Forbidden",
-                "Access denied: insufficient permissions",
+                "Authentication failed",
                 request.getRequestURI()
         );
 
@@ -70,13 +75,14 @@ public class GlobalExceptionHandler {
      * Handle NoHandlerFoundException (404 Not Found).
      */
     @ExceptionHandler(NoHandlerFoundException.class)
-    public ResponseEntity<ErrorResponse> handleNotFound(
+    public ResponseEntity<ErrorResponseDto> handleNotFound(
             NoHandlerFoundException ex,
             HttpServletRequest request) {
 
         logger.warn("Endpoint not found: {}", request.getRequestURI());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.NOT_FOUND.value(),
                 "Not Found",
                 "Endpoint not found: " + request.getRequestURI(),
@@ -90,13 +96,14 @@ public class GlobalExceptionHandler {
      * Handle MaxUploadSizeExceededException (413 Payload Too Large).
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ErrorResponse> handleMaxUploadSizeExceeded(
+    public ResponseEntity<ErrorResponseDto> handleMaxUploadSizeExceeded(
             MaxUploadSizeExceededException ex,
             HttpServletRequest request) {
 
         logger.warn("Upload size exceeded: {}", ex.getMessage());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.PAYLOAD_TOO_LARGE.value(),
                 "Payload Too Large",
                 "File upload size exceeds maximum allowed size",
@@ -110,13 +117,14 @@ public class GlobalExceptionHandler {
      * Handle IllegalStateException (500 Internal Server Error).
      */
     @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalState(
+    public ResponseEntity<ErrorResponseDto> handleIllegalState(
             IllegalStateException ex,
             HttpServletRequest request) {
 
         logger.error("Illegal state: {}", ex.getMessage(), ex);
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Internal Server Error",
                 ex.getMessage(),
@@ -130,13 +138,14 @@ public class GlobalExceptionHandler {
      * Handle generic exceptions (500 Internal Server Error).
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGenericException(
+    public ResponseEntity<ErrorResponseDto> handleGenericException(
             Exception ex,
             HttpServletRequest request) {
 
         logger.error("Unexpected error: {}", ex.getMessage(), ex);
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Internal Server Error",
                 "An unexpected error occurred",

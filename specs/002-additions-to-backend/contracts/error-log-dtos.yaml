@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info:
+  title: Error Log DTOs
+  version: 1.0.0
+  description: OpenAPI schema definitions for ErrorLog response DTOs
+
+components:
+  schemas:
+    ErrorLogResponseDto:
+      type: object
+      required:
+        - id
+        - batchId
+        - severity
+        - message
+        - source
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique error log identifier
+        batchId:
+          type: string
+          format: uuid
+          description: Batch this error belongs to
+        severity:
+          type: string
+          enum: [INFO, WARN, ERROR, FATAL]
+          description: Error severity level
+        message:
+          type: string
+          description: Error message
+        source:
+          type: string
+          description: Source of the error (e.g., file upload, validation)
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Additional structured metadata (JSONB)
+        occurredAt:
+          type: string
+          format: date-time
+          description: When the error occurred

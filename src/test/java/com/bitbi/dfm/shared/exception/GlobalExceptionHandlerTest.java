@@ -1,5 +1,6 @@
 package com.bitbi.dfm.shared.exception;
 
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -37,7 +38,7 @@ class GlobalExceptionHandlerTest {
         IllegalArgumentException ex = new IllegalArgumentException("Invalid argument");
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleIllegalArgument(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleIllegalArgument(ex, request);
 
         // Then
         assertNotNull(response);
@@ -56,7 +57,7 @@ class GlobalExceptionHandlerTest {
         AccessDeniedException ex = new AccessDeniedException("Access denied");
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleAccessDenied(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleAccessDenied(ex, request);
 
         // Then
         assertNotNull(response);
@@ -64,7 +65,7 @@ class GlobalExceptionHandlerTest {
         assertNotNull(response.getBody());
         assertEquals(403, response.getBody().status());
         assertEquals("Forbidden", response.getBody().error());
-        assertEquals("Access denied: insufficient permissions", response.getBody().message());
+        assertEquals("Authentication failed", response.getBody().message()); // FR-014: Generic message
         assertEquals("/api/v1/test", response.getBody().path());
     }
 
@@ -75,7 +76,7 @@ class GlobalExceptionHandlerTest {
         NoHandlerFoundException ex = new NoHandlerFoundException("GET", "/api/v1/test", null);
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleNotFound(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleNotFound(ex, request);
 
         // Then
         assertNotNull(response);
@@ -94,7 +95,7 @@ class GlobalExceptionHandlerTest {
         MaxUploadSizeExceededException ex = new MaxUploadSizeExceededException(10_000_000);
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleMaxUploadSizeExceeded(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleMaxUploadSizeExceeded(ex, request);
 
         // Then
         assertNotNull(response);
@@ -113,7 +114,7 @@ class GlobalExceptionHandlerTest {
         IllegalStateException ex = new IllegalStateException("Invalid state");
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleIllegalState(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleIllegalState(ex, request);
 
         // Then
         assertNotNull(response);
@@ -132,7 +133,7 @@ class GlobalExceptionHandlerTest {
         Exception ex = new RuntimeException("Unexpected error");
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleGenericException(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleGenericException(ex, request);
 
         // Then
         assertNotNull(response);
@@ -151,7 +152,7 @@ class GlobalExceptionHandlerTest {
         IllegalArgumentException ex = new IllegalArgumentException("Test");
 
         // When
-        ResponseEntity<ErrorResponse> response = handler.handleIllegalArgument(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleIllegalArgument(ex, request);
 
         // Then
         assertNotNull(response.getBody());
