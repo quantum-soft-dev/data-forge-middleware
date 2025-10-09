@@ -26,7 +26,11 @@
       "Bash(gh run list:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr checks:*)",
-      "Bash(npm run dev:*)"
+      "Bash(npm run dev:*)",
+      "Bash(if [ -f build/reports/jacoco/test/html/index.html ])",
+      "Bash(then grep -A 5 \"Total\" build/reports/jacoco/test/html/index.html)",
+      "Bash(else echo \"JaCoCo report not found\")",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []
