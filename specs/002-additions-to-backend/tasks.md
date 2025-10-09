@@ -58,10 +58,10 @@ Create immutable ErrorResponseDto record with fields: timestamp (Instant), statu
 All fields are required (no nullable fields).
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 5 fields
-- [ ] All fields use correct types (Instant, Integer, String)
-- [ ] No fromEntity() method needed (constructed directly from exceptions)
-- [ ] Record is in `shared/presentation/dto` package
+- [X] Record compiles with all 5 fields
+- [X] All fields use correct types (Instant, Integer, String)
+- [X] No fromEntity() method needed (constructed directly from exceptions)
+- [X] Record is in `shared/presentation/dto` package
 
 **FR Mapping**: FR-004, FR-014
 
@@ -80,10 +80,10 @@ Create immutable generic PageResponseDto<T> record with fields: content (List<T>
 Add static method `of(Page<E> page, Function<E, T> mapper)` to convert Spring Data Page to DTO.
 
 **Acceptance Criteria**:
-- [ ] Generic record compiles with type parameter T
-- [ ] All 5 fields present with correct types
-- [ ] Static `of()` method converts Page<Entity> to PageResponseDto<DTO>
-- [ ] Method applies mapper function to transform entities
+- [X] Generic record compiles with type parameter T
+- [X] All 5 fields present with correct types
+- [X] Static `of()` method converts Page<Entity> to PageResponseDto<DTO>
+- [X] Method applies mapper function to transform entities
 
 **FR Mapping**: FR-001, FR-002
 
@@ -109,11 +109,11 @@ Update methods:
 Construct ErrorResponseDto with timestamp (Instant.now()), status, error (status reason phrase), message, path (from HttpServletRequest).
 
 **Acceptance Criteria**:
-- [ ] All handler methods return ResponseEntity<ErrorResponseDto>
-- [ ] ErrorResponseDto constructed with all 5 fields
-- [ ] Timestamp uses Instant.now()
-- [ ] Path extracted from HttpServletRequest.getRequestURI()
-- [ ] Tests updated to assert ErrorResponseDto structure
+- [X] All handler methods return ResponseEntity<ErrorResponseDto>
+- [X] ErrorResponseDto constructed with all 5 fields
+- [X] Timestamp uses Instant.now()
+- [X] Path extracted from HttpServletRequest.getRequestURI()
+- [X] Tests updated to assert ErrorResponseDto structure
 
 **FR Mapping**: FR-004, FR-014
 
@@ -141,11 +141,11 @@ If both present:
 Otherwise, continue filter chain.
 
 **Acceptance Criteria**:
-- [ ] Extends OncePerRequestFilter
-- [ ] Checks for both Authorization and X-Keycloak-Token headers
-- [ ] Returns 400 when both tokens present
-- [ ] Writes ErrorResponseDto JSON to response
-- [ ] Filter registered before Spring Security authentication filters
+- [X] Extends OncePerRequestFilter
+- [X] Checks for both Authorization and X-Keycloak-Token headers
+- [X] Returns 400 when both tokens present
+- [X] Writes ErrorResponseDto JSON to response
+- [X] Filter registered before Spring Security authentication filters
 
 **FR Mapping**: FR-015
 
@@ -174,12 +174,12 @@ Log structure (JSON in production):
 Use SLF4J with MDC.put() for structured fields.
 
 **Acceptance Criteria**:
-- [ ] Implements AuthenticationFailureHandler
-- [ ] Logs with SLF4J logger
-- [ ] Uses MDC.put() for: ip, endpoint, method, status, tokenType
-- [ ] Log message contains "auth_failure"
-- [ ] Token type detected from Authorization header (JWT vs Keycloak)
-- [ ] MDC context cleared after logging
+- [X] Implements AuthenticationFailureHandler
+- [X] Logs with SLF4J logger
+- [X] Uses MDC.put() for: ip, endpoint, method, status, tokenType
+- [X] Log message contains "auth_failure"
+- [X] Token type detected from Authorization header (JWT vs Keycloak)
+- [X] MDC context cleared after logging
 
 **FR Mapping**: FR-013
 
@@ -205,13 +205,13 @@ Register DualAuthenticationFilter before authentication.
 Register AuthenticationAuditLogger as failure handler.
 
 **Acceptance Criteria**:
-- [ ] AuthenticationManagerResolver resolves based on path + method
-- [ ] DualAuthenticationFilter registered first
-- [ ] AuthenticationAuditLogger wired as failure handler
-- [ ] GET requests on client endpoints accept both tokens
-- [ ] Write requests on client endpoints accept JWT only
-- [ ] Admin endpoints accept Keycloak only
-- [ ] Configuration compiles and Spring context starts
+- [X] AuthenticationManagerResolver resolves based on path + method
+- [X] DualAuthenticationFilter registered first
+- [X] AuthenticationAuditLogger wired as failure handler
+- [X] GET requests on client endpoints accept both tokens
+- [X] Write requests on client endpoints accept JWT only
+- [X] Admin endpoints accept Keycloak only
+- [X] Configuration compiles and Spring context starts
 
 **FR Mapping**: FR-005, FR-006, FR-007, FR-008, FR-009, FR-015
 
@@ -245,11 +245,11 @@ Add static method `fromEntity(Batch batch)` that:
 - Returns completedAt as null if batch still active
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 10 fields
-- [ ] completedAt marked as nullable (@Nullable annotation)
-- [ ] fromEntity() method present and handles null completedAt
-- [ ] Status converted from enum to String
-- [ ] Package is `com.bitbi.dfm.batch.presentation.dto`
+- [X] Record compiles with all 10 fields
+- [X] completedAt marked as nullable (@Nullable annotation)
+- [X] fromEntity() method present and handles null completedAt
+- [X] Status converted from enum to String
+- [X] Package is `com.bitbi.dfm.batch.presentation.dto`
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -370,10 +370,10 @@ Create immutable ErrorLogResponseDto record with fields:
 Add static method `fromEntity(ErrorLog errorLog)` that copies all fields.
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 7 fields
-- [ ] metadata marked as nullable
-- [ ] fromEntity() method present
-- [ ] Package is `com.bitbi.dfm.error.presentation.dto`
+- [X] Record compiles with all 7 fields
+- [X] metadata marked as nullable
+- [X] fromEntity() method present
+- [X] Package is `com.bitbi.dfm.error.presentation.dto`
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -477,9 +477,9 @@ Create immutable FileUploadResponseDto record with fields:
 Add static method `fromEntity(FileUpload fileUpload)`.
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 7 fields
-- [ ] fromEntity() method present
-- [ ] Package is `com.bitbi.dfm.upload.presentation.dto`
+- [X] Record compiles with all 7 fields
+- [X] fromEntity() method present
+- [X] Package is `com.bitbi.dfm.upload.presentation.dto`
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -573,9 +573,9 @@ Create immutable AccountResponseDto record with fields:
 Add static method `fromEntity(Account account)` that excludes sensitive fields (passwords, secrets).
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 6 fields
-- [ ] fromEntity() excludes sensitive data
-- [ ] Package is `com.bitbi.dfm.account.presentation.dto`
+- [X] Record compiles with all 6 fields
+- [X] fromEntity() excludes sensitive data
+- [X] Package is `com.bitbi.dfm.account.presentation.dto`
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -675,9 +675,9 @@ Create immutable SiteResponseDto record with fields:
 Add static method `fromEntity(Site site)` that excludes clientSecret.
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 6 fields
-- [ ] fromEntity() excludes clientSecret
-- [ ] Package is `com.bitbi.dfm.site.presentation.dto`
+- [X] Record compiles with all 6 fields
+- [X] fromEntity() excludes clientSecret
+- [X] Package is `com.bitbi.dfm.site.presentation.dto`
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -774,10 +774,10 @@ Create immutable TokenResponseDto record with fields:
 Add static method `fromToken(JwtToken jwtToken)` that extracts fields from custom JwtToken value object.
 
 **Acceptance Criteria**:
-- [ ] Record compiles with all 4 fields
-- [ ] fromToken() method present
-- [ ] Extracts claims from JwtToken
-- [ ] Package is `com.bitbi.dfm.auth.presentation.dto`
+- [X] Record compiles with all 4 fields
+- [X] fromToken() method present
+- [X] Extracts claims from JwtToken
+- [X] Package is `com.bitbi.dfm.auth.presentation.dto`
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
