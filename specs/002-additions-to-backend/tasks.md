@@ -304,11 +304,11 @@ Methods to update:
 Remove createBatchResponse() and createErrorResponse() helper methods (ErrorResponseDto handled by GlobalExceptionHandler now).
 
 **Acceptance Criteria**:
-- [ ] All 5 methods return ResponseEntity<BatchResponseDto>
-- [ ] All success responses use BatchResponseDto.fromEntity()
-- [ ] Error responses removed (GlobalExceptionHandler handles them)
-- [ ] Controller compiles without errors
-- [ ] No Map<String, Object> references remain
+- [X] All 5 methods return ResponseEntity<BatchResponseDto>
+- [X] All success responses use BatchResponseDto.fromEntity()
+- [X] Error responses removed (GlobalExceptionHandler handles them)
+- [X] Controller compiles without errors
+- [X] No Map<String, Object> references remain
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -341,8 +341,8 @@ Assert JSON fields with jsonPath():
 - [ ] 4 test methods asserting DTO schema
 - [ ] Uses Spring Security Test (jwt(), opaqueToken())
 - [ ] Verifies all field types match OpenAPI schema
-- [ ] Tests both JWT and Keycloak authentication
-- [ ] Tests fail before implementation (RED phase)
+- [X] Tests both JWT and Keycloak authentication
+- [X] Tests fail before implementation (RED phase)
 
 **FR Mapping**: FR-001, FR-002, FR-005, FR-006, FR-007
 
@@ -419,10 +419,10 @@ Methods to update:
 - getErrorLogs() → return List<ErrorLogResponseDto> or PageResponseDto<ErrorLogResponseDto>
 
 **Acceptance Criteria**:
-- [ ] All methods return ErrorLogResponseDto or List/Page thereof
-- [ ] Uses ErrorLogResponseDto.fromEntity()
-- [ ] No Map<String, Object> references
-- [ ] Controller compiles
+- [X] All methods return ErrorLogResponseDto or List/Page thereof
+- [X] Uses ErrorLogResponseDto.fromEntity()
+- [X] No Map<String, Object> references
+- [X] Controller compiles
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -446,10 +446,10 @@ Tests:
 Assert JSON fields match OpenAPI schema (error-log-dtos.yaml).
 
 **Acceptance Criteria**:
-- [ ] 3 test methods
-- [ ] Uses MockMvc
-- [ ] Asserts all ErrorLogResponseDto fields
-- [ ] Tests both JWT and Keycloak on GET
+- [X] 3 test methods
+- [X] Uses MockMvc
+- [X] Asserts all ErrorLogResponseDto fields
+- [X] Tests both JWT and Keycloak on GET
 
 **FR Mapping**: FR-001, FR-005
 
@@ -499,9 +499,9 @@ Test case:
 1. fromEntity_shouldMapAllFields()
 
 **Acceptance Criteria**:
-- [ ] 1 test method
-- [ ] Asserts all 7 fields
-- [ ] Tests pass
+- [X] 1 test method
+- [X] Asserts all 7 fields
+- [X] Tests pass
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -521,9 +521,9 @@ Methods:
 - uploadFile() → return FileUploadResponseDto.fromEntity(fileUpload)
 
 **Acceptance Criteria**:
-- [ ] Method returns ResponseEntity<FileUploadResponseDto>
-- [ ] Uses fromEntity()
-- [ ] Controller compiles
+- [X] Method returns ResponseEntity<FileUploadResponseDto>
+- [X] Uses fromEntity()
+- [X] Controller compiles
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -544,9 +544,9 @@ Tests:
 2. uploadFile_withKeycloakToken_shouldReturn403() - Keycloak rejected on POST
 
 **Acceptance Criteria**:
-- [ ] 2 test methods
-- [ ] Asserts FileUploadResponseDto fields
-- [ ] Tests authentication rules
+- [X] 2 test methods
+- [X] Asserts FileUploadResponseDto fields
+- [X] Tests authentication rules
 
 **FR Mapping**: FR-001, FR-006, FR-007
 
@@ -596,9 +596,9 @@ Test case:
 2. fromEntity_shouldExcludeSensitiveFields() - verify no password/secrets in DTO
 
 **Acceptance Criteria**:
-- [ ] 2 test methods
-- [ ] Asserts all 6 fields
-- [ ] Verifies sensitive data exclusion
+- [X] 2 test methods
+- [X] Asserts all 6 fields
+- [X] Verifies sensitive data exclusion
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -621,10 +621,10 @@ Methods:
 - updateAccount() → return AccountResponseDto.fromEntity(account)
 
 **Acceptance Criteria**:
-- [ ] All methods return AccountResponseDto or PageResponseDto<AccountResponseDto>
-- [ ] Uses fromEntity()
-- [ ] Paginated endpoints use PageResponseDto.of()
-- [ ] Controller compiles
+- [X] All methods return AccountResponseDto or PageResponseDto<AccountResponseDto>
+- [X] Uses fromEntity()
+- [X] Paginated endpoints use PageResponseDto.of()
+- [X] Controller compiles
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -646,9 +646,9 @@ Tests:
 3. createAccount_withJwtToken_shouldReturn403() - JWT rejected on admin endpoint
 
 **Acceptance Criteria**:
-- [ ] 3 test methods
-- [ ] Asserts AccountResponseDto fields
-- [ ] Tests Keycloak-only authentication
+- [X] 3 test methods
+- [X] Asserts AccountResponseDto fields
+- [X] Tests Keycloak-only authentication
 
 **FR Mapping**: FR-001, FR-008, FR-009
 
@@ -698,9 +698,9 @@ Test cases:
 2. fromEntity_shouldExcludeClientSecret()
 
 **Acceptance Criteria**:
-- [ ] 2 test methods
-- [ ] Asserts all 6 fields
-- [ ] Verifies clientSecret exclusion
+- [X] 2 test methods
+- [X] Asserts all 6 fields
+- [X] Verifies clientSecret exclusion
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -723,9 +723,9 @@ Methods:
 - updateSite() → return SiteResponseDto.fromEntity(site)
 
 **Acceptance Criteria**:
-- [ ] All methods return SiteResponseDto or PageResponseDto<SiteResponseDto>
-- [ ] Uses fromEntity()
-- [ ] Controller compiles
+- [X] All methods return SiteResponseDto or PageResponseDto<SiteResponseDto>
+- [X] Uses fromEntity()
+- [X] Controller compiles
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -747,9 +747,9 @@ Tests:
 3. createSite_withJwtToken_shouldReturn403()
 
 **Acceptance Criteria**:
-- [ ] 3 test methods
-- [ ] Asserts SiteResponseDto fields
-- [ ] Tests Keycloak-only authentication
+- [X] 3 test methods
+- [X] Asserts SiteResponseDto fields
+- [X] Tests Keycloak-only authentication
 
 **FR Mapping**: FR-001, FR-008, FR-009
 
@@ -797,9 +797,9 @@ Test case:
 1. fromToken_shouldExtractAllClaims()
 
 **Acceptance Criteria**:
-- [ ] 1 test method
-- [ ] Asserts all 4 fields
-- [ ] Mocks JwtToken value object
+- [X] 1 test method
+- [X] Asserts all 4 fields
+- [X] Mocks JwtToken value object
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -819,9 +819,9 @@ Method:
 - generateToken() → return TokenResponseDto.fromToken(jwtToken)
 
 **Acceptance Criteria**:
-- [ ] Method returns ResponseEntity<TokenResponseDto>
-- [ ] Uses fromToken()
-- [ ] Controller compiles
+- [X] Method returns ResponseEntity<TokenResponseDto>
+- [X] Uses fromToken()
+- [X] Controller compiles
 
 **FR Mapping**: FR-001, FR-002, FR-003
 
@@ -841,9 +841,9 @@ Test:
 1. generateToken_shouldReturnTokenResponseDto()
 
 **Acceptance Criteria**:
-- [ ] 1 test method
-- [ ] Asserts TokenResponseDto fields
-- [ ] Uses Basic Auth for token generation endpoint
+- [X] 1 test method
+- [X] Asserts TokenResponseDto fields
+- [X] Uses Basic Auth for token generation endpoint
 
 **FR Mapping**: FR-001
 
