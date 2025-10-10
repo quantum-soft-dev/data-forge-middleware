@@ -42,6 +42,7 @@ class AccountResponseDtoTest {
         assertEquals("Test Account", dto.name());
         assertEquals(true, dto.isActive());
         assertEquals(createdAt.toInstant(ZoneOffset.UTC), dto.createdAt());
+        assertEquals(5, dto.maxConcurrentBatches());
     }
 
     @Test
@@ -63,7 +64,7 @@ class AccountResponseDtoTest {
         // Then
         assertNotNull(dto);
         // Verify DTO only contains safe fields
-        assertEquals(5, dto.getClass().getRecordComponents().length);
+        assertEquals(6, dto.getClass().getRecordComponents().length);
         // Verify no password-like field exists in DTO
         assertDoesNotThrow(() -> {
             dto.id();
@@ -71,6 +72,7 @@ class AccountResponseDtoTest {
             dto.name();
             dto.isActive();
             dto.createdAt();
+            dto.maxConcurrentBatches();
         });
     }
 }

@@ -7,6 +7,8 @@ import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -118,6 +120,17 @@ public class SiteService {
     @Transactional(readOnly = true)
     public List<Site> listActiveSitesByAccount(UUID accountId) {
         return siteRepository.findActiveByAccountId(accountId);
+    }
+
+    /**
+     * List all sites with pagination (admin endpoint).
+     *
+     * @param pageable pagination parameters
+     * @return paginated list of sites
+     */
+    @Transactional(readOnly = true)
+    public Page<Site> listAllSites(Pageable pageable) {
+        return siteRepository.findAll(pageable);
     }
 
     /**

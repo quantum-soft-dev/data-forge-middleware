@@ -6,6 +6,10 @@ import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -126,6 +130,57 @@ public class SiteAdminController {
             logger.error("Error getting site: siteId={}", siteId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorResponse("Failed to retrieve site"));
+        }
+    }
+
+    /**
+     * List all sites with pagination (admin endpoint).
+     * <p>
+     * GET /admin/sites?page=0&size=20&sort=createdAt,desc
+     * </p>
+     *
+     * @param page page number (default: 0)
+     * @param size page size (default: 20)
+     * @param sort sort field and direction (default: createdAt,desc)
+     * @return paginated list of sites
+     */
+    @GetMapping("/admin/sites")
+    public ResponseEntity<Map<String, Object>> listAllSites(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt,desc") String sort) {
+        try {
+            // Parse sort parameter
+            String[] sortParams = sort.split(",");
+            String sortField = sortParams[0];
+            Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
+                    ? Sort.Direction.ASC
+                    : Sort.Direction.DESC;
+
+            // Create pageable
+            Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+
+            // Get paginated sites
+            Page<Site> sitePage = siteService.listAllSites(pageable);
+
+            // Convert to response
+            List<SiteResponseDto> siteList = sitePage.getContent().stream()
+                    .map(SiteResponseDto::fromEntity)
+                    .collect(Collectors.toList());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("content", siteList);
+            response.put("page", sitePage.getNumber());
+            response.put("size", sitePage.getSize());
+            response.put("totalElements", sitePage.getTotalElements());
+            response.put("totalPages", sitePage.getTotalPages());
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            logger.error("Error listing all sites", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorResponse("Failed to list sites"));
         }
     }
 

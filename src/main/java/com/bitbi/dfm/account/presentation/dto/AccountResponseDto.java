@@ -21,13 +21,15 @@ import java.util.UUID;
  * @param name Account display name
  * @param isActive Active status
  * @param createdAt Creation timestamp
+ * @param maxConcurrentBatches Maximum concurrent batches allowed (default: 5)
  */
 public record AccountResponseDto(
     UUID id,
     String email,
     String name,
     Boolean isActive,
-    Instant createdAt
+    Instant createdAt,
+    Integer maxConcurrentBatches
 ) {
 
     /**
@@ -36,6 +38,7 @@ public record AccountResponseDto(
      * Maps all non-sensitive fields from entity to DTO, converting:
      * - LocalDateTime timestamp to Instant (UTC)
      * - Excludes sensitive fields (passwords, secrets)
+     * - Sets maxConcurrentBatches to default value of 5
      *
      * @param account The domain entity to convert
      * @return AccountResponseDto with all fields mapped
@@ -46,7 +49,8 @@ public record AccountResponseDto(
             account.getEmail(),
             account.getName(),
             account.getIsActive(),
-            account.getCreatedAt().toInstant(ZoneOffset.UTC)
+            account.getCreatedAt().toInstant(ZoneOffset.UTC),
+            5 // Default max concurrent batches per account
         );
     }
 }
