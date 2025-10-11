@@ -43,13 +43,13 @@ class AccountServiceTest {
         // Given
         String email = "test@example.com";
         String name = "Test Account";
-        Account account = Account.create(email, name);
+        Account account = Account.create(email, name, null, null);
 
         when(accountRepository.findByEmail(email)).thenReturn(Optional.empty());
         when(accountRepository.save(any(Account.class))).thenReturn(account);
 
         // When
-        Account result = accountService.createAccount(email, name);
+        Account result = accountService.createAccount(email, name, null, null);
 
         // Then
         assertNotNull(result);
@@ -65,14 +65,14 @@ class AccountServiceTest {
         // Given
         String email = "existing@example.com";
         String name = "Test Account";
-        Account existingAccount = Account.create(email, "Existing");
+        Account existingAccount = Account.create(email, "Existing", null, null);
 
         when(accountRepository.findByEmail(email)).thenReturn(Optional.of(existingAccount));
 
         // When & Then
         AccountService.AccountAlreadyExistsException exception =
                 assertThrows(AccountService.AccountAlreadyExistsException.class, () ->
-                        accountService.createAccount(email, name)
+                        accountService.createAccount(email, name, null, null)
                 );
         assertTrue(exception.getMessage().contains(email));
         verify(accountRepository).findByEmail(email);
@@ -84,7 +84,7 @@ class AccountServiceTest {
     void shouldGetAccountByIdSuccessfully() {
         // Given
         UUID accountId = UUID.randomUUID();
-        Account account = Account.create("test@example.com", "Test");
+        Account account = Account.create("test@example.com", "Test", null, null);
 
         when(accountRepository.findById(accountId)).thenReturn(Optional.of(account));
 
@@ -119,7 +119,7 @@ class AccountServiceTest {
     void shouldGetAccountByEmailSuccessfully() {
         // Given
         String email = "test@example.com";
-        Account account = Account.create(email, "Test");
+        Account account = Account.create(email, "Test", null, null);
 
         when(accountRepository.findByEmail(email)).thenReturn(Optional.of(account));
 
@@ -153,8 +153,8 @@ class AccountServiceTest {
     @DisplayName("Should list active accounts")
     void shouldListActiveAccounts() {
         // Given
-        Account account1 = Account.create("test1@example.com", "Account 1");
-        Account account2 = Account.create("test2@example.com", "Account 2");
+        Account account1 = Account.create("test1@example.com", "Account 1", null, null);
+        Account account2 = Account.create("test2@example.com", "Account 2", null, null);
         List<Account> accounts = Arrays.asList(account1, account2);
 
         when(accountRepository.findAllActive()).thenReturn(accounts);
@@ -172,8 +172,8 @@ class AccountServiceTest {
     @DisplayName("Should list accounts with pagination")
     void shouldListAccountsWithPagination() {
         // Given
-        Account account1 = Account.create("test1@example.com", "Account 1");
-        Account account2 = Account.create("test2@example.com", "Account 2");
+        Account account1 = Account.create("test1@example.com", "Account 1", null, null);
+        Account account2 = Account.create("test2@example.com", "Account 2", null, null);
         List<Account> accounts = Arrays.asList(account1, account2);
         Pageable pageable = PageRequest.of(0, 10);
         Page<Account> page = new PageImpl<>(accounts, pageable, 2);
@@ -196,13 +196,13 @@ class AccountServiceTest {
         // Given
         UUID accountId = UUID.randomUUID();
         String newName = "Updated Name";
-        Account account = Account.create("test@example.com", "Old Name");
+        Account account = Account.create("test@example.com", "Old Name", null, null);
 
         when(accountRepository.findById(accountId)).thenReturn(Optional.of(account));
         when(accountRepository.save(any(Account.class))).thenReturn(account);
 
         // When
-        Account result = accountService.updateAccount(accountId, newName);
+        Account result = accountService.updateAccount(accountId, newName, null, null);
 
         // Then
         assertNotNull(result);
@@ -221,7 +221,7 @@ class AccountServiceTest {
 
         // When & Then
         assertThrows(AccountService.AccountNotFoundException.class, () ->
-                accountService.updateAccount(accountId, newName)
+                accountService.updateAccount(accountId, newName, null, null)
         );
         verify(accountRepository).findById(accountId);
         verify(accountRepository, never()).save(any());
@@ -232,7 +232,7 @@ class AccountServiceTest {
     void shouldDeactivateAccountSuccessfully() {
         // Given
         UUID accountId = UUID.randomUUID();
-        Account account = Account.create("test@example.com", "Test");
+        Account account = Account.create("test@example.com", "Test", null, null);
 
         when(accountRepository.findById(accountId)).thenReturn(Optional.of(account));
         when(accountRepository.save(any(Account.class))).thenReturn(account);
@@ -251,7 +251,7 @@ class AccountServiceTest {
     void shouldNotPublishEventWhenDeactivatingAlreadyInactiveAccount() {
         // Given
         UUID accountId = UUID.randomUUID();
-        Account account = Account.create("test@example.com", "Test");
+        Account account = Account.create("test@example.com", "Test", null, null);
         account.deactivate(); // Already deactivated
 
         when(accountRepository.findById(accountId)).thenReturn(Optional.of(account));
@@ -287,7 +287,7 @@ class AccountServiceTest {
     void shouldReactivateAccountSuccessfully() {
         // Given
         UUID accountId = UUID.randomUUID();
-        Account account = Account.create("test@example.com", "Test");
+        Account account = Account.create("test@example.com", "Test", null, null);
         account.deactivate(); // Deactivate first
 
         when(accountRepository.findById(accountId)).thenReturn(Optional.of(account));
@@ -307,7 +307,7 @@ class AccountServiceTest {
     void shouldReturnAccountWhenReactivatingAlreadyActiveAccount() {
         // Given
         UUID accountId = UUID.randomUUID();
-        Account account = Account.create("test@example.com", "Test");
+        Account account = Account.create("test@example.com", "Test", null, null);
         // Account is already active
 
         when(accountRepository.findById(accountId)).thenReturn(Optional.of(account));

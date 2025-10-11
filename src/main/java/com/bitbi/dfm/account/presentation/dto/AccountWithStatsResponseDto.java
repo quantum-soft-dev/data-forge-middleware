@@ -17,7 +17,9 @@ import java.util.UUID;
  * @param id                  Account unique identifier
  * @param email               Account email address
  * @param name                Account display name
- * @param isActive            Whether account is active
+ * @param phone               Account phone number (optional)
+ * @param company             Account company name (optional)
+ * @param status              Account status (active/inactive)
  * @param createdAt           Account creation timestamp
  * @param sitesCount          Total number of sites
  * @param totalBatches        Total number of batches across all sites
@@ -37,8 +39,14 @@ public record AccountWithStatsResponseDto(
         @Schema(description = "Account display name", example = "John Doe")
         String name,
 
-        @Schema(description = "Whether account is active", example = "true")
-        boolean isActive,
+        @Schema(description = "Account phone number", example = "+1234567890")
+        String phone,
+
+        @Schema(description = "Account company name", example = "Acme Corp")
+        String company,
+
+        @Schema(description = "Account status", example = "active")
+        String status,
 
         @Schema(description = "Account creation timestamp (ISO-8601)", example = "2025-01-15T10:30:00Z")
         Instant createdAt,
@@ -64,7 +72,9 @@ public record AccountWithStatsResponseDto(
                 account.getId(),
                 account.getEmail(),
                 account.getName(),
-                account.getIsActive(),
+                account.getPhone(),
+                account.getCompany(),
+                account.getIsActive() ? "active" : "inactive",
                 account.getCreatedAt().toInstant(java.time.ZoneOffset.UTC),
                 ((Number) statistics.getOrDefault("totalSites", 0)).intValue(),
                 ((Number) statistics.getOrDefault("totalBatches", 0)).intValue(),

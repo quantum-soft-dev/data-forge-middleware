@@ -55,7 +55,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.content[0].id").exists())
                 .andExpect(jsonPath("$.content[0].email").exists())
                 .andExpect(jsonPath("$.content[0].name").exists())
-                .andExpect(jsonPath("$.content[0].isActive").isBoolean())
+                .andExpect(jsonPath("$.content[0].status").isString())
                 .andExpect(jsonPath("$.content[0].createdAt").exists())
                 .andExpect(jsonPath("$.content[0].maxConcurrentBatches").isNumber())
                 .andExpect(jsonPath("$.page").isNumber())

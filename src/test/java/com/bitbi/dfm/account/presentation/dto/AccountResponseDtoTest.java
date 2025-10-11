@@ -29,6 +29,8 @@ class AccountResponseDtoTest {
         when(account.getId()).thenReturn(id);
         when(account.getEmail()).thenReturn("test@example.com");
         when(account.getName()).thenReturn("Test Account");
+        when(account.getPhone()).thenReturn("+1234567890");
+        when(account.getCompany()).thenReturn("Acme Corp");
         when(account.getIsActive()).thenReturn(true);
         when(account.getCreatedAt()).thenReturn(createdAt);
 
@@ -40,7 +42,9 @@ class AccountResponseDtoTest {
         assertEquals(id, dto.id());
         assertEquals("test@example.com", dto.email());
         assertEquals("Test Account", dto.name());
-        assertEquals(true, dto.isActive());
+        assertEquals("+1234567890", dto.phone());
+        assertEquals("Acme Corp", dto.company());
+        assertEquals("active", dto.status());
         assertEquals(createdAt.toInstant(ZoneOffset.UTC), dto.createdAt());
         assertEquals(5, dto.maxConcurrentBatches());
     }
@@ -53,6 +57,8 @@ class AccountResponseDtoTest {
         when(account.getId()).thenReturn(UUID.randomUUID());
         when(account.getEmail()).thenReturn("admin@example.com");
         when(account.getName()).thenReturn("Admin Account");
+        when(account.getPhone()).thenReturn(null);
+        when(account.getCompany()).thenReturn(null);
         when(account.getIsActive()).thenReturn(true);
         when(account.getCreatedAt()).thenReturn(LocalDateTime.now());
         // Note: Account entity may have password or other sensitive fields
@@ -64,13 +70,15 @@ class AccountResponseDtoTest {
         // Then
         assertNotNull(dto);
         // Verify DTO only contains safe fields
-        assertEquals(6, dto.getClass().getRecordComponents().length);
+        assertEquals(8, dto.getClass().getRecordComponents().length);
         // Verify no password-like field exists in DTO
         assertDoesNotThrow(() -> {
             dto.id();
             dto.email();
             dto.name();
-            dto.isActive();
+            dto.phone();
+            dto.company();
+            dto.status();
             dto.createdAt();
             dto.maxConcurrentBatches();
         });
