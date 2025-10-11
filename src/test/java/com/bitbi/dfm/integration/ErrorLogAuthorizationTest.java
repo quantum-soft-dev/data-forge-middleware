@@ -1,10 +1,10 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.error.presentation.dto.LogErrorRequestDto;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
-import java.util.HashMap;
 import java.util.Map;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -45,10 +45,11 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         // Given: Token for store-03.example.com (different account)
         String token03 = generateToken("store-03.example.com", "batch-test-secret");
 
-        Map<String, Object> errorRequest = new HashMap<>();
-        errorRequest.put("type", "MaliciousError");
-        errorRequest.put("message", "Attempting cross-tenant error logging");
-        errorRequest.put("metadata", Map.of("malicious", "true"));
+        LogErrorRequestDto errorRequest = new LogErrorRequestDto(
+                "MaliciousError",
+                "Attempting cross-tenant error logging",
+                Map.of("malicious", "true")
+        );
 
         String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
@@ -72,10 +73,11 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         // Given: Token for store-01.example.com
         String token01 = generateTestToken(); // Uses store-01 by default
 
-        Map<String, Object> errorRequest = new HashMap<>();
-        errorRequest.put("type", "ValidationError");
-        errorRequest.put("message", "Legitimate error message");
-        errorRequest.put("metadata", Map.of("field", "amount", "value", "invalid"));
+        LogErrorRequestDto errorRequest = new LogErrorRequestDto(
+                "ValidationError",
+                "Legitimate error message",
+                Map.of("field", "amount", "value", "invalid")
+        );
 
         String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
@@ -142,9 +144,11 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         // Given: Valid token
         String token = generateTestToken(); // Uses store-01 by default
 
-        Map<String, Object> errorRequest = new HashMap<>();
-        errorRequest.put("type", "TestError");
-        errorRequest.put("message", "Test message");
+        LogErrorRequestDto errorRequest = new LogErrorRequestDto(
+                "TestError",
+                "Test message",
+                null
+        );
 
         String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 

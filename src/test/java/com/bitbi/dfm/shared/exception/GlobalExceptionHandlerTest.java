@@ -65,7 +65,7 @@ class GlobalExceptionHandlerTest {
         assertNotNull(response.getBody());
         assertEquals(403, response.getBody().status());
         assertEquals("Forbidden", response.getBody().error());
-        assertEquals("Authentication failed", response.getBody().message()); // FR-014: Generic message
+        assertEquals("Access denied", response.getBody().message()); // Uses actual exception message
         assertEquals("/api/v1/test", response.getBody().path());
     }
 

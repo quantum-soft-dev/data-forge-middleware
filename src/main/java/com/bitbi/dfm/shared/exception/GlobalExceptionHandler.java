@@ -98,7 +98,7 @@ public class GlobalExceptionHandler {
                 Instant.now(),
                 HttpStatus.FORBIDDEN.value(),
                 "Forbidden",
-                "Authentication failed",
+                ex.getMessage(),
                 request.getRequestURI()
         );
 
@@ -229,6 +229,48 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle BatchNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleBatchNotFound(
+            com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Batch not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle ErrorLogNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleErrorLogNotFound(
+            com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Error log not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
 
     /**

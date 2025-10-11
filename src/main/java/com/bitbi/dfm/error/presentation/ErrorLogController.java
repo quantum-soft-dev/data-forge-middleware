@@ -7,6 +7,7 @@ import com.bitbi.dfm.error.presentation.dto.ErrorLogResponseDto;
 import com.bitbi.dfm.error.presentation.dto.LogErrorRequestDto;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
+import org.springframework.security.access.AccessDeniedException;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -19,8 +20,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -129,7 +128,7 @@ public class ErrorLogController {
         if (!batch.getSiteId().equals(siteId)) {
             logger.warn("Unauthorized error logging attempt: siteId={}, batchId={}, batchOwner={}",
                         siteId, batchId, batch.getSiteId());
-            throw new IllegalArgumentException("Cannot log errors to batch owned by another site");
+            throw new AccessDeniedException("Cannot log errors to batch owned by another site");
         }
 
         logger.debug("Logging error: batchId={}, siteId={}, type={}", batchId, siteId, request.type());
@@ -163,49 +162,28 @@ public class ErrorLogController {
                     content = @Content(mediaType = "application/json"))
     })
     @GetMapping("/log/{errorId}")
-    public ResponseEntity<?> getErrorLog(
+    public ResponseEntity<ErrorLogResponseDto> getErrorLog(
             @PathVariable("errorId") UUID errorId,
             @RequestHeader("Authorization") String authHeader) {
 
-        try {
-            UUID siteId = extractSiteId(authHeader); // Validate authentication
+        UUID siteId = extractSiteId(authHeader); // Validate authentication
 
-            ErrorLog errorLog = errorLoggingService.getErrorLog(errorId);
+        ErrorLog errorLog = errorLoggingService.getErrorLog(errorId);
 
-            // ✅ SECURITY FIX: Verify error log belongs to authenticated site's batch
-            if (errorLog.getBatchId() != null) {
-                try {
-                    com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(errorLog.getBatchId());
-                    if (!batch.getSiteId().equals(siteId)) {
-                        logger.warn("Unauthorized error log access attempt: siteId={}, errorId={}, batchOwner={}",
-                                    siteId, errorId, batch.getSiteId());
-                        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                                .body(createErrorResponse(HttpStatus.FORBIDDEN,
-                                      "Cannot access error log from batch owned by another site"));
-                    }
-                } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
-                    logger.warn("Batch not found for error log: errorId={}, batchId={}", errorId, errorLog.getBatchId());
-                    return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                            .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
-                }
+        // ✅ SECURITY FIX: Verify error log belongs to authenticated site's batch
+        if (errorLog.getBatchId() != null) {
+            com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(errorLog.getBatchId());
+            if (!batch.getSiteId().equals(siteId)) {
+                logger.warn("Unauthorized error log access attempt: siteId={}, errorId={}, batchOwner={}",
+                            siteId, errorId, batch.getSiteId());
+                throw new AccessDeniedException("Cannot access error log from batch owned by another site");
             }
-            // Note: Standalone errors (batchId == null) are accessible by the site that created them
-            // because errorLog.getSiteId() was already used during creation
-
-            ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
-            return ResponseEntity.ok(response);
-
-        } catch (ErrorLoggingService.ErrorLogNotFoundException e) {
-            logger.warn("Error log not found: {}", errorId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Error log not found"));
-
-        } catch (Exception e) {
-            logger.error("Error getting error log: errorId={}", errorId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
-                          "Failed to retrieve error log"));
         }
+        // Note: Standalone errors (batchId == null) are accessible by the site that created them
+        // because errorLog.getSiteId() was already used during creation
+
+        ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
+        return ResponseEntity.ok(response);
     }
 
     private UUID extractSiteId(String authHeader) {
@@ -218,17 +196,5 @@ public class ErrorLogController {
             throw new IllegalArgumentException("Invalid Authorization header");
         }
         return authHeader.substring("Bearer ".length());
-    }
-
-    /**
-     * Create standardized error response with status, error, and message fields.
-     * Matches ErrorResponseDto structure for consistency across API.
-     */
-    private Map<String, Object> createErrorResponse(HttpStatus status, String message) {
-        Map<String, Object> error = new HashMap<>();
-        error.put("status", status.value());
-        error.put("error", status.getReasonPhrase());
-        error.put("message", message);
-        return error;
     }
 }
