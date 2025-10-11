@@ -66,12 +66,12 @@ public class AccountAdminController {
      * POST /admin/accounts
      * </p>
      *
-     * @param request account details (email, name)
+     * @param request account details (email, name, phone, company)
      * @return created account response
      */
     @Operation(
             summary = "Create new account",
-            description = "Creates a new account with email and name. Returns account details."
+            description = "Creates a new account with email, name, and optional phone/company. Returns account details."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "201", description = "Account created successfully",
@@ -85,9 +85,17 @@ public class AccountAdminController {
     public ResponseEntity<AccountResponseDto> createAccount(
             @Valid @RequestBody CreateAccountRequestDto request) {
 
-        logger.info("Creating account: email={}, name={}", request.email(), request.name());
+        logger.info("Creating account: email={}, name={}, phone={}, company={}",
+                   request.email(), request.name(),
+                   request.phone() != null ? "[set]" : "[not set]",
+                   request.company() != null ? "[set]" : "[not set]");
 
-        Account account = accountService.createAccount(request.email(), request.name());
+        Account account = accountService.createAccount(
+            request.email(),
+            request.name(),
+            request.phone(),
+            request.company()
+        );
 
         AccountResponseDto response = AccountResponseDto.fromEntity(account);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -172,12 +180,12 @@ public class AccountAdminController {
      * </p>
      *
      * @param accountId account identifier
-     * @param request   account update details (name)
+     * @param request   account update details (name, phone, company - all optional)
      * @return updated account response
      */
     @Operation(
             summary = "Update account",
-            description = "Updates account display name."
+            description = "Updates account name, phone, and/or company. All fields are optional (partial update)."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Account updated successfully",
@@ -192,9 +200,18 @@ public class AccountAdminController {
             @PathVariable("id") UUID accountId,
             @Valid @RequestBody UpdateAccountRequestDto request) {
 
-        logger.info("Updating account: accountId={}, name={}", accountId, request.name());
+        logger.info("Updating account: accountId={}, name={}, phone={}, company={}",
+                   accountId,
+                   request.name() != null ? "[updating]" : "[unchanged]",
+                   request.phone() != null ? "[updating]" : "[unchanged]",
+                   request.company() != null ? "[updating]" : "[unchanged]");
 
-        Account account = accountService.updateAccount(accountId, request.name());
+        Account account = accountService.updateAccount(
+            accountId,
+            request.name(),
+            request.phone(),
+            request.company()
+        );
 
         AccountResponseDto response = AccountResponseDto.fromEntity(account);
         return ResponseEntity.ok(response);

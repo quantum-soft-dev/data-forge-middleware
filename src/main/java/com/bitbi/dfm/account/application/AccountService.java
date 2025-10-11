@@ -40,19 +40,22 @@ public class AccountService {
     /**
      * Create new account.
      *
-     * @param email account email (must be unique)
-     * @param name  account name
+     * @param email   account email (must be unique)
+     * @param name    account name
+     * @param phone   account phone number (optional)
+     * @param company account company name (optional)
      * @return created account
      * @throws AccountAlreadyExistsException if email already exists
      */
-    public Account createAccount(String email, String name) {
-        logger.info("Creating new account: email={}", email);
+    public Account createAccount(String email, String name, String phone, String company) {
+        logger.info("Creating new account: email={}, name={}, phone={}, company={}",
+                   email, name, phone != null ? "[set]" : "[not set]", company != null ? "[set]" : "[not set]");
 
         if (accountRepository.findByEmail(email).isPresent()) {
             throw new AccountAlreadyExistsException("Account with email already exists: " + email);
         }
 
-        Account account = Account.create(email, name);
+        Account account = Account.create(email, name, phone, company);
         Account saved = accountRepository.save(account);
 
         logger.info("Account created successfully: id={}, email={}", saved.getId(), saved.getEmail());
@@ -108,17 +111,35 @@ public class AccountService {
 
     /**
      * Update account information.
+     * Only updates fields that are non-null (partial update).
      *
      * @param accountId account identifier
-     * @param name      new account name
+     * @param name      new account name (optional)
+     * @param phone     new account phone (optional)
+     * @param company   new account company (optional)
      * @return updated account
      * @throws AccountNotFoundException if account not found
      */
-    public Account updateAccount(UUID accountId, String name) {
-        logger.info("Updating account: id={}, name={}", accountId, name);
+    public Account updateAccount(UUID accountId, String name, String phone, String company) {
+        logger.info("Updating account: id={}, name={}, phone={}, company={}",
+                   accountId,
+                   name != null ? "[updating]" : "[unchanged]",
+                   phone != null ? "[updating]" : "[unchanged]",
+                   company != null ? "[updating]" : "[unchanged]");
 
         Account account = getAccount(accountId);
-        account.updateName(name);
+
+        // Partial update - only update fields that are provided
+        if (name != null && !name.isBlank()) {
+            account.updateName(name);
+        }
+        if (phone != null) {
+            account.updatePhone(phone);
+        }
+        if (company != null) {
+            account.updateCompany(company);
+        }
+
         Account saved = accountRepository.save(account);
 
         logger.info("Account updated successfully: id={}", accountId);

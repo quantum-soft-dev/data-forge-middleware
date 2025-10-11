@@ -47,6 +47,12 @@ public class Account {
     @Column(name = "name", nullable = false, length = 255)
     private String name;
 
+    @Column(name = "phone", length = 50)
+    private String phone;
+
+    @Column(name = "company", length = 255)
+    private String company;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
@@ -59,11 +65,13 @@ public class Account {
     /**
      * Private constructor for JPA.
      */
-    protected Account(UUID id, String email, String name, Boolean isActive,
-                      LocalDateTime createdAt, LocalDateTime updatedAt) {
+    protected Account(UUID id, String email, String name, String phone, String company,
+                      Boolean isActive, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.email = email;
         this.name = name;
+        this.phone = phone;
+        this.company = company;
         this.isActive = isActive;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
@@ -72,12 +80,14 @@ public class Account {
     /**
      * Create new account with validation.
      *
-     * @param email user's email address
-     * @param name  user's display name
+     * @param email   user's email address
+     * @param name    user's display name
+     * @param phone   user's phone number (optional)
+     * @param company user's company name (optional)
      * @return new Account instance
      * @throws IllegalArgumentException if email or name is invalid
      */
-    public static Account create(String email, String name) {
+    public static Account create(String email, String name, String phone, String company) {
         Objects.requireNonNull(email, "Email cannot be null");
         Objects.requireNonNull(name, "Name cannot be null");
 
@@ -87,7 +97,11 @@ public class Account {
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
 
-        return new Account(id, email.toLowerCase().trim(), name.trim(), true, now, now);
+        String trimmedPhone = phone != null && !phone.isBlank() ? phone.trim() : null;
+        String trimmedCompany = company != null && !company.isBlank() ? company.trim() : null;
+
+        return new Account(id, email.toLowerCase().trim(), name.trim(),
+                          trimmedPhone, trimmedCompany, true, now, now);
     }
 
     /**
@@ -100,6 +114,26 @@ public class Account {
         Objects.requireNonNull(newName, "Name cannot be null");
         validateName(newName);
         this.name = newName.trim();
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Update account phone number.
+     *
+     * @param newPhone new phone number (can be null)
+     */
+    public void updatePhone(String newPhone) {
+        this.phone = newPhone != null && !newPhone.isBlank() ? newPhone.trim() : null;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Update account company name.
+     *
+     * @param newCompany new company name (can be null)
+     */
+    public void updateCompany(String newCompany) {
+        this.company = newCompany != null && !newCompany.isBlank() ? newCompany.trim() : null;
         this.updatedAt = LocalDateTime.now();
     }
 
