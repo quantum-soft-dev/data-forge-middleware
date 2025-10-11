@@ -261,17 +261,25 @@ public class AccountAdminController {
     }
 
     /**
-     * Get account statistics (admin endpoint).
+     * Get account statistics (deprecated short endpoint).
      * <p>
      * GET /admin/accounts/{id}/stats
+     * </p>
+     * <p>
+     * <b>DEPRECATED:</b> Use {@link #getAccountStatistics(UUID)} instead.
+     * This endpoint will be removed in v4.0.0. Use /api/admin/accounts/{id}/statistics
+     * for the canonical statistics endpoint.
      * </p>
      *
      * @param accountId account identifier
      * @return account statistics formatted for admin UI
+     * @deprecated Use {@link #getAccountStatistics(UUID)} instead (GET /api/admin/accounts/{id}/statistics)
      */
+    @Deprecated(since = "3.1.0", forRemoval = true)
     @Operation(
-            summary = "Get account statistics (short endpoint)",
-            description = "Retrieves account statistics including sites count, batches, files, and storage size."
+            summary = "Get account statistics (deprecated - use /statistics)",
+            description = "⚠️ DEPRECATED: Use /api/admin/accounts/{id}/statistics instead. This endpoint will be removed in v4.0.0.",
+            deprecated = true
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully",
@@ -281,23 +289,27 @@ public class AccountAdminController {
     })
     @GetMapping("/{id}/stats")
     public ResponseEntity<AccountStatisticsDto> getAccountStats(@PathVariable("id") UUID accountId) {
-        Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
-        AccountStatisticsDto response = AccountStatisticsDto.fromMap(statistics);
-        return ResponseEntity.ok(response);
+        logger.warn("DEPRECATED: /stats endpoint called. Use /statistics instead. Endpoint: /api/admin/accounts/{}/stats", accountId);
+        // Delegate to canonical endpoint
+        return getAccountStatistics(accountId);
     }
 
     /**
-     * Get account statistics.
+     * Get account statistics (canonical endpoint).
      * <p>
      * GET /admin/accounts/{id}/statistics
+     * </p>
+     * <p>
+     * This is the canonical endpoint for retrieving account statistics.
+     * The shorter /stats endpoint is deprecated and will be removed in v4.0.0.
      * </p>
      *
      * @param accountId account identifier
      * @return account statistics
      */
     @Operation(
-            summary = "Get account statistics (long endpoint)",
-            description = "Retrieves account statistics including sites count, batches, files, and storage size."
+            summary = "Get account statistics",
+            description = "Retrieves account statistics including sites count, batches, files, and storage size. This is the canonical endpoint."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully",
