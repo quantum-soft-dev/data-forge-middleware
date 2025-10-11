@@ -19,17 +19,20 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * REST controller for account administration.
+ * REST controller for account administration (Admin UI API).
  * <p>
  * Provides admin endpoints for account CRUD operations.
  * Requires Keycloak authentication with ROLE_ADMIN.
  * </p>
+ * <p>
+ * URL change from v2.x: /admin/accounts → /api/admin/accounts (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/admin/accounts")
+@RequestMapping("/api/admin/accounts")
 @PreAuthorize("hasRole('ADMIN')")
 public class AccountAdminController {
 

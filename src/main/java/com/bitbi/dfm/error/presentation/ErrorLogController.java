@@ -15,17 +15,20 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST controller for error logging operations.
+ * REST controller for error logging operations (Data Forge Client API).
  * <p>
  * Provides endpoint for logging errors during batch processing.
  * Requires JWT authentication.
  * </p>
+ * <p>
+ * URL change from v2.x: /api/v1/error/** → /api/dfc/error/** (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/v1/error")
+@RequestMapping("/api/dfc/error")
 public class ErrorLogController {
 
     private static final Logger logger = LoggerFactory.getLogger(ErrorLogController.class);

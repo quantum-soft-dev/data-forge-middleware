@@ -23,17 +23,20 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * REST controller for batch administration.
+ * REST controller for batch administration (Admin UI API).
  * <p>
  * Provides admin endpoints for batch management operations.
  * Requires Keycloak authentication with ROLE_ADMIN.
  * </p>
+ * <p>
+ * URL change from v2.x: /admin/batches → /api/admin/batches (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/admin/batches")
+@RequestMapping("/api/admin/batches")
 @PreAuthorize("hasRole('ADMIN')")
 public class BatchAdminController {
 

@@ -16,17 +16,21 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST controller for file upload operations.
+ * REST controller for file upload operations (Data Forge Client API).
  * <p>
  * Handles multipart file uploads to batch with S3 storage integration.
  * Requires JWT authentication.
  * </p>
+ * <p>
+ * URL change from v2.x: /api/v1/batch/{id}/upload → /api/dfc/upload (breaking change)
+ * Note: Endpoints now use /api/dfc/upload base path instead of /api/v1/batch
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/v1/batch")
+@RequestMapping("/api/dfc/upload")
 public class FileUploadController {
 
     private static final Logger logger = LoggerFactory.getLogger(FileUploadController.class);

@@ -153,15 +153,39 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for admin endpoints with OAuth2 Resource Server.
+     * Security filter chain for JWT-authenticated Data Forge Client endpoints.
      * <p>
-     * Higher priority (@Order(1)) to match /admin/** first.
+     * Order 1: Highest priority to match /api/dfc/** first.
+     * JWT tokens only - custom JwtAuthenticationFilter.
      * </p>
      */
     @Bean
-    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http) throws Exception {
+    @org.springframework.core.annotation.Order(1)
+    public SecurityFilterChain jwtFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/admin/**")
+            .securityMatcher("/api/dfc/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(jwtAuthenticationFilter(), BearerTokenAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    /**
+     * Security filter chain for Keycloak-authenticated admin endpoints.
+     * <p>
+     * Order 2: Second priority to match /api/admin/** (changed from /admin/**).
+     * Keycloak OAuth2 Resource Server only - ROLE_ADMIN required.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(2)
+    public SecurityFilterChain keycloakFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/admin/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -177,39 +201,23 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for client API endpoints with custom JWT filter.
+     * Default security filter chain for remaining endpoints.
      * <p>
-     * Lower priority (default order) to match after admin filter chain.
+     * Order 3: Lowest priority - catches all remaining requests.
+     * Allows public access to actuator, swagger, and auth token endpoint.
      * </p>
      */
     @Bean
-    @Primary
-    public SecurityFilterChain clientApiSecurityFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/v1/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
-                .anyRequest().authenticated()
-            )
-            .addFilterBefore(jwtAuthenticationFilter(), BearerTokenAuthenticationFilter.class);
-
-        return http.build();
-    }
-
-    /**
-     * Default security filter chain for remaining endpoints.
-     */
-    @Bean
+    @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                .anyRequest().authenticated()
+                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
+                .anyRequest().denyAll()
             );
 
         return http.build();

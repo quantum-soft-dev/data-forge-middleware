@@ -16,6 +16,8 @@ Auto-generated from all feature plans. Last updated: 2025-10-09
 - **SpringDoc OpenAPI** - API documentation (Swagger UI)
 - **JUnit 5 + Mockito** - Unit testing
 - **Testcontainers** - Integration testing (PostgreSQL + LocalStack S3)
+- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6, Spring Data JPA (003-separation-of-security)
+- PostgreSQL 16 (existing, no schema changes required) (003-separation-of-security)
 
 ## Project Structure
 
