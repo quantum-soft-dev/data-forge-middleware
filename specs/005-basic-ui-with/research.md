@@ -189,7 +189,7 @@ subscriberKeys = {
 - React 19.2, TypeScript (strict mode)
 - Vite (build tool)
 - shadcn/ui components + Tailwind CSS
-- TanStack Store (state management)
+- Zustand (state management) - React 19 compatible alternative to TanStack Store
 - TanStack Query (server state, data fetching)
 - TanStack Router (type-safe routing)
 - TanStack Table (virtualization for 10K+ records)
@@ -215,7 +215,8 @@ subscriberKeys = {
 | Category | Estimated Size (gzipped) | Percentage |
 |----------|--------------------------|------------|
 | React 19 + ReactDOM | ~45 KB | 9% |
-| TanStack libraries (Query, Router, Table, Store) | ~35 KB | 7% |
+| TanStack libraries (Query, Router, Table) | ~32 KB | 6.4% |
+| Zustand | ~3 KB | 0.6% |
 | react-oidc-context + oidc-client-ts | ~22 KB | 4% |
 | Recharts (3-5 charts) | ~135 KB | 27% |
 | shadcn/ui components (10-15 components) | ~60 KB | 12% |
@@ -224,7 +225,7 @@ subscriberKeys = {
 | axios | ~15 KB | 3% |
 | Sonner | ~5 KB | 1% |
 | Application code (estimated) | ~100 KB | 20% |
-| Vendor chunks (misc) | ~48 KB | 10% |
+| Vendor chunks (misc) | ~48 KB | 9.6% |
 | **Total** | **~500 KB** | **100%** |
 
 **Notes**:

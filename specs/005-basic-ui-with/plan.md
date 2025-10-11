@@ -18,13 +18,13 @@ Build a modern React 19-based web application with Keycloak OAuth 2.0 authentica
 **Primary Dependencies**:
 - **Build**: Vite
 - **UI Framework**: shadcn/ui components, Tailwind CSS
-- **State Management**: TanStack Store
+- **State Management**: Zustand (React 19 compatible, ~3KB gzipped)
 - **Data Fetching**: TanStack Query (React Query)
 - **Routing**: TanStack Router (type-safe)
 - **Tables**: TanStack Table (virtualization for 10K+ records)
 - **Forms**: React Hook Form + Zod validation
-- **Auth**: NEEDS CLARIFICATION - OAuth 2.0 client library (oidc-client-ts vs react-oidc-context vs manual implementation)
-- **Charts**: NEEDS CLARIFICATION - Visualization library (Recharts vs Chart.js vs D3.js)
+- **Auth**: react-oidc-context (OAuth 2.0 / OIDC client)
+- **Charts**: Recharts (via shadcn/ui components)
 - **Notifications**: Sonner (toast notifications)
 
 **Storage**: Backend REST API (existing) with PostgreSQL 16 (subscriber data)

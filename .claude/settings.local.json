@@ -6,7 +6,11 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:bundlephobia.com)",
       "WebFetch(domain:blog.logrocket.com)",
-      "Bash(.specify/scripts/bash/check-prerequisites.sh:*)"
+      "Bash(.specify/scripts/bash/check-prerequisites.sh:*)",
+      "Bash(mkdir:*)",
+      "Bash(tree:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install)"
     ],
     "deny": [],
     "ask": []
