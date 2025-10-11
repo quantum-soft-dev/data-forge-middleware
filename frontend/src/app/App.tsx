@@ -18,15 +18,11 @@ import { Toaster } from 'sonner'
 function AppContent() {
   const auth = useAuth()
 
-  // Setup axios interceptors after auth is available
+  // Setup axios interceptors and error handler once on mount
+  // The interceptor will dynamically get the token on each request via closure
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (auth.isAuthenticated && auth.user?.access_token) {
-      setupInterceptors(() => auth.user?.access_token)
-    }
-  }, [auth.isAuthenticated, auth.user?.access_token])
-
-  // Setup error handler once on mount
-  useEffect(() => {
+    setupInterceptors(() => auth.user?.access_token)
     setupErrorHandler()
   }, [])
 
