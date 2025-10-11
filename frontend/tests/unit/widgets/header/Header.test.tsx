@@ -39,7 +39,7 @@ describe('Header', () => {
   it('should render navigation links', () => {
     render(<Header />)
     expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    expect(screen.getByText('Subscribers')).toBeInTheDocument()
+    expect(screen.getByText('Accounts')).toBeInTheDocument()
   })
 
   it('should render Dashboard link with correct route', () => {
@@ -49,11 +49,11 @@ describe('Header', () => {
     expect(dashboardLink).toHaveTextContent('Dashboard')
   })
 
-  it('should render Subscribers link with correct route', () => {
+  it('should render Accounts link with correct route', () => {
     render(<Header />)
-    const subscribersLink = screen.getByTestId('link-/subscribers')
-    expect(subscribersLink).toBeInTheDocument()
-    expect(subscribersLink).toHaveTextContent('Subscribers')
+    const accountsLink = screen.getByTestId('link-/accounts')
+    expect(accountsLink).toBeInTheDocument()
+    expect(accountsLink).toHaveTextContent('Accounts')
   })
 
   it('should render logout button', () => {

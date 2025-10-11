@@ -6,17 +6,17 @@ describe('generateDemoData', () => {
   it('should return DashboardMetrics object', () => {
     const data = generateDemoData()
     expect(data).toBeDefined()
-    expect(data).toHaveProperty('totalSubscribers')
+    expect(data).toHaveProperty('totalAccounts')
     expect(data).toHaveProperty('trendData')
     expect(data).toHaveProperty('statusDistribution')
     expect(data).toHaveProperty('monthlyGrowth')
     expect(data).toHaveProperty('topCompanies')
   })
 
-  it('should generate consistent total subscribers count', () => {
+  it('should generate consistent total accounts count', () => {
     const data = generateDemoData()
-    expect(data.totalSubscribers).toBe(450)
-    expect(typeof data.totalSubscribers).toBe('number')
+    expect(data.totalAccounts).toBe(450)
+    expect(typeof data.totalAccounts).toBe('number')
   })
 
   it('should generate 12 months of trend data', () => {

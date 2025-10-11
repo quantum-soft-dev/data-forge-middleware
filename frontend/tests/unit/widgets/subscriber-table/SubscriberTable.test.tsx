@@ -111,7 +111,7 @@ describe('SubscriberTable', () => {
       />
     )
 
-    expect(screen.getByText(/No subscribers found/i)).toBeInTheDocument()
+    expect(screen.getByText(/No accounts found/i)).toBeInTheDocument()
   })
 
   it('should display loading skeleton when loading', () => {
