@@ -36,10 +36,14 @@ public class FileUploadController {
 
     private final FileUploadService fileUploadService;
     private final TokenService tokenService;
+    private final com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService;
 
-    public FileUploadController(FileUploadService fileUploadService, TokenService tokenService) {
+    public FileUploadController(FileUploadService fileUploadService,
+                                TokenService tokenService,
+                                com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService) {
         this.fileUploadService = fileUploadService;
         this.tokenService = tokenService;
+        this.batchLifecycleService = batchLifecycleService;
     }
 
     /**
@@ -62,9 +66,25 @@ public class FileUploadController {
             @RequestHeader("Authorization") String authHeader) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
+            UUID siteId = extractSiteId(authHeader); // Validate authentication
 
-            logger.info("Uploading {} files to batch: batchId={}", files.length, batchId);
+            // ✅ SECURITY FIX: Verify batch ownership before upload
+            try {
+                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+                if (!batch.getSiteId().equals(siteId)) {
+                    logger.warn("Unauthorized file upload attempt: siteId={}, batchId={}, batchOwner={}",
+                                siteId, batchId, batch.getSiteId());
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot upload files to batch owned by another site"));
+                }
+            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
+                logger.warn("Batch not found during authorization check: {}", batchId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+            }
+
+            logger.info("Uploading {} files to batch: batchId={}, siteId={}", files.length, batchId, siteId);
 
             if (files.length == 0) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -145,7 +165,23 @@ public class FileUploadController {
             @RequestHeader("Authorization") String authHeader) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
+            UUID siteId = extractSiteId(authHeader); // Validate authentication
+
+            // ✅ SECURITY FIX: Verify batch ownership before retrieving file
+            try {
+                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+                if (!batch.getSiteId().equals(siteId)) {
+                    logger.warn("Unauthorized file retrieval attempt: siteId={}, batchId={}, batchOwner={}",
+                                siteId, batchId, batch.getSiteId());
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot access files in batch owned by another site"));
+                }
+            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
+                logger.warn("Batch not found during authorization check: {}", batchId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+            }
 
             UploadedFile file = fileUploadService.getFile(fileId);
 

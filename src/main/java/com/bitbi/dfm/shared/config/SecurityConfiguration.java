@@ -12,28 +12,30 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
-import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
-import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * Security configuration with separated authentication systems.
+ * Security configuration with path-based separated authentication systems (FR-005).
  *
- * <p>Implements path-based authentication with complete separation:</p>
+ * <p>Implements three separate SecurityFilterChain beans with @Order precedence:</p>
  * <ul>
- *   <li>/api/dfc/** → JWT authentication only (Data Forge Client endpoints)</li>
- *   <li>/api/admin/** → Keycloak OAuth2 authentication only (Admin UI endpoints)</li>
- *   <li>/api/v1/auth/token → Public endpoint (Basic Auth for token generation)</li>
- *   <li>Actuator, Swagger → Public endpoints</li>
+ *   <li><b>Order 1:</b> /api/dfc/** → JWT authentication only (Data Forge Client endpoints)</li>
+ *   <li><b>Order 2:</b> /api/admin/** → Keycloak OAuth2 authentication only (Admin UI endpoints)</li>
+ *   <li><b>Order 3:</b> Default → Public endpoints + deny all others</li>
  * </ul>
  *
- * <p>Breaking change from version 2.0.0: No longer supports dual authentication or mixed token types.</p>
- * <p>Audit logging: AuthenticationAuditLogger logs auth failures with IP, endpoint, method, status, tokenType.</p>
+ * <p><b>Architecture:</b> Each filter chain operates independently. Requests are routed to the first
+ * matching SecurityFilterChain based on path patterns. There is no dual authentication or token type
+ * mixing - each endpoint accepts only its designated authentication mechanism.</p>
+ *
+ * <p><b>Audit Logging:</b> AuthenticationAuditLogger logs authentication failures with contextual
+ * information (IP, endpoint, method, status, tokenType) for security monitoring.</p>
  *
  * @author Data Forge Team
- * @version 3.0.0
+ * @version 3.1.0
+ * @see com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter Custom JWT authentication
+ * @see com.bitbi.dfm.shared.auth.AuthenticationAuditLogger Authentication failure logging
  */
 @Configuration
 @EnableWebSecurity
@@ -133,18 +135,4 @@ public class SecurityConfiguration {
         return http.build();
     }
 
-    /**
-     * Convert Keycloak JWT roles to Spring Security authorities.
-     */
-    @Bean
-    public JwtAuthenticationConverter jwtAuthenticationConverter() {
-        JwtGrantedAuthoritiesConverter grantedAuthoritiesConverter = new JwtGrantedAuthoritiesConverter();
-        grantedAuthoritiesConverter.setAuthorityPrefix("ROLE_");
-        grantedAuthoritiesConverter.setAuthoritiesClaimName("realm_access.roles");
-
-        JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
-        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(grantedAuthoritiesConverter);
-
-        return jwtAuthenticationConverter;
-    }
 }

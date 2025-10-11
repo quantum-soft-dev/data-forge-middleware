@@ -17,8 +17,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
-import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -29,17 +29,28 @@ import java.util.stream.Collectors;
 
 /**
  * Test security configuration that mocks OAuth2/Keycloak authentication.
- * <p>
- * This configuration is used in contract and integration tests to avoid
- * the need for a running Keycloak instance.
- * </p>
- * <p>
- * Mock JWT tokens are decoded to provide ROLE_ADMIN or ROLE_USER authorities
- * based on the token content.
- * </p>
+ *
+ * <p>This configuration mirrors the production SecurityConfiguration architecture with
+ * three separate SecurityFilterChain beans, but uses mocked authentication for testing
+ * without requiring a running Keycloak instance.</p>
+ *
+ * <p><b>Filter Chain Architecture:</b></p>
+ * <ul>
+ *   <li><b>Order 1:</b> /api/dfc/** → Custom JWT authentication via JwtAuthenticationFilter</li>
+ *   <li><b>Order 2:</b> /api/admin/** → Mocked OAuth2 Resource Server (mock.admin.jwt.token grants ROLE_ADMIN)</li>
+ *   <li><b>Order 3:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
+ * </ul>
+ *
+ * <p><b>Mock Token Behavior:</b></p>
+ * <ul>
+ *   <li>"mock.admin.jwt.token" → Grants ROLE_ADMIN for admin endpoint testing</li>
+ *   <li>"mock.user.jwt.token" → Grants ROLE_USER for user endpoint testing</li>
+ *   <li>Any other token → No roles (authorization will fail)</li>
+ * </ul>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 1.1.0
+ * @see com.bitbi.dfm.shared.config.SecurityConfiguration Production security configuration
  */
 @TestConfiguration
 @EnableWebSecurity
@@ -169,7 +180,7 @@ public class TestSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .anyRequest().authenticated()
             )
-            .addFilterBefore(jwtAuthenticationFilter(), BearerTokenAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

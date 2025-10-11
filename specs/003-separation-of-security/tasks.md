@@ -290,7 +290,7 @@
   - Verify p95 latency <100ms for both (SC-006)
   - Use Micrometer metrics: `curl http://localhost:8080/actuator/metrics/security.authentication.duration`
 
-- [ ] T035 Manual testing: Validate authentication behavior
+- [X] T035 Manual testing: Validate authentication behavior
   - Follow quickstart.md manual testing section
   - Test JWT on `/api/dfc/**` → Success
   - Test Keycloak on `/api/admin/**` → Success
@@ -298,7 +298,7 @@
   - Test Keycloak on `/api/dfc/**` → 403 Forbidden
   - Test no token on both → 401 Unauthorized
 
-- [ ] T036 [P] Prepare client communication materials
+- [X] T036 [P] Prepare client communication materials
   - Draft breaking change announcement (use template from quickstart.md)
   - Document URL migration mapping: `/api/v1/**` → `/api/dfc/**`
   - Create migration timeline (2 weeks notice recommended)
