@@ -4,6 +4,12 @@ import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
+import com.bitbi.dfm.account.presentation.dto.AccountStatisticsDto;
+import com.bitbi.dfm.account.presentation.dto.AccountWithStatsResponseDto;
+import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
+import com.bitbi.dfm.account.presentation.dto.UpdateAccountRequestDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -56,43 +62,15 @@ public class AccountAdminController {
      * @return created account response
      */
     @PostMapping
-    public ResponseEntity<?> createAccount(@RequestBody Map<String, String> request) {
-        try {
-            String email = request.get("email");
-            String name = request.get("name");
+    public ResponseEntity<AccountResponseDto> createAccount(
+            @Valid @RequestBody CreateAccountRequestDto request) {
 
-            if (email == null || email.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("Email is required"));
-            }
+        logger.info("Creating account: email={}, name={}", request.email(), request.name());
 
-            if (name == null || name.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("Name is required"));
-            }
+        Account account = accountService.createAccount(request.email(), request.name());
 
-            logger.info("Creating account: email={}, name={}", email, name);
-
-            Account account = accountService.createAccount(email, name);
-
-            AccountResponseDto response = AccountResponseDto.fromEntity(account);
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-
-        } catch (AccountService.AccountAlreadyExistsException e) {
-            logger.warn("Account already exists: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
-
-        } catch (IllegalArgumentException e) {
-            logger.warn("Invalid account data: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse(e.getMessage()));
-
-        } catch (Exception e) {
-            logger.error("Error creating account", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to create account"));
-        }
+        AccountResponseDto response = AccountResponseDto.fromEntity(account);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     /**
@@ -102,40 +80,15 @@ public class AccountAdminController {
      * </p>
      *
      * @param accountId account identifier
-     * @return account response
+     * @return account response with statistics
      */
     @GetMapping("/{id}")
-    public ResponseEntity<?> getAccount(@PathVariable("id") UUID accountId) {
-        try {
-            Account account = accountService.getAccount(accountId);
-            AccountResponseDto dto = AccountResponseDto.fromEntity(account);
+    public ResponseEntity<AccountWithStatsResponseDto> getAccount(@PathVariable("id") UUID accountId) {
+        Account account = accountService.getAccount(accountId);
+        Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
 
-            // Add statistics to the response
-            Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
-
-            // Build extended response with DTO fields + statistics
-            Map<String, Object> response = new HashMap<>();
-            response.put("id", dto.id());
-            response.put("email", dto.email());
-            response.put("name", dto.name());
-            response.put("isActive", dto.isActive());
-            response.put("createdAt", dto.createdAt());
-            response.put("sitesCount", statistics.get("totalSites"));
-            response.put("totalBatches", statistics.get("totalBatches"));
-            response.put("totalUploadedFiles", statistics.get("totalFiles"));
-
-            return ResponseEntity.ok(response);
-
-        } catch (AccountService.AccountNotFoundException e) {
-            logger.warn("Account not found: {}", accountId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Account not found"));
-
-        } catch (Exception e) {
-            logger.error("Error getting account: accountId={}", accountId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve account"));
-        }
+        AccountWithStatsResponseDto response = AccountWithStatsResponseDto.fromEntityAndStats(account, statistics);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -150,43 +103,28 @@ public class AccountAdminController {
      * @return paginated list of accounts
      */
     @GetMapping
-    public ResponseEntity<Map<String, Object>> listAccounts(
+    public ResponseEntity<PageResponseDto<AccountResponseDto>> listAccounts(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "createdAt,desc") String sort) {
-        try {
-            // Parse sort parameter
-            String[] sortParams = sort.split(",");
-            String sortField = sortParams[0];
-            Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
-                    ? Sort.Direction.ASC
-                    : Sort.Direction.DESC;
 
-            // Create pageable
-            Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+        // Parse sort parameter
+        String[] sortParams = sort.split(",");
+        String sortField = sortParams[0];
+        Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
 
-            // Get paginated accounts
-            Page<Account> accountPage = accountService.listAccounts(pageable);
+        // Create pageable
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
 
-            // Convert to response
-            List<AccountResponseDto> accountList = accountPage.getContent().stream()
-                    .map(AccountResponseDto::fromEntity)
-                    .collect(Collectors.toList());
+        // Get paginated accounts
+        Page<Account> accountPage = accountService.listAccounts(pageable);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("content", accountList);
-            response.put("page", accountPage.getNumber());
-            response.put("size", accountPage.getSize());
-            response.put("totalElements", accountPage.getTotalElements());
-            response.put("totalPages", accountPage.getTotalPages());
+        // Convert to response DTO
+        PageResponseDto<AccountResponseDto> response = PageResponseDto.of(accountPage, AccountResponseDto::fromEntity);
 
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            logger.error("Error listing accounts", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to list accounts"));
-        }
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -200,40 +138,16 @@ public class AccountAdminController {
      * @return updated account response
      */
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateAccount(
+    public ResponseEntity<AccountResponseDto> updateAccount(
             @PathVariable("id") UUID accountId,
-            @RequestBody Map<String, String> request) {
+            @Valid @RequestBody UpdateAccountRequestDto request) {
 
-        try {
-            String name = request.get("name");
+        logger.info("Updating account: accountId={}, name={}", accountId, request.name());
 
-            if (name == null || name.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("Name is required"));
-            }
+        Account account = accountService.updateAccount(accountId, request.name());
 
-            logger.info("Updating account: accountId={}, name={}", accountId, name);
-
-            Account account = accountService.updateAccount(accountId, name);
-
-            AccountResponseDto response = AccountResponseDto.fromEntity(account);
-            return ResponseEntity.ok(response);
-
-        } catch (AccountService.AccountNotFoundException e) {
-            logger.warn("Account not found: {}", accountId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Account not found"));
-
-        } catch (IllegalArgumentException e) {
-            logger.warn("Invalid account data: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse(e.getMessage()));
-
-        } catch (Exception e) {
-            logger.error("Error updating account: accountId={}", accountId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to update account"));
-        }
+        AccountResponseDto response = AccountResponseDto.fromEntity(account);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -246,24 +160,12 @@ public class AccountAdminController {
      * @return no content response
      */
     @DeleteMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> deactivateAccount(@PathVariable("id") UUID accountId) {
-        try {
-            logger.info("Deactivating account: accountId={}", accountId);
+    public ResponseEntity<Void> deactivateAccount(@PathVariable("id") UUID accountId) {
+        logger.info("Deactivating account: accountId={}", accountId);
 
-            accountService.deactivateAccount(accountId);
+        accountService.deactivateAccount(accountId);
 
-            return ResponseEntity.noContent().build();
-
-        } catch (AccountService.AccountNotFoundException e) {
-            logger.warn("Account not found: {}", accountId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Account not found"));
-
-        } catch (Exception e) {
-            logger.error("Error deactivating account: accountId={}", accountId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to deactivate account"));
-        }
+        return ResponseEntity.noContent().build();
     }
 
     /**
@@ -276,28 +178,10 @@ public class AccountAdminController {
      * @return account statistics formatted for admin UI
      */
     @GetMapping("/{id}/stats")
-    public ResponseEntity<Map<String, Object>> getAccountStats(@PathVariable("id") UUID accountId) {
-        try {
-            Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
-
-            // Map to expected admin response format
-            Map<String, Object> response = new HashMap<>();
-            response.put("accountId", statistics.get("accountId"));
-            response.put("sitesCount", statistics.get("totalSites"));
-            response.put("activeSites", statistics.get("activeSites"));
-            response.put("totalBatches", statistics.get("totalBatches"));
-            response.put("completedBatches", 0); // TODO: Add to service
-            response.put("failedBatches", 0); // TODO: Add to service
-            response.put("totalFiles", statistics.get("totalFiles"));
-            response.put("totalStorageSize", 0L); // TODO: Add to service
-
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            logger.error("Error getting account statistics: accountId={}", accountId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve statistics"));
-        }
+    public ResponseEntity<AccountStatisticsDto> getAccountStats(@PathVariable("id") UUID accountId) {
+        Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
+        AccountStatisticsDto response = AccountStatisticsDto.fromMap(statistics);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -310,16 +194,10 @@ public class AccountAdminController {
      * @return account statistics
      */
     @GetMapping("/{id}/statistics")
-    public ResponseEntity<Map<String, Object>> getAccountStatistics(@PathVariable("id") UUID accountId) {
-        try {
-            Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
-            return ResponseEntity.ok(statistics);
-
-        } catch (Exception e) {
-            logger.error("Error getting account statistics: accountId={}", accountId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve statistics"));
-        }
+    public ResponseEntity<AccountStatisticsDto> getAccountStatistics(@PathVariable("id") UUID accountId) {
+        Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
+        AccountStatisticsDto response = AccountStatisticsDto.fromMap(statistics);
+        return ResponseEntity.ok(response);
     }
 
     /**

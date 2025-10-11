@@ -3,7 +3,13 @@ package com.bitbi.dfm.site.presentation;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.site.application.SiteService;
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.presentation.dto.CreateSiteRequestDto;
+import com.bitbi.dfm.site.presentation.dto.SiteCreationResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
+import com.bitbi.dfm.site.presentation.dto.SiteStatisticsDto;
+import com.bitbi.dfm.site.presentation.dto.UpdateSiteRequestDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -54,59 +60,20 @@ public class SiteAdminController {
      *
      * @param accountId account identifier
      * @param request   site details (domain, displayName)
-     * @return created site response
+     * @return created site response with plaintext client secret
      */
     @PostMapping("/api/admin/accounts/{accountId}/sites")
-    public ResponseEntity<Map<String, Object>> createSite(
+    public ResponseEntity<SiteCreationResponseDto> createSite(
             @PathVariable("accountId") UUID accountId,
-            @RequestBody Map<String, String> request) {
+            @Valid @RequestBody CreateSiteRequestDto request) {
 
-        try {
-            String domain = request.get("domain");
-            String displayName = request.get("displayName");
+        logger.info("Creating site: accountId={}, domain={}, displayName={}", accountId, request.domain(), request.displayName());
 
-            if (domain == null || domain.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("Domain is required"));
-            }
+        SiteService.SiteCreationResult result = siteService.createSite(accountId, request.domain(), request.displayName());
 
-            if (displayName == null || displayName.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("Display name is required"));
-            }
+        SiteCreationResponseDto response = SiteCreationResponseDto.fromCreationResult(result);
 
-            logger.info("Creating site: accountId={}, domain={}, displayName={}", accountId, domain, displayName);
-
-            SiteService.SiteCreationResult result = siteService.createSite(accountId, domain, displayName);
-
-            // Special response for site creation - includes plaintext secret (one-time only)
-            SiteResponseDto dto = SiteResponseDto.fromEntity(result.site());
-            Map<String, Object> response = new HashMap<>();
-            response.put("id", dto.id());
-            response.put("accountId", dto.accountId());
-            response.put("domain", dto.domain());
-            response.put("name", dto.name());
-            response.put("isActive", dto.isActive());
-            response.put("createdAt", dto.createdAt());
-            response.put("clientSecret", result.plaintextSecret()); // Only shown at creation
-
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-
-        } catch (SiteService.SiteAlreadyExistsException e) {
-            logger.warn("Site already exists: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(createErrorResponse(e.getMessage()));
-
-        } catch (IllegalArgumentException e) {
-            logger.warn("Invalid site data: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse(e.getMessage()));
-
-        } catch (Exception e) {
-            logger.error("Error creating site", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to create site"));
-        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     /**
@@ -149,43 +116,28 @@ public class SiteAdminController {
      * @return paginated list of sites
      */
     @GetMapping("/api/admin/sites")
-    public ResponseEntity<Map<String, Object>> listAllSites(
+    public ResponseEntity<PageResponseDto<SiteResponseDto>> listAllSites(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "createdAt,desc") String sort) {
-        try {
-            // Parse sort parameter
-            String[] sortParams = sort.split(",");
-            String sortField = sortParams[0];
-            Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
-                    ? Sort.Direction.ASC
-                    : Sort.Direction.DESC;
 
-            // Create pageable
-            Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+        // Parse sort parameter
+        String[] sortParams = sort.split(",");
+        String sortField = sortParams[0];
+        Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
 
-            // Get paginated sites
-            Page<Site> sitePage = siteService.listAllSites(pageable);
+        // Create pageable
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
 
-            // Convert to response
-            List<SiteResponseDto> siteList = sitePage.getContent().stream()
-                    .map(SiteResponseDto::fromEntity)
-                    .collect(Collectors.toList());
+        // Get paginated sites
+        Page<Site> sitePage = siteService.listAllSites(pageable);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("content", siteList);
-            response.put("page", sitePage.getNumber());
-            response.put("size", sitePage.getSize());
-            response.put("totalElements", sitePage.getTotalElements());
-            response.put("totalPages", sitePage.getTotalPages());
+        // Convert to response DTO
+        PageResponseDto<SiteResponseDto> response = PageResponseDto.of(sitePage, SiteResponseDto::fromEntity);
 
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            logger.error("Error listing all sites", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to list sites"));
-        }
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -226,40 +178,16 @@ public class SiteAdminController {
      * @return updated site response
      */
     @PutMapping("/api/admin/sites/{id}")
-    public ResponseEntity<?> updateSite(
+    public ResponseEntity<SiteResponseDto> updateSite(
             @PathVariable("id") UUID siteId,
-            @RequestBody Map<String, String> request) {
+            @Valid @RequestBody UpdateSiteRequestDto request) {
 
-        try {
-            String displayName = request.get("displayName");
+        logger.info("Updating site: siteId={}, displayName={}", siteId, request.displayName());
 
-            if (displayName == null || displayName.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse("Display name is required"));
-            }
+        Site site = siteService.updateSite(siteId, request.displayName());
 
-            logger.info("Updating site: siteId={}, displayName={}", siteId, displayName);
-
-            Site site = siteService.updateSite(siteId, displayName);
-
-            SiteResponseDto response = SiteResponseDto.fromEntity(site);
-            return ResponseEntity.ok(response);
-
-        } catch (SiteService.SiteNotFoundException e) {
-            logger.warn("Site not found: {}", siteId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Site not found"));
-
-        } catch (IllegalArgumentException e) {
-            logger.warn("Invalid site data: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(createErrorResponse(e.getMessage()));
-
-        } catch (Exception e) {
-            logger.error("Error updating site: siteId={}", siteId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to update site"));
-        }
+        SiteResponseDto response = SiteResponseDto.fromEntity(site);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -272,24 +200,12 @@ public class SiteAdminController {
      * @return no content response
      */
     @DeleteMapping("/api/admin/sites/{id}")
-    public ResponseEntity<Map<String, Object>> deactivateSite(@PathVariable("id") UUID siteId) {
-        try {
-            logger.info("Deactivating site: siteId={}", siteId);
+    public ResponseEntity<Void> deactivateSite(@PathVariable("id") UUID siteId) {
+        logger.info("Deactivating site: siteId={}", siteId);
 
-            siteService.deactivateSite(siteId);
+        siteService.deactivateSite(siteId);
 
-            return ResponseEntity.noContent().build();
-
-        } catch (SiteService.SiteNotFoundException e) {
-            logger.warn("Site not found: {}", siteId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Site not found"));
-
-        } catch (Exception e) {
-            logger.error("Error deactivating site: siteId={}", siteId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to deactivate site"));
-        }
+        return ResponseEntity.noContent().build();
     }
 
     /**
@@ -302,16 +218,10 @@ public class SiteAdminController {
      * @return site statistics
      */
     @GetMapping("/api/admin/sites/{id}/statistics")
-    public ResponseEntity<Map<String, Object>> getSiteStatistics(@PathVariable("id") UUID siteId) {
-        try {
-            Map<String, Object> statistics = accountStatisticsService.getSiteStatistics(siteId);
-            return ResponseEntity.ok(statistics);
-
-        } catch (Exception e) {
-            logger.error("Error getting site statistics: siteId={}", siteId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve statistics"));
-        }
+    public ResponseEntity<SiteStatisticsDto> getSiteStatistics(@PathVariable("id") UUID siteId) {
+        Map<String, Object> statistics = accountStatisticsService.getSiteStatistics(siteId);
+        SiteStatisticsDto response = SiteStatisticsDto.fromMap(statistics);
+        return ResponseEntity.ok(response);
     }
 
     private Map<String, Object> createErrorResponse(String message) {

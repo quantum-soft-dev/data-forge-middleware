@@ -2,6 +2,8 @@ package com.bitbi.dfm.error.presentation;
 
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,8 +20,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * REST controller for error log administration (Admin UI API).
@@ -63,43 +66,28 @@ public class ErrorAdminController {
      * @return paginated list of error logs
      */
     @GetMapping
-    public ResponseEntity<Map<String, Object>> listErrors(
+    public ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> listErrors(
             @RequestParam(required = false) UUID siteId,
             @RequestParam(required = false) String type,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        try {
-            Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "occurredAt"));
-            Page<ErrorLog> errorPage;
 
-            if (siteId != null && type != null) {
-                errorPage = errorLogRepository.findBySiteIdAndType(siteId, type, pageable);
-            } else if (siteId != null) {
-                errorPage = errorLogRepository.findBySiteId(siteId, pageable);
-            } else if (type != null) {
-                errorPage = errorLogRepository.findByType(type, pageable);
-            } else {
-                errorPage = errorLogRepository.findAll(pageable);
-            }
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "occurredAt"));
+        Page<ErrorLog> errorPage;
 
-            List<Map<String, Object>> errorList = errorPage.getContent().stream()
-                    .map(this::createErrorResponse)
-                    .collect(Collectors.toList());
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("content", errorList);
-            response.put("page", errorPage.getNumber());
-            response.put("size", errorPage.getSize());
-            response.put("totalElements", errorPage.getTotalElements());
-            response.put("totalPages", errorPage.getTotalPages());
-
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            logger.error("Error listing error logs", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createError("Failed to list errors"));
+        if (siteId != null && type != null) {
+            errorPage = errorLogRepository.findBySiteIdAndType(siteId, type, pageable);
+        } else if (siteId != null) {
+            errorPage = errorLogRepository.findBySiteId(siteId, pageable);
+        } else if (type != null) {
+            errorPage = errorLogRepository.findByType(type, pageable);
+        } else {
+            errorPage = errorLogRepository.findAll(pageable);
         }
+
+        PageResponseDto<ErrorLogSummaryDto> response = PageResponseDto.of(errorPage, ErrorLogSummaryDto::fromEntity);
+
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -152,24 +140,6 @@ public class ErrorAdminController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to export errors");
         }
-    }
-
-    private Map<String, Object> createErrorResponse(ErrorLog error) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", error.getId());
-        response.put("batchId", error.getBatchId());
-        response.put("siteId", error.getSiteId());
-        response.put("type", error.getType());
-        response.put("message", error.getMessage());
-        response.put("metadata", error.getMetadata());
-        response.put("occurredAt", error.getOccurredAt().toString());
-        return response;
-    }
-
-    private Map<String, Object> createError(String message) {
-        Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
-        return error;
     }
 
     private String escapeCSV(String value) {
