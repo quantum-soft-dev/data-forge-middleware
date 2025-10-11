@@ -1,6 +1,6 @@
 # Feature Specification: Basic UI with Keycloak Authentication and Subscriber Management
 
-**Feature Branch**: `feature/005-basic-ui-with`
+**Feature Branch**: `005-basic-ui-with`
 **Created**: 2025-10-11
 **Status**: Draft
 **Input**: User description: "Basic UI with Keycloak authentication and subscriber management"
