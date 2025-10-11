@@ -1,5 +1,5 @@
-import { createRouter, createRoute, createRootRoute } from '@tanstack/react-router'
-import { lazy } from 'react'
+import { createRouter, createRoute, createRootRoute, Outlet } from '@tanstack/react-router'
+import { lazy, Suspense } from 'react'
 
 // Lazy-loaded page components for code splitting
 const LoginPage = lazy(() => import('@/pages/login/LoginPage'))
@@ -10,10 +10,18 @@ const SubscriberListPage = lazy(() => import('@/pages/subscribers/list/Subscribe
 // Root route
 const rootRoute = createRootRoute({
   component: () => (
-    <div className="min-h-screen bg-background">
-      {/* Outlet will render child routes */}
-      <div id="root-outlet" />
-    </div>
+    <Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center">
+          <div className="text-center">
+            <div className="mb-4 inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent" />
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      }
+    >
+      <Outlet />
+    </Suspense>
   ),
 })
 

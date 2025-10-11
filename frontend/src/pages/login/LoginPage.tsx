@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useAuth } from '@/entities/user-session/api/useAuth'
 import { LoginButton } from '@/features/auth/login/LoginButton'
+import { Database, Shield } from 'lucide-react'
 
 /**
  * Login page
@@ -34,35 +35,56 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
-      <div className="w-full max-w-md space-y-8 rounded-lg bg-white p-8 shadow-lg">
-        {/* Header */}
-        <div className="text-center">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">
-            DataForge Middleware
-          </h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Sign in to access subscriber management
-          </p>
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
+      <div className="w-full max-w-md">
+        {/* Logo/Icon */}
+        <div className="mb-8 flex justify-center">
+          <div className="relative">
+            <div className="absolute inset-0 animate-pulse rounded-full bg-gradient-to-r from-blue-400 to-purple-400 opacity-30 blur-xl" />
+            <div className="relative flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 shadow-lg">
+              <Database className="h-10 w-10 text-white" strokeWidth={2} />
+            </div>
+          </div>
         </div>
 
-        {/* Error display */}
-        {auth.error && (
-          <div className="rounded-md bg-destructive/10 p-4">
-            <p className="text-sm text-destructive">
-              {auth.error.message || 'Authentication failed. Please try again.'}
+        {/* Card */}
+        <div className="space-y-6 rounded-2xl border border-white/20 bg-white/80 p-8 shadow-2xl backdrop-blur-sm">
+          {/* Header */}
+          <div className="text-center">
+            <h1 className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-3xl font-extrabold tracking-tight text-transparent">
+              DataForge Middleware
+            </h1>
+            <p className="mt-3 text-sm text-gray-600">
+              Sign in to access subscriber management
             </p>
           </div>
-        )}
 
-        {/* Login button */}
-        <div className="mt-6">
-          <LoginButton />
+          {/* Error display */}
+          {auth.error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+              <p className="text-sm font-medium text-red-800">
+                {auth.error.message || 'Authentication failed. Please try again.'}
+              </p>
+            </div>
+          )}
+
+          {/* Login button */}
+          <div className="space-y-4">
+            <LoginButton />
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-center gap-2 border-t border-gray-200 pt-6">
+            <Shield className="h-4 w-4 text-gray-400" />
+            <p className="text-xs text-gray-500">
+              Protected by Keycloak SSO
+            </p>
+          </div>
         </div>
 
-        {/* Footer */}
-        <p className="mt-4 text-center text-xs text-gray-500">
-          Protected by Keycloak SSO
+        {/* Additional info */}
+        <p className="mt-6 text-center text-xs text-gray-500">
+          Secure enterprise-grade authentication
         </p>
       </div>
     </div>

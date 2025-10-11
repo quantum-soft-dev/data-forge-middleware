@@ -1,4 +1,5 @@
 import { AuthProvider as OidcAuthProvider } from 'react-oidc-context'
+import { WebStorageStateStore } from 'oidc-client-ts'
 import { env } from '@/shared/config/env'
 import type { ReactNode } from 'react'
 
@@ -29,7 +30,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     automaticSilentRenew: true,
     loadUserInfo: true,
     // Store tokens in sessionStorage (not localStorage per security constraint)
-    userStore: typeof window !== 'undefined' ? window.sessionStorage : undefined,
+    userStore: typeof window !== 'undefined'
+      ? new WebStorageStateStore({ store: window.sessionStorage })
+      : undefined,
   }
 
   return <OidcAuthProvider {...oidcConfig}>{children}</OidcAuthProvider>
