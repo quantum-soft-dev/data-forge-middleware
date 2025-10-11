@@ -3,6 +3,7 @@ import {
   subscriberSchema,
   subscriberFiltersSchema,
   subscriberListResponseSchema,
+  createSubscriberSchema,
 } from '@/entities/subscriber/model/schema'
 
 describe('Subscriber Schemas', () => {
@@ -129,6 +130,94 @@ describe('Subscriber Schemas', () => {
 
       const result = subscriberListResponseSchema.safeParse(invalidResponse)
       expect(result.success).toBe(false)
+    })
+  })
+
+  describe('createSubscriberSchema', () => {
+    it('should validate valid create subscriber data', () => {
+      const validData = {
+        name: 'John Doe',
+        email: 'john@example.com',
+        phone: '+1234567890',
+        company: 'Acme Corp',
+      }
+
+      const result = createSubscriberSchema.safeParse(validData)
+      expect(result.success).toBe(true)
+    })
+
+    it('should require name field', () => {
+      const invalidData = {
+        email: 'john@example.com',
+        // missing name
+      }
+
+      const result = createSubscriberSchema.safeParse(invalidData)
+      expect(result.success).toBe(false)
+    })
+
+    it('should require email field', () => {
+      const invalidData = {
+        name: 'John Doe',
+        // missing email
+      }
+
+      const result = createSubscriberSchema.safeParse(invalidData)
+      expect(result.success).toBe(false)
+    })
+
+    it('should validate email format', () => {
+      const invalidData = {
+        name: 'John Doe',
+        email: 'invalid-email',
+      }
+
+      const result = createSubscriberSchema.safeParse(invalidData)
+      expect(result.success).toBe(false)
+    })
+
+    it('should accept empty phone string', () => {
+      const data = {
+        name: 'John Doe',
+        email: 'john@example.com',
+        phone: '',
+        company: 'Acme',
+      }
+
+      const result = createSubscriberSchema.safeParse(data)
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.phone).toBe('')
+      }
+    })
+
+    it('should accept empty company string', () => {
+      const data = {
+        name: 'John Doe',
+        email: 'john@example.com',
+        phone: '+1234567890',
+        company: '',
+      }
+
+      const result = createSubscriberSchema.safeParse(data)
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.company).toBe('')
+      }
+    })
+
+    it('should allow optional phone and company fields', () => {
+      const minimalData = {
+        name: 'Jane Smith',
+        email: 'jane@example.com',
+      }
+
+      const result = createSubscriberSchema.safeParse(minimalData)
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.phone).toBeUndefined()
+        expect(result.data.company).toBeUndefined()
+      }
     })
   })
 })

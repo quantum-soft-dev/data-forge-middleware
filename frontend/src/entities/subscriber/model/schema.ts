@@ -34,7 +34,15 @@ export const subscriberListResponseSchema = z.object({
   totalPages: z.number().int().min(0),
 })
 
+export const createSubscriberSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  email: z.string().min(1, 'Email is required').email('Invalid email format'),
+  phone: z.string().optional(),
+  company: z.string().optional(),
+})
+
 // Type exports
 export type SubscriberSchema = z.infer<typeof subscriberSchema>
 export type SubscriberFiltersSchema = z.infer<typeof subscriberFiltersSchema>
 export type SubscriberListResponseSchema = z.infer<typeof subscriberListResponseSchema>
+export type CreateSubscriberFormData = z.infer<typeof createSubscriberSchema>

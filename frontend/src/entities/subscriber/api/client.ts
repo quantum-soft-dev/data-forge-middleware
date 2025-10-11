@@ -6,7 +6,8 @@
  */
 
 import { apiClient } from '@/shared/api/client'
-import type { SubscriberFilters, SubscriberListResponse } from '../model/types'
+import type { SubscriberFilters, SubscriberListResponse, Subscriber } from '../model/types'
+import type { CreateSubscriberFormData } from '../model/schema'
 
 /**
  * Fetch subscribers with pagination and filtering
@@ -40,5 +41,18 @@ export async function fetchSubscribers(
     `/admin/subscribers?${params.toString()}`
   )
 
+  return response.data
+}
+
+/**
+ * Create a new subscriber
+ *
+ * @param data - Subscriber data (name, email, phone, company)
+ * @returns Created subscriber with ID and metadata
+ */
+export async function createSubscriber(
+  data: CreateSubscriberFormData
+): Promise<Subscriber> {
+  const response = await apiClient.post<Subscriber>('/admin/subscribers', data)
   return response.data
 }

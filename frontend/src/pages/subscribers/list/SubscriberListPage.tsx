@@ -6,10 +6,12 @@
  */
 
 import { useState } from 'react'
+import { Plus } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
 import { SubscriberTable } from '@/widgets/subscriber-table/SubscriberTable'
 import { SearchInput } from '@/features/subscriber-search/SearchInput'
 import { StatusFilter } from '@/features/subscriber-search/StatusFilter'
+import { CreateSubscriberDialog } from '@/features/subscriber-create/CreateSubscriberDialog'
 import { useSubscribers } from '@/entities/subscriber/api/useSubscribers'
 import type { SubscriberStatus } from '@/entities/subscriber/model/types'
 
@@ -18,6 +20,7 @@ export default function SubscriberListPage() {
   const [pageSize, setPageSize] = useState(10)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<SubscriberStatus | 'all'>('all')
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
 
   const { data, isLoading, isError, error } = useSubscribers({
     page,
@@ -51,11 +54,20 @@ export default function SubscriberListPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {/* Page header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Subscribers</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Manage your subscriber database
-          </p>
+        <div className="mb-8 flex items-start justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Subscribers</h1>
+            <p className="mt-2 text-sm text-gray-600">
+              Manage your subscriber database
+            </p>
+          </div>
+          <button
+            onClick={() => setIsCreateDialogOpen(true)}
+            className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          >
+            <Plus className="h-4 w-4" />
+            Create Subscriber
+          </button>
         </div>
 
         {/* Filters */}
@@ -84,6 +96,12 @@ export default function SubscriberListPage() {
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
           isLoading={isLoading}
+        />
+
+        {/* Create Dialog */}
+        <CreateSubscriberDialog
+          open={isCreateDialogOpen}
+          onClose={() => setIsCreateDialogOpen(false)}
         />
       </main>
     </div>
