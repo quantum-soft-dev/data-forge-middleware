@@ -3,8 +3,15 @@ package com.bitbi.dfm.error.presentation;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -40,6 +47,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/admin/errors")
 @PreAuthorize("hasRole('ADMIN')")
+@Tag(name = "Admin - Error Logs", description = "Error log administration endpoints")
 public class ErrorAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(ErrorAdminController.class);
@@ -65,6 +73,14 @@ public class ErrorAdminController {
      * @param size page size
      * @return paginated list of error logs
      */
+    @Operation(
+            summary = "List error logs",
+            description = "Retrieves a paginated list of error logs with optional filtering by site and error type."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Error logs retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class)))
+    })
     @GetMapping
     public ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> listErrors(
             @RequestParam(required = false) UUID siteId,
@@ -102,6 +118,16 @@ public class ErrorAdminController {
      * @param end optional end date filter
      * @return CSV file download
      */
+    @Operation(
+            summary = "Export error logs to CSV",
+            description = "Exports filtered error logs to CSV format with optional date range filtering."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "CSV export generated successfully",
+                    content = @Content(mediaType = "text/csv")),
+            @ApiResponse(responseCode = "400", description = "Invalid date format",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @GetMapping("/export")
     public ResponseEntity<String> exportErrors(
             @RequestParam(required = false) UUID siteId,

@@ -6,11 +6,18 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -41,6 +48,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/admin/batches")
 @PreAuthorize("hasRole('ADMIN')")
+@Tag(name = "Admin - Batches", description = "Batch administration endpoints")
 public class BatchAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchAdminController.class);
@@ -72,6 +80,14 @@ public class BatchAdminController {
      * @param size page size
      * @return paginated list of batches
      */
+    @Operation(
+            summary = "List batches",
+            description = "Retrieves a paginated list of batches with optional filtering by site and status."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Batches retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class)))
+    })
     @GetMapping
     public ResponseEntity<PageResponseDto<BatchSummaryDto>> listBatches(
             @RequestParam(required = false) UUID siteId,
@@ -106,6 +122,16 @@ public class BatchAdminController {
      * @param batchId batch identifier
      * @return batch details with files
      */
+    @Operation(
+            summary = "Get batch details",
+            description = "Retrieves batch details including associated uploaded files."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Batch found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = BatchDetailResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Batch not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @GetMapping("/{id}")
     public ResponseEntity<BatchDetailResponseDto> getBatchDetails(@PathVariable("id") UUID batchId) {
         Batch batch = batchRepository.findById(batchId)
@@ -129,6 +155,14 @@ public class BatchAdminController {
      * @param batchId batch identifier
      * @return no content
      */
+    @Operation(
+            summary = "Delete batch",
+            description = "Deletes batch metadata. Note: does not delete files from S3."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Batch deleted successfully"),
+            @ApiResponse(responseCode = "404", description = "Batch not found")
+    })
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteBatch(@PathVariable("id") UUID batchId) {
         logger.info("Deleting batch: batchId={}", batchId);

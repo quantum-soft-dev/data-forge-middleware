@@ -8,7 +8,14 @@ import com.bitbi.dfm.account.presentation.dto.AccountStatisticsDto;
 import com.bitbi.dfm.account.presentation.dto.AccountWithStatsResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.UpdateAccountRequestDto;
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +47,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/admin/accounts")
 @PreAuthorize("hasRole('ADMIN')")
+@Tag(name = "Admin - Accounts", description = "Account administration endpoints")
 public class AccountAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(AccountAdminController.class);
@@ -61,6 +69,18 @@ public class AccountAdminController {
      * @param request account details (email, name)
      * @return created account response
      */
+    @Operation(
+            summary = "Create new account",
+            description = "Creates a new account with email and name. Returns account details."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Account created successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = AccountResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid input (validation error)",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "Account already exists",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @PostMapping
     public ResponseEntity<AccountResponseDto> createAccount(
             @Valid @RequestBody CreateAccountRequestDto request) {
@@ -82,6 +102,16 @@ public class AccountAdminController {
      * @param accountId account identifier
      * @return account response with statistics
      */
+    @Operation(
+            summary = "Get account by ID",
+            description = "Retrieves account details with embedded statistics."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Account found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = AccountWithStatsResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @GetMapping("/{id}")
     public ResponseEntity<AccountWithStatsResponseDto> getAccount(@PathVariable("id") UUID accountId) {
         Account account = accountService.getAccount(accountId);
@@ -102,6 +132,14 @@ public class AccountAdminController {
      * @param sort sort field and direction (default: createdAt,desc)
      * @return paginated list of accounts
      */
+    @Operation(
+            summary = "List all accounts",
+            description = "Retrieves a paginated list of all active accounts with sorting support."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Accounts retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class)))
+    })
     @GetMapping
     public ResponseEntity<PageResponseDto<AccountResponseDto>> listAccounts(
             @RequestParam(defaultValue = "0") int page,
@@ -137,6 +175,18 @@ public class AccountAdminController {
      * @param request   account update details (name)
      * @return updated account response
      */
+    @Operation(
+            summary = "Update account",
+            description = "Updates account display name."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Account updated successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = AccountResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid input (validation error)",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @PutMapping("/{id}")
     public ResponseEntity<AccountResponseDto> updateAccount(
             @PathVariable("id") UUID accountId,
@@ -159,6 +209,15 @@ public class AccountAdminController {
      * @param accountId account identifier
      * @return no content response
      */
+    @Operation(
+            summary = "Deactivate account",
+            description = "Soft-deletes an account by setting isActive=false. Cascades to all associated sites."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Account deactivated successfully"),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deactivateAccount(@PathVariable("id") UUID accountId) {
         logger.info("Deactivating account: accountId={}", accountId);
@@ -177,6 +236,16 @@ public class AccountAdminController {
      * @param accountId account identifier
      * @return account statistics formatted for admin UI
      */
+    @Operation(
+            summary = "Get account statistics (short endpoint)",
+            description = "Retrieves account statistics including sites count, batches, files, and storage size."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = AccountStatisticsDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @GetMapping("/{id}/stats")
     public ResponseEntity<AccountStatisticsDto> getAccountStats(@PathVariable("id") UUID accountId) {
         Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
@@ -193,6 +262,16 @@ public class AccountAdminController {
      * @param accountId account identifier
      * @return account statistics
      */
+    @Operation(
+            summary = "Get account statistics (long endpoint)",
+            description = "Retrieves account statistics including sites count, batches, files, and storage size."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = AccountStatisticsDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @GetMapping("/{id}/statistics")
     public ResponseEntity<AccountStatisticsDto> getAccountStatistics(@PathVariable("id") UUID accountId) {
         Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
@@ -208,6 +287,14 @@ public class AccountAdminController {
      *
      * @return global statistics
      */
+    @Operation(
+            summary = "Get global statistics",
+            description = "Retrieves platform-wide statistics across all accounts."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Global statistics retrieved successfully",
+                    content = @Content(mediaType = "application/json"))
+    })
     @GetMapping("../statistics")
     public ResponseEntity<Map<String, Object>> getGlobalStatistics() {
         Map<String, Object> statistics = accountStatisticsService.getGlobalStatistics();

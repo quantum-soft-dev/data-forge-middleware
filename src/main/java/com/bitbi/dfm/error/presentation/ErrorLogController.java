@@ -5,6 +5,13 @@ import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogResponseDto;
 import com.bitbi.dfm.error.presentation.dto.LogErrorRequestDto;
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +38,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/dfc/error")
+@Tag(name = "Client - Error Logging", description = "Error logging endpoints for Data Forge Client")
 public class ErrorLogController {
 
     private static final Logger logger = LoggerFactory.getLogger(ErrorLogController.class);
@@ -58,6 +66,17 @@ public class ErrorLogController {
      * @param authHeader Authorization header with Bearer token
      * @return 204 No Content
      */
+    @Operation(
+            summary = "Log standalone error",
+            description = "Logs an error that occurs outside of batch processing context. Requires JWT authentication."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Error logged successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid input (validation error)",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Invalid or expired JWT token",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @PostMapping
     public ResponseEntity<Void> logStandaloneError(
             @Valid @RequestBody LogErrorRequestDto request,
@@ -83,6 +102,20 @@ public class ErrorLogController {
      * @param authHeader Authorization header with Bearer token
      * @return created error log response
      */
+    @Operation(
+            summary = "Log batch error",
+            description = "Logs an error associated with a specific batch. Verifies batch ownership before logging. Requires JWT authentication."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Error logged successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorLogResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid input or unauthorized batch access",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Invalid or expired JWT token",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Batch not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @PostMapping("/{batchId}")
     public ResponseEntity<ErrorLogResponseDto> logError(
             @PathVariable("batchId") UUID batchId,
@@ -117,6 +150,18 @@ public class ErrorLogController {
      * @param authHeader Authorization header
      * @return error log response
      */
+    @Operation(
+            summary = "Get error log by ID",
+            description = "Retrieves error log details. Verifies ownership for batch-associated errors. Requires JWT authentication."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Error log found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorLogResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Unauthorized access to error log",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "404", description = "Error log not found",
+                    content = @Content(mediaType = "application/json"))
+    })
     @GetMapping("/log/{errorId}")
     public ResponseEntity<?> getErrorLog(
             @PathVariable("errorId") UUID errorId,
