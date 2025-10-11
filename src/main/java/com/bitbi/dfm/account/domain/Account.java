@@ -1,5 +1,7 @@
 package com.bitbi.dfm.account.domain;
 
+import com.bitbi.dfm.account.infrastructure.CompanyConverter;
+import com.bitbi.dfm.account.infrastructure.PhoneConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -48,9 +50,11 @@ public class Account {
     private String name;
 
     @Column(name = "phone", length = 50)
+    @Convert(converter = PhoneConverter.class)
     private Phone phone;
 
     @Column(name = "company", length = 255)
+    @Convert(converter = CompanyConverter.class)
     private Company company;
 
     @Column(name = "is_active", nullable = false)
