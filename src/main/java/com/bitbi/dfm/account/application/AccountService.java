@@ -55,7 +55,26 @@ public class AccountService {
             throw new AccountAlreadyExistsException("Account with email already exists: " + email);
         }
 
-        Account account = Account.create(email, name, phone, company);
+        // Wrap validation exceptions with field context for better error messages
+        Account account;
+        try {
+            account = Account.create(email, name, phone, company);
+        } catch (IllegalArgumentException e) {
+            // Determine which field caused the error by analyzing the exception message
+            String message = e.getMessage();
+            if (message.contains("phone") || message.contains("E.164")) {
+                throw new IllegalArgumentException("Invalid phone number: " + message, e);
+            } else if (message.contains("Company") || message.contains("company")) {
+                throw new IllegalArgumentException("Invalid company name: " + message, e);
+            } else if (message.contains("email") || message.contains("Email")) {
+                throw new IllegalArgumentException("Invalid email: " + message, e);
+            } else if (message.contains("name") || message.contains("Name")) {
+                throw new IllegalArgumentException("Invalid name: " + message, e);
+            }
+            // Re-throw if we can't determine the field
+            throw e;
+        }
+
         Account saved = accountRepository.save(account);
 
         logger.info("Account created successfully: id={}, email={}", saved.getId(), saved.getEmail());
@@ -130,14 +149,27 @@ public class AccountService {
         Account account = getAccount(accountId);
 
         // Partial update - only update fields that are provided
+        // Wrap each update with field-specific error context
         if (name != null && !name.isBlank()) {
-            account.updateName(name);
+            try {
+                account.updateName(name);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid name: " + e.getMessage(), e);
+            }
         }
         if (phone != null) {
-            account.updatePhone(phone);
+            try {
+                account.updatePhone(phone);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid phone number: " + e.getMessage(), e);
+            }
         }
         if (company != null) {
-            account.updateCompany(company);
+            try {
+                account.updateCompany(company);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid company name: " + e.getMessage(), e);
+            }
         }
 
         Account saved = accountRepository.save(account);
