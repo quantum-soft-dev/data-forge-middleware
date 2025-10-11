@@ -43,12 +43,12 @@ public record AccountResponseDto(
      * - LocalDateTime timestamp to Instant (UTC)
      * - Boolean isActive to String status ("active" or "inactive")
      * - Excludes sensitive fields (passwords, secrets)
-     * - Sets maxConcurrentBatches to default value of 5
      *
      * @param account The domain entity to convert
+     * @param maxConcurrentBatches Maximum concurrent batches allowed for this account
      * @return AccountResponseDto with all fields mapped
      */
-    public static AccountResponseDto fromEntity(Account account) {
+    public static AccountResponseDto fromEntity(Account account, int maxConcurrentBatches) {
         return new AccountResponseDto(
             account.getId(),
             account.getEmail(),
@@ -57,7 +57,7 @@ public record AccountResponseDto(
             account.getCompany() != null ? account.getCompany().getValue() : null,
             account.getIsActive() ? "active" : "inactive",
             account.getCreatedAt().toInstant(ZoneOffset.UTC),
-            5 // Default max concurrent batches per account
+            maxConcurrentBatches
         );
     }
 }

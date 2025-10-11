@@ -1,5 +1,6 @@
 package com.bitbi.dfm.account.presentation;
 
+import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.account.domain.Account;
@@ -54,10 +55,15 @@ public class AccountAdminController {
 
     private final AccountService accountService;
     private final AccountStatisticsService accountStatisticsService;
+    private final AccountProperties accountProperties;
 
-    public AccountAdminController(AccountService accountService, AccountStatisticsService accountStatisticsService) {
+    public AccountAdminController(
+            AccountService accountService,
+            AccountStatisticsService accountStatisticsService,
+            AccountProperties accountProperties) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
+        this.accountProperties = accountProperties;
     }
 
     /**
@@ -97,7 +103,10 @@ public class AccountAdminController {
             request.company()
         );
 
-        AccountResponseDto response = AccountResponseDto.fromEntity(account);
+        AccountResponseDto response = AccountResponseDto.fromEntity(
+                account,
+                accountProperties.getMaxConcurrentBatches()
+        );
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -168,7 +177,11 @@ public class AccountAdminController {
         Page<Account> accountPage = accountService.listAccounts(pageable);
 
         // Convert to response DTO
-        PageResponseDto<AccountResponseDto> response = PageResponseDto.of(accountPage, AccountResponseDto::fromEntity);
+        int maxConcurrentBatches = accountProperties.getMaxConcurrentBatches();
+        PageResponseDto<AccountResponseDto> response = PageResponseDto.of(
+                accountPage,
+                account -> AccountResponseDto.fromEntity(account, maxConcurrentBatches)
+        );
 
         return ResponseEntity.ok(response);
     }
@@ -213,7 +226,10 @@ public class AccountAdminController {
             request.company()
         );
 
-        AccountResponseDto response = AccountResponseDto.fromEntity(account);
+        AccountResponseDto response = AccountResponseDto.fromEntity(
+                account,
+                accountProperties.getMaxConcurrentBatches()
+        );
         return ResponseEntity.ok(response);
     }
 

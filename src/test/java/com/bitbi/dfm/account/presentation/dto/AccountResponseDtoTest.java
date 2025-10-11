@@ -37,7 +37,7 @@ class AccountResponseDtoTest {
         when(account.getCreatedAt()).thenReturn(createdAt);
 
         // When
-        AccountResponseDto dto = AccountResponseDto.fromEntity(account);
+        AccountResponseDto dto = AccountResponseDto.fromEntity(account, 5);
 
         // Then
         assertNotNull(dto);
@@ -67,7 +67,7 @@ class AccountResponseDtoTest {
         // These should NOT be exposed in the DTO
 
         // When
-        AccountResponseDto dto = AccountResponseDto.fromEntity(account);
+        AccountResponseDto dto = AccountResponseDto.fromEntity(account, 10);
 
         // Then
         assertNotNull(dto);
