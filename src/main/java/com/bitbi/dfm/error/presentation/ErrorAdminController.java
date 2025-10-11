@@ -108,38 +108,32 @@ public class ErrorAdminController {
             @RequestParam(required = false) String type,
             @RequestParam(required = false) String start,
             @RequestParam(required = false) String end) {
-        try {
-            LocalDateTime startDate = start != null ? LocalDateTime.parse(start) : null;
-            LocalDateTime endDate = end != null ? LocalDateTime.parse(end) : null;
 
-            List<ErrorLog> errors = errorLogRepository.exportByFilters(siteId, type, startDate, endDate);
+        LocalDateTime startDate = start != null ? LocalDateTime.parse(start) : null;
+        LocalDateTime endDate = end != null ? LocalDateTime.parse(end) : null;
 
-            StringBuilder csv = new StringBuilder();
-            csv.append("ID,Batch ID,Site ID,Type,Message,Metadata,Occurred At\n");
+        List<ErrorLog> errors = errorLogRepository.exportByFilters(siteId, type, startDate, endDate);
 
-            for (ErrorLog error : errors) {
-                csv.append(escapeCSV(error.getId().toString())).append(",");
-                csv.append(escapeCSV(error.getBatchId() != null ? error.getBatchId().toString() : "")).append(",");
-                csv.append(escapeCSV(error.getSiteId().toString())).append(",");
-                csv.append(escapeCSV(error.getType())).append(",");
-                csv.append(escapeCSV(error.getMessage())).append(",");
-                csv.append(escapeCSV(serializeMetadata(error.getMetadata()))).append(",");
-                csv.append(escapeCSV(error.getOccurredAt().format(CSV_DATE_FORMAT))).append("\n");
-            }
+        StringBuilder csv = new StringBuilder();
+        csv.append("ID,Batch ID,Site ID,Type,Message,Metadata,Occurred At\n");
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.parseMediaType("text/csv"));
-            headers.setContentDispositionFormData("attachment", "error-logs.csv");
-
-            return ResponseEntity.ok()
-                    .headers(headers)
-                    .body(csv.toString());
-
-        } catch (Exception e) {
-            logger.error("Error exporting error logs", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to export errors");
+        for (ErrorLog error : errors) {
+            csv.append(escapeCSV(error.getId().toString())).append(",");
+            csv.append(escapeCSV(error.getBatchId() != null ? error.getBatchId().toString() : "")).append(",");
+            csv.append(escapeCSV(error.getSiteId().toString())).append(",");
+            csv.append(escapeCSV(error.getType())).append(",");
+            csv.append(escapeCSV(error.getMessage())).append(",");
+            csv.append(escapeCSV(serializeMetadata(error.getMetadata()))).append(",");
+            csv.append(escapeCSV(error.getOccurredAt().format(CSV_DATE_FORMAT))).append("\n");
         }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/csv"));
+        headers.setContentDispositionFormData("attachment", "error-logs.csv");
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(csv.toString());
     }
 
     private String escapeCSV(String value) {

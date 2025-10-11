@@ -21,7 +21,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -86,22 +88,10 @@ public class SiteAdminController {
      * @return site response
      */
     @GetMapping("/api/admin/sites/{id}")
-    public ResponseEntity<?> getSite(@PathVariable("id") UUID siteId) {
-        try {
-            Site site = siteService.getSite(siteId);
-            SiteResponseDto response = SiteResponseDto.fromEntity(site);
-            return ResponseEntity.ok(response);
-
-        } catch (SiteService.SiteNotFoundException e) {
-            logger.warn("Site not found: {}", siteId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Site not found"));
-
-        } catch (Exception e) {
-            logger.error("Error getting site: siteId={}", siteId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve site"));
-        }
+    public ResponseEntity<SiteResponseDto> getSite(@PathVariable("id") UUID siteId) {
+        Site site = siteService.getSite(siteId);
+        SiteResponseDto response = SiteResponseDto.fromEntity(site);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -150,21 +140,14 @@ public class SiteAdminController {
      * @return list of sites
      */
     @GetMapping("/api/admin/accounts/{accountId}/sites")
-    public ResponseEntity<?> listSitesByAccount(@PathVariable("accountId") UUID accountId) {
-        try {
-            List<Site> sites = siteService.listSitesByAccount(accountId);
+    public ResponseEntity<List<SiteResponseDto>> listSitesByAccount(@PathVariable("accountId") UUID accountId) {
+        List<Site> sites = siteService.listSitesByAccount(accountId);
 
-            List<SiteResponseDto> siteList = sites.stream()
-                    .map(SiteResponseDto::fromEntity)
-                    .collect(Collectors.toList());
+        List<SiteResponseDto> siteList = sites.stream()
+                .map(SiteResponseDto::fromEntity)
+                .collect(Collectors.toList());
 
-            return ResponseEntity.ok(siteList);
-
-        } catch (Exception e) {
-            logger.error("Error listing sites: accountId={}", accountId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to list sites"));
-        }
+        return ResponseEntity.ok(siteList);
     }
 
     /**
@@ -222,11 +205,5 @@ public class SiteAdminController {
         Map<String, Object> statistics = accountStatisticsService.getSiteStatistics(siteId);
         SiteStatisticsDto response = SiteStatisticsDto.fromMap(statistics);
         return ResponseEntity.ok(response);
-    }
-
-    private Map<String, Object> createErrorResponse(String message) {
-        Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
-        return error;
     }
 }

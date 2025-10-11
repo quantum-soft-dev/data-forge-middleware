@@ -21,8 +21,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * REST controller for account administration (Admin UI API).
@@ -210,20 +210,7 @@ public class AccountAdminController {
      */
     @GetMapping("../statistics")
     public ResponseEntity<Map<String, Object>> getGlobalStatistics() {
-        try {
-            Map<String, Object> statistics = accountStatisticsService.getGlobalStatistics();
-            return ResponseEntity.ok(statistics);
-
-        } catch (Exception e) {
-            logger.error("Error getting global statistics", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve statistics"));
-        }
-    }
-
-    private Map<String, Object> createErrorResponse(String message) {
-        Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
-        return error;
+        Map<String, Object> statistics = accountStatisticsService.getGlobalStatistics();
+        return ResponseEntity.ok(statistics);
     }
 }

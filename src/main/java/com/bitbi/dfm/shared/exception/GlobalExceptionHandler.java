@@ -1,6 +1,8 @@
 package com.bitbi.dfm.shared.exception;
 
+import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
+import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -143,6 +145,90 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(error);
+    }
+
+    /**
+     * Handle AccountNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(AccountService.AccountNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountNotFound(
+            AccountService.AccountNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyExistsException (409 Conflict).
+     */
+    @ExceptionHandler(AccountService.AccountAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyExists(
+            AccountService.AccountAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already exists: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle SiteNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(SiteService.SiteNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteNotFound(
+            SiteService.SiteNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle SiteAlreadyExistsException (409 Conflict).
+     */
+    @ExceptionHandler(SiteService.SiteAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteAlreadyExists(
+            SiteService.SiteAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site already exists: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**
