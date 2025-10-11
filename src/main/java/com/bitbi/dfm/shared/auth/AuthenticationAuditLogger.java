@@ -10,6 +10,9 @@ import org.springframework.security.web.authentication.AuthenticationFailureHand
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.Base64;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Authentication failure handler that logs auth failures with structured MDC context.
@@ -71,29 +74,89 @@ public class AuthenticationAuditLogger implements AuthenticationFailureHandler {
     }
 
     /**
-     * Detect token type from request headers.
+     * Detect token type from request headers using structural JWT analysis.
      *
-     * Checks Authorization header for Bearer token pattern and X-Keycloak-Token header.
+     * Parses the JWT header to determine token type based on:
+     * - Algorithm (alg): "HS256" = custom JWT, "RS256" = Keycloak
+     * - Issuer (iss): Presence of Keycloak issuer URL
+     * - Type (typ): JWT type identifier
+     *
      * Returns "jwt", "keycloak", or "unknown".
      */
     private String detectTokenType(HttpServletRequest request) {
         String authorizationHeader = request.getHeader("Authorization");
         String keycloakTokenHeader = request.getHeader("X-Keycloak-Token");
 
-        if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
-            // Heuristic: Keycloak tokens are typically longer (>500 chars)
-            // JWT tokens from this system are shorter (<300 chars)
-            String token = authorizationHeader.substring(7);
-            if (token.length() > 500) {
-                return "keycloak";
-            }
-            return "jwt";
-        }
-
+        // Check X-Keycloak-Token header first (explicit Keycloak indicator)
         if (keycloakTokenHeader != null) {
             return "keycloak";
         }
 
+        // Parse Bearer token if present
+        if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
+            String token = authorizationHeader.substring(7);
+            return analyzeJwtStructure(token);
+        }
+
         return "unknown";
+    }
+
+    /**
+     * Analyze JWT token structure to determine its type.
+     *
+     * Decodes the JWT header and inspects:
+     * - Algorithm (alg): HS256/HS384/HS512 = custom JWT, RS256/RS384/RS512 = Keycloak
+     * - Token type (typ): Should be "JWT"
+     *
+     * @param token JWT token string
+     * @return "jwt" for custom tokens, "keycloak" for Keycloak tokens, "unknown" if unable to parse
+     */
+    private String analyzeJwtStructure(String token) {
+        try {
+            // JWT format: header.payload.signature
+            String[] parts = token.split("\\.");
+            if (parts.length != 3) {
+                return "unknown";
+            }
+
+            // Decode header (first part) - Base64URL encoded
+            String headerJson = new String(Base64.getUrlDecoder().decode(parts[0]));
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode header = mapper.readTree(headerJson);
+
+            // Check algorithm field
+            String algorithm = header.has("alg") ? header.get("alg").asText() : null;
+
+            if (algorithm != null) {
+                // HMAC algorithms (HS256, HS384, HS512) = custom JWT
+                if (algorithm.startsWith("HS")) {
+                    return "jwt";
+                }
+                // RSA algorithms (RS256, RS384, RS512) = Keycloak
+                if (algorithm.startsWith("RS")) {
+                    return "keycloak";
+                }
+            }
+
+            // Fallback: check payload for Keycloak-specific claims
+            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]));
+            JsonNode payload = mapper.readTree(payloadJson);
+
+            // Keycloak tokens have "iss" (issuer) field pointing to Keycloak server
+            if (payload.has("iss")) {
+                String issuer = payload.get("iss").asText();
+                if (issuer.contains("keycloak") || issuer.contains("/realms/")) {
+                    return "keycloak";
+                }
+            }
+
+            // If we got here, it's likely a custom JWT with unknown algorithm
+            return "jwt";
+
+        } catch (Exception e) {
+            // Unable to parse token structure
+            logger.debug("Unable to parse JWT token structure: {}", e.getMessage());
+            return "unknown";
+        }
     }
 }

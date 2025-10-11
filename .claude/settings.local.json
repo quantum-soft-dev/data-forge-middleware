@@ -30,7 +30,9 @@
       "Bash(if [ -f build/reports/jacoco/test/html/index.html ])",
       "Bash(then grep -A 5 \"Total\" build/reports/jacoco/test/html/index.html)",
       "Bash(else echo \"JaCoCo report not found\")",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(tee:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

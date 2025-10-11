@@ -15,17 +15,20 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST controller for batch lifecycle operations.
+ * REST controller for batch lifecycle operations (Data Forge Client API).
  * <p>
  * Provides endpoints for batch management: start, complete, fail, cancel.
  * All endpoints require JWT authentication and verify site ownership.
  * </p>
+ * <p>
+ * URL change from v2.x: /api/v1/batch/** → /api/dfc/batch/** (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/v1/batch")
+@RequestMapping("/api/dfc/batch")
 public class BatchController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchController.class);

@@ -67,6 +67,11 @@ VALUES ('0199bab2-8d63-8563-8340-edbf1c11c778', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('0199bab2-ca1c-3d0e-441d-adb776a62579', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'FAILED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-04/10-00/', 3, 3072, true, '2025-10-04 10:00:00', '2025-10-04 10:00:00', '2025-10-04 10:30:00');
 
+-- Batch for store-03 (different account) - used for cross-tenant authorization tests
+-- COMPLETED status so it doesn't interfere with batch lifecycle tests that create new batches for store-03
+INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
+VALUES ('0199bab2-dddd-dddd-dddd-dddddddddddd', '0199bab1-fad2-bf76-c478-eae1f61e1c17', '0199bab0-ca3b-e41c-5521-2f4b33fda8b6', 'COMPLETED', '0199bab1-fad2-bf76-c478-eae1f61e1c17/store-03.example.com/2025-10-06/13-00/', 1, 2048, false, '2025-10-06 13:00:00', '2025-10-06 13:00:00', '2025-10-06 13:30:00');
+
 -- Test uploaded files
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
 VALUES ('0199bab3-0429-c04f-9482-7f3b88456918', 'c3d4e5f6-a7b8-9012-cdef-123456789012', 'data1.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/data1.csv', 1024, 'text/csv', 'checksum1', '2025-10-05 14:35:00');
@@ -76,6 +81,10 @@ VALUES ('0199bab3-69d1-d291-0fb6-c8dd6d09ee88', 'c3d4e5f6-a7b8-9012-cdef-1234567
 
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
 VALUES ('0199bab3-a134-e3e5-e76e-7ba0a7c44fa5', '0199bab2-8d63-8563-8340-edbf1c11c778', 'existing-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/existing-file.csv', 1024, 'text/csv', 'abc123def456', CURRENT_TIMESTAMP);
+
+-- File for store-03 batch (used for cross-tenant authorization tests)
+INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
+VALUES ('0199bab3-eeee-eeee-eeee-eeeeeeeeeeee', '0199bab2-dddd-dddd-dddd-dddddddddddd', 'store-03-file.csv', '0199bab1-fad2-bf76-c478-eae1f61e1c17/store-03.example.com/2025-10-06/13-00/store-03-file.csv', 2048, 'text/csv', 'xyz789abc123', CURRENT_TIMESTAMP);
 
 -- Test error logs
 INSERT INTO error_logs (id, batch_id, site_id, type, title, message, metadata, occurred_at)

@@ -16,6 +16,8 @@ Auto-generated from all feature plans. Last updated: 2025-10-09
 - **SpringDoc OpenAPI** - API documentation (Swagger UI)
 - **JUnit 5 + Mockito** - Unit testing
 - **Testcontainers** - Integration testing (PostgreSQL + LocalStack S3)
+- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6, Spring Data JPA (003-separation-of-security)
+- PostgreSQL 16 (existing, no schema changes required) (003-separation-of-security)
 
 ## Project Structure
 
@@ -148,15 +150,14 @@ aws --endpoint-url=http://localhost:4566 s3 mb s3://dataforge-uploads
 
 ## Recent Implementation Decisions
 
-### Security Configuration (Updated 2025-10-09)
+### Security Configuration (Updated 2025-10-11)
 - **Replaced deprecated keycloak-spring-boot-starter** with spring-boot-starter-oauth2-resource-server
-- **Dual authentication (FR-005)**: Custom JWT for client API, Keycloak OAuth2 for admin API
-  - GET endpoints on client API accept BOTH JWT and Keycloak tokens
-  - POST/PUT/DELETE endpoints on client API accept JWT only (Keycloak returns 403)
-  - Admin endpoints accept Keycloak only (JWT returns 403)
-- **AuthenticationManagerResolver**: Path/method-based authentication strategy selection
-- **DualAuthenticationFilter**: Rejects requests with both tokens (400 Bad Request)
+- **Separate security filter chains (FR-005)**: Custom JWT for client API, Keycloak OAuth2 for admin API
+  - Client API (`/api/dfc/**`) accepts JWT tokens only (Keycloak returns 403)
+  - Admin API (`/api/admin/**`) accepts Keycloak tokens only (JWT returns 403)
+  - Filter chain precedence controlled via `@Order` annotation
 - **AuthenticationAuditLogger**: Logs auth failures with MDC context (ip, endpoint, method, status, tokenType)
+  - Token type detection via JWT structural analysis (algorithm field: HS* = custom JWT, RS* = Keycloak)
 - **CSRF disabled**: Stateless API with token-based authentication
 - **CORS**: Configured for Actuator endpoints in ActuatorConfiguration
 
@@ -211,18 +212,16 @@ All DTOs include static `fromEntity()` methods for entity-to-DTO mapping.
 
 ## Known Limitations
 
-1. **TestSecurityConfig divergence**: Test security configuration uses separate SecurityFilterChains instead of AuthenticationManagerResolver (production uses resolver for dual auth). This causes Keycloak OAuth2 tests to fail in test environment (documented in DualAuthenticationIntegrationTest.java:24-30). JWT authentication tests pass correctly (2/5 tests in DualAuthenticationIntegrationTest).
-2. **Code coverage below 80%**: Overall test coverage is 16% line coverage, 7% branch coverage (as of 2025-10-09). This reflects the pre-existing codebase; Phase 3 additions (DTOs, dual auth) are tested but most domain/application layers from foundational implementation remain untested.
-3. **Actuator ServletEndpointsSupplier deprecation**: Using deprecated suppliers in ActuatorConfiguration (Spring Boot 3.5.6 compatibility)
-4. **No user registration flow**: Accounts/sites created via admin API only
-5. **Basic retry logic**: S3 uploads retry 3 times with fixed 1-second delay (no exponential backoff)
-6. **In-memory batch counting**: Concurrent batch limit check not atomic across instances
-7. **No rate limiting**: API endpoints lack request throttling
-8. **Single region**: S3 configuration supports one region only
+1. **Code coverage below 80%**: Overall test coverage is 16% line coverage, 7% branch coverage (as of 2025-10-09). This reflects the pre-existing codebase; Phase 3 additions (DTOs, security separation) are tested but most domain/application layers from foundational implementation remain untested.
+2. **Actuator ServletEndpointsSupplier deprecation**: Using deprecated suppliers in ActuatorConfiguration (Spring Boot 3.5.6 compatibility)
+3. **No user registration flow**: Accounts/sites created via admin API only
+4. **Basic retry logic**: S3 uploads retry 3 times with fixed 1-second delay (no exponential backoff)
+5. **In-memory batch counting**: Concurrent batch limit check not atomic across instances
+6. **No rate limiting**: API endpoints lack request throttling
+7. **Single region**: S3 configuration supports one region only
 
 ## Future Enhancements
 
-- [ ] Update TestSecurityConfig to use AuthenticationManagerResolver for dual auth (matches production SecurityConfiguration)
 - [ ] Increase test coverage to 80% (add unit tests for domain/application layers)
 - [ ] Multi-region S3 replication
 - [ ] Redis cache for token validation

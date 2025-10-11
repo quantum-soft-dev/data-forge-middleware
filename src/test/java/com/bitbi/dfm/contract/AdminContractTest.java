@@ -62,7 +62,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts
-        mockMvc.perform(post("/admin/accounts")
+        mockMvc.perform(post("/api/admin/accounts")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -84,7 +84,7 @@ class AdminContractTest {
     @DisplayName("Should list accounts with pagination when admin authenticated")
     void shouldListAccountsWithPaginationWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts with pagination params
-        mockMvc.perform(get("/admin/accounts")
+        mockMvc.perform(get("/api/admin/accounts")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("page", "0")
                         .param("size", "20")
@@ -107,7 +107,7 @@ class AdminContractTest {
     @DisplayName("Should get account details when admin authenticated")
     void shouldGetAccountDetailsWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts/{id}
-        mockMvc.perform(get("/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(get("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with account details
@@ -137,7 +137,7 @@ class AdminContractTest {
                 """;
 
         // When: PUT /admin/accounts/{id}
-        mockMvc.perform(put("/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -156,7 +156,7 @@ class AdminContractTest {
     @DisplayName("Should soft delete account when admin authenticated")
     void shouldSoftDeleteAccountWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/accounts/{id}
-        mockMvc.perform(delete("/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(delete("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 204 No Content
@@ -170,7 +170,7 @@ class AdminContractTest {
     @DisplayName("Should get account statistics when admin authenticated")
     void shouldGetAccountStatisticsWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts/{id}/stats
-        mockMvc.perform(get("/admin/accounts/{id}/stats", MOCK_ACCOUNT_ID)
+        mockMvc.perform(get("/api/admin/accounts/{id}/stats", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with statistics
@@ -202,7 +202,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites
-        mockMvc.perform(post("/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -226,7 +226,7 @@ class AdminContractTest {
     @DisplayName("Should list sites for account when admin authenticated")
     void shouldListSitesForAccountWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts/{accountId}/sites
-        mockMvc.perform(get("/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(get("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with site array
@@ -242,7 +242,7 @@ class AdminContractTest {
     @DisplayName("Should soft delete site when admin authenticated")
     void shouldSoftDeleteSiteWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/sites/{id}
-        mockMvc.perform(delete("/admin/sites/{id}", MOCK_SITE_ID)
+        mockMvc.perform(delete("/api/admin/sites/{id}", MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 204 No Content
@@ -258,7 +258,7 @@ class AdminContractTest {
     @DisplayName("Should list batches with filtering when admin authenticated")
     void shouldListBatchesWithFilteringWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/batches with filters
-        mockMvc.perform(get("/admin/batches")
+        mockMvc.perform(get("/api/admin/batches")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("siteId", MOCK_SITE_ID)
                         .param("status", "COMPLETED")
@@ -280,7 +280,7 @@ class AdminContractTest {
     @DisplayName("Should get batch details when admin authenticated")
     void shouldGetBatchDetailsWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/batches/{id}
-        mockMvc.perform(get("/admin/batches/{id}", MOCK_BATCH_ID)
+        mockMvc.perform(get("/api/admin/batches/{id}", MOCK_BATCH_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with batch details
@@ -303,7 +303,7 @@ class AdminContractTest {
     @DisplayName("Should delete batch metadata when admin authenticated")
     void shouldDeleteBatchMetadataWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/batches/{id}
-        mockMvc.perform(delete("/admin/batches/{id}", MOCK_BATCH_ID)
+        mockMvc.perform(delete("/api/admin/batches/{id}", MOCK_BATCH_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 204 No Content
@@ -319,7 +319,7 @@ class AdminContractTest {
     @DisplayName("Should list errors with filtering when admin authenticated")
     void shouldListErrorsWithFilteringWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/errors with filters
-        mockMvc.perform(get("/admin/errors")
+        mockMvc.perform(get("/api/admin/errors")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("siteId", MOCK_SITE_ID)
                         .param("type", "FileReadError")
@@ -341,7 +341,7 @@ class AdminContractTest {
     @DisplayName("Should export errors to CSV when admin authenticated")
     void shouldExportErrorsToCsvWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/errors/export
-        mockMvc.perform(get("/admin/errors/export")
+        mockMvc.perform(get("/api/admin/errors/export")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("siteId", MOCK_SITE_ID))
 
@@ -360,7 +360,7 @@ class AdminContractTest {
     @DisplayName("Should reject admin access when user lacks ROLE_ADMIN")
     void shouldRejectAdminAccessWhenUserLacksRoleAdmin() throws Exception {
         // When: GET /admin/accounts with non-admin token
-        mockMvc.perform(get("/admin/accounts")
+        mockMvc.perform(get("/api/admin/accounts")
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
                 // Then: 403 Forbidden
@@ -374,7 +374,7 @@ class AdminContractTest {
     @DisplayName("Should reject admin access when authentication missing")
     void shouldRejectAdminAccessWhenAuthenticationMissing() throws Exception {
         // When: GET /admin/accounts without Authorization header
-        mockMvc.perform(get("/admin/accounts"))
+        mockMvc.perform(get("/api/admin/accounts"))
 
                 // Then: 401 Unauthorized
                 .andExpect(status().isUnauthorized());

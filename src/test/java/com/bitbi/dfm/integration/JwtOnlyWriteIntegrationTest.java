@@ -43,11 +43,11 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("startBatch_withJwt_shouldReturn201")
     void startBatch_withJwt_shouldReturn201() throws Exception {
-        // Given: Valid JWT token for test site (store-01.example.com)
-        String jwtToken = generateTestToken();
+        // Given: Valid JWT token for admin-site (no IN_PROGRESS batch exists)
+        String jwtToken = generateToken("admin-site.example.com", "admin-site-secret");
 
         // When: POST batch start with JWT token
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", jwtToken))
 
                 // Then: 201 Created with BatchResponseDto
@@ -83,7 +83,7 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: POST batch start with Keycloak token
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", keycloakToken))
 
                 // Then: 403 Forbidden (test environment matches production behavior for write operations)
@@ -104,7 +104,7 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
         String batchId = "0199bab2-8d63-8563-8340-edbf1c11c778"; // IN_PROGRESS batch from test-data.sql
 
         // When: PUT batch complete with JWT token
-        mockMvc.perform(post("/api/v1/batch/" + batchId + "/complete")
+        mockMvc.perform(post("/api/dfc/batch/" + batchId + "/complete")
                         .header("Authorization", jwtToken))
 
                 // Then: 200 OK with BatchResponseDto including completedAt
@@ -125,7 +125,7 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
         String batchId = "0199bab2-8d63-8563-8340-edbf1c11c778";
 
         // When: PUT batch complete with Keycloak token
-        mockMvc.perform(post("/api/v1/batch/" + batchId + "/complete")
+        mockMvc.perform(post("/api/dfc/batch/" + batchId + "/complete")
                         .header("Authorization", keycloakToken))
 
                 // Then: 403 Forbidden (production + test behavior match)

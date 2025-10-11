@@ -19,14 +19,18 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * REST controller for site administration.
+ * REST controller for site administration (Admin UI API).
  * <p>
  * Provides admin endpoints for site CRUD operations.
  * Requires Keycloak authentication with ROLE_ADMIN.
  * </p>
+ * <p>
+ * URL change from v2.x: /admin/sites → /api/admin/sites (breaking change)
+ * URL change from v2.x: /admin/accounts/{accountId}/sites → /api/admin/accounts/{accountId}/sites (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
 @PreAuthorize("hasRole('ADMIN')")
@@ -52,7 +56,7 @@ public class SiteAdminController {
      * @param request   site details (domain, displayName)
      * @return created site response
      */
-    @PostMapping("/admin/accounts/{accountId}/sites")
+    @PostMapping("/api/admin/accounts/{accountId}/sites")
     public ResponseEntity<Map<String, Object>> createSite(
             @PathVariable("accountId") UUID accountId,
             @RequestBody Map<String, String> request) {
@@ -114,7 +118,7 @@ public class SiteAdminController {
      * @param siteId site identifier
      * @return site response
      */
-    @GetMapping("/admin/sites/{id}")
+    @GetMapping("/api/admin/sites/{id}")
     public ResponseEntity<?> getSite(@PathVariable("id") UUID siteId) {
         try {
             Site site = siteService.getSite(siteId);
@@ -144,7 +148,7 @@ public class SiteAdminController {
      * @param sort sort field and direction (default: createdAt,desc)
      * @return paginated list of sites
      */
-    @GetMapping("/admin/sites")
+    @GetMapping("/api/admin/sites")
     public ResponseEntity<Map<String, Object>> listAllSites(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -193,7 +197,7 @@ public class SiteAdminController {
      * @param accountId account identifier
      * @return list of sites
      */
-    @GetMapping("/admin/accounts/{accountId}/sites")
+    @GetMapping("/api/admin/accounts/{accountId}/sites")
     public ResponseEntity<?> listSitesByAccount(@PathVariable("accountId") UUID accountId) {
         try {
             List<Site> sites = siteService.listSitesByAccount(accountId);
@@ -221,7 +225,7 @@ public class SiteAdminController {
      * @param request site update details (displayName)
      * @return updated site response
      */
-    @PutMapping("/admin/sites/{id}")
+    @PutMapping("/api/admin/sites/{id}")
     public ResponseEntity<?> updateSite(
             @PathVariable("id") UUID siteId,
             @RequestBody Map<String, String> request) {
@@ -267,7 +271,7 @@ public class SiteAdminController {
      * @param siteId site identifier
      * @return no content response
      */
-    @DeleteMapping("/admin/sites/{id}")
+    @DeleteMapping("/api/admin/sites/{id}")
     public ResponseEntity<Map<String, Object>> deactivateSite(@PathVariable("id") UUID siteId) {
         try {
             logger.info("Deactivating site: siteId={}", siteId);
@@ -297,7 +301,7 @@ public class SiteAdminController {
      * @param siteId site identifier
      * @return site statistics
      */
-    @GetMapping("/admin/sites/{id}/statistics")
+    @GetMapping("/api/admin/sites/{id}/statistics")
     public ResponseEntity<Map<String, Object>> getSiteStatistics(@PathVariable("id") UUID siteId) {
         try {
             Map<String, Object> statistics = accountStatisticsService.getSiteStatistics(siteId);

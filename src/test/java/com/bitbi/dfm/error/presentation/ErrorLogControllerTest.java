@@ -28,6 +28,7 @@ class ErrorLogControllerTest {
     private ErrorLogController controller;
     private ErrorLoggingService errorLoggingService;
     private TokenService tokenService;
+    private com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService;
 
     private UUID testSiteId;
     private UUID testBatchId;
@@ -38,7 +39,8 @@ class ErrorLogControllerTest {
     void setUp() {
         errorLoggingService = mock(ErrorLoggingService.class);
         tokenService = mock(TokenService.class);
-        controller = new ErrorLogController(errorLoggingService, tokenService);
+        batchLifecycleService = mock(com.bitbi.dfm.batch.application.BatchLifecycleService.class);
+        controller = new ErrorLogController(errorLoggingService, tokenService, batchLifecycleService);
 
         testSiteId = UUID.randomUUID();
         testBatchId = UUID.randomUUID();
@@ -46,6 +48,11 @@ class ErrorLogControllerTest {
         testAuthHeader = "Bearer " + testToken;
 
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
+
+        // Mock batch ownership check - by default, return a batch owned by testSiteId
+        com.bitbi.dfm.batch.domain.Batch mockBatch = mock(com.bitbi.dfm.batch.domain.Batch.class);
+        when(mockBatch.getSiteId()).thenReturn(testSiteId);
+        when(batchLifecycleService.getBatch(testBatchId)).thenReturn(mockBatch);
     }
 
     @Test
@@ -58,7 +65,7 @@ class ErrorLogControllerTest {
         request.put("metadata", new HashMap<>());
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
+        ResponseEntity<?> response = controller.logStandaloneError(request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
@@ -82,7 +89,7 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
+        ResponseEntity<?> response = controller.logStandaloneError(request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
@@ -100,7 +107,7 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
+        ResponseEntity<?> response = controller.logStandaloneError(request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
@@ -117,7 +124,7 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
+        ResponseEntity<?> response = controller.logStandaloneError(request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
@@ -135,7 +142,7 @@ class ErrorLogControllerTest {
         when(tokenService.validateToken(testToken)).thenReturn(testSiteId);
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
+        ResponseEntity<?> response = controller.logStandaloneError(request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
@@ -155,7 +162,7 @@ class ErrorLogControllerTest {
                 .when(errorLoggingService).logStandaloneError(any(), any(), any(), any());
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
+        ResponseEntity<?> response = controller.logStandaloneError(request, testAuthHeader);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
@@ -229,7 +236,7 @@ class ErrorLogControllerTest {
         assertNotNull(response.getBody());
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) response.getBody();
-        assertEquals("Error type is required", body.get("error"));
+        assertEquals("Error type is required", body.get("message"));
     }
 
     @Test
@@ -270,7 +277,7 @@ class ErrorLogControllerTest {
         assertNotNull(response.getBody());
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) response.getBody();
-        assertEquals("Error message is required", body.get("error"));
+        assertEquals("Error message is required", body.get("message"));
     }
 
     @Test
@@ -293,7 +300,7 @@ class ErrorLogControllerTest {
         assertNotNull(response.getBody());
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) response.getBody();
-        assertEquals("Failed to log error", body.get("error"));
+        assertEquals("Failed to log error", body.get("message"));
     }
 
     @Test
@@ -338,7 +345,7 @@ class ErrorLogControllerTest {
         assertNotNull(response.getBody());
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) response.getBody();
-        assertEquals("Error log not found", body.get("error"));
+        assertEquals("Error log not found", body.get("message"));
     }
 
     @Test
@@ -359,7 +366,7 @@ class ErrorLogControllerTest {
         assertNotNull(response.getBody());
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) response.getBody();
-        assertEquals("Failed to retrieve error log", body.get("error"));
+        assertEquals("Failed to retrieve error log", body.get("message"));
     }
 
     @Test
@@ -371,7 +378,7 @@ class ErrorLogControllerTest {
         request.put("message", "Test error message");
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, null);
+        ResponseEntity<?> response = controller.logStandaloneError(request, null);
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
@@ -386,7 +393,7 @@ class ErrorLogControllerTest {
         request.put("message", "Test error message");
 
         // When
-        ResponseEntity<Void> response = controller.logStandaloneError(request, "InvalidHeader");
+        ResponseEntity<?> response = controller.logStandaloneError(request, "InvalidHeader");
 
         // Then
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());

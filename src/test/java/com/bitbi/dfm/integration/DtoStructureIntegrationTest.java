@@ -82,7 +82,7 @@ class DtoStructureIntegrationTest extends BaseIntegrationTest {
         // ===================================================================
         // Step 1: Start Batch → Verify BatchResponseDto structure
         // ===================================================================
-        String startResponse = mockMvc.perform(post("/api/v1/batch/start")
+        String startResponse = mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
@@ -140,7 +140,7 @@ class DtoStructureIntegrationTest extends BaseIntegrationTest {
                 "mock,csv,data\n1,2,3".getBytes()
         );
 
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", batchId)
+        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", batchId)
                         .file(file)
                         .header("Authorization", "Bearer " + jwtToken))
 
@@ -180,7 +180,7 @@ class DtoStructureIntegrationTest extends BaseIntegrationTest {
                 }
                 """;
 
-        mockMvc.perform(post("/api/v1/error/{batchId}", batchId)
+        mockMvc.perform(post("/api/dfc/error/{batchId}", batchId)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
@@ -223,7 +223,7 @@ class DtoStructureIntegrationTest extends BaseIntegrationTest {
         // ===================================================================
         // Step 4: Complete Batch → Verify BatchResponseDto with completedAt
         // ===================================================================
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", batchId)
+        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", batchId)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 

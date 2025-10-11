@@ -23,8 +23,8 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should complete batch and transition to COMPLETED status")
     void shouldCompleteBatchAndTransitionToCompletedStatus() throws Exception {
         // Given: Batch with uploaded files
-        // When: POST /api/v1/batch/{batchId}/complete
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        // When: POST /api/dfc/batch/{batchId}/complete
+        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
 
                 // Then: Batch completed
@@ -43,7 +43,7 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should prevent file upload after batch completion")
     void shouldPreventFileUploadAfterBatchCompletion() throws Exception {
         // Given: Completed batch
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
@@ -53,7 +53,7 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
                 "late content".getBytes()
         );
 
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", IN_PROGRESS_MOCK_BATCH_ID)
                         .file(file)
                         .header("Authorization", generateTestToken()))
 
@@ -66,12 +66,12 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should prevent double completion")
     void shouldPreventDoubleCompletion() throws Exception {
         // Given: Already completed batch
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Attempt to complete again
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
 
                 // Then: 400 Bad Request
@@ -83,12 +83,12 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should allow new batch after completion")
     void shouldAllowNewBatchAfterCompletion() throws Exception {
         // Given: Previous batch completed
-        mockMvc.perform(post("/api/v1/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Start new batch
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateTestToken()))
 
                 // Then: Success (no more IN_PROGRESS conflict)

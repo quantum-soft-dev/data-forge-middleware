@@ -16,34 +16,42 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST controller for file upload operations.
+ * REST controller for file upload operations (Data Forge Client API).
  * <p>
  * Handles multipart file uploads to batch with S3 storage integration.
  * Requires JWT authentication.
  * </p>
+ * <p>
+ * URL change from v2.x: /api/v1/batch → /api/dfc/batch (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/v1/batch")
+@RequestMapping("/api/dfc/batch")
 public class FileUploadController {
 
     private static final Logger logger = LoggerFactory.getLogger(FileUploadController.class);
 
     private final FileUploadService fileUploadService;
     private final TokenService tokenService;
+    private final com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService;
 
-    public FileUploadController(FileUploadService fileUploadService, TokenService tokenService) {
+    public FileUploadController(FileUploadService fileUploadService,
+                                TokenService tokenService,
+                                com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService) {
         this.fileUploadService = fileUploadService;
         this.tokenService = tokenService;
+        this.batchLifecycleService = batchLifecycleService;
     }
 
     /**
-     * Upload files to batch.
+     * Upload files to active batch.
      * <p>
-     * POST /api/v1/batch/{id}/upload
+     * POST /api/dfc/batch/{batchId}/upload
      * Content-Type: multipart/form-data
+     * Uploads files to the authenticated site's active (IN_PROGRESS) batch.
      * </p>
      *
      * @param batchId    batch identifier
@@ -51,16 +59,32 @@ public class FileUploadController {
      * @param authHeader Authorization header with Bearer token
      * @return upload summary response
      */
-    @PostMapping("/{id}/upload")
+    @PostMapping("/{batchId}/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(
-            @PathVariable("id") UUID batchId,
+            @PathVariable("batchId") UUID batchId,
             @RequestParam("files") MultipartFile[] files,
             @RequestHeader("Authorization") String authHeader) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
+            UUID siteId = extractSiteId(authHeader); // Validate authentication
 
-            logger.info("Uploading {} files to batch: batchId={}", files.length, batchId);
+            // ✅ SECURITY FIX: Verify batch ownership before upload
+            try {
+                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+                if (!batch.getSiteId().equals(siteId)) {
+                    logger.warn("Unauthorized file upload attempt: siteId={}, batchId={}, batchOwner={}",
+                                siteId, batchId, batch.getSiteId());
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot upload files to batch owned by another site"));
+                }
+            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
+                logger.warn("Batch not found during authorization check: {}", batchId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+            }
+
+            logger.info("Uploading {} files to batch: batchId={}, siteId={}", files.length, batchId, siteId);
 
             if (files.length == 0) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -141,7 +165,23 @@ public class FileUploadController {
             @RequestHeader("Authorization") String authHeader) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
+            UUID siteId = extractSiteId(authHeader); // Validate authentication
+
+            // ✅ SECURITY FIX: Verify batch ownership before retrieving file
+            try {
+                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+                if (!batch.getSiteId().equals(siteId)) {
+                    logger.warn("Unauthorized file retrieval attempt: siteId={}, batchId={}, batchOwner={}",
+                                siteId, batchId, batch.getSiteId());
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot access files in batch owned by another site"));
+                }
+            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
+                logger.warn("Batch not found during authorization check: {}", batchId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+            }
 
             UploadedFile file = fileUploadService.getFile(fileId);
 

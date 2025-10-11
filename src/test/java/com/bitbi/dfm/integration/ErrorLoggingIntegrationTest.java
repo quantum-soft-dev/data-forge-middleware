@@ -38,8 +38,8 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 }
                 """;
 
-        // When: POST /api/v1/error/{batchId}
-        mockMvc.perform(post("/api/v1/error/{batchId}", MOCK_BATCH_ID)
+        // When: POST /api/dfc/error/{batchId}
+        mockMvc.perform(post("/api/dfc/error/{batchId}", MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
@@ -65,7 +65,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 """;
 
         // When: Log error
-        mockMvc.perform(post("/api/v1/error/{batchId}", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/dfc/error/{batchId}", MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
@@ -87,8 +87,8 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 }
                 """;
 
-        // When: POST /api/v1/error (no batchId)
-        mockMvc.perform(post("/api/v1/error")
+        // When: POST /api/dfc/error (no batchId)
+        mockMvc.perform(post("/api/dfc/error")
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
@@ -110,7 +110,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 """;
 
         // When: Log error
-        mockMvc.perform(post("/api/v1/error/{batchId}", MOCK_BATCH_ID)
+        mockMvc.perform(post("/api/dfc/error/{batchId}", MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))

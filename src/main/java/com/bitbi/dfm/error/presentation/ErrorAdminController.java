@@ -22,17 +22,20 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * REST controller for error log administration.
+ * REST controller for error log administration (Admin UI API).
  * <p>
  * Provides admin endpoints for error log viewing and export.
  * Requires Keycloak authentication with ROLE_ADMIN.
  * </p>
+ * <p>
+ * URL change from v2.x: /admin/errors → /api/admin/errors (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/admin/errors")
+@RequestMapping("/api/admin/errors")
 @PreAuthorize("hasRole('ADMIN')")
 public class ErrorAdminController {
 
