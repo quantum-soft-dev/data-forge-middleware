@@ -122,7 +122,7 @@ class GlobalExceptionHandlerTest {
         assertNotNull(response.getBody());
         assertEquals(500, response.getBody().status());
         assertEquals("Internal Server Error", response.getBody().error());
-        assertEquals("Invalid state", response.getBody().message());
+        assertEquals("An unexpected error occurred", response.getBody().message());
         assertEquals("/api/v1/test", response.getBody().path());
     }
 
@@ -157,5 +157,102 @@ class GlobalExceptionHandlerTest {
         // Then
         assertNotNull(response.getBody());
         assertNotNull(response.getBody().timestamp());
+    }
+
+    // ===================================================================
+    // Edge Case Tests - Information Disclosure Prevention
+    // ===================================================================
+
+    @Test
+    @DisplayName("Should sanitize IllegalStateException with sensitive data")
+    void shouldSanitizeIllegalStateExceptionWithSensitiveData() {
+        // Given: Exception with sensitive technical details
+        IllegalStateException ex = new IllegalStateException(
+                "Database connection failed: username=admin, password=secret123, host=internal-db.company.com:5432"
+        );
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleIllegalState(ex, request);
+
+        // Then: Sensitive data should NOT be in response
+        assertNotNull(response.getBody());
+        assertEquals("An unexpected error occurred", response.getBody().message());
+        assertFalse(response.getBody().message().contains("password"));
+        assertFalse(response.getBody().message().contains("secret123"));
+        assertFalse(response.getBody().message().contains("admin"));
+        assertFalse(response.getBody().message().contains("internal-db"));
+    }
+
+    @Test
+    @DisplayName("Should sanitize generic Exception with stack trace info")
+    void shouldSanitizeGenericExceptionWithStackTrace() {
+        // Given: Exception with internal class/package names
+        Exception ex = new RuntimeException(
+                "NullPointerException at com.bitbi.internal.secret.SecretProcessor.processSecret(line:42)"
+        );
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleGenericException(ex, request);
+
+        // Then: Internal class names should NOT be in response
+        assertNotNull(response.getBody());
+        assertEquals("An unexpected error occurred", response.getBody().message());
+        assertFalse(response.getBody().message().contains("SecretProcessor"));
+        assertFalse(response.getBody().message().contains("com.bitbi.internal"));
+    }
+
+    @Test
+    @DisplayName("Should return all validation errors, not just first one")
+    void shouldReturnAllValidationErrors() {
+        // Given: MethodArgumentNotValidException with multiple field errors
+        org.springframework.validation.BindingResult bindingResult =
+                mock(org.springframework.validation.BindingResult.class);
+
+        org.springframework.validation.FieldError error1 =
+                new org.springframework.validation.FieldError("dto", "email", "must be a valid email");
+        org.springframework.validation.FieldError error2 =
+                new org.springframework.validation.FieldError("dto", "name", "must not be blank");
+        org.springframework.validation.FieldError error3 =
+                new org.springframework.validation.FieldError("dto", "age", "must be positive");
+
+        when(bindingResult.getFieldErrors()).thenReturn(java.util.List.of(error1, error2, error3));
+
+        org.springframework.web.bind.MethodArgumentNotValidException ex =
+                new org.springframework.web.bind.MethodArgumentNotValidException(
+                        mock(org.springframework.core.MethodParameter.class),
+                        bindingResult
+                );
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleValidationErrors(ex, request);
+
+        // Then: All errors should be present
+        assertNotNull(response.getBody());
+        String message = response.getBody().message();
+        assertTrue(message.contains("email: must be a valid email"));
+        assertTrue(message.contains("name: must not be blank"));
+        assertTrue(message.contains("age: must be positive"));
+    }
+
+    @Test
+    @DisplayName("Should handle empty validation errors gracefully")
+    void shouldHandleEmptyValidationErrorsGracefully() {
+        // Given: MethodArgumentNotValidException with no field errors
+        org.springframework.validation.BindingResult bindingResult =
+                mock(org.springframework.validation.BindingResult.class);
+        when(bindingResult.getFieldErrors()).thenReturn(java.util.List.of());
+
+        org.springframework.web.bind.MethodArgumentNotValidException ex =
+                new org.springframework.web.bind.MethodArgumentNotValidException(
+                        mock(org.springframework.core.MethodParameter.class),
+                        bindingResult
+                );
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleValidationErrors(ex, request);
+
+        // Then
+        assertNotNull(response.getBody());
+        assertEquals("Validation failed", response.getBody().message());
     }
 }

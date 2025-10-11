@@ -42,10 +42,11 @@ public record LogErrorRequestDto(
         String message,
 
         @Schema(
-                description = "Optional additional error context (arbitrary JSON object)",
+                description = "Optional additional error context (max 20 entries, 10KB total size)",
                 example = "{\"fileName\": \"data.csv\", \"fileSize\": 1024}",
                 requiredMode = Schema.RequiredMode.NOT_REQUIRED
         )
+        @ValidMetadata
         Map<String, Object> metadata
 ) {
 }

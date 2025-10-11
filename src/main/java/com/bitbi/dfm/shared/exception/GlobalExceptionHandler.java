@@ -57,7 +57,7 @@ public class GlobalExceptionHandler {
      * Handle MethodArgumentNotValidException (400 Bad Request).
      * <p>
      * This handler is triggered when @Valid validation fails on request body DTOs.
-     * It extracts field validation errors and returns them in a user-friendly format.
+     * It extracts all field validation errors and returns them in a user-friendly format.
      * </p>
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -65,11 +65,14 @@ public class GlobalExceptionHandler {
             MethodArgumentNotValidException ex,
             HttpServletRequest request) {
 
-        // Extract first validation error message
+        // Extract all validation error messages
         String errorMessage = ex.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + ": " + error.getDefaultMessage())
-                .findFirst()
-                .orElse("Validation failed");
+                .collect(java.util.stream.Collectors.joining(", "));
+
+        if (errorMessage.isEmpty()) {
+            errorMessage = "Validation failed";
+        }
 
         logger.warn("Validation failed: {}", errorMessage);
 
@@ -275,6 +278,10 @@ public class GlobalExceptionHandler {
 
     /**
      * Handle IllegalStateException (500 Internal Server Error).
+     * <p>
+     * Returns generic error message to client to prevent information disclosure.
+     * Full technical details are logged server-side for debugging.
+     * </p>
      */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ErrorResponseDto> handleIllegalState(
@@ -287,7 +294,7 @@ public class GlobalExceptionHandler {
                 Instant.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Internal Server Error",
-                ex.getMessage(),
+                "An unexpected error occurred", // Generic message - details logged server-side
                 request.getRequestURI()
         );
 
