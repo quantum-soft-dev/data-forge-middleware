@@ -48,10 +48,10 @@ public class Account {
     private String name;
 
     @Column(name = "phone", length = 50)
-    private String phone;
+    private Phone phone;
 
     @Column(name = "company", length = 255)
-    private String company;
+    private Company company;
 
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
@@ -65,7 +65,7 @@ public class Account {
     /**
      * Private constructor for JPA.
      */
-    protected Account(UUID id, String email, String name, String phone, String company,
+    protected Account(UUID id, String email, String name, Phone phone, Company company,
                       Boolean isActive, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.email = email;
@@ -85,7 +85,7 @@ public class Account {
      * @param phone   user's phone number (optional)
      * @param company user's company name (optional)
      * @return new Account instance
-     * @throws IllegalArgumentException if email or name is invalid
+     * @throws IllegalArgumentException if email, name, phone, or company is invalid
      */
     public static Account create(String email, String name, String phone, String company) {
         Objects.requireNonNull(email, "Email cannot be null");
@@ -97,11 +97,12 @@ public class Account {
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
 
-        String trimmedPhone = phone != null && !phone.isBlank() ? phone.trim() : null;
-        String trimmedCompany = company != null && !company.isBlank() ? company.trim() : null;
+        // Value Objects handle validation internally
+        Phone phoneVO = Phone.of(phone);
+        Company companyVO = Company.of(company);
 
         return new Account(id, email.toLowerCase().trim(), name.trim(),
-                          trimmedPhone, trimmedCompany, true, now, now);
+                          phoneVO, companyVO, true, now, now);
     }
 
     /**
@@ -121,9 +122,10 @@ public class Account {
      * Update account phone number.
      *
      * @param newPhone new phone number (can be null)
+     * @throws IllegalArgumentException if phone format is invalid
      */
     public void updatePhone(String newPhone) {
-        this.phone = newPhone != null && !newPhone.isBlank() ? newPhone.trim() : null;
+        this.phone = Phone.of(newPhone);
         this.updatedAt = LocalDateTime.now();
     }
 
@@ -131,9 +133,10 @@ public class Account {
      * Update account company name.
      *
      * @param newCompany new company name (can be null)
+     * @throws IllegalArgumentException if company name is invalid
      */
     public void updateCompany(String newCompany) {
-        this.company = newCompany != null && !newCompany.isBlank() ? newCompany.trim() : null;
+        this.company = Company.of(newCompany);
         this.updatedAt = LocalDateTime.now();
     }
 

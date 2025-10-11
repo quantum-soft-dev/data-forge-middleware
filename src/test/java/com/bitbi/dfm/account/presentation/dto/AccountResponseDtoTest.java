@@ -1,6 +1,8 @@
 package com.bitbi.dfm.account.presentation.dto;
 
 import com.bitbi.dfm.account.domain.Account;
+import com.bitbi.dfm.account.domain.Phone;
+import com.bitbi.dfm.account.domain.Company;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -29,8 +31,8 @@ class AccountResponseDtoTest {
         when(account.getId()).thenReturn(id);
         when(account.getEmail()).thenReturn("test@example.com");
         when(account.getName()).thenReturn("Test Account");
-        when(account.getPhone()).thenReturn("+1234567890");
-        when(account.getCompany()).thenReturn("Acme Corp");
+        when(account.getPhone()).thenReturn(Phone.of("+1234567890"));
+        when(account.getCompany()).thenReturn(Company.of("Acme Corp"));
         when(account.getIsActive()).thenReturn(true);
         when(account.getCreatedAt()).thenReturn(createdAt);
 

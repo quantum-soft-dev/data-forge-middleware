@@ -53,8 +53,8 @@ public record AccountResponseDto(
             account.getId(),
             account.getEmail(),
             account.getName(),
-            account.getPhone(),
-            account.getCompany(),
+            account.getPhone() != null ? account.getPhone().getValue() : null,
+            account.getCompany() != null ? account.getCompany().getValue() : null,
             account.getIsActive() ? "active" : "inactive",
             account.getCreatedAt().toInstant(ZoneOffset.UTC),
             5 // Default max concurrent batches per account
