@@ -1,11 +1,17 @@
-import { createRouter, createRoute, createRootRoute, Outlet } from '@tanstack/react-router'
+import { createRouter, createRoute, createRootRoute, Outlet, redirect } from '@tanstack/react-router'
 import { lazy, Suspense } from 'react'
+import type { AuthContextProps } from 'react-oidc-context'
 
 // Lazy-loaded page components for code splitting
 const LoginPage = lazy(() => import('@/pages/login/LoginPage'))
 const CallbackPage = lazy(() => import('@/pages/login/CallbackPage'))
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
 const AccountListPage = lazy(() => import('@/pages/accounts/list/AccountListPage'))
+
+// Router context type
+interface RouterContext {
+  auth: AuthContextProps
+}
 
 // Root route
 const rootRoute = createRootRoute({
@@ -41,12 +47,24 @@ const callbackRoute = createRoute({
 const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/dashboard',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+  },
   component: DashboardPage,
 })
 
 const accountsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accounts',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+  },
   component: AccountListPage,
 })
 
@@ -68,5 +86,8 @@ export const router = createRouter({
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router
+  }
+  interface RouteContext {
+    auth: AuthContextProps
   }
 }
