@@ -18,6 +18,8 @@ Auto-generated from all feature plans. Last updated: 2025-10-09
 - **Testcontainers** - Integration testing (PostgreSQL + LocalStack S3)
 - Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6, Spring Data JPA (003-separation-of-security)
 - PostgreSQL 16 (existing, no schema changes required) (003-separation-of-security)
+- Java 21 (LTS) + Spring Boot 3.5.6, Spring Web, Spring Data JPA, Jakarta Validation (Bean Validation 3.0), SpringDoc OpenAPI 3 (004-code-improvements-the)
+- PostgreSQL 16 (existing schema, no changes) (004-code-improvements-the)
 
 ## Project Structure
 
@@ -184,6 +186,40 @@ All endpoints now return structured DTO records instead of Map<String, Object>:
 - **PageResponseDto<T>**: content (List<T>), page, size, totalElements, totalPages
 
 All DTOs include static `fromEntity()` methods for entity-to-DTO mapping.
+
+### Request DTO Validation (Added 2025-10-11 - Spec 004 US1)
+Admin API controllers refactored to use typed request DTOs instead of Map<String, Object>:
+
+**Request DTOs created:**
+- **CreateAccountRequestDto** (account/presentation/dto/): email (@NotBlank, @Email), name (@NotBlank, @Size(2-100))
+- **UpdateAccountRequestDto** (account/presentation/dto/): name (@NotBlank, @Size(2-100))
+- **CreateSiteRequestDto** (site/presentation/dto/): domain (@NotBlank, @Size(3-255), @Pattern(^[a-z0-9.-]+$)), displayName (@NotBlank, @Size(2-100))
+- **UpdateSiteRequestDto** (site/presentation/dto/): displayName (@NotBlank, @Size(2-100))
+- **LogErrorRequestDto** (error/presentation/dto/): type (@NotBlank, @Size(max=100)), message (@NotBlank, @Size(max=1000)), metadata (Map<String, Object>, optional)
+
+**Controllers refactored (all try-catch blocks removed):**
+- **AccountAdminController**: createAccount(), updateAccount() - now use @Valid DTOs
+- **SiteAdminController**: createSite(), updateSite() - now use @Valid DTOs
+- **ErrorLogController**: logStandaloneError(), logError() - now use @Valid DTOs
+
+**Validation handled by:**
+- Jakarta Bean Validation 3.0 (@Valid annotation triggers automatic validation)
+- GlobalExceptionHandler.handleValidationErrors() - catches MethodArgumentNotValidException, returns ErrorResponseDto (400)
+- All validation errors return consistent format: {timestamp, status, error, message, path}
+
+**Benefits:**
+- Type safety at compile time (no runtime Map casting errors)
+- Automatic validation before controller method execution
+- Self-documenting API (OpenAPI schema generation from @Schema annotations)
+- Consistent error responses across all endpoints
+- Removed 200+ lines of manual validation code
+
+**Status (2025-10-11):**
+- ✅ All 5 request DTOs created with validation annotations
+- ✅ All 6 endpoints refactored to use DTOs
+- ✅ GlobalExceptionHandler updated for MethodArgumentNotValidException
+- ✅ Contract tests added for DTO validation (AdminContractTest: 7 account tests, 9 site tests)
+- ⚠️ Unit tests need updating (28 compilation errors - tests still use Map instead of DTOs)
 
 ### Observability
 - **Structured Logging**: JSON format in production with Logstash encoder

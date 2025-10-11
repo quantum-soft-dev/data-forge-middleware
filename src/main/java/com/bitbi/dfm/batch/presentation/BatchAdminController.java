@@ -4,10 +4,20 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
+import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -19,8 +29,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.List;
+import java.util.UUID;
 
 /**
  * REST controller for batch administration (Admin UI API).
@@ -38,6 +48,7 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/admin/batches")
 @PreAuthorize("hasRole('ADMIN')")
+@Tag(name = "Admin - Batches", description = "Batch administration endpoints")
 public class BatchAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchAdminController.class);
@@ -69,44 +80,37 @@ public class BatchAdminController {
      * @param size page size
      * @return paginated list of batches
      */
+    @Operation(
+            summary = "List batches",
+            description = "Retrieves a paginated list of batches with optional filtering by site and status."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Batches retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class)))
+    })
     @GetMapping
-    public ResponseEntity<Map<String, Object>> listBatches(
+    public ResponseEntity<PageResponseDto<BatchSummaryDto>> listBatches(
             @RequestParam(required = false) UUID siteId,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        try {
-            Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-            Page<Batch> batchPage;
 
-            if (siteId != null && status != null) {
-                batchPage = batchRepository.findBySiteIdAndStatus(siteId, BatchStatus.valueOf(status), pageable);
-            } else if (siteId != null) {
-                batchPage = batchRepository.findBySiteId(siteId, pageable);
-            } else if (status != null) {
-                batchPage = batchRepository.findByStatus(BatchStatus.valueOf(status), pageable);
-            } else {
-                batchPage = batchRepository.findAll(pageable);
-            }
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<Batch> batchPage;
 
-            List<Map<String, Object>> batchList = batchPage.getContent().stream()
-                    .map(this::createBatchSummary)
-                    .collect(Collectors.toList());
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("content", batchList);
-            response.put("page", batchPage.getNumber());
-            response.put("size", batchPage.getSize());
-            response.put("totalElements", batchPage.getTotalElements());
-            response.put("totalPages", batchPage.getTotalPages());
-
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            logger.error("Error listing batches", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to list batches"));
+        if (siteId != null && status != null) {
+            batchPage = batchRepository.findBySiteIdAndStatus(siteId, BatchStatus.valueOf(status), pageable);
+        } else if (siteId != null) {
+            batchPage = batchRepository.findBySiteId(siteId, pageable);
+        } else if (status != null) {
+            batchPage = batchRepository.findByStatus(BatchStatus.valueOf(status), pageable);
+        } else {
+            batchPage = batchRepository.findAll(pageable);
         }
+
+        PageResponseDto<BatchSummaryDto> response = PageResponseDto.of(batchPage, BatchSummaryDto::fromEntity);
+
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -118,30 +122,28 @@ public class BatchAdminController {
      * @param batchId batch identifier
      * @return batch details with files
      */
+    @Operation(
+            summary = "Get batch details",
+            description = "Retrieves batch details including associated uploaded files."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Batch found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = BatchDetailResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Batch not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getBatchDetails(@PathVariable("id") UUID batchId) {
-        try {
-            Batch batch = batchRepository.findById(batchId)
-                    .orElseThrow(() -> new RuntimeException("Batch not found"));
+    public ResponseEntity<BatchDetailResponseDto> getBatchDetails(@PathVariable("id") UUID batchId) {
+        Batch batch = batchRepository.findById(batchId)
+                .orElseThrow(() -> new RuntimeException("Batch not found"));
 
-            Site site = siteRepository.findById(batch.getSiteId())
-                    .orElse(null);
+        Site site = siteRepository.findById(batch.getSiteId())
+                .orElse(null);
 
-            List<UploadedFile> files = uploadedFileRepository.findByBatchId(batchId);
+        List<UploadedFile> files = uploadedFileRepository.findByBatchId(batchId);
 
-            Map<String, Object> response = createBatchDetailResponse(batch, site, files);
-            return ResponseEntity.ok(response);
-
-        } catch (RuntimeException e) {
-            logger.warn("Batch not found: {}", batchId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse("Batch not found"));
-
-        } catch (Exception e) {
-            logger.error("Error getting batch details: batchId={}", batchId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("Failed to retrieve batch"));
-        }
+        BatchDetailResponseDto response = BatchDetailResponseDto.fromEntityAndFiles(batch, site, files);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -153,64 +155,23 @@ public class BatchAdminController {
      * @param batchId batch identifier
      * @return no content
      */
+    @Operation(
+            summary = "Delete batch",
+            description = "Deletes batch metadata. Note: does not delete files from S3."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Batch deleted successfully"),
+            @ApiResponse(responseCode = "404", description = "Batch not found")
+    })
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteBatch(@PathVariable("id") UUID batchId) {
-        try {
-            logger.info("Deleting batch: batchId={}", batchId);
+        logger.info("Deleting batch: batchId={}", batchId);
 
-            if (!batchRepository.existsById(batchId)) {
-                return ResponseEntity.notFound().build();
-            }
-
-            batchRepository.deleteById(batchId);
-            return ResponseEntity.noContent().build();
-
-        } catch (Exception e) {
-            logger.error("Error deleting batch: batchId={}", batchId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        if (!batchRepository.existsById(batchId)) {
+            return ResponseEntity.notFound().build();
         }
-    }
 
-    private Map<String, Object> createBatchSummary(Batch batch) {
-        Map<String, Object> summary = new HashMap<>();
-        summary.put("id", batch.getId());
-        summary.put("siteId", batch.getSiteId());
-        summary.put("status", batch.getStatus().toString());
-        summary.put("s3Path", batch.getS3Path());
-        summary.put("uploadedFilesCount", batch.getUploadedFilesCount());
-        summary.put("totalSize", batch.getTotalSize());
-        summary.put("hasErrors", batch.getHasErrors());
-        summary.put("startedAt", batch.getStartedAt() != null ? batch.getStartedAt().toString() : null);
-        summary.put("completedAt", batch.getCompletedAt() != null ? batch.getCompletedAt().toString() : null);
-        summary.put("createdAt", batch.getCreatedAt().toString());
-        return summary;
-    }
-
-    private Map<String, Object> createBatchDetailResponse(Batch batch, Site site, List<UploadedFile> files) {
-        Map<String, Object> response = createBatchSummary(batch);
-        response.put("siteDomain", site != null ? site.getDomain() : "unknown");
-
-        List<Map<String, Object>> fileList = files.stream()
-                .map(file -> {
-                    Map<String, Object> fileData = new HashMap<>();
-                    fileData.put("id", file.getId());
-                    fileData.put("originalFileName", file.getOriginalFileName());
-                    fileData.put("s3Key", file.getS3Key());
-                    fileData.put("fileSize", file.getFileSize());
-                    fileData.put("contentType", file.getContentType());
-                    fileData.put("checksum", file.getChecksum());
-                    fileData.put("uploadedAt", file.getUploadedAt().toString());
-                    return fileData;
-                })
-                .collect(Collectors.toList());
-
-        response.put("files", fileList);
-        return response;
-    }
-
-    private Map<String, Object> createErrorResponse(String message) {
-        Map<String, Object> error = new HashMap<>();
-        error.put("error", message);
-        return error;
+        batchRepository.deleteById(batchId);
+        return ResponseEntity.noContent().build();
     }
 }

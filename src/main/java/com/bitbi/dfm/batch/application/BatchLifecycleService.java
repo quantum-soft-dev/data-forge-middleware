@@ -92,7 +92,7 @@ public class BatchLifecycleService {
     @Transactional(readOnly = true)
     public Batch getBatch(UUID batchId) {
         return batchRepository.findById(batchId)
-                .orElseThrow(() -> new BatchNotFoundException("Batch not found: " + batchId));
+                .orElseThrow(() -> new BatchNotFoundException("Batch not found"));
     }
 
     /**

@@ -1,12 +1,15 @@
 package com.bitbi.dfm.shared.exception;
 
+import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
+import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -51,6 +54,40 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle MethodArgumentNotValidException (400 Bad Request).
+     * <p>
+     * This handler is triggered when @Valid validation fails on request body DTOs.
+     * It extracts all field validation errors and returns them in a user-friendly format.
+     * </p>
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponseDto> handleValidationErrors(
+            MethodArgumentNotValidException ex,
+            HttpServletRequest request) {
+
+        // Extract all validation error messages
+        String errorMessage = ex.getBindingResult().getFieldErrors().stream()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .collect(java.util.stream.Collectors.joining(", "));
+
+        if (errorMessage.isEmpty()) {
+            errorMessage = "Validation failed";
+        }
+
+        logger.warn("Validation failed: {}", errorMessage);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle AccessDeniedException (403 Forbidden).
      */
     @ExceptionHandler(AccessDeniedException.class)
@@ -64,7 +101,7 @@ public class GlobalExceptionHandler {
                 Instant.now(),
                 HttpStatus.FORBIDDEN.value(),
                 "Forbidden",
-                "Authentication failed",
+                ex.getMessage(),
                 request.getRequestURI()
         );
 
@@ -114,7 +151,137 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle AccountNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(AccountService.AccountNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountNotFound(
+            AccountService.AccountNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyExistsException (409 Conflict).
+     */
+    @ExceptionHandler(AccountService.AccountAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyExists(
+            AccountService.AccountAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already exists: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle SiteNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(SiteService.SiteNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteNotFound(
+            SiteService.SiteNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle SiteAlreadyExistsException (409 Conflict).
+     */
+    @ExceptionHandler(SiteService.SiteAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteAlreadyExists(
+            SiteService.SiteAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site already exists: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle BatchNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleBatchNotFound(
+            com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Batch not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle ErrorLogNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleErrorLogNotFound(
+            com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Error log not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
      * Handle IllegalStateException (500 Internal Server Error).
+     * <p>
+     * Returns generic error message to client to prevent information disclosure.
+     * Full technical details are logged server-side for debugging.
+     * </p>
      */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ErrorResponseDto> handleIllegalState(
@@ -127,7 +294,7 @@ public class GlobalExceptionHandler {
                 Instant.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Internal Server Error",
-                ex.getMessage(),
+                "An unexpected error occurred", // Generic message - details logged server-side
                 request.getRequestURI()
         );
 
