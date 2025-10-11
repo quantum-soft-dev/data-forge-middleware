@@ -17,7 +17,12 @@
       "Bash(npm run build:analyze:*)",
       "Bash(npm run dev)",
       "Bash(curl:*)",
-      "Bash(/Users/boris/projects/bit-bi/data-forge-middleware/.specify/scripts/bash/check-prerequisites.sh:*)"
+      "Bash(/Users/boris/projects/bit-bi/data-forge-middleware/.specify/scripts/bash/check-prerequisites.sh:*)",
+      "Bash(git mv:*)",
+      "Bash(find:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(npm run:*)",
+      "Bash(awk:*)"
     ],
     "deny": [],
     "ask": []

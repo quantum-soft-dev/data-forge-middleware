@@ -5,7 +5,7 @@ import { lazy, Suspense } from 'react'
 const LoginPage = lazy(() => import('@/pages/login/LoginPage'))
 const CallbackPage = lazy(() => import('@/pages/login/CallbackPage'))
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
-const SubscriberListPage = lazy(() => import('@/pages/subscribers/list/SubscriberListPage'))
+const AccountListPage = lazy(() => import('@/pages/accounts/list/AccountListPage'))
 
 // Root route
 const rootRoute = createRootRoute({
@@ -44,10 +44,10 @@ const dashboardRoute = createRoute({
   component: DashboardPage,
 })
 
-const subscribersRoute = createRoute({
+const accountsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accounts',
-  component: SubscriberListPage,
+  component: AccountListPage,
 })
 
 // Create route tree
@@ -55,7 +55,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   callbackRoute,
   dashboardRoute,
-  subscribersRoute,
+  accountsRoute,
 ])
 
 // Create router instance

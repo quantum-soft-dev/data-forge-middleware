@@ -4,7 +4,7 @@ import { DashboardCharts } from '@/widgets/dashboard-charts'
 
 // Mock demo data
 const mockDemoData = {
-  totalSubscribers: 450,
+  totalAccounts: 450,
   trendData: [
     { month: 'Jan', subscribers: 100 },
     { month: 'Feb', subscribers: 150 },

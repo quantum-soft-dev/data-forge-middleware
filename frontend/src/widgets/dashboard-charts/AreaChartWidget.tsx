@@ -16,7 +16,7 @@ export function AreaChartWidget({ data }: AreaChartWidgetProps) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
       <h3 className="mb-4 text-lg font-semibold text-gray-900">
-        Subscriber Growth Trend
+        Account Growth Trend
       </h3>
       <ResponsiveContainer width="100%" height={300}>
         <AreaChart data={data}>

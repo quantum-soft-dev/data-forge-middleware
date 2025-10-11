@@ -55,7 +55,7 @@ export default function LoginPage() {
               DataForge Middleware
             </h1>
             <p className="mt-3 text-sm text-gray-600">
-              Sign in to access subscriber management
+              Sign in to access account management
             </p>
           </div>
 
