@@ -45,7 +45,7 @@ const DEMO_MONTHLY_GROWTH = [
 
 export function generateDemoData(): DashboardMetrics {
   return {
-    totalSubscribers: 450,
+    totalAccounts: 450,
     trendData: DEMO_TREND_DATA,
     statusDistribution: [
       { name: 'Active', value: 400 },

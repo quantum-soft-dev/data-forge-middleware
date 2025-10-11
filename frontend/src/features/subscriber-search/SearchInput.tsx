@@ -16,7 +16,7 @@ interface SearchInputProps {
 
 export function SearchInput({
   onSearch,
-  placeholder = 'Search subscribers...',
+  placeholder = 'Search accounts...',
   defaultValue = '',
 }: SearchInputProps) {
   const [value, setValue] = useState(defaultValue)

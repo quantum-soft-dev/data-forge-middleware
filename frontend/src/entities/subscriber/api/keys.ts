@@ -1,5 +1,5 @@
 /**
- * React Query Key Factory for Subscribers
+ * React Query Key Factory for Accounts
  *
  * Provides consistent query keys for caching and invalidation.
  * Follows TanStack Query best practices for key management.

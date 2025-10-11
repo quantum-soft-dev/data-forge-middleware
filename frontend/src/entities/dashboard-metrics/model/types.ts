@@ -26,7 +26,7 @@ export interface TopCompany {
 }
 
 export interface DashboardMetrics {
-  totalSubscribers: number
+  totalAccounts: number
   trendData: TrendDataPoint[]
   statusDistribution: StatusSegment[]
   monthlyGrowth: MonthlyGrowthPoint[]

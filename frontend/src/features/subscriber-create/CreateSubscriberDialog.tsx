@@ -53,7 +53,7 @@ export function CreateSubscriberDialog({ open, onClose }: CreateSubscriberDialog
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
           <h2 id="dialog-title" className="text-xl font-semibold text-gray-900">
-            Create Subscriber
+            Create Account
           </h2>
           <button
             onClick={onClose}

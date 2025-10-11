@@ -46,7 +46,7 @@ const dashboardRoute = createRoute({
 
 const subscribersRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/subscribers',
+  path: '/accounts',
   component: SubscriberListPage,
 })
 

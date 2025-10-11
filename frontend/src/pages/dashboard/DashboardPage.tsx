@@ -5,7 +5,7 @@
  * Per FR-008: Shows demo charts with navigation and logout.
  *
  * Features:
- * - Navigation header with Dashboard/Subscribers links
+ * - Navigation header with Dashboard/Accounts links
  * - 4 chart widgets in responsive grid
  * - Logout button in header
  */

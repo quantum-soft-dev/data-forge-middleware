@@ -51,7 +51,7 @@ export function useCreateSubscriber() {
         } else if (status === 400) {
           toast.error(message || 'Validation error. Please check your input.')
         } else {
-          toast.error('Failed to create subscriber. Please try again.')
+          toast.error('Failed to create account. Please try again.')
         }
       } else {
         toast.error('An unexpected error occurred')

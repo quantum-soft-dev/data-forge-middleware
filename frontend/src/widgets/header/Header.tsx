@@ -2,9 +2,9 @@
  * Header Widget
  *
  * App header with navigation menu and logout button.
- * Displayed on all protected pages (Dashboard, Subscribers).
+ * Displayed on all protected pages (Dashboard, Accounts).
  *
- * Per FR-008: Navigation menu with links to Dashboard and Subscribers pages.
+ * Per FR-008: Navigation menu with links to Dashboard and Accounts pages.
  */
 
 import { Link } from '@tanstack/react-router'
@@ -34,13 +34,13 @@ export function Header() {
               Dashboard
             </Link>
             <Link
-              to="/subscribers"
+              to="/accounts"
               className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
               activeProps={{
                 className: 'text-sm font-medium text-primary hover:text-primary',
               }}
             >
-              Subscribers
+              Accounts
             </Link>
             <div className="ml-4 border-l border-gray-300 pl-4">
               <LogoutButton />

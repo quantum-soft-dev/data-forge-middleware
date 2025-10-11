@@ -56,9 +56,9 @@ export default function SubscriberListPage() {
         {/* Page header */}
         <div className="mb-8 flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Subscribers</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Accounts</h1>
             <p className="mt-2 text-sm text-gray-600">
-              Manage your subscriber database
+              Manage your account database
             </p>
           </div>
           <button
@@ -66,7 +66,7 @@ export default function SubscriberListPage() {
             className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             <Plus className="h-4 w-4" />
-            Create Subscriber
+            Create Account
           </button>
         </div>
 
@@ -82,7 +82,7 @@ export default function SubscriberListPage() {
         {isError && (
           <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
             <p className="text-sm font-medium text-red-800">
-              {error instanceof Error ? error.message : 'Failed to load subscribers'}
+              {error instanceof Error ? error.message : 'Failed to load accounts'}
             </p>
           </div>
         )}

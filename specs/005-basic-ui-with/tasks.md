@@ -1,4 +1,4 @@
-# Tasks: Basic UI with Keycloak Authentication and Subscriber Management
+# Tasks: Basic UI with Keycloak Authentication and Account Management
 
 **Input**: Design documents from `/specs/005-basic-ui-with/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
@@ -134,9 +134,9 @@
 ### Implementation for User Story 2
 
 - [ ] **T050** [P] [US2] Create `frontend/src/entities/dashboard-metrics/model/types.ts` - DashboardMetrics, TrendData, PieData, BarData interfaces per data-model.md
-- [ ] **T051** [P] [US2] Create `frontend/src/entities/dashboard-metrics/model/demo-data.ts` - generate fake dashboard data (450 subscribers, 12-month trend, status distribution, top companies)
-- [ ] **T052** [P] [US2] Create `frontend/src/widgets/header/Header.tsx` - app header with navigation menu (Dashboard, Subscribers) and LogoutButton
-- [ ] **T053** [P] [US2] Create `frontend/src/widgets/dashboard-charts/AreaChartWidget.tsx` - subscriber trend over time (Recharts AreaChart)
+- [ ] **T051** [P] [US2] Create `frontend/src/entities/dashboard-metrics/model/demo-data.ts` - generate fake dashboard data (450 accounts, 12-month trend, status distribution, top companies)
+- [ ] **T052** [P] [US2] Create `frontend/src/widgets/header/Header.tsx` - app header with navigation menu (Dashboard, Accounts) and LogoutButton
+- [ ] **T053** [P] [US2] Create `frontend/src/widgets/dashboard-charts/AreaChartWidget.tsx` - account trend over time (Recharts AreaChart)
 - [ ] **T054** [P] [US2] Create `frontend/src/widgets/dashboard-charts/PieChartWidget.tsx` - status distribution (Recharts PieChart)
 - [ ] **T055** [P] [US2] Create `frontend/src/widgets/dashboard-charts/BarChartWidget.tsx` - monthly growth (Recharts BarChart)
 - [ ] **T056** [P] [US2] Create `frontend/src/widgets/dashboard-charts/TopCompaniesWidget.tsx` - top 5 companies (Recharts BarChart horizontal)
@@ -151,11 +151,11 @@
 
 ---
 
-## Phase 5: User Story 3 - View Subscriber List (Priority: P3)
+## Phase 5: User Story 3 - View Account List (Priority: P3)
 
-**Goal**: Display paginated table of all subscribers with search, filter, and sort capabilities. Supports up to 10,000 subscribers.
+**Goal**: Display paginated table of all accounts with search, filter, and sort capabilities. Supports up to 10,000 accounts.
 
-**Independent Test**: Navigate to Subscribers page → See table with subscriber data → Use pagination controls → Search for subscriber → Filter by status → Verify results update.
+**Independent Test**: Navigate to Accounts page → See table with account data → Use pagination controls → Search for account → Filter by status → Verify results update.
 
 **Estimated Time**: 14-16 hours
 
@@ -164,11 +164,11 @@
 - [ ] **T062** [P] [US3] Unit test for `SubscriberTable` widget in `frontend/tests/unit/widgets/subscriber-table/SubscriberTable.test.tsx` - renders table with data, pagination controls
 - [ ] **T063** [P] [US3] Unit test for `SubscriberSearch` feature in `frontend/tests/unit/features/subscriber-search/SubscriberSearch.test.tsx` - input debounced, triggers search
 - [ ] **T064** [P] [US3] Unit test for `useSubscribers` hook in `frontend/tests/unit/entities/subscriber/api/useSubscribers.test.ts` - fetches data with React Query, handles pagination
-- [ ] **T065** [P] [US3] Unit test for subscriber Zod schema in `frontend/tests/unit/entities/subscriber/model/schema.test.ts` - validates subscriber data structure
+- [ ] **T065** [P] [US3] Unit test for account Zod schema in `frontend/tests/unit/entities/subscriber/model/schema.test.ts` - validates account data structure
 
 ### Integration Tests for User Story 3 (TDD - Write FIRST, ensure FAIL)
 
-- [ ] **T066** [US3] Integration test for subscriber list with mock API in `frontend/tests/integration/subscribers/SubscriberList.test.tsx` - fetch subscribers, render table, pagination works
+- [ ] **T066** [US3] Integration test for account list with mock API in `frontend/tests/integration/subscribers/SubscriberList.test.tsx` - fetch subscribers, render table, pagination works
 
 ### Implementation for User Story 3
 
@@ -176,26 +176,26 @@
 - [ ] **T068** [P] [US3] Create `frontend/src/entities/subscriber/model/schema.ts` - Zod schemas (subscriberSchema, subscriberFiltersSchema, subscriberListResponseSchema)
 - [ ] **T069** [P] [US3] Create `frontend/src/entities/subscriber/api/keys.ts` - React Query key factory (subscriberKeys.list, subscriberKeys.detail)
 - [ ] **T070** [US3] Create `frontend/src/entities/subscriber/api/client.ts` - API functions (fetchSubscribers using axios with query params)
-- [ ] **T071** [US3] Create `frontend/src/entities/subscriber/api/useSubscribers.ts` - React Query hook (useQuery with subscriberKeys, pagination, caching)
+- [ ] **T071** [US3] Create `frontend/src/entities/subscriber/api/useSubscribers.ts` - React Query hook (useQuery with accountKeys, pagination, caching)
 - [ ] **T072** [P] [US3] Create `frontend/src/features/subscriber-search/SearchInput.tsx` - debounced search input (400ms delay)
 - [ ] **T073** [P] [US3] Create `frontend/src/features/subscriber-search/StatusFilter.tsx` - dropdown for active/inactive/all filter
 - [ ] **T074** [US3] Create `frontend/src/widgets/subscriber-table/SubscriberTable.tsx` - TanStack Table with virtualization, columns (ID, Name, Email, Phone, Company, Status, Created, Actions)
 - [ ] **T075** [US3] Create `frontend/src/widgets/subscriber-table/Pagination.tsx` - pagination controls (previous, next, page numbers, page size selector)
 - [ ] **T076** [US3] Create `frontend/src/pages/subscribers/list/SubscriberListPage.tsx` - page layout with SearchInput, StatusFilter, SubscriberTable, Pagination
-- [ ] **T077** [US3] Add subscribers list route to `frontend/src/app/router.tsx` - "/subscribers" → SubscriberListPage (protected)
-- [ ] **T078** [US3] Add "Subscribers" link to Header navigation in `frontend/src/widgets/header/Header.tsx`
-- [ ] **T079** [US3] Add empty state to SubscriberTable - display "No subscribers found" when content array is empty
+- [ ] **T077** [US3] Add subscribers list route to `frontend/src/app/router.tsx` - "/accounts" → SubscriberListPage (protected)
+- [ ] **T078** [US3] Add "Accounts" link to Header navigation in `frontend/src/widgets/header/Header.tsx`
+- [ ] **T079** [US3] Add empty state to SubscriberTable - display "No accounts found" when content array is empty
 - [ ] **T080** [US3] Add loading state to SubscriberTable - display skeleton rows while useSubscribers.isLoading
 
-**Checkpoint**: User Story 3 complete - subscriber list displays with pagination, search, and filter. Supports 10,000 records via virtualization. Test independently by navigating to /subscribers.
+**Checkpoint**: User Story 3 complete - account list displays with pagination, search, and filter. Supports 10,000 records via virtualization. Test independently by navigating to /accounts.
 
 ---
 
-## Phase 6: User Story 4 - Create New Subscriber (Priority: P4)
+## Phase 6: User Story 4 - Create New Account (Priority: P4)
 
-**Goal**: Add new subscribers via validated form (name, email, phone, company). Form validates client-side, shows success/error messages, updates list.
+**Goal**: Add new accounts via validated form (name, email, phone, company). Form validates client-side, shows success/error messages, updates list.
 
-**Independent Test**: Click "Create Subscriber" button → Form opens → Fill valid data → Submit → See success toast → New subscriber appears in list. Try duplicate email → See error message.
+**Independent Test**: Click "Create Account" button → Form opens → Fill valid data → Submit → See success toast → New account appears in list. Try duplicate email → See error message.
 
 **Estimated Time**: 12-14 hours
 
@@ -207,7 +207,7 @@
 
 ### Integration Tests for User Story 4 (TDD - Write FIRST, ensure FAIL)
 
-- [ ] **T084** [US4] Integration test for subscriber creation flow in `frontend/tests/integration/subscribers/CreateSubscriber.test.tsx` - open form, fill fields, submit, verify API call, verify list update
+- [ ] **T084** [US4] Integration test for account creation flow in `frontend/tests/integration/subscribers/CreateSubscriber.test.tsx` - open form, fill fields, submit, verify API call, verify list update
 
 ### Implementation for User Story 4
 
@@ -215,19 +215,19 @@
 - [ ] **T086** [US4] Create `frontend/src/entities/subscriber/api/client.ts` - add `createSubscriber(data: CreateSubscriberFormData)` function (POST /api/admin/subscribers)
 - [ ] **T087** [US4] Create `frontend/src/entities/subscriber/api/useCreateSubscriber.ts` - useMutation hook with optimistic update, invalidate subscriberKeys.lists() on success
 - [ ] **T088** [P] [US4] Create `frontend/src/features/subscriber-create/CreateSubscriberForm.tsx` - React Hook Form with Zod resolver, fields (name, email, phone, company), client-side validation
-- [ ] **T089** [US4] Create `frontend/src/features/subscriber-create/CreateSubscriberDialog.tsx` - Dialog wrapper with "Create Subscriber" title, form inside, cancel/submit buttons
-- [ ] **T090** [US4] Add "Create Subscriber" button to `frontend/src/pages/subscribers/list/SubscriberListPage.tsx` - opens CreateSubscriberDialog
-- [ ] **T091** [US4] Add success toast to `useCreateSubscriber` hook - "Subscriber created successfully" on success
+- [ ] **T089** [US4] Create `frontend/src/features/subscriber-create/CreateSubscriberDialog.tsx` - Dialog wrapper with "Create Account" title, form inside, cancel/submit buttons
+- [ ] **T090** [US4] Add "Create Account" button to `frontend/src/pages/subscribers/list/SubscriberListPage.tsx` - opens CreateSubscriberDialog
+- [ ] **T091** [US4] Add success toast to `useCreateSubscriber` hook - "Account created successfully" on success
 - [ ] **T092** [US4] Add error handling to `useCreateSubscriber` hook - display field errors for 400 Bad Request, show "Email already exists" for 409 Conflict
 - [ ] **T093** [US4] Close dialog and reset form after successful creation in CreateSubscriberDialog
 
-**Checkpoint**: User Story 4 complete - users can create new subscribers with validated form. Test independently by creating a subscriber and verifying it appears in the list.
+**Checkpoint**: User Story 4 complete - users can create new accounts with validated form. Test independently by creating an account and verifying it appears in the list.
 
 ---
 
-## Phase 7: User Story 5 - Edit Existing Subscriber (Priority: P5)
+## Phase 7: User Story 5 - Edit Existing Account (Priority: P5)
 
-**Goal**: Update subscriber information via pre-populated form. Validates changes, shows success/error messages, updates list immediately.
+**Goal**: Update account information via pre-populated form. Validates changes, shows success/error messages, updates list immediately.
 
 **Independent Test**: Click "Edit" button on subscriber → Form opens with current data → Modify fields → Save → See success toast → Updated data visible in list. Try invalid data → See validation errors.
 
@@ -240,7 +240,7 @@
 
 ### Integration Tests for User Story 5 (TDD - Write FIRST, ensure FAIL)
 
-- [ ] **T096** [US5] Integration test for subscriber edit flow in `frontend/tests/integration/subscribers/EditSubscriber.test.tsx` - click edit, modify field, submit, verify API call, verify list update
+- [ ] **T096** [US5] Integration test for account edit flow in `frontend/tests/integration/subscribers/EditSubscriber.test.tsx` - click edit, modify field, submit, verify API call, verify list update
 
 ### Implementation for User Story 5
 
@@ -250,43 +250,43 @@
 - [ ] **T100** [US5] Create `frontend/src/entities/subscriber/api/useUpdateSubscriber.ts` - useMutation hook with optimistic update, invalidate specific subscriber and list queries
 - [ ] **T101** [P] [US5] Create `frontend/src/features/subscriber-edit/EditSubscriberForm.tsx` - React Hook Form with Zod resolver, pre-fill with current data, client-side validation
 - [ ] **T102** [US5] Create `frontend/src/features/subscriber-edit/EditSubscriberDialog.tsx` - Dialog with "Edit Subscriber" title, EditSubscriberForm inside, cancel/save buttons
-- [ ] **T103** [US5] Add "Edit" button to each row in `frontend/src/widgets/subscriber-table/SubscriberTable.tsx` - opens EditSubscriberDialog with subscriber ID
-- [ ] **T104** [US5] Add success toast to `useUpdateSubscriber` hook - "Subscriber updated successfully"
-- [ ] **T105** [US5] Add error handling to `useUpdateSubscriber` hook - display field errors for 400, show "Email already exists" for 409, show "Subscriber not found" for 404
+- [ ] **T103** [US5] Add "Edit" button to each row in `frontend/src/widgets/subscriber-table/SubscriberTable.tsx` - opens EditSubscriberDialog with account ID
+- [ ] **T104** [US5] Add success toast to `useUpdateSubscriber` hook - "Account updated successfully"
+- [ ] **T105** [US5] Add error handling to `useUpdateSubscriber` hook - display field errors for 400, show "Email already exists" for 409, show "Account not found" for 404
 - [ ] **T106** [US5] Close dialog and reset form after successful update in EditSubscriberDialog
 
-**Checkpoint**: User Story 5 complete - users can edit existing subscribers with pre-populated form. Test independently by editing a subscriber and verifying changes appear in the list.
+**Checkpoint**: User Story 5 complete - users can edit existing accounts with pre-populated form. Test independently by editing an account and verifying changes appear in the list.
 
 ---
 
-## Phase 8: User Story 6 - Delete Subscriber (Priority: P6)
+## Phase 8: User Story 6 - Delete Account (Priority: P6)
 
-**Goal**: Remove subscribers via confirmation dialog. Shows subscriber info, requires confirmation, displays success message, removes from list.
+**Goal**: Remove accounts via confirmation dialog. Shows account info, requires confirmation, displays success message, removes from list.
 
-**Independent Test**: Click "Delete" button on subscriber → Confirmation dialog appears with subscriber info → Confirm deletion → See success toast → Subscriber removed from list. Verify soft delete (status set to inactive).
+**Independent Test**: Click "Delete" button on subscriber → Confirmation dialog appears with account info → Confirm deletion → See success toast → Account removed from list. Verify soft delete (status set to inactive).
 
 **Estimated Time**: 8-10 hours
 
 ### Unit Tests for User Story 6 (TDD - Write FIRST, ensure FAIL)
 
-- [ ] **T107** [P] [US6] Unit test for `DeleteSubscriberDialog` in `frontend/tests/unit/features/subscriber-delete/DeleteSubscriberDialog.test.tsx` - renders subscriber info, confirms deletion, cancels deletion
+- [ ] **T107** [P] [US6] Unit test for `DeleteSubscriberDialog` in `frontend/tests/unit/features/subscriber-delete/DeleteSubscriberDialog.test.tsx` - renders account info, confirms deletion, cancels deletion
 - [ ] **T108** [P] [US6] Unit test for `useDeleteSubscriber` hook in `frontend/tests/unit/entities/subscriber/api/useDeleteSubscriber.test.ts` - calls API, removes from cache optimistically, shows toast
 
 ### Integration Tests for User Story 6 (TDD - Write FIRST, ensure FAIL)
 
-- [ ] **T109** [US6] Integration test for subscriber delete flow in `frontend/tests/integration/subscribers/DeleteSubscriber.test.tsx` - click delete, confirm in dialog, verify API call, verify removal from list
+- [ ] **T109** [US6] Integration test for account delete flow in `frontend/tests/integration/subscribers/DeleteSubscriber.test.tsx` - click delete, confirm in dialog, verify API call, verify removal from list
 
 ### Implementation for User Story 6
 
 - [ ] **T110** [US6] Add `deleteSubscriber(id: string)` to `frontend/src/entities/subscriber/api/client.ts` (DELETE /api/admin/subscribers/{id})
 - [ ] **T111** [US6] Create `frontend/src/entities/subscriber/api/useDeleteSubscriber.ts` - useMutation hook with optimistic update (remove from cache), invalidate subscriberKeys.lists()
-- [ ] **T112** [P] [US6] Create `frontend/src/features/subscriber-delete/DeleteSubscriberDialog.tsx` - confirmation dialog with subscriber name/email, "Are you sure?" message, cancel/delete buttons (delete button styled as destructive)
-- [ ] **T113** [US6] Add "Delete" button to each row in `frontend/src/widgets/subscriber-table/SubscriberTable.tsx` - opens DeleteSubscriberDialog with subscriber data
-- [ ] **T114** [US6] Add success toast to `useDeleteSubscriber` hook - "Subscriber deleted successfully"
-- [ ] **T115** [US6] Add error handling to `useDeleteSubscriber` hook - show "Subscriber not found" for 404, show generic error for 500
+- [ ] **T112** [P] [US6] Create `frontend/src/features/subscriber-delete/DeleteSubscriberDialog.tsx` - confirmation dialog with account name/email, "Are you sure?" message, cancel/delete buttons (delete button styled as destructive)
+- [ ] **T113** [US6] Add "Delete" button to each row in `frontend/src/widgets/subscriber-table/SubscriberTable.tsx` - opens DeleteSubscriberDialog with account data
+- [ ] **T114** [US6] Add success toast to `useDeleteSubscriber` hook - "Account deleted successfully"
+- [ ] **T115** [US6] Add error handling to `useDeleteSubscriber` hook - show "Account not found" for 404, show generic error for 500
 - [ ] **T116** [US6] Close dialog after successful deletion in DeleteSubscriberDialog
 
-**Checkpoint**: User Story 6 complete - users can delete subscribers with confirmation. Test independently by deleting a subscriber and verifying it's removed from the list.
+**Checkpoint**: User Story 6 complete - users can delete accounts with confirmation. Test independently by deleting an account and verifying it's removed from the list.
 
 ---
 
@@ -330,7 +330,7 @@
 - **User Story 1 (P1)**: Can start after Foundational (Phase 2) - No dependencies on other stories
 - **User Story 2 (P2)**: Can start after Foundational (Phase 2) - Requires US1 for logout button in Header, but otherwise independent
 - **User Story 3 (P3)**: Can start after Foundational (Phase 2) - Independent of US1/US2
-- **User Story 4 (P4)**: Depends on User Story 3 (needs SubscriberTable to display created subscriber)
+- **User Story 4 (P4)**: Depends on User Story 3 (needs SubscriberTable to display created account)
 - **User Story 5 (P5)**: Depends on User Story 3 (needs SubscriberTable edit button)
 - **User Story 6 (P6)**: Depends on User Story 3 (needs SubscriberTable delete button)
 
@@ -387,14 +387,14 @@
 
 ---
 
-## Parallel Example: User Story 3 (Subscriber List)
+## Parallel Example: User Story 3 (Account List)
 
 ```bash
 # Launch all unit tests together (write FIRST):
 Task T062: "Unit test for SubscriberTable widget"
 Task T063: "Unit test for SubscriberSearch feature"
 Task T064: "Unit test for useSubscribers hook"
-Task T065: "Unit test for subscriber Zod schema"
+Task T065: "Unit test for account Zod schema"
 
 # Launch types/schema/keys together (after tests written):
 Task T067: "Create Subscriber types"
@@ -423,7 +423,7 @@ Task T073: "Create StatusFilter component"
 
 1. **Foundation** (Phases 1-2) → Project initialized, authentication framework ready
 2. **MVP** (Phase 3-4) → Authentication + Dashboard → Test independently → Deploy/Demo
-3. **Read Subscribers** (Phase 5) → Add subscriber list → Test independently → Deploy/Demo
+3. **Read Accounts** (Phase 5) → Add account list → Test independently → Deploy/Demo
 4. **Full CRUD** (Phases 6-8) → Add create, edit, delete → Test independently → Deploy/Demo
 5. **Production Ready** (Phase 9) → Polish, performance, accessibility → Final deploy
 
@@ -435,7 +435,7 @@ With multiple developers:
 2. **After Foundational Complete**:
    - **Developer A**: User Story 1 (Authentication) - T030-T044
    - **Developer B**: User Story 2 (Dashboard) - T045-T061
-   - **Developer C**: User Story 3 (Subscriber List) - T062-T080
+   - **Developer C**: User Story 3 (Account List) - T062-T080
 3. **After US3 Complete**:
    - **Developer A**: User Story 4 (Create) - T081-T093
    - **Developer B**: User Story 5 (Edit) - T094-T106
@@ -452,10 +452,10 @@ With multiple developers:
 | Phase 2: Foundational | 8-10 hours | 12-16 hours |
 | Phase 3: US1 Authentication | 12-14 hours | 24-30 hours |
 | Phase 4: US2 Dashboard | 11-13 hours | 35-43 hours |
-| Phase 5: US3 Subscriber List | 14-16 hours | 49-59 hours |
-| Phase 6: US4 Create Subscriber | 12-14 hours | 61-73 hours |
-| Phase 7: US5 Edit Subscriber | 10-12 hours | 71-85 hours |
-| Phase 8: US6 Delete Subscriber | 8-10 hours | 79-95 hours |
+| Phase 5: US3 Account List | 14-16 hours | 49-59 hours |
+| Phase 6: US4 Create Account | 12-14 hours | 61-73 hours |
+| Phase 7: US5 Edit Account | 10-12 hours | 71-85 hours |
+| Phase 8: US6 Delete Account | 8-10 hours | 79-95 hours |
 | Phase 9: Polish & Cross-Cutting | 8-10 hours | 87-105 hours |
 
 **Total Estimated Time**: 87-105 hours (~11-13 working days for one developer, ~3-4 days for team of 3)

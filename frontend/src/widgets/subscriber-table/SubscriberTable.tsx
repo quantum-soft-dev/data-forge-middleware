@@ -127,7 +127,7 @@ export function SubscriberTable({
       <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow">
         <div className="px-6 py-12 text-center">
           <p className="text-sm text-gray-500">
-            No subscribers found. Try adjusting your filters.
+            No accounts found. Try adjusting your filters.
           </p>
         </div>
       </div>

@@ -1,7 +1,7 @@
 /**
  * useSubscribers Hook
  *
- * React Query hook for fetching subscriber list.
+ * React Query hook for fetching account list (subscriber entity).
  * Provides automatic caching, refetching, and loading states.
  */
 

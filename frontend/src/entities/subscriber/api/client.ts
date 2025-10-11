@@ -1,8 +1,9 @@
 /**
- * Subscriber API Client
+ * Account API Client (Subscriber entity)
  *
- * HTTP client for subscriber endpoints.
+ * HTTP client for account endpoints.
  * Uses axios instance from shared/api/client.
+ * Maps backend Account model to frontend Subscriber interface.
  */
 
 import { apiClient } from '@/shared/api/client'
@@ -10,10 +11,11 @@ import type { SubscriberFilters, SubscriberListResponse, Subscriber } from '../m
 import type { CreateSubscriberFormData } from '../model/schema'
 
 /**
- * Fetch subscribers with pagination and filtering
+ * Fetch accounts with pagination and filtering
+ * Backend endpoint: GET /api/admin/accounts
  *
  * @param filters - Search, status, and pagination params
- * @returns Paginated list of subscribers
+ * @returns Paginated list of accounts (mapped to Subscriber interface)
  */
 export async function fetchSubscribers(
   filters: SubscriberFilters
@@ -38,21 +40,22 @@ export async function fetchSubscribers(
   }
 
   const response = await apiClient.get<SubscriberListResponse>(
-    `/admin/subscribers?${params.toString()}`
+    `/admin/accounts?${params.toString()}`
   )
 
   return response.data
 }
 
 /**
- * Create a new subscriber
+ * Create a new account
+ * Backend endpoint: POST /api/admin/accounts
  *
- * @param data - Subscriber data (name, email, phone, company)
- * @returns Created subscriber with ID and metadata
+ * @param data - Account data (name, email)
+ * @returns Created account with ID and metadata (mapped to Subscriber interface)
  */
 export async function createSubscriber(
   data: CreateSubscriberFormData
 ): Promise<Subscriber> {
-  const response = await apiClient.post<Subscriber>('/admin/subscribers', data)
+  const response = await apiClient.post<Subscriber>('/admin/accounts', data)
   return response.data
 }

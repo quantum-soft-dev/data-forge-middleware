@@ -10,7 +10,14 @@
       "Bash(mkdir:*)",
       "Bash(tree:*)",
       "Bash(npm create:*)",
-      "Bash(npm install)"
+      "Bash(npm install)",
+      "Bash(npm test:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run build:analyze:*)",
+      "Bash(npm run dev)",
+      "Bash(curl:*)",
+      "Bash(/Users/boris/projects/bit-bi/data-forge-middleware/.specify/scripts/bash/check-prerequisites.sh:*)"
     ],
     "deny": [],
     "ask": []
