@@ -34,7 +34,9 @@ class PhoneTest {
             "+442071234567",
             "+79161234567",
             "1234567890",
-            "+12345678901234" // 14 digits (max is 15)
+            "+12345678901234", // 14 digits (max is 15)
+            "0123456789",      // Leading zero allowed (some countries use it)
+            "+0123456789"      // Leading zero after + allowed
     })
     @DisplayName("Should accept valid phone formats")
     void shouldAcceptValidPhoneFormats(String phoneNumber) {
@@ -110,12 +112,12 @@ class PhoneTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "abc123",
-            "12-34-56",
-            "(123)456-7890",
-            "+1 234 567 890",
-            "0123456789", // Leading zero not allowed
-            "+0123456789"  // Leading zero after + not allowed
+            "abc123",           // Letters not allowed
+            "12-34-56",         // Hyphens not allowed
+            "(123)456-7890",    // Parentheses not allowed
+            "+1 234 567 890",   // Spaces not allowed
+            "123456",           // Too short (min 7 digits)
+            "+1234567890123456" // Too long (max 15 digits)
     })
     @DisplayName("Should reject invalid phone formats")
     void shouldRejectInvalidPhoneFormats(String invalidPhone) {

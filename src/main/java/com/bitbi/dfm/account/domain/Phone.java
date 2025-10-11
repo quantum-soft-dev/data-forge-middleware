@@ -26,9 +26,10 @@ public final class Phone {
     /**
      * E.164 phone number pattern: optional +, digits, length 7-15.
      * More lenient than strict E.164 to accommodate various formats.
+     * Allows leading zeros to support all valid international numbers.
      */
     private static final Pattern PHONE_PATTERN = Pattern.compile(
-            "^\\+?[1-9]\\d{6,14}$"
+            "^\\+?[0-9]{7,15}$"
     );
 
     private static final int MAX_LENGTH = 50;
