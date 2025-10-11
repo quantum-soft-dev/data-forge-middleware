@@ -20,6 +20,7 @@ Auto-generated from all feature plans. Last updated: 2025-10-09
 - PostgreSQL 16 (existing, no schema changes required) (003-separation-of-security)
 - Java 21 (LTS) + Spring Boot 3.5.6, Spring Web, Spring Data JPA, Jakarta Validation (Bean Validation 3.0), SpringDoc OpenAPI 3 (004-code-improvements-the)
 - PostgreSQL 16 (existing schema, no changes) (004-code-improvements-the)
+- Backend REST API (existing) with PostgreSQL 16 (subscriber data) (005-basic-ui-with)
 
 ## Project Structure
 
