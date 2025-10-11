@@ -164,6 +164,12 @@ public class SecurityConfiguration {
 
     /**
      * Custom converter to extract roles from Keycloak's realm_access.roles claim.
+     * <p>
+     * Automatically adds ROLE_ prefix if not present to ensure compatibility with
+     * Spring Security's hasRole() method. Handles both formats:
+     * - "ADMIN" → "ROLE_ADMIN"
+     * - "ROLE_ADMIN" → "ROLE_ADMIN" (unchanged)
+     * </p>
      */
     static class KeycloakRoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
         @Override
@@ -180,7 +186,11 @@ public class SecurityConfiguration {
             }
 
             return roles.stream()
-                .map(SimpleGrantedAuthority::new)
+                .map(role -> {
+                    // Ensure ROLE_ prefix for Spring Security hasRole() compatibility
+                    String roleName = role.startsWith("ROLE_") ? role : "ROLE_" + role;
+                    return new SimpleGrantedAuthority(roleName);
+                })
                 .collect(Collectors.toList());
         }
     }
