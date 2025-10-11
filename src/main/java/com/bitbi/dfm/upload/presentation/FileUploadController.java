@@ -22,15 +22,14 @@ import java.util.UUID;
  * Requires JWT authentication.
  * </p>
  * <p>
- * URL change from v2.x: /api/v1/batch/{id}/upload → /api/dfc/upload (breaking change)
- * Note: Endpoints now use /api/dfc/upload base path instead of /api/v1/batch
+ * URL change from v2.x: /api/v1/batch → /api/dfc/batch (breaking change)
  * </p>
  *
  * @author Data Forge Team
  * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/dfc/upload")
+@RequestMapping("/api/dfc/batch")
 public class FileUploadController {
 
     private static final Logger logger = LoggerFactory.getLogger(FileUploadController.class);
@@ -44,10 +43,11 @@ public class FileUploadController {
     }
 
     /**
-     * Upload files to batch.
+     * Upload files to active batch.
      * <p>
-     * POST /api/v1/batch/{id}/upload
+     * POST /api/dfc/batch/{batchId}/upload
      * Content-Type: multipart/form-data
+     * Uploads files to the authenticated site's active (IN_PROGRESS) batch.
      * </p>
      *
      * @param batchId    batch identifier
@@ -55,9 +55,9 @@ public class FileUploadController {
      * @param authHeader Authorization header with Bearer token
      * @return upload summary response
      */
-    @PostMapping("/{id}/upload")
+    @PostMapping("/{batchId}/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(
-            @PathVariable("id") UUID batchId,
+            @PathVariable("batchId") UUID batchId,
             @RequestParam("files") MultipartFile[] files,
             @RequestHeader("Authorization") String authHeader) {
 

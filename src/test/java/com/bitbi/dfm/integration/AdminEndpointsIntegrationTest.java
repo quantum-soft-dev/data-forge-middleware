@@ -46,7 +46,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: GET admin accounts list with Keycloak token
-        mockMvc.perform(get("/admin/accounts")
+        mockMvc.perform(get("/api/admin/accounts")
                         .header("Authorization", keycloakToken))
 
                 // Then: 200 OK with PageResponseDto<AccountResponseDto>
@@ -82,7 +82,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateTestToken();
 
         // When: GET admin accounts list with JWT token
-        mockMvc.perform(get("/admin/accounts")
+        mockMvc.perform(get("/api/admin/accounts")
                         .header("Authorization", jwtToken))
 
                 // Then: 403 Forbidden (test + production behavior match)
@@ -101,7 +101,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateTestToken();
 
         // When: GET admin sites list with JWT token
-        mockMvc.perform(get("/admin/sites")
+        mockMvc.perform(get("/api/admin/sites")
                         .header("Authorization", jwtToken))
 
                 // Then: 403 Forbidden (test + production behavior match)
@@ -118,7 +118,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: GET admin sites list with Keycloak token
-        mockMvc.perform(get("/admin/sites")
+        mockMvc.perform(get("/api/admin/sites")
                         .header("Authorization", keycloakToken))
 
                 // Then: 200 OK with PageResponseDto<SiteResponseDto>

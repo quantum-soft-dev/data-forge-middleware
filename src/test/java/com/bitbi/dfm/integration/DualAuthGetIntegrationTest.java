@@ -47,7 +47,7 @@ class DualAuthGetIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateTestToken();
 
         // When: GET batch with JWT token (IN_PROGRESS batch from test-data.sql)
-        mockMvc.perform(get("/api/v1/batch/0199bab2-8d63-8563-8340-edbf1c11c778")
+        mockMvc.perform(get("/api/dfc/batch/0199bab2-8d63-8563-8340-edbf1c11c778")
                         .header("Authorization", jwtToken))
 
                 // Then: 200 OK with BatchResponseDto structure
@@ -89,7 +89,7 @@ class DualAuthGetIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: GET batch with Keycloak token
-        mockMvc.perform(get("/api/v1/batch/0199bab2-8d63-8563-8340-edbf1c11c778")
+        mockMvc.perform(get("/api/dfc/batch/0199bab2-8d63-8563-8340-edbf1c11c778")
                         .header("Authorization", keycloakToken))
 
                 // Then: 403 Forbidden in test environment (TestSecurityConfig limitation)
@@ -113,7 +113,7 @@ class DualAuthGetIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateTestToken();
 
         // When: GET error log with JWT token (error log from test-data.sql)
-        mockMvc.perform(get("/api/v1/error/log/0199bab3-d4d6-c1d1-226a-241c7b874314")
+        mockMvc.perform(get("/api/dfc/error/log/0199bab3-d4d6-c1d1-226a-241c7b874314")
                         .header("Authorization", jwtToken))
 
                 // Then: 200 OK with ErrorLogResponseDto structure
@@ -136,7 +136,7 @@ class DualAuthGetIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: GET error log with Keycloak token
-        mockMvc.perform(get("/api/v1/error/log/0199bab3-d4d6-c1d1-226a-241c7b874314")
+        mockMvc.perform(get("/api/dfc/error/log/0199bab3-d4d6-c1d1-226a-241c7b874314")
                         .header("Authorization", keycloakToken))
 
                 // Then: 403 Forbidden in test environment
