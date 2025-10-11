@@ -186,6 +186,297 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.totalStorageSize").isNumber());
     }
 
+    // ========== CreateAccountRequestDto Validation Tests ==========
+
+    /**
+     * Test Case 6a: Create account with blank email should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with blank email")
+    void shouldRejectAccountCreationWithBlankEmail() throws Exception {
+        String requestBody = """
+                {
+                  "email": "",
+                  "name": "Test User"
+                }
+                """;
+
+        // When: POST /admin/accounts with blank email
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 6b: Create account with invalid email format should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with invalid email format")
+    void shouldRejectAccountCreationWithInvalidEmailFormat() throws Exception {
+        String requestBody = """
+                {
+                  "email": "not-an-email",
+                  "name": "Test User"
+                }
+                """;
+
+        // When: POST /admin/accounts with invalid email
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 6c: Create account with blank name should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with blank name")
+    void shouldRejectAccountCreationWithBlankName() throws Exception {
+        String requestBody = """
+                {
+                  "email": "test@example.com",
+                  "name": ""
+                }
+                """;
+
+        // When: POST /admin/accounts with blank name
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 6d: Create account with name too short should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with name too short")
+    void shouldRejectAccountCreationWithNameTooShort() throws Exception {
+        String requestBody = """
+                {
+                  "email": "test@example.com",
+                  "name": "A"
+                }
+                """;
+
+        // When: POST /admin/accounts with name too short (< 2 chars)
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 6e: Create account with name too long should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with name too long")
+    void shouldRejectAccountCreationWithNameTooLong() throws Exception {
+        String requestBody = """
+                {
+                  "email": "test@example.com",
+                  "name": "%s"
+                }
+                """.formatted("A".repeat(101)); // 101 characters (max is 100)
+
+        // When: POST /admin/accounts with name too long (> 100 chars)
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 6f: Create account with missing email field should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with missing email field")
+    void shouldRejectAccountCreationWithMissingEmail() throws Exception {
+        String requestBody = """
+                {
+                  "name": "Test User"
+                }
+                """;
+
+        // When: POST /admin/accounts without email field
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 6g: Create account with missing name field should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account creation with missing name field")
+    void shouldRejectAccountCreationWithMissingName() throws Exception {
+        String requestBody = """
+                {
+                  "email": "test@example.com"
+                }
+                """;
+
+        // When: POST /admin/accounts without name field
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    // ========== UpdateAccountRequestDto Validation Tests ==========
+
+    /**
+     * Test Case 7a: Update account with blank name should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account update with blank name")
+    void shouldRejectAccountUpdateWithBlankName() throws Exception {
+        String requestBody = """
+                {
+                  "name": ""
+                }
+                """;
+
+        // When: PUT /admin/accounts/{id} with blank name
+        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 7b: Update account with name too short should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account update with name too short")
+    void shouldRejectAccountUpdateWithNameTooShort() throws Exception {
+        String requestBody = """
+                {
+                  "name": "A"
+                }
+                """;
+
+        // When: PUT /admin/accounts/{id} with name too short (< 2 chars)
+        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 7c: Update account with name too long should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account update with name too long")
+    void shouldRejectAccountUpdateWithNameTooLong() throws Exception {
+        String requestBody = """
+                {
+                  "name": "%s"
+                }
+                """.formatted("A".repeat(101)); // 101 characters (max is 100)
+
+        // When: PUT /admin/accounts/{id} with name too long (> 100 chars)
+        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 7d: Update account with missing name field should return 400.
+     */
+    @Test
+    @DisplayName("Should reject account update with missing name field")
+    void shouldRejectAccountUpdateWithMissingName() throws Exception {
+        String requestBody = "{}";
+
+        // When: PUT /admin/accounts/{id} without name field
+        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
     // ========== Site Management Tests ==========
 
     /**
@@ -247,6 +538,249 @@ class AdminContractTest {
 
                 // Then: 204 No Content
                 .andExpect(status().isNoContent());
+    }
+
+    // ========== CreateSiteRequestDto Validation Tests ==========
+
+    /**
+     * Test Case 9a: Create site with blank domain should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with blank domain")
+    void shouldRejectSiteCreationWithBlankDomain() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "",
+                  "displayName": "Test Site"
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites with blank domain
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9b: Create site with domain too short should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with domain too short")
+    void shouldRejectSiteCreationWithDomainTooShort() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "ab",
+                  "displayName": "Test Site"
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites with domain too short (< 3 chars)
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9c: Create site with domain too long should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with domain too long")
+    void shouldRejectSiteCreationWithDomainTooLong() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "%s",
+                  "displayName": "Test Site"
+                }
+                """.formatted("a".repeat(256)); // 256 characters (max is 255)
+
+        // When: POST /admin/accounts/{accountId}/sites with domain too long (> 255 chars)
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9d: Create site with invalid domain format should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with invalid domain format")
+    void shouldRejectSiteCreationWithInvalidDomainFormat() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "UPPERCASE.COM",
+                  "displayName": "Test Site"
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites with uppercase domain
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9e: Create site with blank displayName should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with blank display name")
+    void shouldRejectSiteCreationWithBlankDisplayName() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "test.example.com",
+                  "displayName": ""
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites with blank displayName
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9f: Create site with displayName too short should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with display name too short")
+    void shouldRejectSiteCreationWithDisplayNameTooShort() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "test.example.com",
+                  "displayName": "A"
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites with displayName too short (< 2 chars)
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9g: Create site with displayName too long should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with display name too long")
+    void shouldRejectSiteCreationWithDisplayNameTooLong() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "test.example.com",
+                  "displayName": "%s"
+                }
+                """.formatted("A".repeat(101)); // 101 characters (max is 100)
+
+        // When: POST /admin/accounts/{accountId}/sites with displayName too long (> 100 chars)
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9h: Create site with missing domain field should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with missing domain field")
+    void shouldRejectSiteCreationWithMissingDomain() throws Exception {
+        String requestBody = """
+                {
+                  "displayName": "Test Site"
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites without domain field
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 9i: Create site with missing displayName field should return 400.
+     */
+    @Test
+    @DisplayName("Should reject site creation with missing display name field")
+    void shouldRejectSiteCreationWithMissingDisplayName() throws Exception {
+        String requestBody = """
+                {
+                  "domain": "test.example.com"
+                }
+                """;
+
+        // When: POST /admin/accounts/{accountId}/sites without displayName field
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
     }
 
     // ========== Batch Management Tests ==========

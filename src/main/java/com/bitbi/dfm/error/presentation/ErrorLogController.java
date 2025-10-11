@@ -4,6 +4,8 @@ import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogResponseDto;
+import com.bitbi.dfm.error.presentation.dto.LogErrorRequestDto;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -57,39 +59,17 @@ public class ErrorLogController {
      * @return 204 No Content
      */
     @PostMapping
-    public ResponseEntity<?> logStandaloneError(
-            @RequestBody Map<String, Object> request,
+    public ResponseEntity<Void> logStandaloneError(
+            @Valid @RequestBody LogErrorRequestDto request,
             @RequestHeader("Authorization") String authHeader) {
 
-        try {
-            UUID siteId = extractSiteId(authHeader);
+        UUID siteId = extractSiteId(authHeader);
 
-            String type = (String) request.get("type");
-            String message = (String) request.get("message");
-            @SuppressWarnings("unchecked")
-            Map<String, Object> metadata = (Map<String, Object>) request.get("metadata");
+        logger.debug("Logging standalone error: siteId={}, type={}", siteId, request.type());
 
-            if (type == null || type.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Error type is required"));
-            }
+        errorLoggingService.logStandaloneError(siteId, request.type(), request.message(), request.metadata());
 
-            if (message == null || message.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Error message is required"));
-            }
-
-            logger.debug("Logging standalone error: siteId={}, type={}", siteId, type);
-
-            errorLoggingService.logStandaloneError(siteId, type, message, metadata);
-
-            return ResponseEntity.noContent().build();
-
-        } catch (Exception e) {
-            logger.error("Error logging standalone error", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to log error"));
-        }
+        return ResponseEntity.noContent().build();
     }
 
     /**
@@ -104,57 +84,27 @@ public class ErrorLogController {
      * @return created error log response
      */
     @PostMapping("/{batchId}")
-    public ResponseEntity<?> logError(
+    public ResponseEntity<ErrorLogResponseDto> logError(
             @PathVariable("batchId") UUID batchId,
-            @RequestBody Map<String, Object> request,
+            @Valid @RequestBody LogErrorRequestDto request,
             @RequestHeader("Authorization") String authHeader) {
 
-        try {
-            UUID siteId = extractSiteId(authHeader);
+        UUID siteId = extractSiteId(authHeader);
 
-            // ✅ SECURITY FIX: Verify batch ownership before logging error
-            try {
-                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
-                if (!batch.getSiteId().equals(siteId)) {
-                    logger.warn("Unauthorized error logging attempt: siteId={}, batchId={}, batchOwner={}",
-                                siteId, batchId, batch.getSiteId());
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
-                                  "Cannot log errors to batch owned by another site"));
-                }
-            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
-                logger.warn("Batch not found during authorization check: {}", batchId);
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
-            }
-
-            String type = (String) request.get("type");
-            String message = (String) request.get("message");
-            @SuppressWarnings("unchecked")
-            Map<String, Object> metadata = (Map<String, Object>) request.get("metadata");
-
-            if (type == null || type.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Error type is required"));
-            }
-
-            if (message == null || message.isBlank()) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse(HttpStatus.BAD_REQUEST, "Error message is required"));
-            }
-
-            logger.debug("Logging error: batchId={}, siteId={}, type={}", batchId, siteId, type);
-
-            ErrorLog errorLog = errorLoggingService.logError(batchId, siteId, type, message, metadata);
-
-            ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-
-        } catch (Exception e) {
-            logger.error("Error logging error: batchId={}", batchId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to log error"));
+        // ✅ SECURITY FIX: Verify batch ownership before logging error
+        com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+        if (!batch.getSiteId().equals(siteId)) {
+            logger.warn("Unauthorized error logging attempt: siteId={}, batchId={}, batchOwner={}",
+                        siteId, batchId, batch.getSiteId());
+            throw new IllegalArgumentException("Cannot log errors to batch owned by another site");
         }
+
+        logger.debug("Logging error: batchId={}, siteId={}, type={}", batchId, siteId, request.type());
+
+        ErrorLog errorLog = errorLoggingService.logError(batchId, siteId, request.type(), request.message(), request.metadata());
+
+        ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     /**
