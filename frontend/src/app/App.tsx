@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { AuthProvider, QueryProvider, RouterProvider } from '@/app/providers'
+import { ErrorBoundary } from '@/app/ErrorBoundary'
 import { setupInterceptors } from '@/shared/api/interceptors'
 import { setupErrorHandler } from '@/shared/api/error-handler'
 import { Toaster } from 'sonner'
@@ -76,13 +77,15 @@ function AppContent() {
  */
 function App() {
   return (
-    <AuthProvider>
-      <QueryProvider>
-        <AppContent />
-        {/* Toast notifications */}
-        <Toaster position="top-right" />
-      </QueryProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <QueryProvider>
+          <AppContent />
+          {/* Toast notifications */}
+          <Toaster position="top-right" />
+        </QueryProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   )
 }
 
