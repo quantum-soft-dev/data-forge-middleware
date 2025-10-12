@@ -42,6 +42,7 @@ public class AccountStatisticsService {
 
     /**
      * Get statistics for specific account.
+     * Optimized to use COUNT queries and ID-only queries to prevent N+1 queries.
      *
      * @param accountId account identifier
      * @return statistics map
@@ -51,14 +52,14 @@ public class AccountStatisticsService {
 
         stats.put("accountId", accountId);
         stats.put("totalSites", siteRepository.countByAccountId(accountId));
-        stats.put("activeSites", siteRepository.findActiveByAccountId(accountId).size());
+        // Optimized: Use countActiveByAccountId instead of loading all sites and calling .size()
+        stats.put("activeSites", siteRepository.countActiveByAccountId(accountId));
         stats.put("totalBatches", batchRepository.countByAccountId(accountId));
         stats.put("activeBatches", batchRepository.countActiveBatchesByAccountId(accountId));
         stats.put("totalFiles", uploadedFileRepository.countByAccountId(accountId));
+        // Optimized: Use findSiteIdsByAccountId to fetch only IDs instead of full Site entities
         stats.put("totalErrors", errorLogRepository.countBySiteIds(
-                siteRepository.findByAccountId(accountId).stream()
-                        .map(site -> site.getId())
-                        .toList()
+                siteRepository.findSiteIdsByAccountId(accountId)
         ));
 
         return stats;
