@@ -73,7 +73,7 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.email").value("test@example.com"))
                 .andExpect(jsonPath("$.name").value("Test User"))
-                .andExpect(jsonPath("$.isActive").value(true))
+                .andExpect(jsonPath("$.status").value("active"))
                 .andExpect(jsonPath("$.createdAt").exists());
     }
 
@@ -116,7 +116,7 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.id").value(MOCK_ACCOUNT_ID))
                 .andExpect(jsonPath("$.email").exists())
                 .andExpect(jsonPath("$.name").exists())
-                .andExpect(jsonPath("$.isActive").exists())
+                .andExpect(jsonPath("$.status").exists())
                 .andExpect(jsonPath("$.createdAt").exists())
                 .andExpect(jsonPath("$.sitesCount").isNumber())
                 .andExpect(jsonPath("$.totalBatches").isNumber())
@@ -456,25 +456,26 @@ class AdminContractTest {
     }
 
     /**
-     * Test Case 7d: Update account with missing name field should return 400.
+     * Test Case 7d: Update account with no fields (empty JSON) should return 200 (no-op update).
+     * All fields are optional for partial updates.
      */
     @Test
-    @DisplayName("Should reject account update with missing name field")
-    void shouldRejectAccountUpdateWithMissingName() throws Exception {
+    @DisplayName("Should accept account update with no fields (partial update support)")
+    void shouldAcceptAccountUpdateWithNoFields() throws Exception {
         String requestBody = "{}";
 
-        // When: PUT /admin/accounts/{id} without name field
+        // When: PUT /admin/accounts/{id} with empty JSON (no fields to update)
         mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
 
-                // Then: 400 Bad Request
-                .andExpect(status().isBadRequest())
+                // Then: 200 OK (no-op update is valid)
+                .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.error").value("Bad Request"))
-                .andExpect(jsonPath("$.message").exists());
+                .andExpect(jsonPath("$.id").value(MOCK_ACCOUNT_ID))
+                .andExpect(jsonPath("$.email").exists())
+                .andExpect(jsonPath("$.name").exists());
     }
 
     // ========== Site Management Tests ==========

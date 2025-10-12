@@ -59,6 +59,10 @@ batch:
     active:
       per-account: ${BATCH_MAX_ACTIVE_PER_ACCOUNT:10}
 
+# Account Configuration
+account:
+  max-concurrent-batches: ${ACCOUNT_MAX_CONCURRENT_BATCHES:5}
+
 # Upload Configuration
 upload:
   max:

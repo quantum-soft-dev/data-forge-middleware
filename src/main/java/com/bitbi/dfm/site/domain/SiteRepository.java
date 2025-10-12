@@ -27,6 +27,10 @@ public interface SiteRepository {
 
     long countByAccountId(UUID accountId);
 
+    long countActiveByAccountId(UUID accountId);
+
+    List<UUID> findSiteIdsByAccountId(UUID accountId);
+
     long count();
 
     Site save(Site site);

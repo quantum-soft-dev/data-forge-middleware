@@ -12,8 +12,19 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Security configuration with path-based separated authentication systems (FR-005).
@@ -100,7 +111,9 @@ public class SecurityConfiguration {
             .authorizeHttpRequests(auth -> auth
                 .anyRequest().hasRole("ADMIN")
             )
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+            )
             .exceptionHandling(ex -> ex
                 .authenticationEntryPoint((request, response, authException) -> {
                     authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
@@ -133,6 +146,53 @@ public class SecurityConfiguration {
             );
 
         return http.build();
+    }
+
+    /**
+     * Convert Keycloak JWT roles to Spring Security authorities.
+     * <p>
+     * Custom converter to extract roles from nested 'realm_access.roles' claim.
+     * Keycloak stores roles in: { "realm_access": { "roles": ["ROLE_ADMIN", ...] } }
+     * </p>
+     */
+    @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
+        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(new KeycloakRoleConverter());
+        return jwtAuthenticationConverter;
+    }
+
+    /**
+     * Custom converter to extract roles from Keycloak's realm_access.roles claim.
+     * <p>
+     * Automatically adds ROLE_ prefix if not present to ensure compatibility with
+     * Spring Security's hasRole() method. Handles both formats:
+     * - "ADMIN" → "ROLE_ADMIN"
+     * - "ROLE_ADMIN" → "ROLE_ADMIN" (unchanged)
+     * </p>
+     */
+    static class KeycloakRoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
+        @Override
+        @SuppressWarnings("unchecked")
+        public Collection<GrantedAuthority> convert(Jwt jwt) {
+            Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
+            if (realmAccess == null || !realmAccess.containsKey("roles")) {
+                return List.of();
+            }
+
+            List<String> roles = (List<String>) realmAccess.get("roles");
+            if (roles == null || roles.isEmpty()) {
+                return List.of();
+            }
+
+            return roles.stream()
+                .map(role -> {
+                    // Ensure ROLE_ prefix for Spring Security hasRole() compatibility
+                    String roleName = role.startsWith("ROLE_") ? role : "ROLE_" + role;
+                    return new SimpleGrantedAuthority(roleName);
+                })
+                .collect(Collectors.toList());
+        }
     }
 
 }

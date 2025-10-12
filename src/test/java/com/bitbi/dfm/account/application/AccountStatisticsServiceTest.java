@@ -59,11 +59,11 @@ class AccountStatisticsServiceTest {
         List<UUID> siteIds = Arrays.asList(site1Id, site2Id);
 
         when(siteRepository.countByAccountId(accountId)).thenReturn(5L);
-        when(siteRepository.findActiveByAccountId(accountId)).thenReturn(Arrays.asList(site1, site2));
+        when(siteRepository.countActiveByAccountId(accountId)).thenReturn(2L);
         when(batchRepository.countByAccountId(accountId)).thenReturn(10L);
         when(batchRepository.countActiveBatchesByAccountId(accountId)).thenReturn(3);
         when(uploadedFileRepository.countByAccountId(accountId)).thenReturn(25L);
-        when(siteRepository.findByAccountId(accountId)).thenReturn(sites);
+        when(siteRepository.findSiteIdsByAccountId(accountId)).thenReturn(siteIds);
         when(errorLogRepository.countBySiteIds(anyList())).thenReturn(15L);
 
         // When
@@ -73,18 +73,18 @@ class AccountStatisticsServiceTest {
         assertNotNull(stats);
         assertEquals(accountId, stats.get("accountId"));
         assertEquals(5L, stats.get("totalSites"));
-        assertEquals(2, stats.get("activeSites"));
+        assertEquals(2L, stats.get("activeSites"));
         assertEquals(10L, stats.get("totalBatches"));
         assertEquals(3, stats.get("activeBatches"));
         assertEquals(25L, stats.get("totalFiles"));
         assertEquals(15L, stats.get("totalErrors"));
 
         verify(siteRepository).countByAccountId(accountId);
-        verify(siteRepository).findActiveByAccountId(accountId);
+        verify(siteRepository).countActiveByAccountId(accountId);
         verify(batchRepository).countByAccountId(accountId);
         verify(batchRepository).countActiveBatchesByAccountId(accountId);
         verify(uploadedFileRepository).countByAccountId(accountId);
-        verify(siteRepository).findByAccountId(accountId);
+        verify(siteRepository).findSiteIdsByAccountId(accountId);
         verify(errorLogRepository).countBySiteIds(anyList());
     }
 
@@ -95,11 +95,11 @@ class AccountStatisticsServiceTest {
         UUID accountId = UUID.randomUUID();
 
         when(siteRepository.countByAccountId(accountId)).thenReturn(0L);
-        when(siteRepository.findActiveByAccountId(accountId)).thenReturn(Arrays.asList());
+        when(siteRepository.countActiveByAccountId(accountId)).thenReturn(0L);
         when(batchRepository.countByAccountId(accountId)).thenReturn(0L);
         when(batchRepository.countActiveBatchesByAccountId(accountId)).thenReturn(0);
         when(uploadedFileRepository.countByAccountId(accountId)).thenReturn(0L);
-        when(siteRepository.findByAccountId(accountId)).thenReturn(Arrays.asList());
+        when(siteRepository.findSiteIdsByAccountId(accountId)).thenReturn(Arrays.asList());
         when(errorLogRepository.countBySiteIds(anyList())).thenReturn(0L);
 
         // When
@@ -108,7 +108,7 @@ class AccountStatisticsServiceTest {
         // Then
         assertNotNull(stats);
         assertEquals(0L, stats.get("totalSites"));
-        assertEquals(0, stats.get("activeSites"));
+        assertEquals(0L, stats.get("activeSites"));
         assertEquals(0L, stats.get("totalBatches"));
         assertEquals(0, stats.get("activeBatches"));
         assertEquals(0L, stats.get("totalFiles"));
@@ -286,11 +286,11 @@ class AccountStatisticsServiceTest {
         List<Site> activeSites = Arrays.asList(site1, site3);
 
         when(siteRepository.countByAccountId(accountId)).thenReturn(3L);
-        when(siteRepository.findActiveByAccountId(accountId)).thenReturn(activeSites);
+        when(siteRepository.countActiveByAccountId(accountId)).thenReturn(2L);
         when(batchRepository.countByAccountId(accountId)).thenReturn(30L);
         when(batchRepository.countActiveBatchesByAccountId(accountId)).thenReturn(5);
         when(uploadedFileRepository.countByAccountId(accountId)).thenReturn(150L);
-        when(siteRepository.findByAccountId(accountId)).thenReturn(allSites);
+        when(siteRepository.findSiteIdsByAccountId(accountId)).thenReturn(Arrays.asList(site1.getId(), site2.getId(), site3.getId()));
         when(errorLogRepository.countBySiteIds(anyList())).thenReturn(45L);
 
         // When
@@ -298,7 +298,7 @@ class AccountStatisticsServiceTest {
 
         // Then
         assertEquals(3L, stats.get("totalSites"));
-        assertEquals(2, stats.get("activeSites"));
+        assertEquals(2L, stats.get("activeSites"));
         assertEquals(30L, stats.get("totalBatches"));
         assertEquals(150L, stats.get("totalFiles"));
         assertEquals(45L, stats.get("totalErrors"));

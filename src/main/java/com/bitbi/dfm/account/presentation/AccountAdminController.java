@@ -1,5 +1,6 @@
 package com.bitbi.dfm.account.presentation;
 
+import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.account.domain.Account;
@@ -54,10 +55,15 @@ public class AccountAdminController {
 
     private final AccountService accountService;
     private final AccountStatisticsService accountStatisticsService;
+    private final AccountProperties accountProperties;
 
-    public AccountAdminController(AccountService accountService, AccountStatisticsService accountStatisticsService) {
+    public AccountAdminController(
+            AccountService accountService,
+            AccountStatisticsService accountStatisticsService,
+            AccountProperties accountProperties) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
+        this.accountProperties = accountProperties;
     }
 
     /**
@@ -66,12 +72,12 @@ public class AccountAdminController {
      * POST /admin/accounts
      * </p>
      *
-     * @param request account details (email, name)
+     * @param request account details (email, name, phone, company)
      * @return created account response
      */
     @Operation(
             summary = "Create new account",
-            description = "Creates a new account with email and name. Returns account details."
+            description = "Creates a new account with email, name, and optional phone/company. Returns account details."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "201", description = "Account created successfully",
@@ -85,11 +91,22 @@ public class AccountAdminController {
     public ResponseEntity<AccountResponseDto> createAccount(
             @Valid @RequestBody CreateAccountRequestDto request) {
 
-        logger.info("Creating account: email={}, name={}", request.email(), request.name());
+        logger.info("Creating account: email={}, name={}, phone={}, company={}",
+                   request.email(), request.name(),
+                   request.phone() != null ? "[set]" : "[not set]",
+                   request.company() != null ? "[set]" : "[not set]");
 
-        Account account = accountService.createAccount(request.email(), request.name());
+        Account account = accountService.createAccount(
+            request.email(),
+            request.name(),
+            request.phone(),
+            request.company()
+        );
 
-        AccountResponseDto response = AccountResponseDto.fromEntity(account);
+        AccountResponseDto response = AccountResponseDto.fromEntity(
+                account,
+                accountProperties.getMaxConcurrentBatches()
+        );
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -160,7 +177,11 @@ public class AccountAdminController {
         Page<Account> accountPage = accountService.listAccounts(pageable);
 
         // Convert to response DTO
-        PageResponseDto<AccountResponseDto> response = PageResponseDto.of(accountPage, AccountResponseDto::fromEntity);
+        int maxConcurrentBatches = accountProperties.getMaxConcurrentBatches();
+        PageResponseDto<AccountResponseDto> response = PageResponseDto.of(
+                accountPage,
+                account -> AccountResponseDto.fromEntity(account, maxConcurrentBatches)
+        );
 
         return ResponseEntity.ok(response);
     }
@@ -172,12 +193,12 @@ public class AccountAdminController {
      * </p>
      *
      * @param accountId account identifier
-     * @param request   account update details (name)
+     * @param request   account update details (name, phone, company - all optional)
      * @return updated account response
      */
     @Operation(
             summary = "Update account",
-            description = "Updates account display name."
+            description = "Updates account name, phone, and/or company. All fields are optional (partial update)."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Account updated successfully",
@@ -192,11 +213,23 @@ public class AccountAdminController {
             @PathVariable("id") UUID accountId,
             @Valid @RequestBody UpdateAccountRequestDto request) {
 
-        logger.info("Updating account: accountId={}, name={}", accountId, request.name());
+        logger.info("Updating account: accountId={}, name={}, phone={}, company={}",
+                   accountId,
+                   request.name() != null ? "[updating]" : "[unchanged]",
+                   request.phone() != null ? "[updating]" : "[unchanged]",
+                   request.company() != null ? "[updating]" : "[unchanged]");
 
-        Account account = accountService.updateAccount(accountId, request.name());
+        Account account = accountService.updateAccount(
+            accountId,
+            request.name(),
+            request.phone(),
+            request.company()
+        );
 
-        AccountResponseDto response = AccountResponseDto.fromEntity(account);
+        AccountResponseDto response = AccountResponseDto.fromEntity(
+                account,
+                accountProperties.getMaxConcurrentBatches()
+        );
         return ResponseEntity.ok(response);
     }
 
@@ -228,17 +261,25 @@ public class AccountAdminController {
     }
 
     /**
-     * Get account statistics (admin endpoint).
+     * Get account statistics (deprecated short endpoint).
      * <p>
      * GET /admin/accounts/{id}/stats
+     * </p>
+     * <p>
+     * <b>DEPRECATED:</b> Use {@link #getAccountStatistics(UUID)} instead.
+     * This endpoint will be removed in v4.0.0. Use /api/admin/accounts/{id}/statistics
+     * for the canonical statistics endpoint.
      * </p>
      *
      * @param accountId account identifier
      * @return account statistics formatted for admin UI
+     * @deprecated Use {@link #getAccountStatistics(UUID)} instead (GET /api/admin/accounts/{id}/statistics)
      */
+    @Deprecated(since = "3.1.0", forRemoval = true)
     @Operation(
-            summary = "Get account statistics (short endpoint)",
-            description = "Retrieves account statistics including sites count, batches, files, and storage size."
+            summary = "Get account statistics (deprecated - use /statistics)",
+            description = "⚠️ DEPRECATED: Use /api/admin/accounts/{id}/statistics instead. This endpoint will be removed in v4.0.0.",
+            deprecated = true
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully",
@@ -248,23 +289,27 @@ public class AccountAdminController {
     })
     @GetMapping("/{id}/stats")
     public ResponseEntity<AccountStatisticsDto> getAccountStats(@PathVariable("id") UUID accountId) {
-        Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
-        AccountStatisticsDto response = AccountStatisticsDto.fromMap(statistics);
-        return ResponseEntity.ok(response);
+        logger.warn("DEPRECATED: /stats endpoint called. Use /statistics instead. Endpoint: /api/admin/accounts/{}/stats", accountId);
+        // Delegate to canonical endpoint
+        return getAccountStatistics(accountId);
     }
 
     /**
-     * Get account statistics.
+     * Get account statistics (canonical endpoint).
      * <p>
      * GET /admin/accounts/{id}/statistics
+     * </p>
+     * <p>
+     * This is the canonical endpoint for retrieving account statistics.
+     * The shorter /stats endpoint is deprecated and will be removed in v4.0.0.
      * </p>
      *
      * @param accountId account identifier
      * @return account statistics
      */
     @Operation(
-            summary = "Get account statistics (long endpoint)",
-            description = "Retrieves account statistics including sites count, batches, files, and storage size."
+            summary = "Get account statistics",
+            description = "Retrieves account statistics including sites count, batches, files, and storage size. This is the canonical endpoint."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully",

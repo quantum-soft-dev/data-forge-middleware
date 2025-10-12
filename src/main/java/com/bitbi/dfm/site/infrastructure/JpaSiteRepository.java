@@ -59,6 +59,26 @@ public interface JpaSiteRepository extends JpaRepository<Site, UUID>, SiteReposi
     long countByAccountId(UUID accountId);
 
     /**
+     * Count active sites by account ID.
+     * Optimized COUNT query to avoid loading full entities.
+     *
+     * @param accountId account identifier
+     * @return number of active sites
+     */
+    @Query("SELECT COUNT(s) FROM Site s WHERE s.accountId = :accountId AND s.isActive = true")
+    long countActiveByAccountId(UUID accountId);
+
+    /**
+     * Find site IDs by account ID.
+     * Optimized query to fetch only IDs, avoiding N+1 query when only IDs are needed.
+     *
+     * @param accountId account identifier
+     * @return list of site IDs
+     */
+    @Query("SELECT s.id FROM Site s WHERE s.accountId = :accountId")
+    List<UUID> findSiteIdsByAccountId(UUID accountId);
+
+    /**
      * Check if site exists with given domain (case-insensitive).
      *
      * @param domain domain to check

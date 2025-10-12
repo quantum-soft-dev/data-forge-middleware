@@ -13,7 +13,7 @@
 ### 1.1 Technology stack:
 
 **Main libraries:**
-- * *React 19** - UI framework
+- * *React 19.2** - UI framework
 - **TypeScript** - typing
 - **Vite** - build tool
 - **TanStack Router** - routing
