@@ -16,6 +16,29 @@ interface AuthProviderProps {
  * - Redirect URI: OAuth callback URL
  * - Silent Renew: Automatic token refresh enabled
  * - PKCE: Enabled by default (security best practice)
+ * - Storage: sessionStorage (see UX trade-off below)
+ *
+ * UX Trade-off: sessionStorage vs localStorage
+ * ============================================
+ * Current: sessionStorage
+ * - PRO: Tokens cleared when tab/window closes (enhanced security)
+ * - PRO: Reduces risk of token theft from persistent storage
+ * - CON: Users must re-login when closing/reopening tab
+ * - CON: Sessions don't persist across browser restarts
+ *
+ * Alternative: localStorage
+ * - PRO: Sessions persist across tab closes and browser restarts
+ * - PRO: Better UX - users stay logged in longer
+ * - CON: Tokens persist in browser indefinitely (higher security risk)
+ * - CON: Requires manual token cleanup on logout
+ *
+ * Decision Rationale:
+ * We chose sessionStorage for this admin UI to prioritize security over convenience.
+ * Admin users access sensitive data and operations, so forcing re-authentication
+ * after tab close is an acceptable trade-off. For end-user facing apps, consider
+ * localStorage with proper token expiration and refresh logic.
+ *
+ * To switch to localStorage: change window.sessionStorage to window.localStorage
  *
  * See research.md for detailed authentication flow diagram
  */
@@ -29,7 +52,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     scope: 'openid profile email',
     automaticSilentRenew: true,
     loadUserInfo: true,
-    // Store tokens in sessionStorage (not localStorage per security constraint)
+    // Store tokens in sessionStorage (see UX trade-off documentation above)
+    // Security over convenience: tokens cleared when tab closes
     userStore: typeof window !== 'undefined'
       ? new WebStorageStateStore({ store: window.sessionStorage })
       : undefined,
