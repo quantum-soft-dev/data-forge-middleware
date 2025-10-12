@@ -47,6 +47,7 @@ class AccountResponseDtoTest {
         assertEquals("+1234567890", dto.phone());
         assertEquals("Acme Corp", dto.company());
         assertEquals("active", dto.status());
+        assertEquals(true, dto.isActive());  // Backward compatibility field
         assertEquals(createdAt.toInstant(ZoneOffset.UTC), dto.createdAt());
         assertEquals(5, dto.maxConcurrentBatches());
     }
@@ -71,8 +72,8 @@ class AccountResponseDtoTest {
 
         // Then
         assertNotNull(dto);
-        // Verify DTO only contains safe fields
-        assertEquals(8, dto.getClass().getRecordComponents().length);
+        // Verify DTO only contains safe fields (9 fields: id, email, name, phone, company, status, isActive, createdAt, maxConcurrentBatches)
+        assertEquals(9, dto.getClass().getRecordComponents().length);
         // Verify no password-like field exists in DTO
         assertDoesNotThrow(() -> {
             dto.id();
@@ -81,8 +82,47 @@ class AccountResponseDtoTest {
             dto.phone();
             dto.company();
             dto.status();
+            dto.isActive();
             dto.createdAt();
             dto.maxConcurrentBatches();
         });
+    }
+
+    @Test
+    @DisplayName("fromEntity should populate both status and isActive fields for backward compatibility")
+    void fromEntity_shouldPopulateBothStatusAndIsActiveFields() {
+        // Given - active account
+        Account activeAccount = mock(Account.class);
+        when(activeAccount.getId()).thenReturn(UUID.randomUUID());
+        when(activeAccount.getEmail()).thenReturn("active@example.com");
+        when(activeAccount.getName()).thenReturn("Active Account");
+        when(activeAccount.getPhone()).thenReturn(null);
+        when(activeAccount.getCompany()).thenReturn(null);
+        when(activeAccount.getIsActive()).thenReturn(true);
+        when(activeAccount.getCreatedAt()).thenReturn(LocalDateTime.now());
+
+        // When
+        AccountResponseDto activeDto = AccountResponseDto.fromEntity(activeAccount, 5);
+
+        // Then
+        assertEquals("active", activeDto.status());
+        assertEquals(true, activeDto.isActive());
+
+        // Given - inactive account
+        Account inactiveAccount = mock(Account.class);
+        when(inactiveAccount.getId()).thenReturn(UUID.randomUUID());
+        when(inactiveAccount.getEmail()).thenReturn("inactive@example.com");
+        when(inactiveAccount.getName()).thenReturn("Inactive Account");
+        when(inactiveAccount.getPhone()).thenReturn(null);
+        when(inactiveAccount.getCompany()).thenReturn(null);
+        when(inactiveAccount.getIsActive()).thenReturn(false);
+        when(inactiveAccount.getCreatedAt()).thenReturn(LocalDateTime.now());
+
+        // When
+        AccountResponseDto inactiveDto = AccountResponseDto.fromEntity(inactiveAccount, 5);
+
+        // Then
+        assertEquals("inactive", inactiveDto.status());
+        assertEquals(false, inactiveDto.isActive());
     }
 }
