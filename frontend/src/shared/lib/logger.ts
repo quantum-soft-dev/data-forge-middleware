@@ -5,19 +5,19 @@
  * Prevents sensitive token data from leaking in production console logs.
  *
  * Usage:
- * - logger.debug('[Auth]', 'Message') - only logs in dev with DEBUG_AUTH=true
+ * - logger.debug('[Auth]', 'Message') - only logs in dev with VITE_DEBUG_AUTH=true
  * - logger.info('[Info]', 'Message') - logs in dev mode
  * - logger.warn('[Warn]', 'Message') - logs in all environments
  * - logger.error('[Error]', error) - logs in all environments
  */
 
-const isDevelopment = process.env.NODE_ENV === 'development'
-const isDebugAuth = process.env.REACT_APP_DEBUG_AUTH === 'true'
+const isDevelopment = import.meta.env.DEV
+const isDebugAuth = import.meta.env.VITE_DEBUG_AUTH === 'true'
 
 export const logger = {
   /**
    * Debug logging for sensitive auth operations.
-   * Only logs in development with REACT_APP_DEBUG_AUTH=true.
+   * Only logs in development with VITE_DEBUG_AUTH=true.
    */
   debug: (prefix: string, ...args: unknown[]) => {
     if (isDevelopment && isDebugAuth) {
