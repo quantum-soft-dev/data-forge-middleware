@@ -34,6 +34,7 @@ services:
     volumes:
       - localstack_data:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
@@ -86,7 +87,7 @@ services:
     container_name: dfm-backend
     environment:
       # Spring profiles
-      SPRING_PROFILES_ACTIVE: prod
+      SPRING_PROFILES_ACTIVE: dev
       # Database
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dfm
       SPRING_DATASOURCE_USERNAME: dfm

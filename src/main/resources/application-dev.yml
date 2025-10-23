@@ -18,13 +18,13 @@ spring:
           jwk-set-uri: http://localhost:8081/realms/dfm/protocol/openid-connect/certs
 
 s3:
-  endpoint: http://localhost:4566
-  region: us-east-1
+  endpoint: ${AWS_S3_ENDPOINT:https://s3.amazonaws.com}
+  region: ${AWS_S3_REGION:us-east-1}
   bucket:
-    name: dfm-uploads
-  access-key: test
-  secret-key: test
-  path-style-access-enabled: true
+    name: ${AWS_S3_BUCKET_NAME:data-forge-bucket}
+  access-key: ${AWS_ACCESS_KEY_ID:}
+  secret-key: ${AWS_SECRET_ACCESS_KEY:}
+  path-style-access-enabled: false
 
 jwt:
   secret: dev-secret-key-minimum-256-bits-required-for-hmac-sha256-algorithm-development
