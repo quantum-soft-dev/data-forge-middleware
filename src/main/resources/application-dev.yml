@@ -17,13 +17,20 @@ spring:
           issuer-uri: http://localhost:8081/realms/dfm
           jwk-set-uri: http://localhost:8081/realms/dfm/protocol/openid-connect/certs
 
+keycloak:
+  auth-server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
+  realm: ${KEYCLOAK_REALM:dfm}
+  admin:
+    client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:admin-cli}
+    client-secret: ${KEYCLOAK_ADMIN_CLIENT_SECRET:}
+
 s3:
-  endpoint: ${AWS_S3_ENDPOINT:https://s3.amazonaws.com}
+  endpoint: ${AWS_S3_ENDPOINT:http://localhost:4566}
   region: ${AWS_S3_REGION:us-east-1}
   bucket:
     name: ${AWS_S3_BUCKET_NAME:data-forge-bucket}
-  access-key: ${AWS_ACCESS_KEY_ID:}
-  secret-key: ${AWS_SECRET_ACCESS_KEY:}
+  access-key: ${AWS_ACCESS_KEY_ID:test}
+  secret-key: ${AWS_SECRET_ACCESS_KEY:test}
   path-style-access-enabled: false
 
 jwt:

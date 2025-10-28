@@ -1,0 +1,671 @@
+openapi: 3.0.3
+info:
+  title: Account Management API (Keycloak Integration)
+  description: |
+    Admin endpoints for managing accounts with Keycloak integration.
+    All endpoints require Keycloak OAuth2 authentication with ROLE_ADMIN.
+
+    Extends existing Account entity with Keycloak user management capabilities.
+    Keycloak is the source of truth for authentication, passwords, and user status.
+  version: 1.0.0
+  contact:
+    name: Data Forge Team
+    email: support@dataforge.com
+
+servers:
+  - url: http://localhost:8080/api/admin
+    description: Development server
+  - url: https://api.dataforge.com/api/admin
+    description: Production server
+
+security:
+  - keycloakAuth: [admin]
+
+tags:
+  - name: Account Management
+    description: CRUD operations for accounts with Keycloak integration
+  - name: Account Actions
+    description: Lock, unlock, and password reset operations
+
+paths:
+  /accounts:
+    get:
+      tags:
+        - Account Management
+      summary: List all accounts
+      description: Retrieve paginated list of accounts with optional filtering
+      operationId: listAccounts
+      parameters:
+        - name: page
+          in: query
+          description: Page number (0-indexed)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          description: Page size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: isActive
+          in: query
+          description: Filter by account active status
+          schema:
+            type: boolean
+        - name: hasKeycloakIntegration
+          in: query
+          description: Filter by Keycloak integration status
+          schema:
+            type: boolean
+        - name: sort
+          in: query
+          description: Sort field and direction (e.g., "createdAt,desc")
+          schema:
+            type: string
+            default: createdAt,desc
+      responses:
+        '200':
+          description: Successful response with paginated accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageResponseAccount'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags:
+        - Account Management
+      summary: Create new account with Keycloak user
+      description: |
+        Create a new account in both PostgreSQL and Keycloak.
+        User is created with a temporary password that must be changed on first login.
+        Temporary password expires after 30 days in Keycloak.
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAccountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Account with this email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-28T12:00:00Z"
+                status: 409
+                error: "Conflict"
+                message: "Account with email 'user@example.com' already exists"
+                path: "/api/admin/accounts"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}:
+    get:
+      tags:
+        - Account Management
+      summary: Get account by ID with Keycloak status
+      description: Retrieve detailed information about a specific account including Keycloak user status
+      operationId: getAccountById
+      parameters:
+        - $ref: '#/components/parameters/AccountIdPath'
+      responses:
+        '200':
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountWithKeycloakResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-28T12:00:00Z"
+                status: 404
+                error: "Not Found"
+                message: "Account with ID 550e8400-e29b-41d4-a716-446655440000 not found"
+                path: "/api/admin/accounts/550e8400-e29b-41d4-a716-446655440000"
+
+  /accounts/{accountId}/lock:
+    post:
+      tags:
+        - Account Actions
+      summary: Lock account (disable Keycloak user)
+      description: |
+        Disable Keycloak user to prevent login.
+        Sets Keycloak.enabled = false.
+        Existing sessions continue until natural expiration (not immediately terminated).
+        Account.isActive remains unchanged (business resources still accessible to existing sessions).
+      operationId: lockAccount
+      parameters:
+        - $ref: '#/components/parameters/AccountIdPath'
+      responses:
+        '200':
+          description: Account locked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountWithKeycloakResponse'
+        '400':
+          description: Account Keycloak user is already disabled or account not linked to Keycloak
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-28T12:00:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Account is already locked or not integrated with Keycloak"
+                path: "/api/admin/accounts/550e8400-e29b-41d4-a716-446655440000/lock"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}/unlock:
+    post:
+      tags:
+        - Account Actions
+      summary: Unlock account (enable Keycloak user)
+      description: |
+        Enable Keycloak user to restore login access.
+        Sets Keycloak.enabled = true.
+      operationId: unlockAccount
+      parameters:
+        - $ref: '#/components/parameters/AccountIdPath'
+      responses:
+        '200':
+          description: Account unlocked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountWithKeycloakResponse'
+        '400':
+          description: Account Keycloak user is already enabled or account not linked to Keycloak
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-28T12:00:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Account is already unlocked or not integrated with Keycloak"
+                path: "/api/admin/accounts/550e8400-e29b-41d4-a716-446655440000/unlock"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}/reset-password:
+    post:
+      tags:
+        - Account Actions
+      summary: Reset account password in Keycloak
+      description: |
+        Reset account password to a new temporary value in Keycloak.
+        User must change password on next login.
+        Temporary password expires after 30 days.
+        Sets Keycloak credential.temporary = true and requiredActions = ["UPDATE_PASSWORD"].
+      operationId: resetPassword
+      parameters:
+        - $ref: '#/components/parameters/AccountIdPath'
+      responses:
+        '200':
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResetPasswordResponse'
+        '400':
+          description: Account not linked to Keycloak
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-28T12:00:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Account is not integrated with Keycloak"
+                path: "/api/admin/accounts/550e8400-e29b-41d4-a716-446655440000/reset-password"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}/audit-logs:
+    get:
+      tags:
+        - Account Management
+      summary: Get audit logs for account
+      description: Retrieve all administrative actions performed on this account
+      operationId: getAccountAuditLogs
+      parameters:
+        - $ref: '#/components/parameters/AccountIdPath'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Audit logs retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageResponseAuditLog'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    keycloakAuth:
+      type: oauth2
+      description: Keycloak OAuth2 with Authorization Code Flow + PKCE
+      flows:
+        authorizationCode:
+          authorizationUrl: http://localhost:8081/realms/dfm/protocol/openid-connect/auth
+          tokenUrl: http://localhost:8081/realms/dfm/protocol/openid-connect/token
+          scopes:
+            admin: Admin access to account management endpoints
+
+  parameters:
+    AccountIdPath:
+      name: accountId
+      in: path
+      required: true
+      description: Unique identifier of the account (UUID)
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+
+  schemas:
+    CreateAccountRequest:
+      type: object
+      required:
+        - email
+        - name
+        - role
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 3
+          maxLength: 255
+          example: "newuser@example.com"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: "John Doe"
+        phone:
+          type: string
+          pattern: '^\+?[0-9]{7,15}$'
+          nullable: true
+          example: "+1234567890"
+        company:
+          type: string
+          minLength: 2
+          maxLength: 255
+          nullable: true
+          example: "Acme Corp"
+        role:
+          type: string
+          description: Keycloak role to assign to user
+          example: "USER"
+
+    CreateAccountResponse:
+      type: object
+      required:
+        - account
+        - temporaryPassword
+      properties:
+        account:
+          $ref: '#/components/schemas/AccountWithKeycloakResponse'
+        temporaryPassword:
+          type: string
+          description: Generated temporary password (displayed only once)
+          example: "A!8xK2p@Qr7z"
+
+    AccountResponse:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - isActive
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        keycloakUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Keycloak user UUID (null for legacy accounts)
+          example: "a3bb189e-8bf9-3888-9912-ace4e6543002"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        name:
+          type: string
+          example: "John Doe"
+        phone:
+          type: string
+          nullable: true
+          example: "+1234567890"
+        company:
+          type: string
+          nullable: true
+          example: "Acme Corp"
+        isActive:
+          type: boolean
+          description: Business-level active status (controls resource creation)
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-10-28T12:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-10-28T12:00:00Z"
+
+    AccountWithKeycloakResponse:
+      allOf:
+        - $ref: '#/components/schemas/AccountResponse'
+        - type: object
+          properties:
+            keycloakEnabled:
+              type: boolean
+              description: Keycloak user enabled status (controls authentication)
+              example: true
+            passwordTemporary:
+              type: boolean
+              description: Whether password is temporary (requires change on next login)
+              example: false
+            passwordExpiresAt:
+              type: string
+              format: date-time
+              nullable: true
+              description: Password expiration timestamp (if temporary)
+              example: null
+            lastLogin:
+              type: string
+              format: date-time
+              nullable: true
+              description: Last successful login timestamp from Keycloak
+              example: "2025-10-28T14:30:00Z"
+
+    ResetPasswordResponse:
+      type: object
+      required:
+        - accountId
+        - temporaryPassword
+        - expiresAt
+      properties:
+        accountId:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        temporaryPassword:
+          type: string
+          description: New temporary password (displayed only once)
+          example: "B@9yL3q!Rs8w"
+        expiresAt:
+          type: string
+          format: date-time
+          description: Expiration timestamp (30 days from now)
+          example: "2025-11-27T12:00:00Z"
+
+    AdminActionLog:
+      type: object
+      required:
+        - id
+        - actionType
+        - targetAccountId
+        - adminAccountId
+        - status
+        - createdAt
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 456
+        actionType:
+          type: string
+          enum: [CREATE_ACCOUNT, LOCK_ACCOUNT, UNLOCK_ACCOUNT, RESET_PASSWORD]
+          example: "LOCK_ACCOUNT"
+        targetAccountId:
+          type: string
+          format: uuid
+          description: Account that was affected by the action
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        adminAccountId:
+          type: string
+          format: uuid
+          description: Administrator account that performed the action
+          example: "660f9500-f29b-51e5-b827-557766551111"
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+          example: "SUCCESS"
+        errorMessage:
+          type: string
+          nullable: true
+          description: Error details if action failed
+          example: null
+        ipAddress:
+          type: string
+          nullable: true
+          example: "192.168.1.1"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-10-28T12:00:00Z"
+
+    PageResponseAccount:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountWithKeycloakResponse'
+        page:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          example: 150
+        totalPages:
+          type: integer
+          example: 8
+
+    PageResponseAuditLog:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminActionLog'
+        page:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          example: 45
+        totalPages:
+          type: integer
+          example: 3
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-10-28T12:00:00Z"
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          example: "Bad Request"
+        message:
+          type: string
+          example: "Validation failed"
+        path:
+          type: string
+          example: "/api/admin/accounts"
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-28T12:00:00Z"
+            status: 400
+            error: "Bad Request"
+            message: "Email must be a valid email address"
+            path: "/api/admin/accounts"
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-28T12:00:00Z"
+            status: 401
+            error: "Unauthorized"
+            message: "Full authentication is required to access this resource"
+            path: "/api/admin/accounts"
+
+    Forbidden:
+      description: Insufficient permissions (ROLE_ADMIN required)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-28T12:00:00Z"
+            status: 403
+            error: "Forbidden"
+            message: "Access denied - ROLE_ADMIN required"
+            path: "/api/admin/accounts"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-28T12:00:00Z"
+            status: 404
+            error: "Not Found"
+            message: "Account not found"
+            path: "/api/admin/accounts/550e8400-e29b-41d4-a716-446655440000"
+
+    InternalServerError:
+      description: Internal server error (Keycloak sync failure, database error, etc.)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-28T12:00:00Z"
+            status: 500
+            error: "Internal Server Error"
+            message: "Failed to synchronize account with Keycloak"
+            path: "/api/admin/accounts"

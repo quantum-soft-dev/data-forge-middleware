@@ -60,6 +60,9 @@ public class Account {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
+    @Column(name = "keycloak_user_id", length = 36, unique = true)
+    private String keycloakUserId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -70,13 +73,14 @@ public class Account {
      * Private constructor for JPA.
      */
     protected Account(UUID id, String email, String name, Phone phone, Company company,
-                      Boolean isActive, LocalDateTime createdAt, LocalDateTime updatedAt) {
+                      Boolean isActive, String keycloakUserId, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.email = email;
         this.name = name;
         this.phone = phone;
         this.company = company;
         this.isActive = isActive;
+        this.keycloakUserId = keycloakUserId;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -106,7 +110,44 @@ public class Account {
         Company companyVO = Company.of(company);
 
         return new Account(id, email.toLowerCase().trim(), name.trim(),
-                          phoneVO, companyVO, true, now, now);
+                          phoneVO, companyVO, true, null, now, now);
+    }
+
+    /**
+     * Create new account with Keycloak integration.
+     * This is the preferred factory method for new accounts going forward.
+     *
+     * @param keycloakUserId Keycloak user UUID
+     * @param email   user's email address
+     * @param name    user's display name
+     * @param phone   user's phone number (optional)
+     * @param company user's company name (optional)
+     * @return new Account instance with Keycloak linkage
+     * @throws IllegalArgumentException if keycloakUserId is invalid or other params fail validation
+     */
+    public static Account createWithKeycloak(String keycloakUserId, String email,
+                                              String name, String phone, String company) {
+        Objects.requireNonNull(keycloakUserId, "Keycloak user ID cannot be null for new accounts");
+
+        if (!keycloakUserId.matches("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) {
+            throw new IllegalArgumentException("Invalid Keycloak user ID format (must be UUID): " + keycloakUserId);
+        }
+
+        Objects.requireNonNull(email, "Email cannot be null");
+        Objects.requireNonNull(name, "Name cannot be null");
+
+        validateEmail(email);
+        validateName(name);
+
+        UUID id = UUID.randomUUID();
+        LocalDateTime now = LocalDateTime.now();
+
+        // Value Objects handle validation internally
+        Phone phoneVO = Phone.of(phone);
+        Company companyVO = Company.of(company);
+
+        return new Account(id, email.toLowerCase().trim(), name.trim(),
+                          phoneVO, companyVO, true, keycloakUserId, now, now);
     }
 
     /**
@@ -166,6 +207,37 @@ public class Account {
         }
         this.isActive = true;
         this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Associate existing account with Keycloak user (for gradual migration).
+     *
+     * @param keycloakUserId Keycloak user UUID
+     * @throws IllegalArgumentException if keycloakUserId format is invalid
+     * @throws IllegalStateException if account is already linked to Keycloak
+     */
+    public void linkToKeycloak(String keycloakUserId) {
+        Objects.requireNonNull(keycloakUserId, "Keycloak user ID cannot be null");
+
+        if (this.keycloakUserId != null) {
+            throw new IllegalStateException("Account is already linked to Keycloak user: " + this.keycloakUserId);
+        }
+
+        if (!keycloakUserId.matches("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) {
+            throw new IllegalArgumentException("Invalid Keycloak user ID format (must be UUID): " + keycloakUserId);
+        }
+
+        this.keycloakUserId = keycloakUserId;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Check if account is integrated with Keycloak.
+     *
+     * @return true if account has Keycloak user ID
+     */
+    public boolean hasKeycloakIntegration() {
+        return keycloakUserId != null;
     }
 
     /**

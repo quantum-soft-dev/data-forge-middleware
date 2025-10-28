@@ -58,4 +58,20 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
      */
     @Query("SELECT a FROM Account a WHERE a.isActive = true ORDER BY a.createdAt DESC")
     List<Account> findAllActive();
+
+    /**
+     * Find account by Keycloak user ID.
+     *
+     * @param keycloakUserId Keycloak user UUID
+     * @return Optional containing account if found
+     */
+    Optional<Account> findByKeycloakUserId(String keycloakUserId);
+
+    /**
+     * Check if account exists with given Keycloak user ID.
+     *
+     * @param keycloakUserId Keycloak user UUID to check
+     * @return true if account exists
+     */
+    boolean existsByKeycloakUserId(String keycloakUserId);
 }
