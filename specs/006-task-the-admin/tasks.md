@@ -165,7 +165,7 @@
   - Hook: `useCreateAccountMutation()` → POST /api/admin/accounts
   - onSuccess: invalidate accountKeys.lists()
   - onError: show error toast
-- [ ] **T027** [US1] Create `frontend/src/features/user-management/ui/CreateAccountForm.tsx`:
+- [X] **T027** [US1] Create `frontend/src/features/user-management/ui/CreateAccountForm.tsx`:
   - Use React Hook Form + Zod resolver (createAccountSchema)
   - Form fields: email, name, phone (optional), company (optional), role
   - Submit: call useCreateAccountMutation
