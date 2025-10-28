@@ -157,11 +157,11 @@
 
 ### Frontend Implementation for User Story 1
 
-- [ ] **T025** [P] [US1] Create `frontend/src/features/user-management/api/userQueries.ts`:
+- [X] **T025** [P] [US1] Create `frontend/src/features/user-management/api/userQueries.ts`:
   - Query key factory: `accountKeys` with lists(), list(filters), detail(id), auditLogs(id)
   - Hook: `useAccountsQuery(page, size, filters)` → GET /api/admin/accounts
   - Hook: `useAccountQuery(accountId)` → GET /api/admin/accounts/{accountId}
-- [ ] **T026** [P] [US1] Create `frontend/src/features/user-management/api/userMutations.ts`:
+- [X] **T026** [P] [US1] Create `frontend/src/features/user-management/api/userMutations.ts`:
   - Hook: `useCreateAccountMutation()` → POST /api/admin/accounts
   - onSuccess: invalidate accountKeys.lists()
   - onError: show error toast
