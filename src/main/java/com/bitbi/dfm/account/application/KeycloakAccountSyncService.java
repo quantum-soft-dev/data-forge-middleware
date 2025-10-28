@@ -9,6 +9,9 @@ import com.bitbi.dfm.account.infrastructure.KeycloakAdminClient;
 import com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountResponse;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,15 +45,30 @@ public class KeycloakAccountSyncService {
     private final JpaAccountRepository accountRepository;
     private final TemporaryPasswordGenerator passwordGenerator;
     private final AdminActionLogRepository auditLogRepository;
+    private final Counter accountCreatedSuccessCounter;
+    private final Counter accountCreatedFailureCounter;
+    private final Timer accountCreationTimer;
 
     public KeycloakAccountSyncService(KeycloakAdminClient keycloakClient,
                                        JpaAccountRepository accountRepository,
                                        TemporaryPasswordGenerator passwordGenerator,
-                                       AdminActionLogRepository auditLogRepository) {
+                                       AdminActionLogRepository auditLogRepository,
+                                       MeterRegistry meterRegistry) {
         this.keycloakClient = keycloakClient;
         this.accountRepository = accountRepository;
         this.passwordGenerator = passwordGenerator;
         this.auditLogRepository = auditLogRepository;
+
+        // Initialize metrics
+        this.accountCreatedSuccessCounter = Counter.builder("account.created.success")
+                .description("Number of accounts successfully created with Keycloak")
+                .register(meterRegistry);
+        this.accountCreatedFailureCounter = Counter.builder("account.created.failure")
+                .description("Number of failed account creation attempts")
+                .register(meterRegistry);
+        this.accountCreationTimer = Timer.builder("account.creation.duration")
+                .description("Time taken to create account with Keycloak")
+                .register(meterRegistry);
     }
 
     /**
@@ -75,10 +93,11 @@ public class KeycloakAccountSyncService {
                                                 UUID adminAccountId,
                                                 String ipAddress,
                                                 String userAgent) {
-        String keycloakUserId = null;
-        String temporaryPassword = passwordGenerator.generate();
+        return accountCreationTimer.record(() -> {
+            String keycloakUserId = null;
+            String temporaryPassword = passwordGenerator.generate();
 
-        try {
+            try {
             // Phase 1: Create in Keycloak
             log.info("Creating Keycloak user for email: {}", request.email());
             keycloakUserId = keycloakClient.createUser(
@@ -120,9 +139,12 @@ public class KeycloakAccountSyncService {
             UserRepresentation keycloakUser = keycloakClient.getUser(keycloakUserId);
             AccountWithKeycloakResponse accountResponse = AccountWithKeycloakResponse.fromEntity(savedAccount, keycloakUser);
 
+            // Increment success counter
+            accountCreatedSuccessCounter.increment();
+
             return new CreateAccountResponse(accountResponse, temporaryPassword);
 
-        } catch (Exception e) {
+            } catch (Exception e) {
             log.error("Account creation failed for email: {}. Rolling back Keycloak user.", request.email(), e);
 
             // Rollback: Delete from Keycloak if created
@@ -147,8 +169,12 @@ public class KeycloakAccountSyncService {
             );
             auditLogRepository.save(auditLog);
 
+            // Increment failure counter
+            accountCreatedFailureCounter.increment();
+
             throw new AccountCreationException("Failed to create account: " + e.getMessage(), e);
-        }
+            }
+        });
     }
 
     /**

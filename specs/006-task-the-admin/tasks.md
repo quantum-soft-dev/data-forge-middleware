@@ -150,7 +150,7 @@
   - Return: ResponseEntity<CreateAccountResponse> with @ResponseStatus(201)
   - OpenAPI annotations: @Operation, @ApiResponse
   - SecurityRequirement: keycloakAuth with admin scope
-- [ ] **T024** [US1] Add Micrometer metrics in KeycloakAccountSyncService:
+- [X] **T024** [US1] Add Micrometer metrics in KeycloakAccountSyncService:
   - Counter: account.created.success
   - Counter: account.created.failure
   - Timer: account.creation.duration
