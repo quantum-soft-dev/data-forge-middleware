@@ -11,9 +11,12 @@ WORKDIR /app
 
 # Copy Gradle wrapper and build files first (for layer caching)
 COPY gradle gradle/
-COPY gradlew .
+COPY gradlew gradlew.bat ./
 COPY build.gradle.kts .
 COPY settings.gradle.kts .
+
+# Normalize wrapper line endings and make it executable
+RUN sed -i 's/\r$//' gradlew && chmod +x gradlew
 
 # Download dependencies (cached layer)
 RUN ./gradlew dependencies --no-daemon
@@ -22,7 +25,7 @@ RUN ./gradlew dependencies --no-daemon
 COPY src src/
 
 # Build the application
-RUN ./gradlew clean bootJar --no-daemon -x test
+RUN ./gradlew build -x test --no-daemon
 
 # Verify the JAR was created
 RUN ls -lh build/libs/
