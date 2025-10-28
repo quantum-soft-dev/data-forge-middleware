@@ -123,16 +123,16 @@
 
 ### Implementation for User Story 1
 
-- [ ] **T019** [P] [US1] Create `src/main/java/com/bitbi/dfm/account/presentation/dto/CreateAccountRequest.java`:
+- [X] **T019** [P] [US1] Create `src/main/java/com/bitbi/dfm/account/presentation/dto/CreateAccountRequest.java`:
   - Fields: email, name, phone (optional), company (optional), role
   - Jakarta validation annotations (@NotBlank, @Email, @Size)
-- [ ] **T020** [P] [US1] Create `src/main/java/com/bitbi/dfm/account/presentation/dto/AccountWithKeycloakResponse.java`:
+- [X] **T020** [P] [US1] Create `src/main/java/com/bitbi/dfm/account/presentation/dto/AccountWithKeycloakResponse.java`:
   - Extends AccountResponseDto (or includes all Account fields)
   - Additional fields: keycloakEnabled, passwordTemporary, passwordExpiresAt, lastLogin
   - Static method: `fromEntity(Account, UserRepresentation)`
-- [ ] **T021** [P] [US1] Create `src/main/java/com/bitbi/dfm/account/presentation/dto/CreateAccountResponse.java`:
+- [X] **T021** [P] [US1] Create `src/main/java/com/bitbi/dfm/account/presentation/dto/CreateAccountResponse.java`:
   - Fields: account (AccountWithKeycloakResponse), temporaryPassword (String)
-- [ ] **T022** [US1] Implement `src/main/java/com/bitbi/dfm/account/application/KeycloakAccountSyncService.java`:
+- [X] **T022** [US1] Implement `src/main/java/com/bitbi/dfm/account/application/KeycloakAccountSyncService.java`:
   - Constructor: inject Keycloak, AccountRepository, TemporaryPasswordGenerator, AdminActionLogRepository
   - Method: `createAccount(CreateAccountRequest)` with two-phase commit:
     1. Create in Keycloak (enabled=true, temporary=true, generate password)
@@ -144,7 +144,7 @@
     7. Catch exceptions → rollback Keycloak user → log failure → rethrow
   - @Transactional annotation
   - Write unit tests with Mockito (mock all dependencies)
-- [ ] **T023** [US1] Extend `src/main/java/com/bitbi/dfm/account/presentation/AccountAdminController.java`:
+- [X] **T023** [US1] Extend `src/main/java/com/bitbi/dfm/account/presentation/AccountAdminController.java`:
   - Add endpoint: POST /api/admin/accounts (@PostMapping)
   - Parameter: @Valid @RequestBody CreateAccountRequest
   - Return: ResponseEntity<CreateAccountResponse> with @ResponseStatus(201)

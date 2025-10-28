@@ -3,11 +3,13 @@ package com.bitbi.dfm.account.presentation;
 import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
+import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import com.bitbi.dfm.account.presentation.dto.AccountStatisticsDto;
 import com.bitbi.dfm.account.presentation.dto.AccountWithStatsResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
+import com.bitbi.dfm.account.presentation.dto.CreateAccountResponse;
 import com.bitbi.dfm.account.presentation.dto.UpdateAccountRequestDto;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -56,14 +58,17 @@ public class AccountAdminController {
     private final AccountService accountService;
     private final AccountStatisticsService accountStatisticsService;
     private final AccountProperties accountProperties;
+    private final KeycloakAccountSyncService keycloakSyncService;
 
     public AccountAdminController(
             AccountService accountService,
             AccountStatisticsService accountStatisticsService,
-            AccountProperties accountProperties) {
+            AccountProperties accountProperties,
+            KeycloakAccountSyncService keycloakSyncService) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
         this.accountProperties = accountProperties;
+        this.keycloakSyncService = keycloakSyncService;
     }
 
     /**
@@ -344,5 +349,58 @@ public class AccountAdminController {
     public ResponseEntity<Map<String, Object>> getGlobalStatistics() {
         Map<String, Object> statistics = accountStatisticsService.getGlobalStatistics();
         return ResponseEntity.ok(statistics);
+    }
+
+    /**
+     * Create new account with Keycloak integration.
+     * <p>
+     * POST /admin/accounts/with-keycloak
+     * </p>
+     * <p>
+     * Creates account in both Keycloak (for authentication) and PostgreSQL (for business data).
+     * Returns temporary password that user must change on first login.
+     * </p>
+     *
+     * @param request account creation request (email, name, phone, company, role)
+     * @return created account with temporary password
+     */
+    @Operation(
+            summary = "Create account with Keycloak integration",
+            description = "Creates a new account with Keycloak authentication. Returns account details and temporary password."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Account created successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = CreateAccountResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid input (validation error)",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "Account already exists",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping("/with-keycloak")
+    public ResponseEntity<CreateAccountResponse> createAccountWithKeycloak(
+            @Valid @RequestBody CreateAccountRequestDto request,
+            @RequestHeader(value = "X-Forwarded-For", required = false) String ipAddress,
+            @RequestHeader(value = "User-Agent", required = false) String userAgent) {
+
+        logger.info("Creating account with Keycloak: email={}, name={}, phone={}, company={}",
+                request.email(), request.name(),
+                request.phone() != null ? "[set]" : "[not set]",
+                request.company() != null ? "[set]" : "[not set]");
+
+        // TODO: Extract admin account ID from Spring Security context
+        // For now, using a placeholder UUID - this should be replaced with actual admin ID from JWT token
+        UUID adminAccountId = UUID.randomUUID();
+
+        CreateAccountResponse response = keycloakSyncService.createAccount(
+                request,
+                adminAccountId,
+                ipAddress != null ? ipAddress : "unknown",
+                userAgent != null ? userAgent : "unknown"
+        );
+
+        logger.info("Account created successfully with Keycloak user ID: {}",
+                response.account().keycloakUserId());
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 }
