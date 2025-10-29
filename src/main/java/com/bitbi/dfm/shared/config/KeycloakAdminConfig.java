@@ -71,16 +71,19 @@ public class KeycloakAdminConfig {
     }
 
     /**
-     * Creates Keycloak admin client bean for user management operations.
+     * Creates Keycloak SDK client bean for user management operations.
      * <p>
      * Uses CLIENT_CREDENTIALS grant type with service account authentication.
      * The service account must have 'manage-users' role from realm-management client.
      * </p>
+     * <p>
+     * Bean name is "keycloak" to avoid conflict with KeycloakAdminClient component.
+     * </p>
      *
-     * @return configured Keycloak admin client
+     * @return configured Keycloak SDK client
      */
-    @Bean
-    public Keycloak keycloakAdminClient() {
+    @Bean(name = "keycloak")
+    public Keycloak keycloak() {
         return KeycloakBuilder.builder()
                 .serverUrl(authServerUrl)
                 .realm(realm)
