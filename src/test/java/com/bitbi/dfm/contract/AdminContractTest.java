@@ -78,6 +78,190 @@ class AdminContractTest {
     }
 
     /**
+     * Test Case 1a: Create account with role="USER" should return 201 with USER role assigned.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: POST /admin/accounts with role="USER"
+     * Then: 201 Created with account.role="USER" and temporaryPassword
+     * </p>
+     */
+    @Test
+    @DisplayName("Should create account with USER role when specified")
+    void shouldCreateAccountWithUserRole() throws Exception {
+        String requestBody = """
+                {
+                  "email": "user@example.com",
+                  "name": "Regular User",
+                  "role": "USER"
+                }
+                """;
+
+        // When: POST /admin/accounts with role="USER"
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 201 Created
+                .andExpect(status().isCreated())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.account").exists())
+                .andExpect(jsonPath("$.account.email").value("user@example.com"))
+                .andExpect(jsonPath("$.account.name").value("Regular User"))
+                .andExpect(jsonPath("$.account.role").value("USER"))
+                .andExpect(jsonPath("$.temporaryPassword").exists())
+                .andExpect(jsonPath("$.temporaryPassword").isString());
+    }
+
+    /**
+     * Test Case 1b: Create account with role="ADMIN" should return 201 with ADMIN role assigned.
+     */
+    @Test
+    @DisplayName("Should create account with ADMIN role when specified")
+    void shouldCreateAccountWithAdminRole() throws Exception {
+        String requestBody = """
+                {
+                  "email": "admin@example.com",
+                  "name": "Admin User",
+                  "role": "ADMIN"
+                }
+                """;
+
+        // When: POST /admin/accounts with role="ADMIN"
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 201 Created
+                .andExpect(status().isCreated())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.account").exists())
+                .andExpect(jsonPath("$.account.email").value("admin@example.com"))
+                .andExpect(jsonPath("$.account.name").value("Admin User"))
+                .andExpect(jsonPath("$.account.role").value("ADMIN"))
+                .andExpect(jsonPath("$.temporaryPassword").exists());
+    }
+
+    /**
+     * Test Case 1c: Create account with missing role should return 400 Bad Request.
+     */
+    @Test
+    @DisplayName("Should reject account creation with missing role field")
+    void shouldRejectAccountCreationWithMissingRole() throws Exception {
+        String requestBody = """
+                {
+                  "email": "test@example.com",
+                  "name": "Test User"
+                }
+                """;
+
+        // When: POST /admin/accounts without role field
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 1d: Create account with invalid role should return 400 Bad Request.
+     */
+    @Test
+    @DisplayName("Should reject account creation with invalid role value")
+    void shouldRejectAccountCreationWithInvalidRole() throws Exception {
+        String requestBody = """
+                {
+                  "email": "test@example.com",
+                  "name": "Test User",
+                  "role": "SUPERUSER"
+                }
+                """;
+
+        // When: POST /admin/accounts with invalid role
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 1e: Create account with duplicate email should return 409 Conflict.
+     */
+    @Test
+    @DisplayName("Should reject account creation with duplicate email")
+    void shouldRejectAccountCreationWithDuplicateEmail() throws Exception {
+        String requestBody = """
+                {
+                  "email": "existing@example.com",
+                  "name": "Duplicate User",
+                  "role": "USER"
+                }
+                """;
+
+        // First creation succeeds
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated());
+
+        // When: POST /admin/accounts with same email
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 409 Conflict
+                .andExpect(status().isConflict())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("Conflict"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 1f: Create account with invalid email should return 400 Bad Request.
+     */
+    @Test
+    @DisplayName("Should reject account creation with invalid email format")
+    void shouldRejectAccountCreationWithInvalidEmailInCreateRequest() throws Exception {
+        String requestBody = """
+                {
+                  "email": "not-a-valid-email",
+                  "name": "Test User",
+                  "role": "USER"
+                }
+                """;
+
+        // When: POST /admin/accounts with invalid email
+        mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
      * Test Case 2: List accounts should return paginated results.
      */
     @Test

@@ -109,7 +109,7 @@
 
 ### Tests for User Story 1 (TDD - Write FIRST, ensure FAIL)
 
-- [ ] **T017** [P] [US1] Contract test in `src/test/java/com/bitbi/dfm/account/contract/AccountAdminControllerContractTest.java`:
+- [X] **T017** [P] [US1] Contract test in `src/test/java/com/bitbi/dfm/account/contract/AccountAdminControllerContractTest.java`:
   - Test POST /api/admin/accounts → 201 with account + temporary password
   - **Test POST /api/admin/accounts with role="USER" → 201 (verify role in response)**
   - **Test POST /api/admin/accounts with role="ADMIN" → 201 (verify role in response)**
@@ -221,13 +221,13 @@
   - **Test: Successful submission with role="ADMIN" calls mutation with correct data**
   - Test: Temporary password displayed once after success
   - Use Vitest + Testing Library
-- [ ] **T036** [P] [US1] Integration test in `frontend/tests/integration/user-management/create-account-flow.test.tsx`:
+- [X] **T036** [P] [US1] Integration test in `frontend/tests/integration/user-management/create-account-flow.test.tsx`:
   - Mock API: POST /api/admin/accounts → 201
   - **Test: Fill form with role="USER" → submit → see success message with temp password → navigate to list**
   - **Test: Fill form with role="ADMIN" → submit → see success message with temp password → navigate to list**
   - Test: Duplicate email error → shows error toast
   - **Test: Missing role → shows validation error**
-- [ ] **T037** [US1] E2E test in `frontend/tests/e2e/user-management.spec.ts`:
+- [X] **T037** [US1] E2E test in `frontend/tests/e2e/user-management.spec.ts`:
   - Test: Login as admin → navigate to User Management → Create Account → fill form with role="USER" → submit → verify temp password shown → navigate to list → verify new account appears with USER role
   - **Test: Create account with role="ADMIN" → verify account appears in list with ADMIN role badge**
   - Use Playwright

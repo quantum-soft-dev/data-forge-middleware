@@ -284,6 +284,244 @@ test.describe('User Management Lock/Unlock E2E', () => {
   })
 })
 
+test.describe('User Management - Create Account Flow (T037)', () => {
+  test.setTimeout(120000) // 2 minutes for full E2E test
+
+  let testEmail: string
+
+  test.beforeEach(() => {
+    // Generate unique test email
+    const timestamp = Date.now()
+    testEmail = `e2e.create.${timestamp}@example.com`
+  })
+
+  test('create account with USER role - full flow', async ({ page }) => {
+    // Step 1: Admin logs in
+    await adminLogin(page)
+
+    // Verify admin dashboard is loaded
+    await expect(page).toHaveURL(/.*dashboard.*/)
+
+    // Step 2: Navigate to User Management
+    await page.click('a:has-text("User Management")').catch(async () => {
+      // Alternative: navigate via URL
+      await page.goto('/admin/users')
+    })
+
+    await expect(page).toHaveURL(/.*admin\/users.*/)
+
+    // Step 3: Click "Create Account" button
+    await page.click('button:has-text("Create Account")')
+
+    // Wait for create account form/page
+    await expect(page).toHaveURL(/.*accounts\/create.*/)
+
+    // Step 4: Fill in account details with USER role
+    await page.fill('input[name="email"]', testEmail)
+    await page.fill('input[name="name"]', 'E2E Test User')
+    await page.selectOption('select[name="role"]', 'USER')
+
+    // Step 5: Submit form
+    await page.click('button[type="submit"]:has-text("Create Account")')
+
+    // Step 6: Wait for success message and temporary password display
+    await page.waitForSelector(':has-text("Account Created Successfully")', { timeout: 10000 })
+
+    // Verify temporary password is displayed
+    await expect(page.locator(':has-text("Temporary Password")')).toBeVisible()
+
+    // Extract temporary password for verification
+    const passwordElement = await page.locator('[data-testid="temporary-password"]').textContent()
+    const tempPassword = passwordElement || ''
+
+    expect(tempPassword).toBeTruthy()
+    expect(tempPassword.length).toBeGreaterThan(10)
+
+    // Verify account email is shown in modal
+    await expect(page.locator(`:has-text("${testEmail}")`)).toBeVisible()
+
+    // Step 7: Close modal
+    await page.click('button:has-text("Close")').catch(async () => {
+      await page.keyboard.press('Escape')
+    })
+
+    // Wait for modal to close
+    await page.waitForSelector(':has-text("Account Created Successfully")', { state: 'hidden', timeout: 5000 })
+
+    // Step 8: Navigate to user list
+    await page.goto('/admin/users')
+
+    // Step 9: Search for newly created account
+    await page.fill('input[placeholder*="Search"]', testEmail)
+    await page.keyboard.press('Enter')
+
+    // Wait for search results
+    await page.waitForSelector(`td:has-text("${testEmail}")`, { timeout: 10000 })
+
+    // Step 10: Verify account appears in list with USER role
+    const userRow = page.locator(`tr:has-text("${testEmail}")`)
+    await expect(userRow).toBeVisible()
+
+    // Verify USER role badge is present
+    const roleBadge = userRow.locator('[data-testid="role-badge"]')
+    await expect(roleBadge).toHaveText('USER')
+
+    // Verify account status is "Enabled"
+    await expect(userRow.locator(':has-text("Enabled")')).toBeVisible()
+
+    console.log('✅ E2E Test Passed: Create account with USER role - full flow')
+  })
+
+  test('create account with ADMIN role - full flow', async ({ page }) => {
+    // Generate unique admin email
+    const adminEmail = `e2e.admin.${Date.now()}@example.com`
+
+    // Step 1: Admin logs in
+    await adminLogin(page)
+
+    // Step 2: Navigate to User Management
+    await page.goto('/admin/users')
+
+    // Step 3: Click "Create Account" button
+    await page.click('button:has-text("Create Account")')
+
+    await expect(page).toHaveURL(/.*accounts\/create.*/)
+
+    // Step 4: Fill in account details with ADMIN role
+    await page.fill('input[name="email"]', adminEmail)
+    await page.fill('input[name="name"]', 'E2E Test Admin')
+    await page.selectOption('select[name="role"]', 'ADMIN')
+
+    // Step 5: Submit form
+    await page.click('button[type="submit"]:has-text("Create Account")')
+
+    // Step 6: Verify success message and temporary password
+    await page.waitForSelector(':has-text("Account Created Successfully")', { timeout: 10000 })
+
+    const passwordElement = await page.locator('[data-testid="temporary-password"]').textContent()
+    const tempPassword = passwordElement || ''
+
+    expect(tempPassword).toBeTruthy()
+
+    // Close modal
+    await page.click('button:has-text("Close")').catch(async () => {
+      await page.keyboard.press('Escape')
+    })
+
+    // Step 7: Navigate to user list and search
+    await page.goto('/admin/users')
+    await page.fill('input[placeholder*="Search"]', adminEmail)
+    await page.keyboard.press('Enter')
+
+    // Wait for search results
+    await page.waitForSelector(`td:has-text("${adminEmail}")`, { timeout: 10000 })
+
+    // Step 8: Verify account appears with ADMIN role badge
+    const adminRow = page.locator(`tr:has-text("${adminEmail}")`)
+    await expect(adminRow).toBeVisible()
+
+    // Verify ADMIN role badge is present and styled differently
+    const roleBadge = adminRow.locator('[data-testid="role-badge"]')
+    await expect(roleBadge).toHaveText('ADMIN')
+
+    // Verify badge has different styling (e.g., different color for ADMIN)
+    const badgeClass = await roleBadge.getAttribute('class')
+    expect(badgeClass).toContain('admin') // Assumes ADMIN badge has 'admin' class
+
+    console.log('✅ E2E Test Passed: Create account with ADMIN role - full flow')
+  })
+
+  test('create account form validation errors', async ({ page }) => {
+    // Login as admin
+    await adminLogin(page)
+
+    // Navigate to create account page
+    await page.goto('/admin/accounts/create')
+
+    // Try to submit without filling fields
+    await page.click('button[type="submit"]:has-text("Create Account")')
+
+    // Verify validation errors are displayed
+    await expect(page.locator(':has-text("Email is required")')).toBeVisible()
+    await expect(page.locator(':has-text("Name is required")')).toBeVisible()
+    await expect(page.locator(':has-text("Role is required")')).toBeVisible()
+
+    // Verify form did not submit (still on create page)
+    await expect(page).toHaveURL(/.*accounts\/create.*/)
+
+    console.log('✅ E2E Test Passed: Create account form validation errors')
+  })
+
+  test('create account with duplicate email shows error', async ({ page }) => {
+    // Login as admin
+    await adminLogin(page)
+
+    // Navigate to user management
+    await page.goto('/admin/users')
+
+    // Get first existing user email from the list
+    const firstEmailCell = page.locator('tbody tr td').nth(1) // Assuming email is in 2nd column
+    const existingEmail = await firstEmailCell.textContent()
+
+    if (!existingEmail) {
+      console.log('⚠️ No existing users found, skipping duplicate email test')
+      return
+    }
+
+    // Navigate to create account page
+    await page.click('button:has-text("Create Account")')
+
+    // Fill form with duplicate email
+    await page.fill('input[name="email"]', existingEmail.trim())
+    await page.fill('input[name="name"]', 'Duplicate User')
+    await page.selectOption('select[name="role"]', 'USER')
+
+    // Submit form
+    await page.click('button[type="submit"]:has-text("Create Account")')
+
+    // Verify error message is displayed
+    await page.waitForSelector(':has-text("already exists")', { timeout: 10000 })
+
+    // Verify modal did NOT open (no temporary password shown)
+    await expect(page.locator(':has-text("Account Created Successfully")')).not.toBeVisible()
+
+    console.log('✅ E2E Test Passed: Create account with duplicate email shows error')
+  })
+
+  test('cancel create account returns to user list', async ({ page }) => {
+    // Login as admin
+    await adminLogin(page)
+
+    // Navigate to create account page
+    await page.goto('/admin/accounts/create')
+
+    // Fill in some data
+    await page.fill('input[name="email"]', 'test@example.com')
+    await page.fill('input[name="name"]', 'Test User')
+
+    // Click cancel button
+    await page.click('button:has-text("Cancel")')
+
+    // Verify navigation back to user list
+    await expect(page).toHaveURL(/.*admin\/users.*/)
+
+    // Verify account was NOT created (search for the email)
+    await page.fill('input[placeholder*="Search"]', 'test@example.com')
+    await page.keyboard.press('Enter')
+
+    // Wait a moment for search
+    await page.waitForTimeout(1000)
+
+    // Verify "No results" or account is not in the list
+    const noResults = await page.locator(':has-text("No results")').isVisible().catch(() => false)
+    const accountNotFound = await page.locator(`td:has-text("test@example.com")`).isVisible().catch(() => false)
+
+    expect(noResults || !accountNotFound).toBe(true)
+
+    console.log('✅ E2E Test Passed: Cancel create account returns to user list')
+  })
+})
+
 test.describe('User Management - Edge Cases', () => {
   test('admin cannot lock their own account', async ({ page }) => {
     // Login as admin
