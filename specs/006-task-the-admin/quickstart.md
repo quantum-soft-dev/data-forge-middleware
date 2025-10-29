@@ -270,6 +270,9 @@ npm run test:coverage
 
 ## API Testing
 
+> **Automated Validation**: Use `./validate-quickstart.sh` to test all API endpoints automatically.
+> See [VALIDATION.md](./VALIDATION.md) for detailed instructions.
+
 ### Create Account with Keycloak
 
 ```bash
