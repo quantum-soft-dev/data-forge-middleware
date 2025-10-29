@@ -35,7 +35,7 @@ async function fetchAccounts(filters: AccountFilters): Promise<AccountListRespon
   const params = new URLSearchParams()
 
   if (filters.page !== undefined) {
-    params.append('page', String(filters.page - 1)) // Convert 1-indexed UI to 0-indexed API
+    params.append('page', String(filters.page)) // Already 0-indexed from caller
   }
   if (filters.size) {
     params.append('size', String(filters.size))
