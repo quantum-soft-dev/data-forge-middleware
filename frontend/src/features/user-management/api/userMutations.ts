@@ -5,9 +5,11 @@
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { apiClient } from '@/shared/api/client'
 import type {
   CreateAccountRequest,
   CreateAccountResponse,
+  ResetPasswordResponse,
 } from '../../../entities/account/model/types'
 import { accountKeys } from './userQueries'
 
@@ -15,21 +17,17 @@ import { accountKeys } from './userQueries'
  * Create account with Keycloak integration.
  */
 async function createAccount(request: CreateAccountRequest): Promise<CreateAccountResponse> {
-  const response = await fetch('/api/admin/accounts/with-keycloak', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || 'Failed to create account')
+  try {
+    const response = await apiClient.post<CreateAccountResponse>(
+      '/admin/accounts/with-keycloak',
+      request
+    )
+    return response.data
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || 'Failed to create account'
+    const statusCode = error.response?.status || 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
   }
-
-  return response.json()
 }
 
 /**
@@ -52,17 +50,12 @@ export function useCreateAccountMutation() {
  * Lock account (disable Keycloak user).
  */
 async function lockAccount(accountId: string): Promise<void> {
-  const response = await fetch(`/api/admin/accounts/${accountId}/lock`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || 'Failed to lock account')
+  try {
+    await apiClient.post(`/admin/accounts/${accountId}/lock`)
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || 'Failed to lock account'
+    const statusCode = error.response?.status || 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
   }
 }
 
@@ -86,17 +79,12 @@ export function useLockAccountMutation() {
  * Unlock account (enable Keycloak user).
  */
 async function unlockAccount(accountId: string): Promise<void> {
-  const response = await fetch(`/api/admin/accounts/${accountId}/unlock`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.message || 'Failed to unlock account')
+  try {
+    await apiClient.post(`/admin/accounts/${accountId}/unlock`)
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || 'Failed to unlock account'
+    const statusCode = error.response?.status || 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
   }
 }
 
@@ -109,6 +97,39 @@ export function useUnlockAccountMutation() {
 
   return useMutation({
     mutationFn: unlockAccount,
+    onSuccess: (_, accountId) => {
+      // Invalidate specific account detail to refetch
+      queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
+    },
+  })
+}
+
+/**
+ * Reset account password to new temporary password.
+ */
+async function resetPassword(accountId: string): Promise<ResetPasswordResponse> {
+  try {
+    const response = await apiClient.post<ResetPasswordResponse>(
+      `/admin/accounts/${accountId}/reset-password`
+    )
+    return response.data
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || 'Failed to reset password'
+    const statusCode = error.response?.status || 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  }
+}
+
+/**
+ * Hook to reset account password.
+ * Invalidates specific account detail query on success.
+ * Returns temporary password and expiration in response.
+ */
+export function useResetPasswordMutation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: resetPassword,
     onSuccess: (_, accountId) => {
       // Invalidate specific account detail to refetch
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })

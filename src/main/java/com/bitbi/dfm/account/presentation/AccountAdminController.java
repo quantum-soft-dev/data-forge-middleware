@@ -5,11 +5,15 @@ import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountStatisticsService;
 import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
 import com.bitbi.dfm.account.domain.Account;
+import com.bitbi.dfm.account.domain.AdminActionLog;
+import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import com.bitbi.dfm.account.presentation.dto.AccountStatisticsDto;
 import com.bitbi.dfm.account.presentation.dto.AccountWithStatsResponseDto;
+import com.bitbi.dfm.account.presentation.dto.AdminActionLogResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountResponse;
+import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse;
 import com.bitbi.dfm.account.presentation.dto.UpdateAccountRequestDto;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -59,16 +63,19 @@ public class AccountAdminController {
     private final AccountStatisticsService accountStatisticsService;
     private final AccountProperties accountProperties;
     private final KeycloakAccountSyncService keycloakSyncService;
+    private final AdminActionLogRepository auditLogRepository;
 
     public AccountAdminController(
             AccountService accountService,
             AccountStatisticsService accountStatisticsService,
             AccountProperties accountProperties,
-            KeycloakAccountSyncService keycloakSyncService) {
+            KeycloakAccountSyncService keycloakSyncService,
+            AdminActionLogRepository auditLogRepository) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
         this.accountProperties = accountProperties;
         this.keycloakSyncService = keycloakSyncService;
+        this.auditLogRepository = auditLogRepository;
     }
 
     /**
@@ -387,9 +394,10 @@ public class AccountAdminController {
                 request.phone() != null ? "[set]" : "[not set]",
                 request.company() != null ? "[set]" : "[not set]");
 
-        // TODO: Extract admin account ID from Spring Security context
-        // For now, using a placeholder UUID - this should be replaced with actual admin ID from JWT token
-        UUID adminAccountId = UUID.randomUUID();
+        // TODO: Extract admin account ID from Spring Security context (Keycloak JWT sub claim)
+        // For now, passing null - audit logs will have null admin_account_id until we implement
+        // proper Keycloak user ID to local account ID mapping
+        UUID adminAccountId = null;
 
         CreateAccountResponse response = keycloakSyncService.createAccount(
                 request,
@@ -402,5 +410,219 @@ public class AccountAdminController {
                 response.account().keycloakUserId());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    /**
+     * Lock account (disable in Keycloak).
+     * <p>
+     * POST /admin/accounts/{id}/lock
+     * </p>
+     * <p>
+     * Disables the user in Keycloak, preventing login while preserving data.
+     * Requires account to have Keycloak integration.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param ipAddress IP address from X-Forwarded-For header
+     * @param userAgent User-Agent from header
+     * @return updated account with keycloakEnabled=false
+     */
+    @Operation(
+            summary = "Lock account (disable Keycloak user)",
+            description = "Locks an account by disabling the associated Keycloak user. User cannot login until unlocked."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Account locked successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Account already locked or no Keycloak integration",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping("/{id}/lock")
+    public ResponseEntity<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> lockAccount(
+            @PathVariable("id") UUID accountId,
+            @RequestHeader(value = "X-Forwarded-For", required = false) String ipAddress,
+            @RequestHeader(value = "User-Agent", required = false) String userAgent) {
+
+        logger.info("Locking account: accountId={}", accountId);
+
+        // TODO: Extract admin account ID from Spring Security context
+        UUID adminAccountId = UUID.randomUUID();
+
+        com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse response = keycloakSyncService.lockAccount(
+                accountId,
+                adminAccountId,
+                ipAddress != null ? ipAddress : "unknown",
+                userAgent != null ? userAgent : "unknown"
+        );
+
+        logger.info("Account locked successfully: accountId={}, keycloakUserId={}",
+                accountId, response.keycloakUserId());
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Unlock account (enable in Keycloak).
+     * <p>
+     * POST /admin/accounts/{id}/unlock
+     * </p>
+     * <p>
+     * Enables the user in Keycloak, allowing login.
+     * Requires account to have Keycloak integration.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param ipAddress IP address from X-Forwarded-For header
+     * @param userAgent User-Agent from header
+     * @return updated account with keycloakEnabled=true
+     */
+    @Operation(
+            summary = "Unlock account (enable Keycloak user)",
+            description = "Unlocks an account by enabling the associated Keycloak user. User can login again."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Account unlocked successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Account already unlocked or no Keycloak integration",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping("/{id}/unlock")
+    public ResponseEntity<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> unlockAccount(
+            @PathVariable("id") UUID accountId,
+            @RequestHeader(value = "X-Forwarded-For", required = false) String ipAddress,
+            @RequestHeader(value = "User-Agent", required = false) String userAgent) {
+
+        logger.info("Unlocking account: accountId={}", accountId);
+
+        // TODO: Extract admin account ID from Spring Security context
+        UUID adminAccountId = UUID.randomUUID();
+
+        com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse response = keycloakSyncService.unlockAccount(
+                accountId,
+                adminAccountId,
+                ipAddress != null ? ipAddress : "unknown",
+                userAgent != null ? userAgent : "unknown"
+        );
+
+        logger.info("Account unlocked successfully: accountId={}, keycloakUserId={}",
+                accountId, response.keycloakUserId());
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Reset account password to new temporary password.
+     * <p>
+     * POST /admin/accounts/{id}/reset-password
+     * </p>
+     * <p>
+     * Generates a new temporary password and resets it in Keycloak.
+     * User will be forced to change password on next login.
+     * Password expires in 30 days.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param ipAddress IP address from X-Forwarded-For header
+     * @param userAgent User-Agent from header
+     * @return reset response with temporary password and expiration
+     */
+    @Operation(
+            summary = "Reset account password",
+            description = "Resets password to new temporary password. User must change it on next login. Password expires in 30 days."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Password reset successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ResetPasswordResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Account has no Keycloak integration",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping("/{id}/reset-password")
+    public ResponseEntity<ResetPasswordResponse> resetPassword(
+            @PathVariable("id") UUID accountId,
+            @RequestHeader(value = "X-Forwarded-For", required = false) String ipAddress,
+            @RequestHeader(value = "User-Agent", required = false) String userAgent) {
+
+        logger.info("Resetting password for account: accountId={}", accountId);
+
+        // TODO: Extract admin account ID from Spring Security context
+        UUID adminAccountId = UUID.randomUUID();
+
+        ResetPasswordResponse response = keycloakSyncService.resetPassword(
+                accountId,
+                adminAccountId,
+                ipAddress != null ? ipAddress : "unknown",
+                userAgent != null ? userAgent : "unknown"
+        );
+
+        logger.info("Password reset successfully: accountId={}, expiresAt={}",
+                accountId, response.expiresAt());
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get audit logs for an account.
+     * <p>
+     * GET /admin/accounts/{id}/audit-logs?page=0&size=20&sort=createdAt,desc
+     * </p>
+     * <p>
+     * Returns paginated history of administrative actions performed on the account
+     * (create, lock, unlock, reset password).
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param page      page number (default: 0)
+     * @param size      page size (default: 20)
+     * @param sort      sort field and direction (default: createdAt,desc)
+     * @return paginated list of audit log entries
+     */
+    @Operation(
+            summary = "Get account audit logs",
+            description = "Retrieves paginated audit trail of administrative actions performed on this account."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Audit logs retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @GetMapping("/{id}/audit-logs")
+    public ResponseEntity<PageResponseDto<AdminActionLogResponseDto>> getAccountAuditLogs(
+            @PathVariable("id") UUID accountId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt,desc") String sort) {
+
+        logger.info("Fetching audit logs for account: accountId={}, page={}, size={}", accountId, page, size);
+
+        // Verify account exists
+        accountService.getAccount(accountId);
+
+        // Parse sort parameter
+        String[] sortParams = sort.split(",");
+        String sortField = sortParams[0];
+        Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
+
+        // Create pageable
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+
+        // Get paginated audit logs
+        Page<AdminActionLog> logPage = auditLogRepository.findByTargetAccountId(accountId, pageable);
+
+        // Convert to response DTO
+        PageResponseDto<AdminActionLogResponseDto> response = PageResponseDto.of(
+                logPage,
+                AdminActionLogResponseDto::fromEntity
+        );
+
+        return ResponseEntity.ok(response);
     }
 }

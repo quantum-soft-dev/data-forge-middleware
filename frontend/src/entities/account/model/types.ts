@@ -65,9 +65,18 @@ export interface AdminActionLog {
   id: number
   actionType: 'CREATE_ACCOUNT' | 'LOCK_ACCOUNT' | 'UNLOCK_ACCOUNT' | 'RESET_PASSWORD'
   targetAccountId: string
-  adminAccountId: string
+  adminAccountId: string | null
   status: 'SUCCESS' | 'FAILED'
   errorMessage?: string
   ipAddress?: string
+  userAgent?: string
   createdAt: string
+}
+
+export interface AdminActionLogListResponse {
+  content: AdminActionLog[]
+  page: number // 0-indexed from API
+  size: number
+  totalElements: number
+  totalPages: number
 }

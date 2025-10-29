@@ -9,6 +9,7 @@ import type {
   Account,
   AccountWithKeycloakStatus,
   AdminActionLog,
+  AdminActionLogListResponse,
   AccountListResponse,
   AccountFilters,
 } from '../../../entities/account/model/types'
@@ -23,7 +24,7 @@ export const accountKeys = {
   list: (filters: AccountFilters) => [...accountKeys.lists(), filters] as const,
   details: () => [...accountKeys.all, 'detail'] as const,
   detail: (id: string) => [...accountKeys.details(), id] as const,
-  auditLogs: (id: string) => [...accountKeys.detail(id), 'audit-logs'] as const,
+  auditLogs: (id: string, page: number, size: number) => [...accountKeys.detail(id), 'audit-logs', page, size] as const,
 }
 
 /**
@@ -111,10 +112,20 @@ export function useAccountQuery(accountId: string) {
 }
 
 /**
- * Fetch audit logs for an account.
+ * Fetch audit logs for an account with pagination.
  */
-async function fetchAccountAuditLogs(accountId: string): Promise<AdminActionLog[]> {
-  const response = await fetch(`/api/admin/accounts/${accountId}/audit-logs`, {
+async function fetchAccountAuditLogs(
+  accountId: string,
+  page: number = 0,
+  size: number = 20,
+  sort: string = 'createdAt,desc'
+): Promise<AdminActionLogListResponse> {
+  const params = new URLSearchParams()
+  params.append('page', String(page))
+  params.append('size', String(size))
+  params.append('sort', sort)
+
+  const response = await fetch(`/api/admin/accounts/${accountId}/audit-logs?${params.toString()}`, {
     headers: {
       'Content-Type': 'application/json',
     },
@@ -129,14 +140,20 @@ async function fetchAccountAuditLogs(accountId: string): Promise<AdminActionLog[
 }
 
 /**
- * Hook to fetch audit logs for an account.
+ * Hook to fetch paginated audit logs for an account.
  *
  * @param accountId Account UUID
+ * @param page Page number (0-indexed to match API)
+ * @param size Page size (default: 20)
  */
-export function useAccountAuditLogsQuery(accountId: string) {
+export function useAccountAuditLogsQuery(
+  accountId: string,
+  page: number = 0,
+  size: number = 20
+) {
   return useQuery({
-    queryKey: accountKeys.auditLogs(accountId),
-    queryFn: () => fetchAccountAuditLogs(accountId),
+    queryKey: accountKeys.auditLogs(accountId, page, size),
+    queryFn: () => fetchAccountAuditLogs(accountId, page, size),
     enabled: !!accountId,
     staleTime: 10000, // 10 seconds (audit logs should be relatively fresh)
   })

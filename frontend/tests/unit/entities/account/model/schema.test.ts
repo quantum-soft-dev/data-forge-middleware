@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import {
-  subscriberSchema,
-  subscriberFiltersSchema,
-  subscriberListResponseSchema,
+  accountSchema,
+  accountFiltersSchema,
+  accountListResponseSchema,
   createAccountSchema,
 } from '@/entities/account/model/schema'
 
 describe('Account Schemas', () => {
-  describe('subscriberSchema', () => {
-    it('should validate valid subscriber data', () => {
+  describe('accountSchema', () => {
+    it('should validate valid account data', () => {
       const validData = {
         id: '123',
         name: 'John Doe',
@@ -19,7 +19,7 @@ describe('Account Schemas', () => {
         createdAt: '2024-01-15T10:00:00Z',
       }
 
-      const result = subscriberSchema.safeParse(validData)
+      const result = accountSchema.safeParse(validData)
       expect(result.success).toBe(true)
     })
 
@@ -30,7 +30,7 @@ describe('Account Schemas', () => {
         // missing email
       }
 
-      const result = subscriberSchema.safeParse(invalidData)
+      const result = accountSchema.safeParse(invalidData)
       expect(result.success).toBe(false)
     })
 
@@ -45,7 +45,7 @@ describe('Account Schemas', () => {
         createdAt: '2024-01-01T00:00:00Z',
       }
 
-      const result = subscriberSchema.safeParse(invalidData)
+      const result = accountSchema.safeParse(invalidData)
       expect(result.success).toBe(false)
     })
 
@@ -53,18 +53,18 @@ describe('Account Schemas', () => {
       const activeData = { ...validAccount(), status: 'active' }
       const inactiveData = { ...validAccount(), status: 'inactive' }
 
-      expect(subscriberSchema.safeParse(activeData).success).toBe(true)
-      expect(subscriberSchema.safeParse(inactiveData).success).toBe(true)
+      expect(accountSchema.safeParse(activeData).success).toBe(true)
+      expect(accountSchema.safeParse(inactiveData).success).toBe(true)
     })
 
     it('should reject invalid status values', () => {
       const invalidData = { ...validAccount(), status: 'pending' }
-      const result = subscriberSchema.safeParse(invalidData)
+      const result = accountSchema.safeParse(invalidData)
       expect(result.success).toBe(false)
     })
   })
 
-  describe('subscriberFiltersSchema', () => {
+  describe('accountFiltersSchema', () => {
     it('should validate valid filters', () => {
       const validFilters = {
         search: 'john',
@@ -73,29 +73,29 @@ describe('Account Schemas', () => {
         size: 20,
       }
 
-      const result = subscriberFiltersSchema.safeParse(validFilters)
+      const result = accountFiltersSchema.safeParse(validFilters)
       expect(result.success).toBe(true)
     })
 
     it('should accept empty filters', () => {
-      const result = subscriberFiltersSchema.safeParse({})
+      const result = accountFiltersSchema.safeParse({})
       expect(result.success).toBe(true)
     })
 
     it('should reject invalid page numbers', () => {
       const invalidFilters = { page: 0 } // page must be >= 1
-      const result = subscriberFiltersSchema.safeParse(invalidFilters)
+      const result = accountFiltersSchema.safeParse(invalidFilters)
       expect(result.success).toBe(false)
     })
 
     it('should reject invalid page size', () => {
       const invalidFilters = { size: 0 } // size must be >= 1
-      const result = subscriberFiltersSchema.safeParse(invalidFilters)
+      const result = accountFiltersSchema.safeParse(invalidFilters)
       expect(result.success).toBe(false)
     })
   })
 
-  describe('subscriberListResponseSchema', () => {
+  describe('accountListResponseSchema', () => {
     it('should validate valid list response', () => {
       const validResponse = {
         content: [validAccount()],
@@ -105,7 +105,7 @@ describe('Account Schemas', () => {
         totalPages: 1,
       }
 
-      const result = subscriberListResponseSchema.safeParse(validResponse)
+      const result = accountListResponseSchema.safeParse(validResponse)
       expect(result.success).toBe(true)
     })
 
@@ -118,7 +118,7 @@ describe('Account Schemas', () => {
         totalPages: 0,
       }
 
-      const result = subscriberListResponseSchema.safeParse(emptyResponse)
+      const result = accountListResponseSchema.safeParse(emptyResponse)
       expect(result.success).toBe(true)
     })
 
@@ -128,7 +128,7 @@ describe('Account Schemas', () => {
         // missing page, size, etc.
       }
 
-      const result = subscriberListResponseSchema.safeParse(invalidResponse)
+      const result = accountListResponseSchema.safeParse(invalidResponse)
       expect(result.success).toBe(false)
     })
   })

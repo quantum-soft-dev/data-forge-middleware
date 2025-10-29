@@ -6,6 +6,7 @@ import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.presentation.dto.FileUploadResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -139,6 +140,19 @@ public class FileUploadController {
             logger.warn("Invalid file: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
+
+        } catch (DataIntegrityViolationException e) {
+            // Handle duplicate S3 key constraint violation
+            logger.warn("Duplicate file upload attempt: batchId={}, error={}", batchId, e.getMessage());
+            String errorMessage = "File already uploaded";
+
+            // Extract more specific info if available
+            if (e.getMessage() != null && e.getMessage().contains("uploaded_files_s3_key_key")) {
+                errorMessage = "File with this name already exists at this location";
+            }
+
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, errorMessage));
 
         } catch (Exception e) {
             logger.error("Error uploading files: batchId={}", batchId, e);

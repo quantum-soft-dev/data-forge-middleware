@@ -28,6 +28,8 @@ public class KeycloakAdminConfig {
     public static class Admin {
         private String clientId;
         private String clientSecret;
+        private String username;
+        private String password;
 
         public String getClientId() {
             return clientId;
@@ -43,6 +45,22 @@ public class KeycloakAdminConfig {
 
         public void setClientSecret(String clientSecret) {
             this.clientSecret = clientSecret;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
         }
     }
 
@@ -73,8 +91,8 @@ public class KeycloakAdminConfig {
     /**
      * Creates Keycloak SDK client bean for user management operations.
      * <p>
-     * Uses CLIENT_CREDENTIALS grant type with service account authentication.
-     * The service account must have 'manage-users' role from realm-management client.
+     * Uses PASSWORD grant type with admin username/password authentication.
+     * Falls back to CLIENT_CREDENTIALS if username/password not provided.
      * </p>
      * <p>
      * Bean name is "keycloak" to avoid conflict with KeycloakAdminClient component.
@@ -84,12 +102,21 @@ public class KeycloakAdminConfig {
      */
     @Bean(name = "keycloak")
     public Keycloak keycloak() {
-        return KeycloakBuilder.builder()
+        KeycloakBuilder builder = KeycloakBuilder.builder()
                 .serverUrl(authServerUrl)
-                .realm(realm)
-                .grantType(OAuth2Constants.CLIENT_CREDENTIALS)
-                .clientId(admin.getClientId())
-                .clientSecret(admin.getClientSecret())
-                .build();
+                .realm("master") // Always authenticate against master realm for admin operations
+                .clientId(admin.getClientId());
+
+        // Use PASSWORD grant if username/password provided, otherwise CLIENT_CREDENTIALS
+        if (admin.getUsername() != null && !admin.getUsername().isBlank()) {
+            builder.grantType(OAuth2Constants.PASSWORD)
+                   .username(admin.getUsername())
+                   .password(admin.getPassword());
+        } else {
+            builder.grantType(OAuth2Constants.CLIENT_CREDENTIALS)
+                   .clientSecret(admin.getClientSecret());
+        }
+
+        return builder.build();
     }
 }

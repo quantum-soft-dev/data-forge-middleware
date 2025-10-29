@@ -17,8 +17,8 @@ As an administrator, I need to create new user accounts with temporary passwords
 
 **Acceptance Scenarios**:
 
-1. **Given** I am an authenticated administrator, **When** I navigate to the user management section and click "Create User", **Then** I should see a form to enter user details (email, name, role) and the system generates a temporary password
-2. **Given** I have filled in valid user details, **When** I submit the create user form, **Then** the system creates the user in both the database and Keycloak, displays a success message with the temporary password, and shows the new user in the user list
+1. **Given** I am an authenticated administrator, **When** I navigate to the user management section and click "Create User", **Then** I should see a form to enter user details (email, name, role selection: USER or ADMIN) and the system generates a temporary password
+2. **Given** I have filled in valid user details including role selection, **When** I submit the create user form, **Then** the system creates the user in both the database and Keycloak with the specified role (USER or ADMIN) assigned in Keycloak, displays a success message with the temporary password, and shows the new user in the user list
 3. **Given** a new user has been created with a temporary password, **When** the user logs in for the first time with the temporary password, **Then** the system requires them to set a new permanent password before granting access
 4. **Given** I attempt to create a user with an email that already exists, **When** I submit the form, **Then** the system displays an error message indicating the email is already in use and does not create duplicate entries
 5. **Given** I have created a new user, **When** I view the user list, **Then** the new user appears with status indicators showing they have not yet logged in and are using a temporary password
@@ -79,6 +79,7 @@ As an administrator, I need to reset user passwords to temporary values so that 
 - **FR-001**: System MUST provide an admin interface to create new user accounts with email, name, and role information
 - **FR-002**: System MUST generate secure temporary passwords that meet complexity requirements (minimum 12 characters, including uppercase, lowercase, numbers, and special characters)
 - **FR-003**: System MUST create user records in both the local database and Keycloak identity provider when a new user is created
+- **FR-003a**: System MUST assign either USER or ADMIN role to newly created users in Keycloak based on the role specified during creation
 - **FR-004**: System MUST display the generated temporary password to the administrator exactly once at creation time
 - **FR-005**: System MUST require users with temporary passwords to change their password before accessing any other system functionality
 - **FR-006**: System MUST validate that email addresses are unique across both the database and Keycloak before creating a new user
@@ -99,7 +100,7 @@ As an administrator, I need to reset user passwords to temporary values so that 
 
 ### Key Entities
 
-- **User**: Represents a system user with attributes including unique identifier, email address (unique), full name, account status (active/locked), password status (permanent/temporary), password expiration date, created timestamp, last login timestamp, and role/permissions. Users exist in both the local database and Keycloak with synchronized state.
+- **User**: Represents a system user with attributes including unique identifier, email address (unique), full name, account status (active/locked), password status (permanent/temporary), password expiration date, created timestamp, last login timestamp, and role (USER or ADMIN). Users exist in both the local database and Keycloak with synchronized state. The role is assigned in Keycloak at user creation and determines access permissions.
 
 - **Administrative Action Log**: Represents audit trail entries for user management operations, including action type (create/lock/unlock/reset), target user identifier, administrator identifier, timestamp, result status (success/failure), and optional notes or error details.
 
@@ -122,7 +123,7 @@ As an administrator, I need to reset user passwords to temporary values so that 
 2. **Password Policy**: Temporary passwords follow the same complexity rules as permanent passwords (12+ characters, mixed case, numbers, symbols)
 3. **Temporary Password Expiration**: Temporary passwords expire after 30 days if not changed
 4. **Session Handling**: When an account is locked, existing sessions continue until natural expiration (no immediate session termination)
-5. **Role Assignment**: User creation includes assigning a default role; role management beyond initial assignment is out of scope for this feature
+5. **Role Assignment**: User creation requires selecting either USER or ADMIN role, which is assigned in Keycloak and stored in the local database; role changes after creation are out of scope for this feature
 6. **Self-Service Password Reset**: Assumes a separate self-service password reset mechanism exists for users; admin reset is for support scenarios
 7. **Email Notifications**: Email notifications to users (account created, password reset, account locked) are assumed to be handled by Keycloak's built-in notification system
 8. **Concurrent Access**: Standard optimistic locking mechanisms will prevent data corruption from concurrent administrative actions

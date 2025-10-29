@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
+import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -274,6 +275,30 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle CannotLockOwnAccountException (403 Forbidden).
+     * <p>
+     * Prevents administrators from accidentally locking themselves out.
+     * </p>
+     */
+    @ExceptionHandler(KeycloakAccountSyncService.CannotLockOwnAccountException.class)
+    public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
+            KeycloakAccountSyncService.CannotLockOwnAccountException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Admin attempted to lock own account: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
     }
 
     /**

@@ -32,10 +32,10 @@ public class AdminActionLog {
     @Column(name = "action_type", nullable = false, length = 50)
     private AdminActionType actionType;
 
-    @Column(name = "target_account_id", nullable = false)
+    @Column(name = "target_account_id", nullable = true)
     private UUID targetAccountId;
 
-    @Column(name = "admin_account_id", nullable = false)
+    @Column(name = "admin_account_id", nullable = true)
     private UUID adminAccountId;
 
     @Enumerated(EnumType.STRING)

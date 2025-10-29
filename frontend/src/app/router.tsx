@@ -7,6 +7,9 @@ const LoginPage = lazy(() => import('@/pages/login/LoginPage'))
 const CallbackPage = lazy(() => import('@/pages/login/CallbackPage'))
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
 const AccountListPage = lazy(() => import('@/pages/accounts/list/AccountListPage'))
+const CreateAccountPage = lazy(() => import('@/pages/accounts/create/CreateAccountPage'))
+const AccountsListPage = lazy(() => import('@/pages/accounts/users/AccountsListPage'))
+const AccountDetailsPage = lazy(() => import('@/pages/accounts/details/AccountDetailsPage'))
 
 // Router context type
 interface RouterContext {
@@ -68,12 +71,51 @@ const accountsRoute = createRoute({
   component: AccountListPage,
 })
 
+const createAccountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/accounts/create',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+  },
+  component: CreateAccountPage,
+})
+
+const usersListRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/users',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+  },
+  component: AccountsListPage,
+})
+
+const accountDetailsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/users/$id',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+  },
+  component: AccountDetailsPage,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
   callbackRoute,
   dashboardRoute,
   accountsRoute,
+  createAccountRoute,
+  usersListRoute,
+  accountDetailsRoute,
 ])
 
 // Create router instance

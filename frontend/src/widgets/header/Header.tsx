@@ -42,6 +42,15 @@ export function Header() {
             >
               Accounts
             </Link>
+            <Link
+              to="/admin/users"
+              className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+              activeProps={{
+                className: 'text-sm font-medium text-primary hover:text-primary',
+              }}
+            >
+              User Management
+            </Link>
             <div className="ml-4 border-l border-gray-300 pl-4">
               <LogoutButton />
             </div>

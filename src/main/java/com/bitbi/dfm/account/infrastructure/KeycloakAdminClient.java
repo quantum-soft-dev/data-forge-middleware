@@ -5,9 +5,11 @@ import jakarta.ws.rs.core.Response;
 import org.keycloak.admin.client.Keycloak;
 import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.representations.idm.CredentialRepresentation;
+import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -159,6 +161,69 @@ public class KeycloakAdminClient {
             return keycloak.realm(realm).users().get(keycloakUserId).toRepresentation();
         } catch (Exception e) {
             throw new KeycloakOperationException("Error fetching Keycloak user: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Assign a realm-level role to a user in Keycloak.
+     * <p>
+     * This method retrieves the role from the realm and assigns it to the user.
+     * Common roles: "USER", "ADMIN"
+     * </p>
+     *
+     * @param keycloakUserId Keycloak user ID
+     * @param roleName       Name of the role to assign (e.g., "USER", "ADMIN")
+     * @throws KeycloakOperationException if operation fails
+     */
+    public void assignRole(String keycloakUserId, String roleName) {
+        try {
+            // Get the role from the realm
+            RoleRepresentation role = keycloak.realm(realm)
+                    .roles()
+                    .get(roleName)
+                    .toRepresentation();
+
+            if (role == null) {
+                throw new KeycloakOperationException("Role not found in realm: " + roleName);
+            }
+
+            // Assign the role to the user at realm level
+            keycloak.realm(realm)
+                    .users()
+                    .get(keycloakUserId)
+                    .roles()
+                    .realmLevel()
+                    .add(Collections.singletonList(role));
+
+        } catch (Exception e) {
+            if (e instanceof KeycloakOperationException) {
+                throw e;
+            }
+            throw new KeycloakOperationException("Error assigning role to Keycloak user: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Get all realm-level roles assigned to a user.
+     *
+     * @param keycloakUserId Keycloak user ID
+     * @return List of role names
+     * @throws KeycloakOperationException if operation fails
+     */
+    public List<String> getRoles(String keycloakUserId) {
+        try {
+            List<RoleRepresentation> roles = keycloak.realm(realm)
+                    .users()
+                    .get(keycloakUserId)
+                    .roles()
+                    .realmLevel()
+                    .listAll();
+
+            return roles.stream()
+                    .map(RoleRepresentation::getName)
+                    .toList();
+        } catch (Exception e) {
+            throw new KeycloakOperationException("Error getting roles for Keycloak user: " + e.getMessage(), e);
         }
     }
 
