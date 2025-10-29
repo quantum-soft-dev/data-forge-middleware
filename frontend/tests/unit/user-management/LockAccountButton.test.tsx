@@ -152,7 +152,7 @@ describe('LockAccountButton', () => {
     // Verify dialog appears
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(screen.getByText('Lock Account')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /lock account/i })).toBeInTheDocument()
       expect(screen.getByText(/are you sure you want to lock the account for/i)).toBeInTheDocument()
       expect(screen.getByText('test@example.com')).toBeInTheDocument()
       expect(screen.getByText(/the user will not be able to login/i)).toBeInTheDocument()
