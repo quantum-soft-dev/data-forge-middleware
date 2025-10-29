@@ -1,17 +1,27 @@
 package com.bitbi.dfm.contract;
 
+import com.bitbi.dfm.account.infrastructure.KeycloakAdminClient;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import org.keycloak.representations.idm.UserRepresentation;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.UUID;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -35,11 +45,46 @@ class AdminContractTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @MockBean
+    private KeycloakAdminClient keycloakAdminClient;
+
     private static final String MOCK_ADMIN_JWT_TOKEN = "mock.admin.jwt.token";
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
     private static final String MOCK_ACCOUNT_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     private static final String MOCK_SITE_ID = "b2c3d4e5-f6a7-8901-bcde-f12345678901";
     private static final String MOCK_BATCH_ID = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+    private static final String MOCK_KEYCLOAK_USER_ID = "mock-keycloak-user-id-12345";
+
+    @BeforeEach
+    void setUp() throws Exception {
+        // Mock Keycloak Admin Client to avoid real Keycloak API calls
+
+        // For create user in Keycloak
+        when(keycloakAdminClient.createUser(anyString(), anyString(), anyString(), any(Boolean.class)))
+                .thenReturn(MOCK_KEYCLOAK_USER_ID);
+
+        // For update user attributes (bidirectional reference)
+        doNothing().when(keycloakAdminClient).updateUserAttributes(anyString(), anyString());
+
+        // For assign role
+        doNothing().when(keycloakAdminClient).assignRole(anyString(), anyString());
+
+        // For get user (fetch user representation)
+        UserRepresentation mockUser = new UserRepresentation();
+        mockUser.setId(MOCK_KEYCLOAK_USER_ID);
+        mockUser.setEnabled(true);
+        when(keycloakAdminClient.getUser(anyString())).thenReturn(mockUser);
+
+        // For get last login
+        when(keycloakAdminClient.getLastLogin(anyString())).thenReturn(null);
+
+        // For lock/unlock
+        doNothing().when(keycloakAdminClient).disableUser(anyString());
+        doNothing().when(keycloakAdminClient).enableUser(anyString());
+
+        // For reset password
+        doNothing().when(keycloakAdminClient).resetPassword(anyString(), anyString());
+    }
 
     // ========== Account Management Tests ==========
 
@@ -57,12 +102,13 @@ class AdminContractTest {
         String requestBody = """
                 {
                   "email": "test@example.com",
-                  "name": "Test User"
+                  "name": "Test User",
+                  "role": "USER"
                 }
                 """;
 
-        // When: POST /admin/accounts
-        mockMvc.perform(post("/api/admin/accounts")
+        // When: POST /admin/accounts/with-keycloak
+        mockMvc.perform(post("/api/admin/accounts/with-keycloak")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -70,11 +116,12 @@ class AdminContractTest {
                 // Then: 201 Created
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.id").exists())
-                .andExpect(jsonPath("$.email").value("test@example.com"))
-                .andExpect(jsonPath("$.name").value("Test User"))
-                .andExpect(jsonPath("$.status").value("active"))
-                .andExpect(jsonPath("$.createdAt").exists());
+                .andExpect(jsonPath("$.account.id").exists())
+                .andExpect(jsonPath("$.account.email").value("test@example.com"))
+                .andExpect(jsonPath("$.account.name").value("Test User"))
+                .andExpect(jsonPath("$.account.role").value("USER"))
+                .andExpect(jsonPath("$.temporaryPassword").exists())
+                .andExpect(jsonPath("$.temporaryPassword").isString());
     }
 
     /**
@@ -96,8 +143,8 @@ class AdminContractTest {
                 }
                 """;
 
-        // When: POST /admin/accounts with role="USER"
-        mockMvc.perform(post("/api/admin/accounts")
+        // When: POST /admin/accounts/with-keycloak with role="USER"
+        mockMvc.perform(post("/api/admin/accounts/with-keycloak")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -127,8 +174,8 @@ class AdminContractTest {
                 }
                 """;
 
-        // When: POST /admin/accounts with role="ADMIN"
-        mockMvc.perform(post("/api/admin/accounts")
+        // When: POST /admin/accounts/with-keycloak with role="ADMIN"
+        mockMvc.perform(post("/api/admin/accounts/with-keycloak")
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
