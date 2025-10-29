@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import CreateAccountForm from '@/features/user-management/ui/CreateAccountForm'
+import { CreateAccountForm } from '@/features/user-management/ui/CreateAccountForm'
 import * as apiClientModule from '@/shared/api/client'
 
 // Mock the API client module
@@ -111,7 +111,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Step 4: Verify API call with correct data
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        '/api/admin/accounts',
+        '/admin/accounts',
         {
           email: 'john.doe@example.com',
           name: 'John Doe',
@@ -190,7 +190,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Verify API call with ADMIN role
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        '/api/admin/accounts',
+        '/admin/accounts',
         {
           email: 'admin@example.com',
           name: 'Admin User',
@@ -457,7 +457,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Verify API call includes optional fields
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        '/api/admin/accounts',
+        '/admin/accounts',
         expect.objectContaining({
           email: 'test@example.com',
           name: 'Test User',

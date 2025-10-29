@@ -118,7 +118,7 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Step 1: Verify confirmation dialog is rendered
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByText(/reset password/i)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /reset password/i })).toBeInTheDocument()
     expect(screen.getByText(mockAccount.email)).toBeInTheDocument()
 
     // Step 2: Click Reset Password button
@@ -128,8 +128,7 @@ describe('Reset Password Flow - Integration Test', () => {
     // Step 3: Verify API call with correct account ID
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        `/api/admin/accounts/${mockAccount.id}/reset-password`,
-        {}
+        `/admin/accounts/${mockAccount.id}/reset-password`
       )
     })
 

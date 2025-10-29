@@ -26,6 +26,7 @@ vi.mock('@/features/user-management/api/userMutations', () => ({
 
 describe('ResetPasswordDialog', () => {
   let queryClient: QueryClient
+  let mockClipboardWriteText: ReturnType<typeof vi.fn>
 
   const mockAccount: AccountWithKeycloakStatus = {
     id: 'acc-123',
@@ -55,9 +56,10 @@ describe('ResetPasswordDialog', () => {
     vi.clearAllMocks()
 
     // Mock clipboard API
+    mockClipboardWriteText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', {
       value: {
-        writeText: vi.fn().mockResolvedValue(undefined),
+        writeText: mockClipboardWriteText,
       },
       writable: true,
       configurable: true,
@@ -417,7 +419,7 @@ describe('ResetPasswordDialog', () => {
 
       // Verify clipboard.writeText was called
       await waitFor(() => {
-        expect(navigator.clipboard.writeText).toHaveBeenCalledWith(mockPassword)
+        expect(mockClipboardWriteText).toHaveBeenCalledWith(mockPassword)
       })
     })
 
@@ -461,7 +463,7 @@ describe('ResetPasswordDialog', () => {
       // Note: This test assumes the Check component renders something identifiable
       // In a real test, you might check for CSS class changes or aria-label updates
       await waitFor(() => {
-        expect(navigator.clipboard.writeText).toHaveBeenCalled()
+        expect(mockClipboardWriteText).toHaveBeenCalled()
       })
     })
   })
