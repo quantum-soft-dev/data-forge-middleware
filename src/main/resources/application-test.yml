@@ -52,7 +52,7 @@ jwt:
   secret: test-secret-key-for-unit-tests-at-least-256-bits-long-hmac-sha256
   expiration-seconds: 86400
 
-# Keycloak Configuration for tests (disabled)
+# Keycloak Configuration for tests
 keycloak:
   realm: dfm-test
   auth-server-url: http://localhost:8081
@@ -61,6 +61,9 @@ keycloak:
     secret: test-client-secret
   use-resource-role-mappings: false
   bearer-only: true
+  admin:
+    client-id: admin-cli
+    client-secret: test-admin-secret
 
 logging:
   level:
