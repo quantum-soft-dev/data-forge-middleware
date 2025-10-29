@@ -53,7 +53,7 @@ class AdminContractTest {
     private static final String MOCK_ACCOUNT_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     private static final String MOCK_SITE_ID = "b2c3d4e5-f6a7-8901-bcde-f12345678901";
     private static final String MOCK_BATCH_ID = "c3d4e5f6-a7b8-9012-cdef-123456789012";
-    private static final String MOCK_KEYCLOAK_USER_ID = "mock-keycloak-user-id-12345";
+    private static final String MOCK_KEYCLOAK_USER_ID = "d4e5f6a7-b8c9-0123-def4-567890123456"; // Valid UUID format
 
     @BeforeEach
     void setUp() throws Exception {
@@ -117,9 +117,10 @@ class AdminContractTest {
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.account.id").exists())
+                .andExpect(jsonPath("$.account.keycloakUserId").value(MOCK_KEYCLOAK_USER_ID))
                 .andExpect(jsonPath("$.account.email").value("test@example.com"))
                 .andExpect(jsonPath("$.account.name").value("Test User"))
-                .andExpect(jsonPath("$.account.role").value("USER"))
+                .andExpect(jsonPath("$.account.keycloakEnabled").value(true))
                 .andExpect(jsonPath("$.temporaryPassword").exists())
                 .andExpect(jsonPath("$.temporaryPassword").isString());
     }
@@ -153,9 +154,10 @@ class AdminContractTest {
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.account").exists())
+                .andExpect(jsonPath("$.account.keycloakUserId").value(MOCK_KEYCLOAK_USER_ID))
                 .andExpect(jsonPath("$.account.email").value("user@example.com"))
                 .andExpect(jsonPath("$.account.name").value("Regular User"))
-                .andExpect(jsonPath("$.account.role").value("USER"))
+                .andExpect(jsonPath("$.account.keycloakEnabled").value(true))
                 .andExpect(jsonPath("$.temporaryPassword").exists())
                 .andExpect(jsonPath("$.temporaryPassword").isString());
     }
@@ -184,9 +186,10 @@ class AdminContractTest {
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.account").exists())
+                .andExpect(jsonPath("$.account.keycloakUserId").value(MOCK_KEYCLOAK_USER_ID))
                 .andExpect(jsonPath("$.account.email").value("admin@example.com"))
                 .andExpect(jsonPath("$.account.name").value("Admin User"))
-                .andExpect(jsonPath("$.account.role").value("ADMIN"))
+                .andExpect(jsonPath("$.account.keycloakEnabled").value(true))
                 .andExpect(jsonPath("$.temporaryPassword").exists());
     }
 
