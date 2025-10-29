@@ -290,15 +290,15 @@
 
 ### Tests for Frontend US2
 
-- [ ] **T048** [P] [US2] Unit tests in `frontend/tests/unit/user-management/LockAccountButton.test.tsx`:
+- [X] **T048** [P] [US2] Unit tests in `frontend/tests/unit/user-management/LockAccountButton.test.tsx`:
   - Test: Button enabled for unlocked account
   - Test: Button disabled for already locked account
   - Test: Confirmation dialog appears on click
   - Test: Mutation called after confirmation
-- [ ] **T049** [P] [US2] Integration test in `frontend/tests/integration/user-management/lock-unlock-flow.test.tsx`:
+- [X] **T049** [P] [US2] Integration test in `frontend/tests/integration/user-management/lock-unlock-flow.test.tsx`:
   - Mock API: POST lock → 200, POST unlock → 200
   - Test: Navigate to account details → lock → see status change → unlock → see status revert
-- [ ] **T050** [US2] E2E test in `frontend/tests/e2e/user-management.spec.ts`:
+- [X] **T050** [US2] E2E test in `frontend/tests/e2e/user-management.spec.ts`:
   - Test: Create account → lock → attempt login (expect failure) → unlock → login (expect success)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently. Lock/unlock functionality complete.

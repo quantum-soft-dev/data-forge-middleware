@@ -594,7 +594,9 @@ public class AccountAdminController {
         logger.info("Locking account: accountId={}", accountId);
 
         // TODO: Extract admin account ID from Spring Security context
-        UUID adminAccountId = UUID.randomUUID();
+        // For now, passing null - audit logs will have null admin_account_id until we implement
+        // proper Keycloak user ID to Account mapping (V13 migration makes this column nullable)
+        UUID adminAccountId = null;
 
         com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse response = keycloakSyncService.lockAccount(
                 accountId,
@@ -645,7 +647,9 @@ public class AccountAdminController {
         logger.info("Unlocking account: accountId={}", accountId);
 
         // TODO: Extract admin account ID from Spring Security context
-        UUID adminAccountId = UUID.randomUUID();
+        // For now, passing null - audit logs will have null admin_account_id until we implement
+        // proper Keycloak user ID to Account mapping (V13 migration makes this column nullable)
+        UUID adminAccountId = null;
 
         com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse response = keycloakSyncService.unlockAccount(
                 accountId,
@@ -697,7 +701,9 @@ public class AccountAdminController {
         logger.info("Resetting password for account: accountId={}", accountId);
 
         // TODO: Extract admin account ID from Spring Security context
-        UUID adminAccountId = UUID.randomUUID();
+        // For now, passing null - audit logs will have null admin_account_id until we implement
+        // proper Keycloak user ID to Account mapping (V13 migration makes this column nullable)
+        UUID adminAccountId = null;
 
         ResetPasswordResponse response = keycloakSyncService.resetPassword(
                 accountId,

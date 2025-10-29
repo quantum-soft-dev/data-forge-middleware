@@ -784,10 +784,210 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.message").exists());
     }
 
+    // ========== Account Actions Tests (Lock/Unlock) - User Story 2 ==========
+
+    /**
+     * Test Case 10a: Lock account should return 200 with updated status.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: POST /admin/accounts/{id}/lock
+     * Then: 200 OK with AccountWithKeycloakResponse showing keycloakEnabled=false
+     * </p>
+     */
+    @Test
+    @DisplayName("Should lock account when admin authenticated")
+    void shouldLockAccountWhenAdminAuthenticated() throws Exception {
+        // When: POST /admin/accounts/{id}/lock
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK with updated account status
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(MOCK_ACCOUNT_ID))
+                .andExpect(jsonPath("$.keycloakEnabled").value(false))
+                .andExpect(jsonPath("$.email").exists())
+                .andExpect(jsonPath("$.name").exists());
+    }
+
+    /**
+     * Test Case 10b: Unlock account should return 200 with updated status.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: POST /admin/accounts/{id}/unlock
+     * Then: 200 OK with AccountWithKeycloakResponse showing keycloakEnabled=true
+     * </p>
+     */
+    @Test
+    @DisplayName("Should unlock account when admin authenticated")
+    void shouldUnlockAccountWhenAdminAuthenticated() throws Exception {
+        // When: POST /admin/accounts/{id}/unlock
+        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK with updated account status
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(MOCK_ACCOUNT_ID))
+                .andExpect(jsonPath("$.keycloakEnabled").value(true))
+                .andExpect(jsonPath("$.email").exists())
+                .andExpect(jsonPath("$.name").exists());
+    }
+
+    /**
+     * Test Case 10c: Lock account without Keycloak integration should return 400.
+     */
+    @Test
+    @DisplayName("Should reject lock request for account without Keycloak integration")
+    void shouldRejectLockRequestForAccountWithoutKeycloakIntegration() throws Exception {
+        String accountWithoutKeycloak = "d4e5f6a7-b8c9-0123-defg-234567890123";
+
+        // When: POST /admin/accounts/{id}/lock for account without Keycloak
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", accountWithoutKeycloak)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 10d: Lock already locked account should return 400.
+     */
+    @Test
+    @DisplayName("Should reject lock request for already locked account")
+    void shouldRejectLockRequestForAlreadyLockedAccount() throws Exception {
+        // Given: Account is already locked (simulated by calling lock twice)
+        // First lock succeeds
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+                .andExpect(status().isOk());
+
+        // When: POST /admin/accounts/{id}/lock again
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 10e: Unlock account without Keycloak integration should return 400.
+     */
+    @Test
+    @DisplayName("Should reject unlock request for account without Keycloak integration")
+    void shouldRejectUnlockRequestForAccountWithoutKeycloakIntegration() throws Exception {
+        String accountWithoutKeycloak = "d4e5f6a7-b8c9-0123-defg-234567890123";
+
+        // When: POST /admin/accounts/{id}/unlock for account without Keycloak
+        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", accountWithoutKeycloak)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 10f: Unlock already unlocked account should return 400.
+     */
+    @Test
+    @DisplayName("Should reject unlock request for already unlocked account")
+    void shouldRejectUnlockRequestForAlreadyUnlockedAccount() throws Exception {
+        // When: POST /admin/accounts/{id}/unlock for already unlocked account
+        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 400 Bad Request (assuming account starts unlocked)
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 10g: Lock non-existent account should return 404.
+     */
+    @Test
+    @DisplayName("Should return 404 when locking non-existent account")
+    void shouldReturn404WhenLockingNonExistentAccount() throws Exception {
+        String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
+
+        // When: POST /admin/accounts/{id}/lock for non-existent account
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", nonExistentAccountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 404 Not Found
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Not Found"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 10h: Unlock non-existent account should return 404.
+     */
+    @Test
+    @DisplayName("Should return 404 when unlocking non-existent account")
+    void shouldReturn404WhenUnlockingNonExistentAccount() throws Exception {
+        String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
+
+        // When: POST /admin/accounts/{id}/unlock for non-existent account
+        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", nonExistentAccountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 404 Not Found
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Not Found"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 10i: Non-admin user should not be able to lock account.
+     */
+    @Test
+    @DisplayName("Should reject lock request when user lacks ROLE_ADMIN")
+    void shouldRejectLockRequestWhenUserLacksRoleAdmin() throws Exception {
+        // When: POST /admin/accounts/{id}/lock with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Test Case 10j: Non-admin user should not be able to unlock account.
+     */
+    @Test
+    @DisplayName("Should reject unlock request when user lacks ROLE_ADMIN")
+    void shouldRejectUnlockRequestWhenUserLacksRoleAdmin() throws Exception {
+        // When: POST /admin/accounts/{id}/unlock with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
     // ========== Batch Management Tests ==========
 
     /**
-     * Test Case 10: List batches with filtering should return paginated results.
+     * Test Case 11: List batches with filtering should return paginated results.
      */
     @Test
     @DisplayName("Should list batches with filtering when admin authenticated")
