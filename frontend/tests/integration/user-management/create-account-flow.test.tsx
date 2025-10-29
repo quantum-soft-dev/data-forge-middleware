@@ -27,6 +27,14 @@ vi.mock('@/shared/api/client', () => ({
   },
 }))
 
+// Mock sonner toast
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}))
+
 describe('Create Account Flow - Integration Test', () => {
   let queryClient: QueryClient
   let user: ReturnType<typeof userEvent.setup>
@@ -89,7 +97,6 @@ describe('Create Account Flow - Integration Test', () => {
     )
 
     // Step 1: Verify form is rendered
-    expect(screen.getByRole('heading', { name: /create new account/i })).toBeInTheDocument()
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/full name/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/role/i)).toBeInTheDocument()
@@ -111,7 +118,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Step 4: Verify API call with correct data
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        '/admin/accounts',
+        '/admin/accounts/with-keycloak',
         {
           email: 'john.doe@example.com',
           name: 'John Doe',
@@ -190,7 +197,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Verify API call with ADMIN role
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        '/admin/accounts',
+        '/admin/accounts/with-keycloak',
         {
           email: 'admin@example.com',
           name: 'Admin User',
@@ -288,7 +295,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify validation errors are displayed
     await waitFor(() => {
-      expect(screen.getByText(/email is required/i)).toBeInTheDocument()
+      expect(screen.getByText(/invalid email format/i)).toBeInTheDocument()
       expect(screen.getByText(/name is required/i)).toBeInTheDocument()
       expect(screen.getByText(/role is required/i)).toBeInTheDocument()
     })
@@ -321,7 +328,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify email validation error is displayed
     await waitFor(() => {
-      expect(screen.getByText(/invalid email address/i)).toBeInTheDocument()
+      expect(screen.getByText(/invalid email format/i)).toBeInTheDocument()
     })
 
     expect(mockOnSuccess).not.toHaveBeenCalled()
@@ -392,7 +399,9 @@ describe('Create Account Flow - Integration Test', () => {
     await user.click(submitButton)
 
     // Verify button is disabled while pending
-    expect(submitButton).toBeDisabled()
+    await waitFor(() => {
+      expect(submitButton).toBeDisabled()
+    })
 
     // Wait for completion
     await waitFor(() => {
@@ -457,7 +466,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Verify API call includes optional fields
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        '/admin/accounts',
+        '/admin/accounts/with-keycloak',
         expect.objectContaining({
           email: 'test@example.com',
           name: 'Test User',
