@@ -4,7 +4,7 @@ import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AdminActionLog;
 import com.bitbi.dfm.account.domain.AdminActionType;
 import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
-import com.bitbi.dfm.account.infrastructure.JpaAccountRepository;
+import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.account.infrastructure.KeycloakAdminClient;
 import com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
@@ -42,7 +42,7 @@ public class KeycloakAccountSyncService {
     private static final Logger log = LoggerFactory.getLogger(KeycloakAccountSyncService.class);
 
     private final KeycloakAdminClient keycloakClient;
-    private final JpaAccountRepository accountRepository;
+    private final AccountRepository accountRepository;
     private final TemporaryPasswordGenerator passwordGenerator;
     private final AdminActionLogRepository auditLogRepository;
     private final Counter accountCreatedSuccessCounter;
@@ -50,7 +50,7 @@ public class KeycloakAccountSyncService {
     private final Timer accountCreationTimer;
 
     public KeycloakAccountSyncService(KeycloakAdminClient keycloakClient,
-                                       JpaAccountRepository accountRepository,
+                                       AccountRepository accountRepository,
                                        TemporaryPasswordGenerator passwordGenerator,
                                        AdminActionLogRepository auditLogRepository,
                                        MeterRegistry meterRegistry) {
