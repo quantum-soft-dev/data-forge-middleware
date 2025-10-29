@@ -98,10 +98,10 @@ const createAccountRoute = createRoute({
       throw redirect({ to: '/' })
     }
 
-    // Check for ADMIN role
+    // Check for ADMIN role (Keycloak uses ROLE_ prefix)
     const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
     const roles = realmAccess?.roles || []
-    if (!roles.includes('ADMIN')) {
+    if (!roles.includes('ROLE_ADMIN')) {
       throw redirect({ to: '/dashboard' })
     }
   },
@@ -117,10 +117,10 @@ const accountDetailsRoute = createRoute({
       throw redirect({ to: '/' })
     }
 
-    // Check for ADMIN role
+    // Check for ADMIN role (Keycloak uses ROLE_ prefix)
     const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
     const roles = realmAccess?.roles || []
-    if (!roles.includes('ADMIN')) {
+    if (!roles.includes('ROLE_ADMIN')) {
       throw redirect({ to: '/dashboard' })
     }
   },
