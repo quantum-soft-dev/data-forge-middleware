@@ -1298,4 +1298,155 @@ class AdminContractTest {
                 // Then: 401 Unauthorized
                 .andExpect(status().isUnauthorized());
     }
+
+    // ========== Password Reset Tests (T051 - User Story 3) ==========
+
+    /**
+     * Test Case 17: Reset password should return 200 with temporary password and expiration.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: POST /admin/accounts/{id}/reset-password for account with Keycloak integration
+     * Then: 200 OK with temporaryPassword and expiresAt
+     * </p>
+     */
+    @Test
+    @DisplayName("Should reset password and return temporary password when account has Keycloak")
+    void shouldResetPasswordWhenAccountHasKeycloak() throws Exception {
+        // Given: Account exists with Keycloak integration (from test-data.sql)
+        String accountId = MOCK_ACCOUNT_ID;
+
+        // When: POST /admin/accounts/{id}/reset-password
+        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.accountId").value(accountId))
+                .andExpect(jsonPath("$.temporaryPassword").exists())
+                .andExpect(jsonPath("$.temporaryPassword").isNotEmpty())
+                .andExpect(jsonPath("$.expiresAt").exists());
+    }
+
+    /**
+     * Test Case 18: Reset password on account without Keycloak should return 400.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: POST /admin/accounts/{id}/reset-password for account WITHOUT Keycloak integration
+     * Then: 400 Bad Request
+     * </p>
+     */
+    @Test
+    @DisplayName("Should reject password reset when account has no Keycloak integration")
+    void shouldRejectPasswordResetWhenNoKeycloakIntegration() throws Exception {
+        // Given: Create account without Keycloak integration
+        String createRequestBody = """
+                {
+                  "email": "no-keycloak@example.com",
+                  "name": "No Keycloak User"
+                }
+                """;
+
+        String createResponse = mockMvc.perform(post("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createRequestBody))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Extract accountId from response (simple JSON parsing)
+        String accountId = createResponse.substring(
+                createResponse.indexOf("\"id\":\"") + 6,
+                createResponse.indexOf("\"", createResponse.indexOf("\"id\":\"") + 6)
+        );
+
+        // When: POST /admin/accounts/{id}/reset-password for account without Keycloak
+        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Keycloak")));
+    }
+
+    /**
+     * Test Case 19: Reset password on locked account should still work.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND account is locked
+     * When: POST /admin/accounts/{id}/reset-password
+     * Then: 200 OK with temporaryPassword (password reset works even on locked accounts)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should reset password even when account is locked")
+    void shouldResetPasswordWhenAccountIsLocked() throws Exception {
+        // Given: Account exists with Keycloak integration
+        String accountId = MOCK_ACCOUNT_ID;
+
+        // Lock the account first
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", accountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+                .andExpect(status().isOk());
+
+        // When: POST /admin/accounts/{id}/reset-password on locked account
+        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK (password reset still works on locked accounts)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accountId").value(accountId))
+                .andExpect(jsonPath("$.temporaryPassword").exists())
+                .andExpect(jsonPath("$.expiresAt").exists());
+
+        // Unlock account for cleanup
+        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", accountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+                .andExpect(status().isOk());
+    }
+
+    /**
+     * Test Case 20: Reset password with non-existent account should return 404.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: POST /admin/accounts/{id}/reset-password with non-existent account ID
+     * Then: 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("Should return 404 when resetting password for non-existent account")
+    void shouldReturn404WhenResetPasswordForNonExistentAccount() throws Exception {
+        // Given: Non-existent account ID
+        String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
+
+        // When: POST /admin/accounts/{id}/reset-password
+        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", nonExistentAccountId)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 404 Not Found
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * Test Case 21: Reset password without admin role should return 403.
+     * <p>
+     * Given: User authenticated WITHOUT ROLE_ADMIN
+     * When: POST /admin/accounts/{id}/reset-password
+     * Then: 403 Forbidden
+     * </p>
+     */
+    @Test
+    @DisplayName("Should reject password reset when user lacks ROLE_ADMIN")
+    void shouldRejectPasswordResetWhenUserLacksRoleAdmin() throws Exception {
+        // Given: Account exists
+        String accountId = MOCK_ACCOUNT_ID;
+
+        // When: POST /admin/accounts/{id}/reset-password with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
 }

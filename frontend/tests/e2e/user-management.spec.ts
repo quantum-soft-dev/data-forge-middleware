@@ -577,3 +577,276 @@ test.describe('User Management - Edge Cases', () => {
     }
   })
 })
+
+test.describe('User Management - Reset Password Flow (T062)', () => {
+  test.setTimeout(120000) // 2 minutes for full E2E test
+
+  let testEmail: string
+  let testPassword: string
+
+  test.beforeEach(() => {
+    // Generate unique test email
+    const timestamp = Date.now()
+    testEmail = `e2e.reset.${timestamp}@example.com`
+    testPassword = ''
+  })
+
+  test('reset password for existing account - full flow', async ({ page }) => {
+    // Step 1: Admin logs in
+    await adminLogin(page)
+
+    // Verify admin dashboard is loaded
+    await expect(page).toHaveURL(/.*dashboard.*/)
+
+    // Step 2: Navigate to User Management
+    await page.goto('/admin/users')
+
+    // Step 3: Create a new account first (to have a fresh account to reset)
+    await page.click('button:has-text("Create Account")')
+    await expect(page).toHaveURL(/.*accounts\/create.*/)
+
+    // Fill in account details
+    await page.fill('input[name="email"]', testEmail)
+    await page.fill('input[name="name"]', 'E2E Reset Test User')
+    await page.selectOption('select[name="role"]', 'USER')
+
+    // Submit form
+    await page.click('button[type="submit"]:has-text("Create Account")')
+
+    // Wait for success message and get temporary password
+    await page.waitForSelector(':has-text("Account Created Successfully")', { timeout: 10000 })
+    const passwordElement = await page.locator('[data-testid="temporary-password"]').textContent()
+    testPassword = passwordElement || ''
+
+    expect(testPassword).toBeTruthy()
+
+    // Close modal
+    await page.click('button:has-text("Close")').catch(async () => {
+      await page.keyboard.press('Escape')
+    })
+
+    // Step 4: Navigate to account details
+    await page.goto('/admin/users')
+    await page.fill('input[placeholder*="Search"]', testEmail)
+    await page.keyboard.press('Enter')
+    await page.waitForSelector(`td:has-text("${testEmail}")`, { timeout: 10000 })
+    await page.click(`td:has-text("${testEmail}")`)
+
+    // Wait for account details page
+    await expect(page).toHaveURL(/.*admin\/users\/.*/)
+
+    // Step 5: Click Reset Password button
+    await page.click('button:has-text("Reset Password")')
+
+    // Wait for reset password dialog
+    await expect(page.locator('role=dialog')).toBeVisible()
+    await expect(page.locator(':has-text("Reset Password")')).toBeVisible()
+
+    // Verify confirmation message
+    await expect(page.locator(`:has-text("${testEmail}")`)).toBeVisible()
+
+    // Step 6: Confirm password reset
+    await page.click('button:has-text("Reset Password")') // Confirm button in dialog
+
+    // Wait for success message
+    await page.waitForSelector(':has-text("Password Reset Successfully")', { timeout: 10000 })
+
+    // Step 7: Verify temporary password is displayed
+    const newPasswordElement = await page.locator('[data-testid="temporary-password"]').textContent()
+    const newPassword = newPasswordElement || ''
+
+    expect(newPassword).toBeTruthy()
+    expect(newPassword.length).toBeGreaterThan(10)
+    expect(newPassword).not.toBe(testPassword) // New password should be different
+
+    // Verify warning messages
+    await expect(page.locator(':has-text("Save this password now")')).toBeVisible()
+    await expect(page.locator(':has-text("30 days")')).toBeVisible()
+
+    // Step 8: Copy password (optional - verify button exists)
+    const copyButton = page.locator('button[aria-label="Copy password to clipboard"]')
+    await expect(copyButton).toBeVisible()
+
+    // Save new password for login test
+    testPassword = newPassword
+
+    // Step 9: Close dialog
+    await page.click('button:has-text("Close")')
+
+    // Wait for dialog to close
+    await page.waitForSelector(':has-text("Password Reset Successfully")', { state: 'hidden', timeout: 5000 })
+
+    // Step 10: Logout as admin
+    await logout(page)
+
+    // Step 11: Login as the user with new temporary password
+    const loginSuccess = await userLogin(page, testEmail, testPassword)
+
+    expect(loginSuccess).toBe(true)
+
+    // Step 12: Verify user is redirected to password change page (forced password change)
+    await expect(page).toHaveURL(/.*password.*|.*dashboard.*/)
+
+    // If redirected to password change page, verify message
+    const passwordChangeVisible = await page.locator(':has-text("Change Password")').isVisible().catch(() => false)
+
+    if (passwordChangeVisible) {
+      // User is forced to change password (expected for temporary password)
+      await expect(page.locator(':has-text("You must change your password")')).toBeVisible()
+    }
+
+    console.log('✅ E2E Test Passed: Reset password for existing account - full flow')
+  })
+
+  test('reset password dialog shows warning messages', async ({ page }) => {
+    // Login as admin
+    await adminLogin(page)
+
+    // Navigate to user management
+    await page.goto('/admin/users')
+
+    // Get first user from the list
+    const firstUserEmail = await page.locator('tbody tr td').nth(1).textContent()
+
+    if (!firstUserEmail) {
+      console.log('⚠️ No existing users found, skipping test')
+      return
+    }
+
+    // Navigate to account details
+    await page.click(`td:has-text("${firstUserEmail.trim()}")`)
+
+    // Click Reset Password button
+    await page.click('button:has-text("Reset Password")')
+
+    // Verify dialog is open
+    await expect(page.locator('role=dialog')).toBeVisible()
+
+    // Verify warning messages
+    await expect(page.locator(':has-text("A temporary password will be generated")')).toBeVisible()
+    await expect(page.locator(':has-text("The user\'s current password will be invalidated immediately")')).toBeVisible()
+
+    console.log('✅ E2E Test Passed: Reset password dialog shows warning messages')
+  })
+
+  test('cancel reset password closes dialog', async ({ page }) => {
+    // Login as admin
+    await adminLogin(page)
+
+    // Navigate to user management
+    await page.goto('/admin/users')
+
+    // Get first user from the list
+    const firstUserEmail = await page.locator('tbody tr td').nth(1).textContent()
+
+    if (!firstUserEmail) {
+      console.log('⚠️ No existing users found, skipping test')
+      return
+    }
+
+    // Navigate to account details
+    await page.click(`td:has-text("${firstUserEmail.trim()}")`)
+
+    // Click Reset Password button
+    await page.click('button:has-text("Reset Password")')
+
+    // Verify dialog is open
+    await expect(page.locator('role=dialog')).toBeVisible()
+
+    // Click Cancel button
+    await page.click('button:has-text("Cancel")')
+
+    // Verify dialog is closed
+    await expect(page.locator('role=dialog')).not.toBeVisible()
+
+    console.log('✅ E2E Test Passed: Cancel reset password closes dialog')
+  })
+
+  test('cannot reset password for account without Keycloak', async ({ page }) => {
+    // Login as admin
+    await adminLogin(page)
+
+    // Navigate to user management
+    await page.goto('/admin/users')
+
+    // Look for an account without Keycloak integration
+    const noKeycloakIndicator = page.locator(':has-text("No Keycloak Integration")').first()
+    const hasAccountWithoutKeycloak = await noKeycloakIndicator.isVisible().catch(() => false)
+
+    if (hasAccountWithoutKeycloak) {
+      // Click on that account
+      await noKeycloakIndicator.click()
+
+      // Wait for account details page
+      await expect(page).toHaveURL(/.*admin\/users\/.*/)
+
+      // Try to find Reset Password button
+      const resetButton = page.locator('button:has-text("Reset Password")')
+      const isResetButtonVisible = await resetButton.isVisible().catch(() => false)
+
+      if (isResetButtonVisible) {
+        // Button should be disabled
+        await expect(resetButton).toBeDisabled()
+
+        // Verify tooltip/title explains why
+        const title = await resetButton.getAttribute('title')
+        expect(title).toContain('Keycloak')
+      }
+    } else {
+      console.log('⚠️ No accounts without Keycloak found, skipping test')
+    }
+
+    console.log('✅ E2E Test Passed: Cannot reset password for account without Keycloak')
+  })
+
+  test('reset password works on locked account', async ({ page }) => {
+    // Step 1: Admin logs in
+    await adminLogin(page)
+
+    // Step 2: Create a new account
+    await page.goto('/admin/users')
+    await page.click('button:has-text("Create Account")')
+
+    const uniqueEmail = `e2e.locked.reset.${Date.now()}@example.com`
+    await page.fill('input[name="email"]', uniqueEmail)
+    await page.fill('input[name="name"]', 'E2E Locked Reset User')
+    await page.selectOption('select[name="role"]', 'USER')
+    await page.click('button[type="submit"]:has-text("Create Account")')
+
+    // Wait for success and close modal
+    await page.waitForSelector(':has-text("Account Created Successfully")', { timeout: 10000 })
+    await page.click('button:has-text("Close")').catch(async () => {
+      await page.keyboard.press('Escape')
+    })
+
+    // Step 3: Navigate to account and lock it
+    await page.goto('/admin/users')
+    await page.fill('input[placeholder*="Search"]', uniqueEmail)
+    await page.keyboard.press('Enter')
+    await page.click(`td:has-text("${uniqueEmail}")`)
+
+    // Lock the account
+    await page.click('button:has-text("Lock Account")')
+    await page.waitForSelector('role=dialog')
+    await page.click('button:has-text("Lock Account")') // Confirm in dialog
+    await page.waitForSelector(':has-text("Disabled")', { timeout: 10000 })
+
+    // Step 4: Verify account is locked
+    await expect(page.locator(':has-text("Disabled")')).toBeVisible()
+
+    // Step 5: Try to reset password (should work even when locked)
+    await page.click('button:has-text("Reset Password")')
+    await expect(page.locator('role=dialog')).toBeVisible()
+    await page.click('button:has-text("Reset Password")') // Confirm
+
+    // Wait for success
+    await page.waitForSelector(':has-text("Password Reset Successfully")', { timeout: 10000 })
+
+    // Verify temporary password is displayed
+    const passwordElement = await page.locator('[data-testid="temporary-password"]').textContent()
+    expect(passwordElement).toBeTruthy()
+    expect(passwordElement!.length).toBeGreaterThan(10)
+
+    console.log('✅ E2E Test Passed: Reset password works on locked account')
+  })
+})
