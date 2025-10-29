@@ -136,10 +136,12 @@ public class KeycloakAccountSyncService {
             log.info("Keycloak user created with ID: {}", keycloakUserId);
 
             // Phase 2: Assign role to Keycloak user
+            // Frontend sends "USER" or "ADMIN", but Keycloak expects "ROLE_USER" or "ROLE_ADMIN"
             String roleName = request.role();
-            log.info("Assigning role '{}' to Keycloak user: {}", roleName, keycloakUserId);
-            keycloakClient.assignRole(keycloakUserId, roleName);
-            log.info("Role '{}' assigned successfully to user: {}", roleName, keycloakUserId);
+            String keycloakRoleName = roleName.startsWith("ROLE_") ? roleName : "ROLE_" + roleName;
+            log.info("Assigning role '{}' (Keycloak: '{}') to user: {}", roleName, keycloakRoleName, keycloakUserId);
+            keycloakClient.assignRole(keycloakUserId, keycloakRoleName);
+            log.info("Role '{}' assigned successfully to user: {}", keycloakRoleName, keycloakUserId);
 
             // Phase 3: Create in PostgreSQL
             Account account = Account.createWithKeycloak(
