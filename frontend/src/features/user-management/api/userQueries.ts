@@ -5,6 +5,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
+import { apiClient } from '@/shared/api/client'
 import type {
   Account,
   AccountWithKeycloakStatus,
@@ -46,18 +47,11 @@ async function fetchAccounts(filters: AccountFilters): Promise<AccountListRespon
     params.append('status', filters.status)
   }
 
-  const response = await fetch(`/api/admin/accounts?${params.toString()}`, {
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  })
+  const response = await apiClient.get<AccountListResponse>(
+    `/admin/accounts?${params.toString()}`
+  )
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch accounts: ${response.statusText}`)
-  }
-
-  return response.json()
+  return response.data
 }
 
 /**
@@ -83,18 +77,11 @@ export function useAccountsQuery(
  * Fetch single account by ID.
  */
 async function fetchAccount(accountId: string): Promise<AccountWithKeycloakStatus> {
-  const response = await fetch(`/api/admin/accounts/${accountId}`, {
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  })
+  const response = await apiClient.get<AccountWithKeycloakStatus>(
+    `/admin/accounts/${accountId}`
+  )
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch account: ${response.statusText}`)
-  }
-
-  return response.json()
+  return response.data
 }
 
 /**
@@ -125,18 +112,11 @@ async function fetchAccountAuditLogs(
   params.append('size', String(size))
   params.append('sort', sort)
 
-  const response = await fetch(`/api/admin/accounts/${accountId}/audit-logs?${params.toString()}`, {
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  })
+  const response = await apiClient.get<AdminActionLogListResponse>(
+    `/admin/accounts/${accountId}/audit-logs?${params.toString()}`
+  )
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch audit logs: ${response.statusText}`)
-  }
-
-  return response.json()
+  return response.data
 }
 
 /**
