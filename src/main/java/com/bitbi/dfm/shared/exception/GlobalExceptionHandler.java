@@ -302,6 +302,79 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle AccountNotFoundException from domain package (404 Not Found).
+     * <p>
+     * This handler catches the new domain-level AccountNotFoundException.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.AccountNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleDomainAccountNotFound(
+            com.bitbi.dfm.account.domain.exception.AccountNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account not found (domain exception): {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyLockedException (400 Bad Request).
+     * <p>
+     * Thrown when attempting to lock an account that is already locked.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.AccountAlreadyLockedException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyLocked(
+            com.bitbi.dfm.account.domain.exception.AccountAlreadyLockedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already locked: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle KeycloakSyncException (503 Service Unavailable).
+     * <p>
+     * Thrown when synchronization with Keycloak fails.
+     * Returns 503 to indicate temporary service unavailability.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.KeycloakSyncException.class)
+    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncException(
+            com.bitbi.dfm.account.domain.exception.KeycloakSyncException ex,
+            HttpServletRequest request) {
+
+        logger.error("Keycloak sync failed: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Failed to synchronize with Keycloak: " + ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
      * Handle IllegalStateException (500 Internal Server Error).
      * <p>
      * Returns generic error message to client to prevent information disclosure.

@@ -5,6 +5,7 @@
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { apiClient } from '@/shared/api/client'
 import type {
   CreateAccountRequest,
@@ -39,9 +40,19 @@ export function useCreateAccountMutation() {
 
   return useMutation({
     mutationFn: createAccount,
-    onSuccess: () => {
+    onSuccess: (data) => {
       // Invalidate all account list queries to refetch fresh data
       queryClient.invalidateQueries({ queryKey: accountKeys.lists() })
+      // Show success toast
+      toast.success('Account created successfully', {
+        description: `Account for ${data.account.email} has been created with temporary password.`,
+      })
+    },
+    onError: (error) => {
+      // Show error toast
+      toast.error('Failed to create account', {
+        description: error.message,
+      })
     },
   })
 }
@@ -71,6 +82,16 @@ export function useLockAccountMutation() {
     onSuccess: (_, accountId) => {
       // Invalidate specific account detail to refetch
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
+      // Show success toast
+      toast.success('Account locked successfully', {
+        description: 'The account has been disabled in Keycloak.',
+      })
+    },
+    onError: (error) => {
+      // Show error toast
+      toast.error('Failed to lock account', {
+        description: error.message,
+      })
     },
   })
 }
@@ -100,6 +121,16 @@ export function useUnlockAccountMutation() {
     onSuccess: (_, accountId) => {
       // Invalidate specific account detail to refetch
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
+      // Show success toast
+      toast.success('Account unlocked successfully', {
+        description: 'The account has been enabled in Keycloak.',
+      })
+    },
+    onError: (error) => {
+      // Show error toast
+      toast.error('Failed to unlock account', {
+        description: error.message,
+      })
     },
   })
 }
@@ -130,9 +161,19 @@ export function useResetPasswordMutation() {
 
   return useMutation({
     mutationFn: resetPassword,
-    onSuccess: (_, accountId) => {
+    onSuccess: (data, accountId) => {
       // Invalidate specific account detail to refetch
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
+      // Show success toast
+      toast.success('Password reset successfully', {
+        description: 'A temporary password has been generated. Make sure to save it.',
+      })
+    },
+    onError: (error) => {
+      // Show error toast
+      toast.error('Failed to reset password', {
+        description: error.message,
+      })
     },
   })
 }

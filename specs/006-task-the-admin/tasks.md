@@ -410,11 +410,11 @@
   - ✅ Created CannotLockOwnAccountException
   - ✅ Added GlobalExceptionHandler for 403 Forbidden response
   - ✅ Logs warning when admin attempts self-lock
-- [ ] **T070** [P] Error handling improvements: Add specific exception classes (AccountNotFoundException, AccountAlreadyLockedException, KeycloakSyncException)
+- [X] **T070** [P] Error handling improvements: Add specific exception classes (AccountNotFoundException, AccountAlreadyLockedException, KeycloakSyncException)
 - [ ] **T071** [P] Add comprehensive logging with MDC context (accountId, adminId, action) in KeycloakAccountSyncService
 - [ ] **T072** [P] Frontend: Add loading states and skeletons to all pages/components
 - [ ] **T073** [P] Frontend: Add error boundaries for graceful error handling
-- [ ] **T074** [P] Frontend: Implement toast notifications for success/error feedback (use Sonner)
+- [X] **T074** [P] Frontend: Implement toast notifications for success/error feedback (use Sonner)
 - [ ] **T075** Run `./gradlew test` and verify 80% backend coverage threshold met
 - [ ] **T076** Run `npm run test:coverage` in frontend and verify 80% coverage threshold met
 - [ ] **T077** Run quickstart.md validation: Test all cURL commands
