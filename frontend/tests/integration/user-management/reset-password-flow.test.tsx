@@ -17,11 +17,11 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ResetPasswordDialog } from '@/features/user-management/ui/ResetPasswordDialog'
-import * as apiClientModule from '@/shared/api/apiClient'
+import * as apiClientModule from '@/shared/api/client'
 import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
 
 // Mock the API client module
-vi.mock('@/shared/api/apiClient', () => ({
+vi.mock('@/shared/api/client', () => ({
   apiClient: {
     post: vi.fn(),
   },
@@ -71,10 +71,12 @@ describe('Reset Password Flow - Integration Test', () => {
     vi.clearAllMocks()
 
     // Mock clipboard API
-    Object.assign(navigator, {
-      clipboard: {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
         writeText: vi.fn().mockResolvedValue(undefined),
       },
+      writable: true,
+      configurable: true,
     })
   })
 
@@ -357,10 +359,12 @@ describe('Reset Password Flow - Integration Test', () => {
     vi.mocked(apiClientModule.apiClient.post).mockResolvedValue(mockResponse)
 
     // Mock clipboard failure
-    Object.assign(navigator, {
-      clipboard: {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
         writeText: vi.fn().mockRejectedValue(new Error('Clipboard access denied')),
       },
+      writable: true,
+      configurable: true,
     })
 
     renderWithProviders(

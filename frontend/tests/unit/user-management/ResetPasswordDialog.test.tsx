@@ -55,10 +55,12 @@ describe('ResetPasswordDialog', () => {
     vi.clearAllMocks()
 
     // Mock clipboard API
-    Object.assign(navigator, {
-      clipboard: {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
         writeText: vi.fn().mockResolvedValue(undefined),
       },
+      writable: true,
+      configurable: true,
     })
   })
 
@@ -109,7 +111,7 @@ describe('ResetPasswordDialog', () => {
       )
 
       expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(screen.getByText(/reset password/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /reset password/i })).toBeInTheDocument()
       expect(screen.getByText(mockAccount.email)).toBeInTheDocument()
     })
 

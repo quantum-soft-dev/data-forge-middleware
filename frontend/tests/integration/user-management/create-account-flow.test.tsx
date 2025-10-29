@@ -17,12 +17,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
 import CreateAccountForm from '@/features/user-management/ui/CreateAccountForm'
-import * as apiClientModule from '@/shared/api/apiClient'
+import * as apiClientModule from '@/shared/api/client'
 
 // Mock the API client module
-vi.mock('@/shared/api/apiClient', () => ({
+vi.mock('@/shared/api/client', () => ({
   apiClient: {
     post: vi.fn(),
   },
@@ -59,9 +58,7 @@ describe('Create Account Flow - Integration Test', () => {
   const renderWithProviders = (component: React.ReactElement) => {
     return render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          {component}
-        </MemoryRouter>
+        {component}
       </QueryClientProvider>
     )
   }
