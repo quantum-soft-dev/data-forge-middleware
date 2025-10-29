@@ -7,6 +7,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -28,6 +29,14 @@ public interface AdminActionLogRepository extends JpaRepository<AdminActionLog, 
     Page<AdminActionLog> findByTargetAccountId(UUID targetAccountId, Pageable pageable);
 
     /**
+     * Find all action logs for a specific target account (unpaginated).
+     *
+     * @param targetAccountId UUID of the target account
+     * @return list of admin action logs
+     */
+    List<AdminActionLog> findByTargetAccountId(UUID targetAccountId);
+
+    /**
      * Find all action logs performed by a specific admin with pagination.
      *
      * @param adminAccountId UUID of the admin account
@@ -35,6 +44,14 @@ public interface AdminActionLogRepository extends JpaRepository<AdminActionLog, 
      * @return page of admin action logs
      */
     Page<AdminActionLog> findByAdminAccountId(UUID adminAccountId, Pageable pageable);
+
+    /**
+     * Find all action logs performed by a specific admin (unpaginated).
+     *
+     * @param adminAccountId UUID of the admin account
+     * @return list of admin action logs
+     */
+    List<AdminActionLog> findByAdminAccountId(UUID adminAccountId);
 
     /**
      * Find all action logs of a specific type.
