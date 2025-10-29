@@ -246,6 +246,42 @@ public class KeycloakAdminClient {
     }
 
     /**
+     * Get the last login timestamp for a Keycloak user.
+     * <p>
+     * Retrieves the most recent login time from active user sessions.
+     * If no sessions exist, returns null.
+     * </p>
+     *
+     * @param keycloakUserId Keycloak user ID
+     * @return Last login timestamp in milliseconds since epoch, or null if never logged in
+     * @throws KeycloakOperationException if operation fails
+     */
+    public Long getLastLogin(String keycloakUserId) {
+        try {
+            UserResource userResource = keycloak.realm(realm).users().get(keycloakUserId);
+
+            // Get user sessions - returns both active and recent sessions
+            var sessions = userResource.getUserSessions();
+
+            if (sessions == null || sessions.isEmpty()) {
+                // No sessions found, user has never logged in
+                return null;
+            }
+
+            // Find the most recent login time from all sessions
+            // getStart() returns long (primitive), so we filter by checking for 0 (default value)
+            return sessions.stream()
+                    .map(session -> session.getStart())
+                    .filter(start -> start > 0)
+                    .max(Long::compareTo)
+                    .orElse(null);
+
+        } catch (Exception e) {
+            throw new KeycloakOperationException("Error fetching last login for Keycloak user: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Custom exception for Keycloak operations.
      */
     public static class KeycloakOperationException extends RuntimeException {

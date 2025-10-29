@@ -23,12 +23,12 @@ export default function CreateAccountPage() {
     // After showing temporary password, navigate back to list
     // The CreateAccountForm handles password display internally
     setTimeout(() => {
-      navigate({ to: '/accounts' })
+      navigate({ to: '/admin/users' })
     }, 5000) // 5 second delay to allow user to save password
   }
 
   const handleCancel = () => {
-    navigate({ to: '/accounts' })
+    navigate({ to: '/admin/users' })
   }
 
   return (
@@ -43,7 +43,7 @@ export default function CreateAccountPage() {
             className="mb-4 flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Accounts
+            Back to User Management
           </button>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Create New Account</h1>

@@ -65,9 +65,10 @@ public record AccountWithKeycloakResponse(
      *
      * @param account Account domain entity
      * @param keycloakUser Keycloak user representation
+     * @param lastLoginMillis Last login timestamp in milliseconds since epoch (nullable)
      * @return AccountWithKeycloakResponse
      */
-    public static AccountWithKeycloakResponse fromEntity(Account account, UserRepresentation keycloakUser) {
+    public static AccountWithKeycloakResponse fromEntity(Account account, UserRepresentation keycloakUser, Long lastLoginMillis) {
         boolean passwordTemporary = keycloakUser.getCredentials() != null &&
                 keycloakUser.getCredentials().stream()
                         .anyMatch(cred -> "password".equals(cred.getType()) && Boolean.TRUE.equals(cred.isTemporary()));
@@ -77,6 +78,9 @@ public record AccountWithKeycloakResponse(
         if (passwordTemporary && keycloakUser.getCreatedTimestamp() != null) {
             passwordExpiresAt = Instant.ofEpochMilli(keycloakUser.getCreatedTimestamp()).plusSeconds(30L * 24 * 60 * 60);
         }
+
+        // Convert lastLogin from milliseconds to Instant
+        Instant lastLogin = lastLoginMillis != null ? Instant.ofEpochMilli(lastLoginMillis) : null;
 
         return new AccountWithKeycloakResponse(
                 account.getId(),
@@ -89,7 +93,7 @@ public record AccountWithKeycloakResponse(
                 keycloakUser.isEnabled(),
                 passwordTemporary,
                 passwordExpiresAt,
-                null, // lastLogin not available from UserRepresentation, would need separate query
+                lastLogin,
                 account.getCreatedAt().toInstant(ZoneOffset.UTC),
                 account.getUpdatedAt().toInstant(ZoneOffset.UTC)
         );

@@ -6,7 +6,6 @@ import type { AuthContextProps } from 'react-oidc-context'
 const LoginPage = lazy(() => import('@/pages/login/LoginPage'))
 const CallbackPage = lazy(() => import('@/pages/login/CallbackPage'))
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
-const AccountListPage = lazy(() => import('@/pages/accounts/list/AccountListPage'))
 const CreateAccountPage = lazy(() => import('@/pages/accounts/create/CreateAccountPage'))
 const AccountsListPage = lazy(() => import('@/pages/accounts/users/AccountsListPage'))
 const AccountDetailsPage = lazy(() => import('@/pages/accounts/details/AccountDetailsPage'))
@@ -59,30 +58,8 @@ const dashboardRoute = createRoute({
   component: DashboardPage,
 })
 
-const accountsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/accounts',
-  beforeLoad: ({ context }) => {
-    const { auth } = context as RouterContext
-    if (!auth.isAuthenticated && !auth.isLoading) {
-      throw redirect({ to: '/' })
-    }
-  },
-  component: AccountListPage,
-})
-
-const createAccountRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/accounts/create',
-  beforeLoad: ({ context }) => {
-    const { auth } = context as RouterContext
-    if (!auth.isAuthenticated && !auth.isLoading) {
-      throw redirect({ to: '/' })
-    }
-  },
-  component: CreateAccountPage,
-})
-
+// Unified User Management route (replaces old /accounts)
+// Only accessible for users with ADMIN role
 const usersListRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin/users',
@@ -91,8 +68,44 @@ const usersListRoute = createRoute({
     if (!auth.isAuthenticated && !auth.isLoading) {
       throw redirect({ to: '/' })
     }
+
+    // Check for ADMIN role (Keycloak uses ROLE_ prefix)
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (!roles.includes('ROLE_ADMIN')) {
+      // Redirect non-admin users to dashboard
+      throw redirect({ to: '/dashboard' })
+    }
   },
   component: AccountsListPage,
+})
+
+// Redirect old /accounts route to /admin/users for backwards compatibility
+const accountsRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/accounts',
+  beforeLoad: () => {
+    throw redirect({ to: '/admin/users' })
+  },
+})
+
+const createAccountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/users/create',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Check for ADMIN role
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (!roles.includes('ADMIN')) {
+      throw redirect({ to: '/dashboard' })
+    }
+  },
+  component: CreateAccountPage,
 })
 
 const accountDetailsRoute = createRoute({
@@ -103,6 +116,13 @@ const accountDetailsRoute = createRoute({
     if (!auth.isAuthenticated && !auth.isLoading) {
       throw redirect({ to: '/' })
     }
+
+    // Check for ADMIN role
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (!roles.includes('ADMIN')) {
+      throw redirect({ to: '/dashboard' })
+    }
   },
   component: AccountDetailsPage,
 })
@@ -112,9 +132,9 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   callbackRoute,
   dashboardRoute,
-  accountsRoute,
-  createAccountRoute,
+  accountsRedirectRoute,
   usersListRoute,
+  createAccountRoute,
   accountDetailsRoute,
 ])
 

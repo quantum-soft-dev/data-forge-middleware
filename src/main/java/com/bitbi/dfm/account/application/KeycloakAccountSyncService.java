@@ -169,7 +169,8 @@ public class KeycloakAccountSyncService {
 
             // Fetch Keycloak user representation for response
             UserRepresentation keycloakUser = keycloakClient.getUser(keycloakUserId);
-            AccountWithKeycloakResponse accountResponse = AccountWithKeycloakResponse.fromEntity(savedAccount, keycloakUser);
+            Long lastLogin = keycloakClient.getLastLogin(keycloakUserId);
+            AccountWithKeycloakResponse accountResponse = AccountWithKeycloakResponse.fromEntity(savedAccount, keycloakUser, lastLogin);
 
             // Increment success counter
             accountCreatedSuccessCounter.increment();
@@ -280,7 +281,8 @@ public class KeycloakAccountSyncService {
 
             // Fetch updated Keycloak user for response
             UserRepresentation updatedKeycloakUser = keycloakClient.getUser(keycloakUserId);
-            return AccountWithKeycloakResponse.fromEntity(account, updatedKeycloakUser);
+            Long lastLogin = keycloakClient.getLastLogin(keycloakUserId);
+            return AccountWithKeycloakResponse.fromEntity(account, updatedKeycloakUser, lastLogin);
 
         } catch (AccountNotFoundException | NoKeycloakIntegrationException | AccountAlreadyLockedException | CannotLockOwnAccountException e) {
             // These are expected exceptions, re-throw without logging as errors
@@ -371,7 +373,8 @@ public class KeycloakAccountSyncService {
 
             // Fetch updated Keycloak user for response
             UserRepresentation updatedKeycloakUser = keycloakClient.getUser(keycloakUserId);
-            return AccountWithKeycloakResponse.fromEntity(account, updatedKeycloakUser);
+            Long lastLogin = keycloakClient.getLastLogin(keycloakUserId);
+            return AccountWithKeycloakResponse.fromEntity(account, updatedKeycloakUser, lastLogin);
 
         } catch (AccountNotFoundException | NoKeycloakIntegrationException | AccountAlreadyUnlockedException e) {
             // These are expected exceptions, re-throw without logging as errors

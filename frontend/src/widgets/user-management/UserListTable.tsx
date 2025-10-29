@@ -267,10 +267,10 @@ export function UserListTable({
       </div>
 
       <Pagination
-        currentPage={page}
+        page={page}
         totalPages={Math.ceil(totalCount / pageSize)}
         pageSize={pageSize}
-        totalCount={totalCount}
+        totalElements={totalCount}
         onPageChange={onPageChange}
         onPageSizeChange={onPageSizeChange}
       />

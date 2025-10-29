@@ -64,18 +64,21 @@ public class AccountAdminController {
     private final AccountProperties accountProperties;
     private final KeycloakAccountSyncService keycloakSyncService;
     private final AdminActionLogRepository auditLogRepository;
+    private final com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient;
 
     public AccountAdminController(
             AccountService accountService,
             AccountStatisticsService accountStatisticsService,
             AccountProperties accountProperties,
             KeycloakAccountSyncService keycloakSyncService,
-            AdminActionLogRepository auditLogRepository) {
+            AdminActionLogRepository auditLogRepository,
+            com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
         this.accountProperties = accountProperties;
         this.keycloakSyncService = keycloakSyncService;
         this.auditLogRepository = auditLogRepository;
+        this.keycloakAdminClient = keycloakAdminClient;
     }
 
     /**
@@ -147,6 +150,149 @@ public class AccountAdminController {
         Map<String, Object> statistics = accountStatisticsService.getAccountStatistics(accountId);
 
         AccountWithStatsResponseDto response = AccountWithStatsResponseDto.fromEntityAndStats(account, statistics);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get account by ID with Keycloak integration data.
+     * <p>
+     * GET /admin/accounts/{id}/with-keycloak
+     * </p>
+     * <p>
+     * Returns account details enriched with Keycloak status (enabled, temporary password, last login).
+     * If account doesn't have Keycloak integration, returns 400 Bad Request.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @return account response with Keycloak data
+     */
+    @Operation(
+            summary = "Get account with Keycloak integration",
+            description = "Retrieves account details with Keycloak authentication data (status, last login, etc.)."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Account retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse.class))),
+            @ApiResponse(responseCode = "400", description = "Account has no Keycloak integration",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Account not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @GetMapping("/{id}/with-keycloak")
+    public ResponseEntity<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> getAccountWithKeycloak(
+            @PathVariable("id") UUID accountId) {
+
+        logger.info("Fetching account with Keycloak integration: accountId={}", accountId);
+
+        Account account = accountService.getAccount(accountId);
+
+        if (!account.hasKeycloakIntegration()) {
+            throw new IllegalArgumentException("Account does not have Keycloak integration");
+        }
+
+        try {
+            String keycloakUserId = account.getKeycloakUserId();
+            org.keycloak.representations.idm.UserRepresentation keycloakUser =
+                    keycloakAdminClient.getUser(keycloakUserId);
+            Long lastLogin = keycloakAdminClient.getLastLogin(keycloakUserId);
+
+            com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse response =
+                    com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse.fromEntity(
+                            account, keycloakUser, lastLogin);
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("Failed to fetch Keycloak data for account {}", accountId, e);
+            throw new RuntimeException("Failed to fetch Keycloak data: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * List all accounts with Keycloak integration data.
+     * <p>
+     * GET /admin/accounts/with-keycloak?page=0&size=20&sort=createdAt,desc
+     * </p>
+     * <p>
+     * Returns accounts enriched with Keycloak status (enabled, temporary password, last login).
+     * Only includes accounts with Keycloak integration. Legacy accounts are excluded.
+     * </p>
+     *
+     * @param page page number (default: 0)
+     * @param size page size (default: 20)
+     * @param sort sort field and direction (default: createdAt,desc)
+     * @return paginated list of accounts with Keycloak data
+     */
+    @Operation(
+            summary = "List accounts with Keycloak integration",
+            description = "Retrieves paginated list of accounts with Keycloak authentication data (status, last login, etc.)."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Accounts retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class)))
+    })
+    @GetMapping("/with-keycloak")
+    public ResponseEntity<PageResponseDto<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse>> listAccountsWithKeycloak(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt,desc") String sort) {
+
+        logger.info("Fetching accounts with Keycloak integration: page={}, size={}", page, size);
+
+        // Parse sort parameter
+        String[] sortParams = sort.split(",");
+        String sortField = sortParams[0];
+        Sort.Direction sortDirection = sortParams.length > 1 && "asc".equalsIgnoreCase(sortParams[1])
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
+
+        // Create pageable
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+
+        // Get paginated accounts (all accounts, will filter in-app)
+        Page<Account> accountPage = accountService.listAccounts(pageable);
+
+        // Filter accounts with Keycloak and enrich with Keycloak data
+        java.util.List<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> enrichedAccounts = accountPage.getContent().stream()
+                .filter(account -> {
+                    boolean hasKeycloak = account.hasKeycloakIntegration();
+                    if (!hasKeycloak) {
+                        logger.debug("Skipping account {} - no Keycloak integration", account.getId());
+                    }
+                    return hasKeycloak;
+                })
+                .map(account -> {
+                    try {
+                        String keycloakUserId = account.getKeycloakUserId();
+                        logger.debug("Fetching Keycloak data for account {} with Keycloak user {}", account.getId(), keycloakUserId);
+
+                        org.keycloak.representations.idm.UserRepresentation keycloakUser =
+                                keycloakAdminClient.getUser(keycloakUserId);
+                        Long lastLogin = keycloakAdminClient.getLastLogin(keycloakUserId);
+
+                        return com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse.fromEntity(account, keycloakUser, lastLogin);
+                    } catch (Exception e) {
+                        logger.error("Failed to fetch Keycloak data for account {} (Keycloak user: {}): {}",
+                                account.getId(), account.getKeycloakUserId(), e.getMessage(), e);
+                        return null;
+                    }
+                })
+                .filter(java.util.Objects::nonNull)
+                .toList();
+
+        logger.info("Successfully enriched {} accounts out of {} total on page {}",
+                enrichedAccounts.size(), accountPage.getContent().size(), page);
+
+        // For pagination: use total from page (this is approximate, but works for MVP)
+        // TODO: In production, use a separate query to count only Keycloak accounts
+        PageResponseDto<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> response =
+                new PageResponseDto<>(
+                        enrichedAccounts,
+                        accountPage.getNumber(),
+                        accountPage.getSize(),
+                        accountPage.getTotalElements(), // Use total from DB (includes legacy)
+                        accountPage.getTotalPages()
+                );
+
         return ResponseEntity.ok(response);
     }
 
