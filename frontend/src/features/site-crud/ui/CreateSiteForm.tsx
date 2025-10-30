@@ -13,17 +13,17 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Button } from '@/shared/ui/components/button';
-import { Input } from '@/shared/ui/components/input';
-import { Label } from '@/shared/ui/components/label';
+import { Button } from '@/shared/ui/ui/button';
+import { Input } from '@/shared/ui/ui/input';
+import { Label } from '@/shared/ui/ui/label';
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from '@/shared/ui/components/card';
-import { Alert, AlertDescription } from '@/shared/ui/components/alert';
+} from '@/shared/ui/ui/card';
+import { Alert, AlertDescription } from '@/shared/ui/ui/alert';
 import { generatePassword } from '@/shared/lib/password-generator';
 import { CreateSiteFormSchema, type CreateSiteFormData } from '../model/schemas';
 import { useCreateSite } from '../model/queries';

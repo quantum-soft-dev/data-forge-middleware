@@ -14,7 +14,7 @@
 
 import { CreateSiteForm } from '@/features/site-crud/ui/CreateSiteForm';
 import { SiteList } from '@/widgets/site-list/SiteList';
-import { Separator } from '@/shared/ui/components/separator';
+import { Separator } from '@/shared/ui/ui/separator';
 
 export function SiteManagementPage() {
   return (

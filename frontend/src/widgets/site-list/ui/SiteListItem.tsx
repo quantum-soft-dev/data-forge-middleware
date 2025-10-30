@@ -11,8 +11,8 @@
  */
 
 import { useState } from 'react';
-import { Button } from '@/shared/ui/components/button';
-import { Badge } from '@/shared/ui/components/badge';
+import { Button } from '@/shared/ui/ui/button';
+import { Badge } from '@/shared/ui/ui/badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,8 +22,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/shared/ui/components/alert-dialog';
-import { Card, CardContent } from '@/shared/ui/components/card';
+} from '@/shared/ui/ui/alert-dialog';
+import { Card, CardContent } from '@/shared/ui/ui/card';
 import { CheckCircle2, XCircle, Trash2, Power, PowerOff } from 'lucide-react';
 import type { Site } from '@/entities/site';
 import { format } from 'date-fns';

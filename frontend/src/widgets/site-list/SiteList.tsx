@@ -11,8 +11,8 @@
  * Feature: 007-adding-a-site (T035, US1, US2, US3)
  */
 
-import { Alert, AlertDescription } from '@/shared/ui/components/alert';
-import { Skeleton } from '@/shared/ui/components/skeleton';
+import { Alert, AlertDescription } from '@/shared/ui/ui/alert';
+import { Skeleton } from '@/shared/ui/ui/skeleton';
 import { SiteListItem } from './ui/SiteListItem';
 import { useSites, useUpdateSiteStatus, useDeleteSite } from '@/features/site-crud/model/queries';
 import { AlertCircle } from 'lucide-react';
