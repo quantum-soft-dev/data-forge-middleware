@@ -9,6 +9,7 @@ const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
 const CreateAccountPage = lazy(() => import('@/pages/accounts/create/CreateAccountPage'))
 const AccountsListPage = lazy(() => import('@/pages/accounts/users/AccountsListPage'))
 const AccountDetailsPage = lazy(() => import('@/pages/accounts/details/AccountDetailsPage'))
+const SiteManagementPage = lazy(() => import('@/pages/site-management').then(m => ({ default: m.SiteManagementPage })))
 
 // Router context type
 interface RouterContext {
@@ -127,6 +128,19 @@ const accountDetailsRoute = createRoute({
   component: AccountDetailsPage,
 })
 
+// Site Management route (accessible to all authenticated users)
+const siteManagementRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/sites',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+  },
+  component: SiteManagementPage,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -136,6 +150,7 @@ const routeTree = rootRoute.addChildren([
   usersListRoute,
   createAccountRoute,
   accountDetailsRoute,
+  siteManagementRoute,
 ])
 
 // Create router instance

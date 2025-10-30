@@ -44,6 +44,17 @@ export function Header() {
               Dashboard
             </Link>
 
+            {/* Site Management - accessible to all authenticated users */}
+            <Link
+              to="/account/sites"
+              className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+              activeProps={{
+                className: 'text-sm font-medium text-primary hover:text-primary',
+              }}
+            >
+              Site Management
+            </Link>
+
             {/* User Management - only visible for ADMIN role */}
             {isAdmin && (
               <Link

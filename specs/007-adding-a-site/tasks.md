@@ -116,8 +116,8 @@
 - [X] T035 [P] [US1] Create SiteList widget in `frontend/src/widgets/site-list/SiteList.tsx` (display sites with domain, status, actions, loading/error states)
 - [X] T036 [P] [US1] Create SiteListItem component in `frontend/src/widgets/site-list/ui/SiteListItem.tsx` with activate/deactivate/delete actions and confirmation dialog
 - [X] T037 [US1] Create SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.tsx` (integrate CreateSiteForm + SiteList)
-- [ ] T038 [US1] Add route for /account/sites in `frontend/src/app/router.tsx`
-- [ ] T039 [US1] Add navigation link to Site Management in Account Management section
+- [X] T038 [US1] Add route for /account/sites in `frontend/src/app/router.tsx`
+- [X] T039 [US1] Add navigation link to Site Management in Account Management section
 
 ### Verification for User Story 1
 
