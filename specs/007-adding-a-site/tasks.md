@@ -95,8 +95,8 @@
 
 ### Tests for User Story 1 (TDD - Write First, Ensure FAIL)
 
-- [ ] T025 [P] [US1] Contract test for POST /api/sites in `src/test/java/com/bitbi/dfm/site/contract/SiteContractTest.java` (create site endpoint validation)
-- [ ] T026 [P] [US1] Contract test for GET /api/sites in `src/test/java/com/bitbi/dfm/site/contract/SiteContractTest.java` (list sites endpoint)
+- [X] T025 [P] [US1] Contract test for POST /api/sites in `src/test/java/com/bitbi/dfm/site/contract/SiteContractTest.java` (create site endpoint validation) - 4 test cases written
+- [X] T026 [P] [US1] Contract test for GET /api/sites in `src/test/java/com/bitbi/dfm/site/contract/SiteContractTest.java` (list sites endpoint) - 2 test cases written
 - [ ] T027 [P] [US1] Integration test for user site creation flow in `src/test/java/com/bitbi/dfm/site/integration/SiteManagementIntegrationTest.java`
 - [ ] T028 [P] [US1] Frontend unit test for CreateSiteForm in `frontend/src/features/site-crud/ui/CreateSiteForm.test.tsx`
 - [ ] T029 [P] [US1] Frontend integration test for SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.test.tsx`
