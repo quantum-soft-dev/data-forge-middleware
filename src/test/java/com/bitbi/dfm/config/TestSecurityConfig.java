@@ -38,7 +38,8 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li><b>Order 1:</b> /api/dfc/** → Custom JWT authentication via JwtAuthenticationFilter</li>
  *   <li><b>Order 2:</b> /api/admin/** → Mocked OAuth2 Resource Server (mock.admin.jwt.token grants ROLE_ADMIN)</li>
- *   <li><b>Order 3:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
+ *   <li><b>Order 3:</b> /api/sites**, /api/account/** → Mocked OAuth2 for user endpoints (any authenticated user)</li>
+ *   <li><b>Order 4:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
  * </ul>
  *
  * <p><b>Mock Token Behavior:</b></p>
@@ -77,21 +78,25 @@ public class TestSecurityConfig {
             String subject;
             String email;
             String username;
+            String accountId;
 
             if ("mock.admin.jwt.token".equals(token)) {
                 roles = List.of("ADMIN");
-                subject = "admin-user";
+                accountId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // Test account 1 from test-data.sql
+                subject = accountId; // Subject is accountId for extraction
                 email = "admin@test.com";
                 username = "admin";
-            } else if ("mock.user.jwt.token".equals(token)) {
+            } else if ("mock.user.jwt.token".equals(token) || "mock-jwt-token-account-1".equals(token)) {
                 roles = List.of("USER");
-                subject = "regular-user";
+                accountId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // Test account 1 from test-data.sql
+                subject = accountId; // Subject is accountId for extraction
                 email = "user@test.com";
                 username = "user";
             } else {
                 // Invalid token - no roles
                 roles = List.of();
-                subject = "unknown";
+                accountId = "00000000-0000-0000-0000-000000000000";
+                subject = accountId;
                 email = "unknown@test.com";
                 username = "unknown";
             }
@@ -102,6 +107,7 @@ public class TestSecurityConfig {
                     .subject(subject)
                     .claim("email", email)
                     .claim("preferred_username", username)
+                    .claim("accountId", accountId)
                     .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
                     .expiresAt(Instant.now().plusSeconds(3600))
@@ -212,14 +218,40 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Default security filter chain for remaining endpoints.
+     * Security filter chain for user-facing authenticated endpoints.
      * <p>
-     * Order 3: Lowest priority - catches all remaining requests.
-     * Allows public access to actuator, swagger, and auth token endpoint.
+     * Order 3: Third priority to match /api/sites** and /api/account/**.
+     * OAuth2 Resource Server - any authenticated user allowed.
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(3)
+    public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/sites/**", "/api/account/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt
+                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
+                )
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Default security filter chain for remaining endpoints.
+     * <p>
+     * Order 4: Lowest priority - catches all remaining requests.
+     * Allows public access to actuator, swagger, and auth token endpoint.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(4)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
