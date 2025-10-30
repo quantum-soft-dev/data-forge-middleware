@@ -210,7 +210,7 @@ public class AccountAdminController {
     /**
      * List all accounts with Keycloak integration data.
      * <p>
-     * GET /admin/accounts/with-keycloak?page=0&size=20&sort=createdAt,desc
+     * GET /admin/accounts/with-keycloak?page=0&size=20&sort=createdAt,desc&search=john
      * </p>
      * <p>
      * Returns accounts enriched with Keycloak status (enabled, temporary password, last login).
@@ -220,11 +220,12 @@ public class AccountAdminController {
      * @param page page number (default: 0)
      * @param size page size (default: 20)
      * @param sort sort field and direction (default: createdAt,desc)
+     * @param search search query to filter by email or name (optional, case-insensitive)
      * @return paginated list of accounts with Keycloak data
      */
     @Operation(
             summary = "List accounts with Keycloak integration",
-            description = "Retrieves paginated list of accounts with Keycloak authentication data (status, last login, etc.)."
+            description = "Retrieves paginated list of accounts with Keycloak authentication data (status, last login, etc.). Supports search by email or name."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Accounts retrieved successfully",
@@ -234,9 +235,10 @@ public class AccountAdminController {
     public ResponseEntity<PageResponseDto<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse>> listAccountsWithKeycloak(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(defaultValue = "createdAt,desc") String sort) {
+            @RequestParam(defaultValue = "createdAt,desc") String sort,
+            @RequestParam(required = false) String search) {
 
-        logger.info("Fetching accounts with Keycloak integration: page={}, size={}", page, size);
+        logger.info("Fetching accounts with Keycloak integration: page={}, size={}, search={}", page, size, search);
 
         // Parse sort parameter
         String[] sortParams = sort.split(",");
@@ -259,6 +261,16 @@ public class AccountAdminController {
                         logger.debug("Skipping account {} - no Keycloak integration", account.getId());
                     }
                     return hasKeycloak;
+                })
+                .filter(account -> {
+                    // Apply search filter if provided
+                    if (search == null || search.isBlank()) {
+                        return true; // No search filter, include all
+                    }
+                    String searchLower = search.toLowerCase();
+                    boolean matchesEmail = account.getEmail().toLowerCase().contains(searchLower);
+                    boolean matchesName = account.getName() != null && account.getName().toLowerCase().contains(searchLower);
+                    return matchesEmail || matchesName;
                 })
                 .map(account -> {
                     try {

@@ -402,7 +402,7 @@
   - ✅ Empty state with helpful message
   - ✅ Error handling with user-friendly messages
   - ✅ Integrated into AccountDetailsPage
-- [ ] **T066** [P] Add filtering to UserListTable: filter by isActive, hasKeycloakIntegration, passwordTemporary
+- [X] **T066** [P] Add search filtering to backend /admin/accounts/with-keycloak endpoint: filter by email or name (case-insensitive)
 - [ ] **T067** [P] Add sorting to UserListTable: sort by createdAt, email, name
 - [ ] **T068** [P] Add pagination controls to UserListTable
 - [X] **T069** Handle edge case: Prevent admin from locking their own account (check in KeycloakAccountSyncService)
