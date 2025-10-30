@@ -12,8 +12,8 @@ DELETE FROM sites WHERE domain LIKE '%.example.com';
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 
 -- Test accounts
-INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-test@example.com', 'Admin Test Account', true, '2025-09-06 00:00:00', CURRENT_TIMESTAMP);
+INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, keycloak_user_id)
+VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-test@example.com', 'Admin Test Account', true, '2025-09-06 00:00:00', CURRENT_TIMESTAMP, 'd4e5f6a7-b8c9-0123-def4-567890123456');
 
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
 VALUES ('0199bab1-fad2-bf76-c478-eae1f61e1c17', 'test-account-2@example.com', 'Test Account 2', true, '2025-09-16 00:00:00', CURRENT_TIMESTAMP);

@@ -6,6 +6,7 @@ import org.keycloak.representations.idm.UserRepresentation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,12 +17,13 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -57,11 +59,17 @@ class AdminContractTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // Mock Keycloak Admin Client to avoid real Keycloak API calls
+        // Stateful mock: Track enabled state per Keycloak user ID
+        Map<String, Boolean> keycloakUserEnabledState = new HashMap<>();
+        keycloakUserEnabledState.put(MOCK_KEYCLOAK_USER_ID, true); // Default: enabled
 
-        // For create user in Keycloak
+        // For create user in Keycloak - return unique UUID for each call
         when(keycloakAdminClient.createUser(anyString(), anyString(), anyString(), any(Boolean.class)))
-                .thenReturn(MOCK_KEYCLOAK_USER_ID);
+                .thenAnswer((Answer<String>) invocation -> {
+                    String newUserId = UUID.randomUUID().toString();
+                    keycloakUserEnabledState.put(newUserId, true); // New users start enabled
+                    return newUserId;
+                });
 
         // For update user attributes (bidirectional reference)
         doNothing().when(keycloakAdminClient).updateUserAttributes(anyString(), anyString());
@@ -69,18 +77,31 @@ class AdminContractTest {
         // For assign role
         doNothing().when(keycloakAdminClient).assignRole(anyString(), anyString());
 
-        // For get user (fetch user representation)
-        UserRepresentation mockUser = new UserRepresentation();
-        mockUser.setId(MOCK_KEYCLOAK_USER_ID);
-        mockUser.setEnabled(true);
-        when(keycloakAdminClient.getUser(anyString())).thenReturn(mockUser);
+        // For get user - return state based on tracked map
+        when(keycloakAdminClient.getUser(anyString())).thenAnswer((Answer<UserRepresentation>) invocation -> {
+            String userId = invocation.getArgument(0);
+            UserRepresentation user = new UserRepresentation();
+            user.setId(userId);
+            user.setEnabled(keycloakUserEnabledState.getOrDefault(userId, true));
+            return user;
+        });
 
         // For get last login
         when(keycloakAdminClient.getLastLogin(anyString())).thenReturn(null);
 
-        // For lock/unlock
-        doNothing().when(keycloakAdminClient).disableUser(anyString());
-        doNothing().when(keycloakAdminClient).enableUser(anyString());
+        // For lock - update state to disabled
+        doAnswer((Answer<Void>) invocation -> {
+            String userId = invocation.getArgument(0);
+            keycloakUserEnabledState.put(userId, false);
+            return null;
+        }).when(keycloakAdminClient).disableUser(anyString());
+
+        // For unlock - update state to enabled
+        doAnswer((Answer<Void>) invocation -> {
+            String userId = invocation.getArgument(0);
+            keycloakUserEnabledState.put(userId, true);
+            return null;
+        }).when(keycloakAdminClient).enableUser(anyString());
 
         // For reset password
         doNothing().when(keycloakAdminClient).resetPassword(anyString(), anyString());
@@ -117,7 +138,8 @@ class AdminContractTest {
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.account.id").exists())
-                .andExpect(jsonPath("$.account.keycloakUserId").value(MOCK_KEYCLOAK_USER_ID))
+                .andExpect(jsonPath("$.account.keycloakUserId").exists())
+                .andExpect(jsonPath("$.account.keycloakUserId").isString())
                 .andExpect(jsonPath("$.account.email").value("test@example.com"))
                 .andExpect(jsonPath("$.account.name").value("Test User"))
                 .andExpect(jsonPath("$.account.keycloakEnabled").value(true))
@@ -154,7 +176,8 @@ class AdminContractTest {
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.account").exists())
-                .andExpect(jsonPath("$.account.keycloakUserId").value(MOCK_KEYCLOAK_USER_ID))
+                .andExpect(jsonPath("$.account.keycloakUserId").exists())
+                .andExpect(jsonPath("$.account.keycloakUserId").isString())
                 .andExpect(jsonPath("$.account.email").value("user@example.com"))
                 .andExpect(jsonPath("$.account.name").value("Regular User"))
                 .andExpect(jsonPath("$.account.keycloakEnabled").value(true))
@@ -186,7 +209,8 @@ class AdminContractTest {
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.account").exists())
-                .andExpect(jsonPath("$.account.keycloakUserId").value(MOCK_KEYCLOAK_USER_ID))
+                .andExpect(jsonPath("$.account.keycloakUserId").exists())
+                .andExpect(jsonPath("$.account.keycloakUserId").isString())
                 .andExpect(jsonPath("$.account.email").value("admin@example.com"))
                 .andExpect(jsonPath("$.account.name").value("Admin User"))
                 .andExpect(jsonPath("$.account.keycloakEnabled").value(true))
@@ -1047,7 +1071,7 @@ class AdminContractTest {
     /**
      * Test Case 10b: Unlock account should return 200 with updated status.
      * <p>
-     * Given: Admin authenticated with ROLE_ADMIN
+     * Given: Admin authenticated with ROLE_ADMIN AND account is locked
      * When: POST /admin/accounts/{id}/unlock
      * Then: 200 OK with AccountWithKeycloakResponse showing keycloakEnabled=true
      * </p>
@@ -1055,6 +1079,11 @@ class AdminContractTest {
     @Test
     @DisplayName("Should unlock account when admin authenticated")
     void shouldUnlockAccountWhenAdminAuthenticated() throws Exception {
+        // Given: Lock the account first
+        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+                .andExpect(status().isOk());
+
         // When: POST /admin/accounts/{id}/unlock
         mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
@@ -1074,7 +1103,8 @@ class AdminContractTest {
     @Test
     @DisplayName("Should reject lock request for account without Keycloak integration")
     void shouldRejectLockRequestForAccountWithoutKeycloakIntegration() throws Exception {
-        String accountWithoutKeycloak = "d4e5f6a7-b8c9-0123-defg-234567890123";
+        // Account from test-data.sql without keycloak_user_id
+        String accountWithoutKeycloak = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
 
         // When: POST /admin/accounts/{id}/lock for account without Keycloak
         mockMvc.perform(post("/api/admin/accounts/{id}/lock", accountWithoutKeycloak)
@@ -1118,7 +1148,8 @@ class AdminContractTest {
     @Test
     @DisplayName("Should reject unlock request for account without Keycloak integration")
     void shouldRejectUnlockRequestForAccountWithoutKeycloakIntegration() throws Exception {
-        String accountWithoutKeycloak = "d4e5f6a7-b8c9-0123-defg-234567890123";
+        // Account from test-data.sql without keycloak_user_id
+        String accountWithoutKeycloak = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
 
         // When: POST /admin/accounts/{id}/unlock for account without Keycloak
         mockMvc.perform(post("/api/admin/accounts/{id}/unlock", accountWithoutKeycloak)
@@ -1389,31 +1420,11 @@ class AdminContractTest {
     @Test
     @DisplayName("Should reject password reset when account has no Keycloak integration")
     void shouldRejectPasswordResetWhenNoKeycloakIntegration() throws Exception {
-        // Given: Create account without Keycloak integration
-        String createRequestBody = """
-                {
-                  "email": "no-keycloak@example.com",
-                  "name": "No Keycloak User"
-                }
-                """;
-
-        String createResponse = mockMvc.perform(post("/api/admin/accounts")
-                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(createRequestBody))
-                .andExpect(status().isCreated())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
-
-        // Extract accountId from response (simple JSON parsing)
-        String accountId = createResponse.substring(
-                createResponse.indexOf("\"id\":\"") + 6,
-                createResponse.indexOf("\"", createResponse.indexOf("\"id\":\"") + 6)
-        );
+        // Given: Account from test-data.sql without keycloak_user_id
+        String accountWithoutKeycloak = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
 
         // When: POST /admin/accounts/{id}/reset-password for account without Keycloak
-        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountWithoutKeycloak)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 400 Bad Request
