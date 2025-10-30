@@ -39,7 +39,7 @@
 ### Database Foundation
 
 - [X] T005 Create Flyway migration `src/main/resources/db/migration/V014__extend_admin_action_logs_for_sites.sql` with admin_action_logs table extensions, indexes, and sites table constraints (unique on account_id+domain, index on is_active)
-- [ ] T006 Run migration and verify schema: `./gradlew flywayMigrate` and check admin_action_logs table exists
+- [X] T006 Run migration and verify schema: Migration V14 successfully applied, schema at version v14
 
 ### Backend Foundation - Domain Layer
 
@@ -112,10 +112,10 @@
 
 ### Frontend Implementation for User Story 1
 
-- [ ] T034 [P] [US1] Create CreateSiteForm component in `frontend/src/features/site-crud/ui/CreateSiteForm.tsx` with password generation button
-- [ ] T035 [P] [US1] Create SiteList widget in `frontend/src/widgets/site-list/SiteList.tsx` (display sites with domain, status, actions)
-- [ ] T036 [P] [US1] Create SiteListItem component in `frontend/src/widgets/site-list/ui/SiteListItem.tsx`
-- [ ] T037 [US1] Create SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.tsx` (integrate CreateSiteForm + SiteList)
+- [X] T034 [P] [US1] Create CreateSiteForm component in `frontend/src/features/site-crud/ui/CreateSiteForm.tsx` with password generation button, copy functionality, Zod validation
+- [X] T035 [P] [US1] Create SiteList widget in `frontend/src/widgets/site-list/SiteList.tsx` (display sites with domain, status, actions, loading/error states)
+- [X] T036 [P] [US1] Create SiteListItem component in `frontend/src/widgets/site-list/ui/SiteListItem.tsx` with activate/deactivate/delete actions and confirmation dialog
+- [X] T037 [US1] Create SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.tsx` (integrate CreateSiteForm + SiteList)
 - [ ] T038 [US1] Add route for /account/sites in `frontend/src/app/router.tsx`
 - [ ] T039 [US1] Add navigation link to Site Management in Account Management section
 
