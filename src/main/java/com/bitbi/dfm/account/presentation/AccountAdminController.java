@@ -24,6 +24,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -33,6 +35,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -54,6 +57,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/admin/accounts")
 @PreAuthorize("hasRole('ADMIN')")
+@Validated
 @Tag(name = "Admin - Accounts", description = "Account administration endpoints")
 public class AccountAdminController {
 
@@ -65,6 +69,7 @@ public class AccountAdminController {
     private final KeycloakAccountSyncService keycloakSyncService;
     private final AdminActionLogRepository auditLogRepository;
     private final com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient;
+    private final com.bitbi.dfm.account.domain.AccountRepository accountRepository;
 
     public AccountAdminController(
             AccountService accountService,
@@ -72,13 +77,15 @@ public class AccountAdminController {
             AccountProperties accountProperties,
             KeycloakAccountSyncService keycloakSyncService,
             AdminActionLogRepository auditLogRepository,
-            com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient) {
+            com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient,
+            com.bitbi.dfm.account.domain.AccountRepository accountRepository) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
         this.accountProperties = accountProperties;
         this.keycloakSyncService = keycloakSyncService;
         this.auditLogRepository = auditLogRepository;
         this.keycloakAdminClient = keycloakAdminClient;
+        this.accountRepository = accountRepository;
     }
 
     /**
@@ -236,9 +243,13 @@ public class AccountAdminController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "createdAt,desc") String sort,
-            @RequestParam(required = false) String search) {
+            @RequestParam(required = false)
+            @Size(max = 100, message = "Search query must not exceed 100 characters")
+            @Pattern(regexp = "^[a-zA-Z0-9@.\\s-]*$", message = "Search query contains invalid characters")
+            String search) {
 
-        logger.info("Fetching accounts with Keycloak integration: page={}, size={}, search={}", page, size, search);
+        logger.info("Fetching accounts with Keycloak integration: page={}, size={}, search={}",
+                    page, size, search != null ? "[filtered]" : "[all]");
 
         // Parse sort parameter
         String[] sortParams = sort.split(",");
@@ -250,28 +261,11 @@ public class AccountAdminController {
         // Create pageable
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
 
-        // Get paginated accounts (all accounts, will filter in-app)
-        Page<Account> accountPage = accountService.listAccounts(pageable);
+        // Query database with filter applied at DB level (fixes N+1 and pagination issues)
+        Page<Account> accountPage = accountRepository.findAccountsWithKeycloak(search, pageable);
 
-        // Filter accounts with Keycloak and enrich with Keycloak data
+        // Enrich with Keycloak data (only for accounts already filtered by DB)
         java.util.List<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> enrichedAccounts = accountPage.getContent().stream()
-                .filter(account -> {
-                    boolean hasKeycloak = account.hasKeycloakIntegration();
-                    if (!hasKeycloak) {
-                        logger.debug("Skipping account {} - no Keycloak integration", account.getId());
-                    }
-                    return hasKeycloak;
-                })
-                .filter(account -> {
-                    // Apply search filter if provided
-                    if (search == null || search.isBlank()) {
-                        return true; // No search filter, include all
-                    }
-                    String searchLower = search.toLowerCase();
-                    boolean matchesEmail = account.getEmail().toLowerCase().contains(searchLower);
-                    boolean matchesName = account.getName() != null && account.getName().toLowerCase().contains(searchLower);
-                    return matchesEmail || matchesName;
-                })
                 .map(account -> {
                     try {
                         String keycloakUserId = account.getKeycloakUserId();
@@ -291,17 +285,16 @@ public class AccountAdminController {
                 .filter(java.util.Objects::nonNull)
                 .toList();
 
-        logger.info("Successfully enriched {} accounts out of {} total on page {}",
-                enrichedAccounts.size(), accountPage.getContent().size(), page);
+        logger.info("Successfully enriched {} accounts on page {} (total matching: {})",
+                enrichedAccounts.size(), page, accountPage.getTotalElements());
 
-        // For pagination: use total from page (this is approximate, but works for MVP)
-        // TODO: In production, use a separate query to count only Keycloak accounts
+        // Use correct pagination metadata from DB query (now accurate)
         PageResponseDto<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> response =
                 new PageResponseDto<>(
                         enrichedAccounts,
                         accountPage.getNumber(),
                         accountPage.getSize(),
-                        accountPage.getTotalElements(), // Use total from DB (includes legacy)
+                        accountPage.getTotalElements(), // Correct count from DB query
                         accountPage.getTotalPages()
                 );
 

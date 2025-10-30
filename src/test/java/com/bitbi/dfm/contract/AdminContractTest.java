@@ -1510,4 +1510,193 @@ class AdminContractTest {
                 // Then: 403 Forbidden
                 .andExpect(status().isForbidden());
     }
+
+    // ========== Search Functionality Tests (PR #11 fixes) ==========
+
+    /**
+     * Test Case 22: List accounts with Keycloak integration without search should return all Keycloak accounts.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak without search parameter
+     * Then: 200 OK with paginated list of all accounts with Keycloak integration
+     * </p>
+     */
+    @Test
+    @DisplayName("Should list all Keycloak accounts without search filter")
+    void shouldListAllKeycloakAccountsWithoutSearch() throws Exception {
+        // When: GET /admin/accounts/with-keycloak
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 200 OK with paginated response
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[0].id").exists())
+                .andExpect(jsonPath("$.content[0].email").exists())
+                .andExpect(jsonPath("$.content[0].keycloakUserId").exists())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(20))
+                .andExpect(jsonPath("$.totalElements").isNumber())
+                .andExpect(jsonPath("$.totalPages").isNumber());
+    }
+
+    /**
+     * Test Case 23: Search accounts by email should filter results.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak?search=admin-test
+     * Then: 200 OK with filtered results matching "admin-test" in email
+     * </p>
+     */
+    @Test
+    @DisplayName("Should filter Keycloak accounts by email search")
+    void shouldFilterKeycloakAccountsByEmailSearch() throws Exception {
+        // When: GET /admin/accounts/with-keycloak?search=admin-test
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("search", "admin-test")
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 200 OK with filtered results
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[?(@.email == 'admin-test@example.com')]").exists())
+                .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    /**
+     * Test Case 24: Search accounts by name should filter results.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak?search=Admin
+     * Then: 200 OK with filtered results matching "Admin" in name
+     * </p>
+     */
+    @Test
+    @DisplayName("Should filter Keycloak accounts by name search")
+    void shouldFilterKeycloakAccountsByNameSearch() throws Exception {
+        // When: GET /admin/accounts/with-keycloak?search=Admin
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("search", "Admin")
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 200 OK with filtered results
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[?(@.name =~ /.*Admin.*/i)]").exists());
+    }
+
+    /**
+     * Test Case 25: Search with no matches should return empty array.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak?search=nonexistent
+     * Then: 200 OK with empty content array
+     * </p>
+     */
+    @Test
+    @DisplayName("Should return empty results when search matches no accounts")
+    void shouldReturnEmptyResultsWhenSearchMatchesNothing() throws Exception {
+        // When: GET /admin/accounts/with-keycloak?search=nonexistent
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("search", "nonexistent-user-xyz")
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 200 OK with empty content
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(0));
+    }
+
+    /**
+     * Test Case 26: Search with invalid characters should return 400.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak?search=test<script>
+     * Then: 400 Bad Request due to validation failure
+     * </p>
+     */
+    @Test
+    @DisplayName("Should reject search with invalid characters")
+    void shouldRejectSearchWithInvalidCharacters() throws Exception {
+        // When: GET /admin/accounts/with-keycloak?search=test<script>
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("search", "test<script>")
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * Test Case 27: Search with length > 100 characters should return 400.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak?search=<101+ chars>
+     * Then: 400 Bad Request due to length validation failure
+     * </p>
+     */
+    @Test
+    @DisplayName("Should reject search query exceeding 100 characters")
+    void shouldRejectSearchQueryExceeding100Characters() throws Exception {
+        // Given: Search query with 101 characters
+        String longSearch = "a".repeat(101);
+
+        // When: GET /admin/accounts/with-keycloak?search=<101 chars>
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("search", longSearch)
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 400 Bad Request
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("100")));
+    }
+
+    /**
+     * Test Case 28: Search should be case-insensitive.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN
+     * When: GET /admin/accounts/with-keycloak?search=ADMIN (uppercase)
+     * Then: 200 OK with results matching "admin" (lowercase in DB)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should perform case-insensitive search")
+    void shouldPerformCaseInsensitiveSearch() throws Exception {
+        // When: GET /admin/accounts/with-keycloak?search=ADMIN (uppercase)
+        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                        .param("search", "ADMIN")
+                        .param("page", "0")
+                        .param("size", "20"))
+
+                // Then: 200 OK with results (case-insensitive match)
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[?(@.name =~ /.*admin.*/i)]").exists());
+    }
 }

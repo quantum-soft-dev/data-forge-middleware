@@ -5,6 +5,7 @@ import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -76,6 +77,41 @@ public class GlobalExceptionHandler {
         }
 
         logger.warn("Validation failed: {}", errorMessage);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle ConstraintViolationException (400 Bad Request).
+     * <p>
+     * This handler is triggered when @RequestParam or @PathVariable validation fails
+     * (when @Validated is used on the controller class).
+     * It extracts all constraint violation messages and returns them in a user-friendly format.
+     * </p>
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponseDto> handleConstraintViolation(
+            ConstraintViolationException ex,
+            HttpServletRequest request) {
+
+        // Extract all constraint violation messages
+        String errorMessage = ex.getConstraintViolations().stream()
+                .map(violation -> violation.getPropertyPath() + ": " + violation.getMessage())
+                .collect(java.util.stream.Collectors.joining(", "));
+
+        if (errorMessage.isEmpty()) {
+            errorMessage = "Validation failed";
+        }
+
+        logger.warn("Constraint violation: {}", errorMessage);
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),

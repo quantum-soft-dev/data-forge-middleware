@@ -72,4 +72,13 @@ public interface AccountRepository {
      * @param id account identifier
      */
     void deleteById(UUID id);
+
+    /**
+     * Find all accounts with Keycloak integration and optional search filter.
+     *
+     * @param search optional search term to filter by email or name (case-insensitive)
+     * @param pageable pagination parameters
+     * @return page of accounts with Keycloak integration
+     */
+    Page<Account> findAccountsWithKeycloak(String search, Pageable pageable);
 }
