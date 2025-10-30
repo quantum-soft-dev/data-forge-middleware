@@ -18,14 +18,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAccountForm } from '@/features/user-management/ui/CreateAccountForm'
-import * as apiClientModule from '@/shared/api/client'
+import { apiClient } from '@/shared/api/client'
 
-// Mock the API client module
-vi.mock('@/shared/api/client', () => ({
-  apiClient: {
-    post: vi.fn(),
-  },
-}))
+// Mock axios methods directly on the apiClient instance
+vi.spyOn(apiClient, 'post')
+vi.spyOn(apiClient, 'get')
+vi.spyOn(apiClient, 'put')
+vi.spyOn(apiClient, 'delete')
 
 // Mock sonner toast
 vi.mock('sonner', () => ({
@@ -90,7 +89,7 @@ describe('Create Account Flow - Integration Test', () => {
       },
     }
 
-    vi.mocked(apiClientModule.apiClient.post).mockResolvedValue(mockResponse)
+    vi.mocked(apiClient.post).mockResolvedValue(mockResponse)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -117,7 +116,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Step 4: Verify API call with correct data
     await waitFor(() => {
-      expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
+      expect(apiClient.post).toHaveBeenCalledWith(
         '/admin/accounts/with-keycloak',
         {
           email: 'john.doe@example.com',
@@ -179,7 +178,7 @@ describe('Create Account Flow - Integration Test', () => {
       },
     }
 
-    vi.mocked(apiClientModule.apiClient.post).mockResolvedValue(mockResponse)
+    vi.mocked(apiClient.post).mockResolvedValue(mockResponse)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -196,7 +195,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify API call with ADMIN role
     await waitFor(() => {
-      expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
+      expect(apiClient.post).toHaveBeenCalledWith(
         '/admin/accounts/with-keycloak',
         {
           email: 'admin@example.com',
@@ -239,7 +238,7 @@ describe('Create Account Flow - Integration Test', () => {
       },
     }
 
-    vi.mocked(apiClientModule.apiClient.post).mockRejectedValue(mockError)
+    vi.mocked(apiClient.post).mockRejectedValue(mockError)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -256,7 +255,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify API was called
     await waitFor(() => {
-      expect(apiClientModule.apiClient.post).toHaveBeenCalled()
+      expect(apiClient.post).toHaveBeenCalled()
     })
 
     // Verify error message is displayed
@@ -290,7 +289,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify API was NOT called
     await waitFor(() => {
-      expect(apiClientModule.apiClient.post).not.toHaveBeenCalled()
+      expect(apiClient.post).not.toHaveBeenCalled()
     })
 
     // Verify validation errors are displayed
@@ -323,7 +322,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify API was NOT called due to validation error
     await waitFor(() => {
-      expect(apiClientModule.apiClient.post).not.toHaveBeenCalled()
+      expect(apiClient.post).not.toHaveBeenCalled()
     })
 
     // Verify email validation error is displayed
@@ -354,7 +353,7 @@ describe('Create Account Flow - Integration Test', () => {
     expect(mockOnCancel).toHaveBeenCalledTimes(1)
 
     // Verify API was NOT called
-    expect(apiClientModule.apiClient.post).not.toHaveBeenCalled()
+    expect(apiClient.post).not.toHaveBeenCalled()
 
     // Verify onSuccess was NOT called
     expect(mockOnSuccess).not.toHaveBeenCalled()
@@ -365,7 +364,7 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnCancel = vi.fn()
 
     // Mock API with delay to simulate pending state
-    vi.mocked(apiClientModule.apiClient.post).mockImplementation(() => {
+    vi.mocked(apiClient.post).mockImplementation(() => {
       return new Promise((resolve) => {
         setTimeout(() => {
           resolve({
@@ -437,7 +436,7 @@ describe('Create Account Flow - Integration Test', () => {
       },
     }
 
-    vi.mocked(apiClientModule.apiClient.post).mockResolvedValue(mockResponse)
+    vi.mocked(apiClient.post).mockResolvedValue(mockResponse)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -465,7 +464,7 @@ describe('Create Account Flow - Integration Test', () => {
 
     // Verify API call includes optional fields
     await waitFor(() => {
-      expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
+      expect(apiClient.post).toHaveBeenCalledWith(
         '/admin/accounts/with-keycloak',
         expect.objectContaining({
           email: 'test@example.com',
