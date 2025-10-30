@@ -13,7 +13,8 @@ import { z } from 'zod';
  *
  * Validation rules match backend CreateSiteRequestDto:
  * - domain: 3-255 chars, lowercase alphanumeric + dots/hyphens
- * - password: 8+ chars, alphanumeric
+ * - displayName: 2-100 chars, human-readable site name
+ * - password: 8+ chars, alphanumeric, optional (auto-generated if not provided)
  */
 export const CreateSiteFormSchema = z.object({
   domain: z
@@ -25,12 +26,19 @@ export const CreateSiteFormSchema = z.object({
       'Domain can only contain lowercase letters, numbers, dots, and hyphens'
     )
     .trim(),
+  displayName: z
+    .string()
+    .min(2, 'Display name must be at least 2 characters')
+    .max(100, 'Display name must be at most 100 characters')
+    .trim(),
   password: z
     .string()
     .min(8, 'Password must be at least 8 characters')
     .max(12, 'Password must be at most 12 characters')
     .regex(/^[a-zA-Z0-9]+$/, 'Password can only contain letters and numbers')
-    .trim(),
+    .trim()
+    .optional()
+    .or(z.literal('')),
 });
 
 /**

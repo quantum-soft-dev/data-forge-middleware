@@ -16,9 +16,10 @@ class TestSecurityConfigTest {
         // Decode admin token
         Jwt jwt = config.jwtDecoder().decode("mock.admin.jwt.token");
 
-        // Verify claims
-        assert jwt.getSubject().equals("admin-user");
+        // Verify claims (subject is now accountId UUID from test-data.sql)
+        assert jwt.getSubject().equals("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
         assert jwt.getClaim("email").equals("admin@test.com");
+        assert jwt.getClaim("accountId").equals("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
         // Verify authorities conversion
         var authorities = config.jwtAuthenticationConverter()

@@ -29,11 +29,13 @@ export interface Site {
  * Request payload for creating a new site.
  *
  * @property domain - Site domain (3-255 chars, alphanumeric + dots/hyphens)
- * @property password - Site password (8+ chars, alphanumeric)
+ * @property displayName - Human-readable site name (2-100 chars)
+ * @property password - Site password (8+ chars, alphanumeric, optional - will be auto-generated if not provided)
  */
 export interface CreateSiteRequest {
   domain: string;
-  password: string;
+  displayName: string;
+  password?: string;
 }
 
 /**

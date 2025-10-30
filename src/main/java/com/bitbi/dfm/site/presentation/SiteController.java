@@ -1,11 +1,13 @@
 package com.bitbi.dfm.site.presentation;
 
+import com.bitbi.dfm.account.domain.Account;
+import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.site.application.SiteService;
 import com.bitbi.dfm.site.domain.PasswordGenerator;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.presentation.dto.CreateSiteRequestDto;
-import com.bitbi.dfm.site.presentation.dto.SiteCreationResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
+import com.bitbi.dfm.site.presentation.dto.UserSiteCreationResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -45,10 +47,12 @@ public class SiteController {
 
     private final SiteService siteService;
     private final PasswordGenerator passwordGenerator;
+    private final AccountRepository accountRepository;
 
-    public SiteController(SiteService siteService, PasswordGenerator passwordGenerator) {
+    public SiteController(SiteService siteService, PasswordGenerator passwordGenerator, AccountRepository accountRepository) {
         this.siteService = siteService;
         this.passwordGenerator = passwordGenerator;
+        this.accountRepository = accountRepository;
     }
 
     /**
@@ -67,7 +71,7 @@ public class SiteController {
      */
     @PostMapping
     @Operation(summary = "Create a new site")
-    public ResponseEntity<SiteCreationResponseDto> createSite(
+    public ResponseEntity<UserSiteCreationResponseDto> createSite(
             @Valid @RequestBody CreateSiteRequestDto request,
             Authentication authentication) {
 
@@ -88,7 +92,7 @@ public class SiteController {
         );
 
         // Build response with site and plaintext password
-        SiteCreationResponseDto response = SiteCreationResponseDto.fromCreationResult(result);
+        UserSiteCreationResponseDto response = UserSiteCreationResponseDto.fromCreationResult(result);
 
         logger.info("Site created successfully: siteId={}, domain={}", result.site().getId(), request.domain());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -234,30 +238,67 @@ public class SiteController {
      * @return Account ID
      */
     private UUID extractAccountId(Authentication authentication) {
-        if (authentication.getPrincipal() instanceof org.springframework.security.oauth2.jwt.Jwt jwt) {
-            // Try to get accountId from custom claim (Keycloak user attribute)
+        org.springframework.security.oauth2.jwt.Jwt jwt = null;
+
+        logger.debug("Extracting account ID from authentication type: {}", authentication.getClass().getName());
+        logger.debug("Authentication principal type: {}", authentication.getPrincipal().getClass().getName());
+
+        // Try to extract JWT from principal first (works for both JwtAuthenticationToken and tests)
+        if (authentication.getPrincipal() instanceof org.springframework.security.oauth2.jwt.Jwt jwtPrincipal) {
+            jwt = jwtPrincipal;
+            logger.debug("Extracted JWT from principal");
+        }
+
+        if (jwt != null) {
+            // Strategy 1: Try to get accountId from custom claim (Keycloak user attribute)
             String accountIdClaim = jwt.getClaimAsString("accountId");
             if (accountIdClaim != null) {
                 try {
-                    return UUID.fromString(accountIdClaim);
+                    UUID accountId = UUID.fromString(accountIdClaim);
+                    logger.debug("Extracted account ID from 'accountId' claim: {}", accountId);
+                    return accountId;
                 } catch (IllegalArgumentException e) {
                     logger.warn("Invalid accountId claim format: {}", accountIdClaim);
                 }
             }
 
-            // Fallback: try subject (sub) claim
+            // Strategy 2: Try subject (sub) claim if it's a valid UUID
             String subject = jwt.getSubject();
+            logger.debug("Trying to extract account ID from 'sub' claim: {}", subject);
             if (subject != null) {
                 try {
-                    return UUID.fromString(subject);
+                    UUID accountId = UUID.fromString(subject);
+                    logger.debug("Extracted account ID from 'sub' claim: {}", accountId);
+                    return accountId;
                 } catch (IllegalArgumentException e) {
-                    logger.error("Could not extract account ID from JWT - neither 'accountId' claim nor 'sub' is valid UUID. Subject: {}", subject);
-                    throw new IllegalStateException("Account ID not found in JWT token");
+                    logger.debug("'sub' claim is not a valid UUID, trying email lookup: {}", subject);
+                }
+            }
+
+            // Strategy 3: Use email to look up account in database
+            String email = jwt.getClaimAsString("email");
+            if (email == null) {
+                email = jwt.getClaimAsString("preferred_username");
+            }
+
+            logger.debug("Attempting to find account by email: {}", email);
+            if (email != null) {
+                // Look up account by email in the database
+                Account account = accountRepository.findByEmail(email).orElse(null);
+                if (account != null) {
+                    logger.debug("Found account by email: accountId={}", account.getId());
+                    return account.getId();
+                } else {
+                    logger.error("No account found for email: {}", email);
+                    throw new IllegalStateException("Account not found for email: " + email);
                 }
             }
         }
 
         // Fallback for other authentication types (shouldn't happen with OAuth2)
+        logger.error("Unable to extract JWT from authentication. Type: {}, Principal type: {}",
+                     authentication.getClass().getName(),
+                     authentication.getPrincipal().getClass().getName());
         throw new IllegalStateException("Unable to extract account ID - unsupported authentication type: " + authentication.getClass().getName());
     }
 

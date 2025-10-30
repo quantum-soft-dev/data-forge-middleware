@@ -11,7 +11,7 @@
  */
 
 import { useParams, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Globe } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
 import { AccountCard } from '@/entities/account/ui/AccountCard'
 import { LockAccountButton } from '@/features/user-management/ui/LockAccountButton'
@@ -31,6 +31,10 @@ export default function AccountDetailsPage() {
 
   const handleBack = () => {
     navigate({ to: '/admin/users' })
+  }
+
+  const handleManageSites = () => {
+    navigate({ to: '/admin/users/$id/sites', params: { id } })
   }
 
   const handleLockSuccess = () => {
@@ -141,6 +145,20 @@ export default function AccountDetailsPage() {
             </p>
           </div>
         )}
+
+        {/* Sites Section */}
+        <div className="mb-8">
+          <p className="text-sm text-gray-600 mb-4">
+            Manage sites for this user account
+          </p>
+          <button
+            onClick={handleManageSites}
+            className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          >
+            <Globe className="h-4 w-4" />
+            Manage Sites
+          </button>
+        </div>
 
         {/* Admin Action Log Section */}
         <div>

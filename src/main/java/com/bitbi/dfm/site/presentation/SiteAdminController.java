@@ -236,6 +236,101 @@ public class SiteAdminController {
     }
 
     /**
+     * Activate a site (admin operation).
+     * <p>
+     * POST /admin/accounts/{accountId}/sites/{siteId}/activate
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param siteId site identifier
+     * @return activated site entity
+     */
+    @Operation(
+            summary = "Activate a site",
+            description = "Reactivates a previously deactivated site by setting isActive=true."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Site activated successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/activate")
+    public ResponseEntity<SiteResponseDto> activateSite(
+            @PathVariable("accountId") UUID accountId,
+            @PathVariable("siteId") UUID siteId) {
+
+        logger.info("Activating site: siteId={}, accountId={}", siteId, accountId);
+
+        Site site = siteService.reactivateSite(siteId);
+        SiteResponseDto response = SiteResponseDto.fromEntity(site);
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Deactivate a site (admin operation).
+     * <p>
+     * POST /admin/accounts/{accountId}/sites/{siteId}/deactivate
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param siteId site identifier
+     * @return no content response
+     */
+    @Operation(
+            summary = "Deactivate a site",
+            description = "Soft-deletes a site by setting isActive=false."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Site deactivated successfully"),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate")
+    public ResponseEntity<Void> deactivateSiteForAccount(
+            @PathVariable("accountId") UUID accountId,
+            @PathVariable("siteId") UUID siteId) {
+
+        logger.info("Deactivating site: siteId={}, accountId={}", siteId, accountId);
+
+        siteService.deactivateSite(siteId);
+
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Delete a site (admin operation, soft delete).
+     * <p>
+     * DELETE /admin/accounts/{accountId}/sites/{siteId}
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param siteId site identifier
+     * @return no content response
+     */
+    @Operation(
+            summary = "Delete a site",
+            description = "Soft-deletes a site by setting isActive=false."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Site deleted successfully"),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @DeleteMapping("/api/admin/accounts/{accountId}/sites/{siteId}")
+    public ResponseEntity<Void> deleteSiteForAccount(
+            @PathVariable("accountId") UUID accountId,
+            @PathVariable("siteId") UUID siteId) {
+
+        logger.info("Deleting site: siteId={}, accountId={}", siteId, accountId);
+
+        siteService.deactivateSite(siteId);
+
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
      * Deactivate site.
      * <p>
      * DELETE /admin/sites/{id}

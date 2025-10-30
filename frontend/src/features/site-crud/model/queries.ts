@@ -41,12 +41,14 @@ export const siteKeys = {
 /**
  * Fetch all active sites for the authenticated user.
  *
+ * @param options - Query options
  * @returns Query result with sites list
  */
-export function useSites() {
+export function useSites(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: siteKeys.list(),
     queryFn: listUserSites,
+    enabled: options?.enabled ?? true,
     staleTime: 30000, // 30 seconds
     gcTime: 300000, // 5 minutes
   });

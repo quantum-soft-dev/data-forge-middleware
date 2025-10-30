@@ -41,12 +41,12 @@ public record CreateSiteRequestDto(
         String displayName,
 
         @Schema(
-                description = "Site password (optional, will be generated if not provided, 8-12 alphanumeric characters)",
+                description = "Site password (optional, will be generated if not provided). Generated passwords are 8-12 characters. Manual passwords must be at least 8 characters (alphanumeric only).",
                 example = "myPass123",
                 requiredMode = Schema.RequiredMode.NOT_REQUIRED
         )
-        @Size(min = 8, max = 12, message = "Password must be 8-12 characters if provided")
-        @Pattern(regexp = "^[a-zA-Z0-9]*$", message = "Password must contain only letters and numbers")
+        @Size(min = 8, message = "Password must be at least 8 characters if provided")
+        @Pattern(regexp = "^[a-zA-Z0-9]+$", message = "Password must contain only letters and numbers")
         String password
 ) {
 }

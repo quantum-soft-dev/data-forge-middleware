@@ -97,9 +97,11 @@
 
 - [X] T025 [P] [US1] Contract test for POST /api/sites in `src/test/java/com/bitbi/dfm/site/contract/SiteContractTest.java` (create site endpoint validation) - 4 test cases written
 - [X] T026 [P] [US1] Contract test for GET /api/sites in `src/test/java/com/bitbi/dfm/site/contract/SiteContractTest.java` (list sites endpoint) - 2 test cases written
-- [ ] T027 [P] [US1] Integration test for user site creation flow in `src/test/java/com/bitbi/dfm/site/integration/SiteManagementIntegrationTest.java`
-- [ ] T028 [P] [US1] Frontend unit test for CreateSiteForm in `frontend/src/features/site-crud/ui/CreateSiteForm.test.tsx`
+- [X] T027 [P] [US1] Integration test for user site creation flow in `src/test/java/com/bitbi/dfm/site/integration/SiteManagementIntegrationTest.java` - 6 test cases written
+- [X] T028 [P] [US1] Frontend unit test for CreateSiteForm in `frontend/src/features/site-crud/ui/CreateSiteForm.test.tsx` - 20+ test cases covering rendering, validation, password generation, submission
 - [ ] T029 [P] [US1] Frontend integration test for SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.test.tsx`
+
+**⚠️ BLOCKER**: SQL migration issues preventing test execution. V14/V15 migrations need debugging.
 
 **Verify tests FAIL before proceeding to implementation**
 
@@ -115,9 +117,9 @@
 - [X] T034 [P] [US1] Create CreateSiteForm component in `frontend/src/features/site-crud/ui/CreateSiteForm.tsx` with password generation button, copy functionality, Zod validation
 - [X] T035 [P] [US1] Create SiteList widget in `frontend/src/widgets/site-list/SiteList.tsx` (display sites with domain, status, actions, loading/error states)
 - [X] T036 [P] [US1] Create SiteListItem component in `frontend/src/widgets/site-list/ui/SiteListItem.tsx` with activate/deactivate/delete actions and confirmation dialog
-- [X] T037 [US1] Create SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.tsx` (integrate CreateSiteForm + SiteList)
+- [X] T037 [US1] Create SiteManagementPage in `frontend/src/pages/site-management/SiteManagementPage.tsx` (integrate CreateSiteForm + SiteList) - Added Header component for consistent navigation
 - [X] T038 [US1] Add route for /account/sites in `frontend/src/app/router.tsx`
-- [X] T039 [US1] Add navigation link to Site Management in Account Management section
+- [X] T039 [US1] Add navigation link to Site Management in Account Management section - Implemented via "Manage Sites" button in Account Details page
 
 ### Verification for User Story 1
 
@@ -235,12 +237,12 @@
 
 ### Frontend Implementation for User Story 4
 
-- [ ] T085 [P] [US4] Create UserSitesPage in `frontend/src/pages/admin/user-sites/UserSitesPage.tsx` (admin view of user's sites)
-- [ ] T086 [P] [US4] Create useAdminSites hook wrapper (already in T024, verify implementation)
-- [ ] T087 [P] [US4] Reuse CreateSiteForm component with accountId prop for admin context
-- [ ] T088 [US4] Reuse SiteList widget in admin context
-- [ ] T089 [US4] Add route for /admin/users/:accountId/sites in `frontend/src/app/router.tsx` with ROLE_ADMIN guard
-- [ ] T090 [US4] Add "Manage Sites" navigation link in User Management section
+- [X] T085 [P] [US4] Create UserSitesPage in `frontend/src/pages/admin/user-sites/UserSitesPage.tsx` (admin view of user's sites)
+- [X] T086 [P] [US4] Create useAdminSites hook wrapper (already in T024, verify implementation)
+- [X] T087 [P] [US4] Reuse CreateSiteForm component with accountId prop for admin context
+- [X] T088 [US4] Reuse SiteList widget in admin context
+- [X] T089 [US4] Add route for /admin/users/:accountId/sites in `frontend/src/app/router.tsx` with ROLE_ADMIN guard
+- [X] T090 [US4] Add "Manage Sites" button in Account Details page with navigation to user's sites
 
 ### Verification for User Story 4
 

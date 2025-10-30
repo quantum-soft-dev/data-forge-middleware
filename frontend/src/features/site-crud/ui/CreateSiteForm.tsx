@@ -26,11 +26,18 @@ import {
 import { Alert, AlertDescription } from '@/shared/ui/ui/alert';
 import { generatePassword } from '@/shared/lib/password-generator';
 import { CreateSiteFormSchema, type CreateSiteFormData } from '../model/schemas';
-import { useCreateSite } from '../model/queries';
+import { useCreateSite, useCreateAdminSite } from '../model/queries';
 import { Loader2, RefreshCw, Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface CreateSiteFormProps {
+  /**
+   * Account ID for admin context.
+   * If provided, creates site for specified account (admin operation).
+   * If not provided, creates site for authenticated user (user operation).
+   */
+  accountId?: string;
+
   /**
    * Callback when site is successfully created.
    * Receives the created site data and plaintext password.
@@ -44,7 +51,7 @@ interface CreateSiteFormProps {
   showCard?: boolean;
 }
 
-export function CreateSiteForm({ onSuccess, showCard = true }: CreateSiteFormProps) {
+export function CreateSiteForm({ accountId, onSuccess, showCard = true }: CreateSiteFormProps) {
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
   const [passwordCopied, setPasswordCopied] = useState(false);
 
@@ -59,11 +66,16 @@ export function CreateSiteForm({ onSuccess, showCard = true }: CreateSiteFormPro
     resolver: zodResolver(CreateSiteFormSchema),
     defaultValues: {
       domain: '',
+      displayName: '',
       password: '',
     },
   });
 
-  const createSiteMutation = useCreateSite();
+  // Use admin or user mutation based on context
+  const userCreateMutation = useCreateSite();
+  const adminCreateMutation = accountId ? useCreateAdminSite(accountId) : null;
+  const createSiteMutation = adminCreateMutation || userCreateMutation;
+
   const passwordValue = watch('password');
 
   const handleGeneratePassword = () => {
@@ -91,7 +103,8 @@ export function CreateSiteForm({ onSuccess, showCard = true }: CreateSiteFormPro
     try {
       const result = await createSiteMutation.mutateAsync({
         domain: data.domain,
-        password: data.password,
+        displayName: data.displayName,
+        password: data.password || undefined,
       });
 
       toast.success(`Site "${data.domain}" created successfully!`);
@@ -118,7 +131,7 @@ export function CreateSiteForm({ onSuccess, showCard = true }: CreateSiteFormPro
         </Label>
         <Input
           id="domain"
-          placeholder="example.com"
+          placeholder="site-1"
           {...register('domain')}
           disabled={createSiteMutation.isPending}
           aria-invalid={errors.domain ? 'true' : 'false'}
@@ -131,6 +144,29 @@ export function CreateSiteForm({ onSuccess, showCard = true }: CreateSiteFormPro
         )}
         <p className="text-sm text-muted-foreground">
           Enter the domain name (lowercase, 3-255 characters)
+        </p>
+      </div>
+
+      {/* Display Name field */}
+      <div className="space-y-2">
+        <Label htmlFor="displayName">
+          Display Name <span className="text-destructive">*</span>
+        </Label>
+        <Input
+          id="displayName"
+          placeholder="My Website"
+          {...register('displayName')}
+          disabled={createSiteMutation.isPending}
+          aria-invalid={errors.displayName ? 'true' : 'false'}
+          aria-describedby={errors.displayName ? 'displayName-error' : undefined}
+        />
+        {errors.displayName && (
+          <p id="displayName-error" className="text-sm text-destructive">
+            {errors.displayName.message}
+          </p>
+        )}
+        <p className="text-sm text-muted-foreground">
+          Human-readable name for the site (2-100 characters)
         </p>
       </div>
 

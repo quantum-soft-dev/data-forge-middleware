@@ -14,11 +14,25 @@
 import { Alert, AlertDescription } from '@/shared/ui/ui/alert';
 import { Skeleton } from '@/shared/ui/ui/skeleton';
 import { SiteListItem } from './ui/SiteListItem';
-import { useSites, useUpdateSiteStatus, useDeleteSite } from '@/features/site-crud/model/queries';
+import {
+  useSites,
+  useAdminSites,
+  useUpdateSiteStatus,
+  useAdminUpdateSiteStatus,
+  useDeleteSite,
+  useAdminDeleteSite
+} from '@/features/site-crud/model/queries';
 import { AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface SiteListProps {
+  /**
+   * Account ID for admin context.
+   * If provided, shows sites for specified account (admin view).
+   * If not provided, shows sites for authenticated user (user view).
+   */
+  accountId?: string;
+
   /**
    * Whether to show the list in a compact layout.
    * @default false
@@ -26,10 +40,26 @@ interface SiteListProps {
   compact?: boolean;
 }
 
-export function SiteList({ compact = false }: SiteListProps) {
-  const { data: sites, isLoading, error } = useSites();
-  const updateStatusMutation = useUpdateSiteStatus();
-  const deleteSiteMutation = useDeleteSite();
+export function SiteList({ accountId, compact = false }: SiteListProps) {
+  // Use admin or user queries based on context
+  // When accountId is provided (admin context), only admin query runs
+  // When accountId is not provided (user context), only user query runs
+  const isAdminContext = !!accountId;
+
+  // Conditionally enable queries based on context
+  const adminSitesQuery = useAdminSites(accountId || ''); // enabled by accountId
+  const userSitesQuery = useSites({ enabled: !isAdminContext }); // disabled when admin context
+
+  const { data: sites, isLoading, error } = isAdminContext ? adminSitesQuery : userSitesQuery;
+
+  // Use admin or user mutations based on context
+  const userUpdateMutation = useUpdateSiteStatus();
+  const adminUpdateMutation = accountId ? useAdminUpdateSiteStatus(accountId) : null;
+  const updateStatusMutation = adminUpdateMutation || userUpdateMutation;
+
+  const userDeleteMutation = useDeleteSite();
+  const adminDeleteMutation = accountId ? useAdminDeleteSite(accountId) : null;
+  const deleteSiteMutation = adminDeleteMutation || userDeleteMutation;
 
   const handleActivate = async (siteId: string) => {
     try {

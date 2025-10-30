@@ -9,6 +9,7 @@ DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE 
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM sites WHERE domain LIKE '%.example.com';
+DELETE FROM sites WHERE account_id in (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 
 -- Test accounts

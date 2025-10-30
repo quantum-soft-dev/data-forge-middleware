@@ -53,7 +53,7 @@ class SiteAdminControllerTest {
         CreateSiteRequestDto request = new CreateSiteRequestDto("test.example.com", "Test Site", null);
 
         SiteService.SiteCreationResult result = new SiteService.SiteCreationResult(testSite, "test-secret-plaintext");
-        when(siteService.createSite(eq(testAccountId), eq("test.example.com"), eq("Test Site"), anyString()))
+        when(siteService.createSite(eq(testAccountId), eq("test.example.com"), eq("Test Site")))
                 .thenReturn(result);
 
         // When
@@ -67,7 +67,7 @@ class SiteAdminControllerTest {
         assertEquals(testSite.getDisplayName(), body.name());
         assertNotNull(body.clientSecret());
         assertEquals("test-secret-plaintext", body.clientSecret());
-        verify(siteService, times(1)).createSite(testAccountId, "test.example.com", "Test Site");
+        verify(siteService, times(1)).createSite(eq(testAccountId), eq("test.example.com"), eq("Test Site"));
     }
 
     // NOTE: Validation tests removed - now handled by @Valid annotation and GlobalExceptionHandler

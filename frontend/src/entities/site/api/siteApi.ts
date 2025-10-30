@@ -22,7 +22,7 @@ import type { Site, CreateSiteRequest, CreateSiteResponse } from '../model/types
  * @returns List of active sites sorted by creation date (newest first)
  */
 export async function listUserSites(): Promise<Site[]> {
-  const response = await apiClient.get<Site[]>('/api/sites');
+  const response = await apiClient.get<Site[]>('/sites');
   return response.data;
 }
 
@@ -35,7 +35,7 @@ export async function listUserSites(): Promise<Site[]> {
  * @returns Created site with plaintext password (only returned once)
  */
 export async function createUserSite(request: CreateSiteRequest): Promise<CreateSiteResponse> {
-  const response = await apiClient.post<CreateSiteResponse>('/api/sites', request);
+  const response = await apiClient.post<CreateSiteResponse>('/sites', request);
   return response.data;
 }
 
@@ -48,7 +48,7 @@ export async function createUserSite(request: CreateSiteRequest): Promise<Create
  * @returns Updated site entity
  */
 export async function deactivateUserSite(siteId: string): Promise<Site> {
-  const response = await apiClient.post<Site>(`/api/sites/${siteId}/deactivate`);
+  const response = await apiClient.post<Site>(`/sites/${siteId}/deactivate`);
   return response.data;
 }
 
@@ -61,7 +61,7 @@ export async function deactivateUserSite(siteId: string): Promise<Site> {
  * @returns Updated site entity
  */
 export async function activateUserSite(siteId: string): Promise<Site> {
-  const response = await apiClient.post<Site>(`/api/sites/${siteId}/activate`);
+  const response = await apiClient.post<Site>(`/sites/${siteId}/activate`);
   return response.data;
 }
 
@@ -73,7 +73,7 @@ export async function activateUserSite(siteId: string): Promise<Site> {
  * @param siteId - Site identifier
  */
 export async function deleteUserSite(siteId: string): Promise<void> {
-  await apiClient.delete(`/api/sites/${siteId}`);
+  await apiClient.delete(`/sites/${siteId}`);
 }
 
 /**
@@ -89,7 +89,7 @@ export async function deleteUserSite(siteId: string): Promise<void> {
  * @returns List of active sites for the account
  */
 export async function listAdminSites(accountId: string): Promise<Site[]> {
-  const response = await apiClient.get<Site[]>(`/api/admin/accounts/${accountId}/sites`);
+  const response = await apiClient.get<Site[]>(`/admin/accounts/${accountId}/sites`);
   return response.data;
 }
 
@@ -107,7 +107,7 @@ export async function createAdminSite(
   request: CreateSiteRequest
 ): Promise<CreateSiteResponse> {
   const response = await apiClient.post<CreateSiteResponse>(
-    `/api/admin/accounts/${accountId}/sites`,
+    `/admin/accounts/${accountId}/sites`,
     request
   );
   return response.data;
@@ -124,7 +124,7 @@ export async function createAdminSite(
  */
 export async function deactivateAdminSite(accountId: string, siteId: string): Promise<Site> {
   const response = await apiClient.post<Site>(
-    `/api/admin/accounts/${accountId}/sites/${siteId}/deactivate`
+    `/admin/accounts/${accountId}/sites/${siteId}/deactivate`
   );
   return response.data;
 }
@@ -140,7 +140,7 @@ export async function deactivateAdminSite(accountId: string, siteId: string): Pr
  */
 export async function activateAdminSite(accountId: string, siteId: string): Promise<Site> {
   const response = await apiClient.post<Site>(
-    `/api/admin/accounts/${accountId}/sites/${siteId}/activate`
+    `/admin/accounts/${accountId}/sites/${siteId}/activate`
   );
   return response.data;
 }
@@ -154,5 +154,5 @@ export async function activateAdminSite(accountId: string, siteId: string): Prom
  * @param siteId - Site identifier
  */
 export async function deleteAdminSite(accountId: string, siteId: string): Promise<void> {
-  await apiClient.delete(`/api/admin/accounts/${accountId}/sites/${siteId}`);
+  await apiClient.delete(`/admin/accounts/${accountId}/sites/${siteId}`);
 }
