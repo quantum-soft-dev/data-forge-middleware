@@ -225,19 +225,40 @@ public class SiteController {
 
     /**
      * Extract account ID from Spring Security authentication.
+     * <p>
+     * For Keycloak OAuth2 JWT, extracts from:
+     * 1. "accountId" custom attribute (if present)
+     * 2. "sub" (subject) claim as fallback (if valid UUID)
      *
      * @param authentication Spring Security authentication object
      * @return Account ID
      */
     private UUID extractAccountId(Authentication authentication) {
-        // TODO: Extract from JWT claims or Keycloak principal
-        // For now, parse from authentication name (temporary)
-        String name = authentication.getName();
-        try {
-            return UUID.fromString(name);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("Invalid account ID in authentication: " + name);
+        if (authentication.getPrincipal() instanceof org.springframework.security.oauth2.jwt.Jwt jwt) {
+            // Try to get accountId from custom claim (Keycloak user attribute)
+            String accountIdClaim = jwt.getClaimAsString("accountId");
+            if (accountIdClaim != null) {
+                try {
+                    return UUID.fromString(accountIdClaim);
+                } catch (IllegalArgumentException e) {
+                    logger.warn("Invalid accountId claim format: {}", accountIdClaim);
+                }
+            }
+
+            // Fallback: try subject (sub) claim
+            String subject = jwt.getSubject();
+            if (subject != null) {
+                try {
+                    return UUID.fromString(subject);
+                } catch (IllegalArgumentException e) {
+                    logger.error("Could not extract account ID from JWT - neither 'accountId' claim nor 'sub' is valid UUID. Subject: {}", subject);
+                    throw new IllegalStateException("Account ID not found in JWT token");
+                }
+            }
         }
+
+        // Fallback for other authentication types (shouldn't happen with OAuth2)
+        throw new IllegalStateException("Unable to extract account ID - unsupported authentication type: " + authentication.getClass().getName());
     }
 
     /**
