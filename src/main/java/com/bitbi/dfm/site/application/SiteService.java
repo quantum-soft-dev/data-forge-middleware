@@ -123,6 +123,17 @@ public class SiteService {
     }
 
     /**
+     * List all active sites for account, sorted by creation date (newest first).
+     *
+     * @param accountId account identifier
+     * @return list of active sites sorted by createdAt DESC
+     */
+    @Transactional(readOnly = true)
+    public List<Site> listAccountSites(UUID accountId) {
+        return siteRepository.findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(accountId);
+    }
+
+    /**
      * List all sites with pagination (admin endpoint).
      *
      * @param pageable pagination parameters
@@ -196,6 +207,21 @@ public class SiteService {
 
         logger.info("Site reactivated successfully: id={}", siteId);
         return saved;
+    }
+
+    /**
+     * Delete site (soft delete via deactivation).
+     * <p>
+     * Preserves site data and history for audit purposes.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @throws SiteNotFoundException if site not found
+     */
+    public void deleteSite(UUID siteId) {
+        logger.info("Deleting site (soft delete): id={}", siteId);
+        deactivateSite(siteId);
+        logger.info("Site deleted successfully: id={}", siteId);
     }
 
     /**
