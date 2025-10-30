@@ -50,10 +50,10 @@ class SiteAdminControllerTest {
     @DisplayName("Should create site successfully")
     void shouldCreateSiteSuccessfully() {
         // Given
-        CreateSiteRequestDto request = new CreateSiteRequestDto("test.example.com", "Test Site");
+        CreateSiteRequestDto request = new CreateSiteRequestDto("test.example.com", "Test Site", null);
 
         SiteService.SiteCreationResult result = new SiteService.SiteCreationResult(testSite, "test-secret-plaintext");
-        when(siteService.createSite(testAccountId, "test.example.com", "Test Site"))
+        when(siteService.createSite(eq(testAccountId), eq("test.example.com"), eq("Test Site"), anyString()))
                 .thenReturn(result);
 
         // When
