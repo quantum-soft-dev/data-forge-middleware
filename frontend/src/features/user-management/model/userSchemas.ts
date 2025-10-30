@@ -16,10 +16,12 @@ export const createAccountSchema = z.object({
     .max(255),
   phone: z.string()
     .regex(/^\+?[0-9]{7,15}$/, 'Invalid phone format')
+    .or(z.literal(''))
     .optional(),
   company: z.string()
     .min(2)
     .max(255)
+    .or(z.literal(''))
     .optional(),
   role: z.string()
     .min(1, 'Role is required'),

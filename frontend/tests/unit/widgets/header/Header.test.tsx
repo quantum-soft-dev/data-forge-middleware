@@ -12,6 +12,7 @@ vi.mock('@/entities/user-session/api/useAuth', () => ({
     signinRedirect: vi.fn(),
     signoutRedirect: vi.fn(),
     removeUser: vi.fn(),
+    hasRole: vi.fn((role: string) => role === 'ROLE_ADMIN'),
   }),
 }))
 
@@ -39,7 +40,7 @@ describe('Header', () => {
   it('should render navigation links', () => {
     render(<Header />)
     expect(screen.getByText('Dashboard')).toBeInTheDocument()
-    expect(screen.getByText('Accounts')).toBeInTheDocument()
+    expect(screen.getByText('User Management')).toBeInTheDocument()
   })
 
   it('should render Dashboard link with correct route', () => {
@@ -49,11 +50,11 @@ describe('Header', () => {
     expect(dashboardLink).toHaveTextContent('Dashboard')
   })
 
-  it('should render Accounts link with correct route', () => {
+  it('should render User Management link with correct route for admin', () => {
     render(<Header />)
-    const accountsLink = screen.getByTestId('link-/accounts')
-    expect(accountsLink).toBeInTheDocument()
-    expect(accountsLink).toHaveTextContent('Accounts')
+    const userManagementLink = screen.getByTestId('link-/admin/users')
+    expect(userManagementLink).toBeInTheDocument()
+    expect(userManagementLink).toHaveTextContent('User Management')
   })
 
   it('should render logout button', () => {
