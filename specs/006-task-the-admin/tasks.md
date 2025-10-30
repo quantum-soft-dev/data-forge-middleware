@@ -423,7 +423,7 @@
   - ✅ Script tests all 5 API endpoints from quickstart.md
   - ✅ Includes prerequisite checks and clear output
   - ✅ Can be run manually or in CI/CD pipeline
-- [ ] **T078** Update CLAUDE.md with Keycloak-first architecture decisions and new patterns
+- [X] **T078** Update CLAUDE.md with Keycloak-first architecture decisions and new patterns
 - [ ] **T079** [P] Performance testing: Verify <3s for account creation under load
 - [ ] **T080** [P] Security review: Verify no credentials in code, all endpoints require ROLE_ADMIN
 - [ ] **T081** Accessibility audit: Run axe-core on all new pages, fix violations

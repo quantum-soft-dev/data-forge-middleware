@@ -1,11 +1,13 @@
 # data-forge-middleware Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-10-09
+Auto-generated from all feature plans. Last updated: 2025-10-30
 
 ## Active Technologies
+
+### Backend Stack
 - **Java 21** (LTS) with modern language features
 - **Spring Boot 3.5.6** - Core framework
-- **Spring Security** - JWT + OAuth2 Resource Server (Keycloak)
+- **Spring Security 6** - JWT + OAuth2 Resource Server (Keycloak)
 - **Spring Data JPA** - Repository pattern with custom queries
 - **PostgreSQL 16** - Primary database with table partitioning
 - **Flyway 11** - Database migrations
@@ -13,14 +15,25 @@ Auto-generated from all feature plans. Last updated: 2025-10-09
 - **AWS SDK v2** - S3 file storage
 - **Micrometer** - Metrics and observability
 - **Logback + Logstash Encoder** - Structured JSON logging
-- **SpringDoc OpenAPI** - API documentation (Swagger UI)
+- **SpringDoc OpenAPI 3** - API documentation (Swagger UI)
 - **JUnit 5 + Mockito** - Unit testing
 - **Testcontainers** - Integration testing (PostgreSQL + LocalStack S3)
-- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6, Spring Data JPA (003-separation-of-security)
-- PostgreSQL 16 (existing, no schema changes required) (003-separation-of-security)
-- Java 21 (LTS) + Spring Boot 3.5.6, Spring Web, Spring Data JPA, Jakarta Validation (Bean Validation 3.0), SpringDoc OpenAPI 3 (004-code-improvements-the)
-- PostgreSQL 16 (existing schema, no changes) (004-code-improvements-the)
-- Backend REST API (existing) with PostgreSQL 16 (subscriber data) (005-basic-ui-with)
+- **Keycloak 23.0.1** - Admin Client SDK for user management
+
+### Frontend Stack (Added 2025-10-30 - Spec 005/006)
+- **React 18.3** with TypeScript 5.6
+- **Vite 5.4** - Build tool and dev server
+- **TanStack Query v5** - Server state management
+- **React Router v6** - Client-side routing
+- **shadcn/ui** - Component library (Radix UI + Tailwind CSS)
+- **Tailwind CSS 3.4** - Utility-first styling
+- **Axios** - HTTP client with interceptors
+- **Zod** - Schema validation
+- **React Hook Form** - Form state management
+- **Sonner** - Toast notifications
+- **Lucide React** - Icon library
+- **Vitest + React Testing Library** - Frontend testing
+- **OIDC Client TS** - Keycloak authentication client
 
 ## Project Structure
 
@@ -221,6 +234,79 @@ Admin API controllers refactored to use typed request DTOs instead of Map<String
 - ✅ GlobalExceptionHandler updated for MethodArgumentNotValidException
 - ✅ Contract tests added for DTO validation (AdminContractTest: 7 account tests, 9 site tests)
 - ⚠️ Unit tests need updating (28 compilation errors - tests still use Map instead of DTOs)
+
+### Keycloak-First User Management Architecture (Added 2025-10-30 - Spec 006)
+
+**Key Architectural Decision**: Extend existing `accounts` table instead of creating separate users table.
+
+#### Account-Keycloak Integration Pattern
+- **Single Column Extension**: Added `keycloak_user_id VARCHAR(36) UNIQUE` to accounts table (Migration V006)
+- **Backwards Compatible**: Nullable column allows existing accounts to work without Keycloak
+- **DDD Compliance**: Account remains the aggregate root for user operations
+- **No Data Duplication**: Keycloak stores authentication data, PostgreSQL stores business data (phone, company, isActive)
+
+#### Bidirectional Mapping
+```java
+// PostgreSQL → Keycloak
+@Column(name = "keycloak_user_id", length = 36, unique = true)
+private String keycloakUserId;  // Immutable Keycloak UUID
+
+// Keycloak → PostgreSQL
+user.setAttributes(Map.of("accountId", List.of(account.getId().toString())));
+```
+
+#### Keycloak-First Creation Pattern (Two-Phase Commit)
+1. **Phase 1**: Create user in Keycloak (authentication layer) with temporary password
+2. **Phase 2**: Create Account in PostgreSQL (business layer) with keycloakUserId reference
+3. **Bidirectional Link**: Update Keycloak user attributes with PostgreSQL accountId
+4. **Compensating Transaction**: If PostgreSQL fails, delete Keycloak user (rollback)
+5. **Audit Trail**: Log all operations to admin_action_logs table
+
+**Implementation**: `KeycloakAccountSyncService` handles atomic operations with try-catch rollback
+**Critical Error Handling**: Orphaned Keycloak users logged as CRITICAL for manual cleanup
+
+#### Admin Action Audit Logs (Migration V007)
+- **Purpose**: Track all administrative actions for compliance and security audits
+- **Captured Data**: action type, target account ID, admin account ID, success/failure, IP address, user agent, timestamp
+- **Action Types**: CREATE_ACCOUNT, LOCK_ACCOUNT, UNLOCK_ACCOUNT, RESET_PASSWORD, DELETE_ACCOUNT
+- **Nullable admin_account_id**: Allows audit logs before Keycloak user mapping is implemented (V013 migration)
+
+#### Keycloak Admin Client Integration
+- **Library**: `org.keycloak:keycloak-admin-client:23.0.1`
+- **Authentication**: Service account with `CLIENT_CREDENTIALS` grant type
+- **Configuration**: Server URL, realm, client ID, client secret via application.yml
+- **Wrapper Service**: `KeycloakAdminClient` provides simplified API (createUser, disableUser, enableUser, resetPassword, getUser, getLastLogin)
+- **Error Handling**: Maps Keycloak exceptions to domain exceptions (AccountNotFoundException, KeycloakSyncException)
+
+#### User Management Operations
+- **Create Account**: POST /api/admin/accounts/with-keycloak (returns temporary password + account details)
+- **Lock Account**: POST /api/admin/accounts/{id}/lock (disables Keycloak user, preserves data)
+- **Unlock Account**: POST /api/admin/accounts/{id}/unlock (re-enables Keycloak user)
+- **Reset Password**: POST /api/admin/accounts/{id}/reset-password (generates new temporary password, expires in 30 days)
+- **List Accounts**: GET /api/admin/accounts/with-keycloak?search=email (DB-level filtering with search validation)
+
+#### Search Functionality (PR #11 Optimizations - 2025-10-30)
+- **Database-Level Query**: `findAccountsWithKeycloak(@Param("search") String search, Pageable pageable)` with JPQL WHERE and LIKE
+- **Performance**: Moved from in-memory filtering to SQL query, fixes N+1 problem
+- **Security**: Input validation with `@Size(max=100)` and `@Pattern` to prevent ReDoS attacks
+- **Case-Insensitive**: Uses `LOWER()` in SQL for email and name matching
+- **Accurate Pagination**: `totalElements` now reflects actual filtered count from database
+- **PII Protection**: Logs `"[filtered]"` instead of raw search term
+- **ConstraintViolationException Handler**: Added to GlobalExceptionHandler for @RequestParam validation
+
+#### Validation & Security
+- **Input Validation**: @Validated on controller + @Size/@Pattern annotations on search parameters
+- **Role-Based Access**: All admin endpoints require `ROLE_ADMIN` from Keycloak JWT
+- **Prevent Self-Lock**: Admins cannot lock their own accounts (CannotLockOwnAccountException)
+- **Duplicate Prevention**: Unique constraint on keycloak_user_id prevents duplicate integrations
+- **Test Coverage**: 7 contract tests for search (TC22-TC28) covering validation, filtering, edge cases
+
+#### Edge Cases Handled
+- **Keycloak Unavailable**: Fail fast with 503 Service Unavailable
+- **Orphaned Keycloak Users**: CRITICAL log + monitoring alert for manual cleanup
+- **Legacy Accounts**: Accounts without keycloak_user_id continue working (admin API excludes them from listing)
+- **Concurrent Operations**: Spring @Transactional ensures database consistency
+- **Session Continuity**: Locking account does NOT terminate existing sessions (graceful degradation)
 
 ### Observability
 - **Structured Logging**: JSON format in production with Logstash encoder
