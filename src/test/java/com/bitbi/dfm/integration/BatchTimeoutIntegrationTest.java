@@ -21,7 +21,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should mark expired batch as NOT_COMPLETED")
     void shouldMarkExpiredBatchAsNotCompleted() throws Exception {
         // Given: Batch created and left in IN_PROGRESS
-        String batchResponse = mockMvc.perform(post("/api/v1/batch/start")
+        String batchResponse = mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isCreated())
                 .andReturn()
@@ -38,7 +38,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
         // BatchTimeoutScheduler would be invoked here
 
         // Then: Verify batch status changed to NOT_COMPLETED
-        // mockMvc.perform(get("/admin/batches/{id}", batchId)
+        // mockMvc.perform(get("/api/admin/batches/{id}", batchId)
         //         .header("Authorization", MOCK_ADMIN_JWT))
         //     .andExpect(status().isOk())
         //     .andExpect(jsonPath("$.status").value("NOT_COMPLETED"))
@@ -49,7 +49,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should allow new batch after timeout")
     void shouldAllowNewBatchAfterTimeout() throws Exception {
         // Given: Previous batch timed out and marked NOT_COMPLETED
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isCreated());
 
@@ -57,7 +57,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
         // (Batch status changed from IN_PROGRESS to NOT_COMPLETED)
 
         // When: Start new batch
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateTestToken()))
 
                 // Then: Success (no IN_PROGRESS conflict)
@@ -69,7 +69,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should not timeout completed batch")
     void shouldNotTimeoutCompletedBatch() throws Exception {
         // Given: Batch completed before timeout
-        String batchResponse = mockMvc.perform(post("/api/v1/batch/start")
+        String batchResponse = mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isCreated())
                 .andReturn()
@@ -77,7 +77,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
                 .getContentAsString();
 
         // Complete batch
-        // mockMvc.perform(post("/api/v1/batch/{batchId}/complete", batchId)
+        // mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", batchId)
         //         .header("Authorization", MOCK_JWT))
         //     .andExpect(status().isOk());
 

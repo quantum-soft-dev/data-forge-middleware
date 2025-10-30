@@ -2,6 +2,7 @@ package com.bitbi.dfm.auth.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
+import com.bitbi.dfm.auth.presentation.dto.TokenResponseDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,7 @@ public class AuthController {
      * @return JWT token response
      */
     @PostMapping("/token")
-    public ResponseEntity<Map<String, Object>> generateToken(
+    public ResponseEntity<?> generateToken(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             HttpServletRequest request) {
 
@@ -78,10 +79,7 @@ public class AuthController {
             // Generate JWT token
             JwtToken token = tokenService.generateToken(domain, clientSecret);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("token", token.token());
-            response.put("expiresIn", token.getExpirationDuration());
-            response.put("tokenType", "Bearer");
+            TokenResponseDto response = TokenResponseDto.fromToken(token);
 
             logger.info("Token generated successfully: domain={}", domain);
             return ResponseEntity.ok(response);

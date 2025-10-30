@@ -33,8 +33,8 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("Should create batch with IN_PROGRESS status and valid S3 path")
     void shouldCreateBatchWithInProgressStatusAndValidS3Path() throws Exception {
-        // When: POST /api/v1/batch/start
-        mockMvc.perform(post("/api/v1/batch/start")
+        // When: POST /api/dfc/batch/start
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateStore03Token()))
 
                 // Then: Batch created with batchId
@@ -51,12 +51,12 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
         String token = generateStore03Token();
 
         // Given: Active batch exists for site
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                 .header("Authorization", token))
                 .andExpect(status().isCreated());
 
         // When: Attempt to create another batch
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", token))
 
                 // Then: 409 Conflict
@@ -70,7 +70,7 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
         // Given: store-03.example.com has no active batches in test data
 
         // When: Start new batch
-        mockMvc.perform(post("/api/v1/batch/start")
+        mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", generateStore03Token()))
 
                 // Then: Success

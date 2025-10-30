@@ -2,6 +2,8 @@ package com.bitbi.dfm.error.presentation;
 
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -44,6 +46,9 @@ class ErrorAdminControllerTest {
         testBatchId = UUID.randomUUID();
     }
 
+    // NOTE: Error handling tests removed - now handled by GlobalExceptionHandler
+    // For error response testing, see integration tests instead
+
     @Test
     @DisplayName("Should list all errors with pagination")
     void shouldListAllErrorsWithPagination() {
@@ -56,16 +61,16 @@ class ErrorAdminControllerTest {
         when(errorLogRepository.findAll(any(Pageable.class))).thenReturn(page);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(null, null, 0, 20);
+        ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> response = controller.listErrors(null, null, 0, 20);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(2, ((List<?>) response.getBody().get("content")).size());
-        assertEquals(0, response.getBody().get("page"));
-        assertEquals(20, response.getBody().get("size"));
-        assertEquals(2L, response.getBody().get("totalElements"));
-        assertEquals(1, response.getBody().get("totalPages"));
+        assertEquals(2, response.getBody().content().size());
+        assertEquals(0, response.getBody().page());
+        assertEquals(20, response.getBody().size());
+        assertEquals(2L, response.getBody().totalElements());
+        assertEquals(1, response.getBody().totalPages());
 
         verify(errorLogRepository).findAll(any(Pageable.class));
     }
@@ -80,12 +85,12 @@ class ErrorAdminControllerTest {
         when(errorLogRepository.findBySiteId(eq(testSiteId), any(Pageable.class))).thenReturn(page);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(testSiteId, null, 0, 20);
+        ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> response = controller.listErrors(testSiteId, null, 0, 20);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(1, ((List<?>) response.getBody().get("content")).size());
+        assertEquals(1, response.getBody().content().size());
 
         verify(errorLogRepository).findBySiteId(eq(testSiteId), any(Pageable.class));
     }
@@ -101,12 +106,12 @@ class ErrorAdminControllerTest {
         when(errorLogRepository.findByType(eq(errorType), any(Pageable.class))).thenReturn(page);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(null, errorType, 0, 20);
+        ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> response = controller.listErrors(null, errorType, 0, 20);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(1, ((List<?>) response.getBody().get("content")).size());
+        assertEquals(1, response.getBody().content().size());
 
         verify(errorLogRepository).findByType(eq(errorType), any(Pageable.class));
     }
@@ -123,12 +128,12 @@ class ErrorAdminControllerTest {
                 .thenReturn(page);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(testSiteId, errorType, 0, 20);
+        ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> response = controller.listErrors(testSiteId, errorType, 0, 20);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(1, ((List<?>) response.getBody().get("content")).size());
+        assertEquals(1, response.getBody().content().size());
 
         verify(errorLogRepository).findBySiteIdAndType(eq(testSiteId), eq(errorType), any(Pageable.class));
     }
@@ -141,28 +146,13 @@ class ErrorAdminControllerTest {
         when(errorLogRepository.findAll(any(Pageable.class))).thenReturn(emptyPage);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(null, null, 0, 20);
+        ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> response = controller.listErrors(null, null, 0, 20);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertTrue(((List<?>) response.getBody().get("content")).isEmpty());
-        assertEquals(0L, response.getBody().get("totalElements"));
-    }
-
-    @Test
-    @DisplayName("Should handle errors when listing fails")
-    void shouldHandleErrorsWhenListingFails() {
-        // Given
-        when(errorLogRepository.findAll(any(Pageable.class))).thenThrow(new RuntimeException("Database error"));
-
-        // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(null, null, 0, 20);
-
-        // Then
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertTrue(response.getBody().containsKey("error"));
+        assertTrue(response.getBody().content().isEmpty());
+        assertEquals(0L, response.getBody().totalElements());
     }
 
     @Test
@@ -289,22 +279,6 @@ class ErrorAdminControllerTest {
     }
 
     @Test
-    @DisplayName("Should handle errors when export fails")
-    void shouldHandleErrorsWhenExportFails() {
-        // Given
-        when(errorLogRepository.exportByFilters(any(), any(), any(), any()))
-                .thenThrow(new RuntimeException("Database error"));
-
-        // When
-        ResponseEntity<String> response = controller.exportErrors(null, null, null, null);
-
-        // Then
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Failed to export errors", response.getBody());
-    }
-
-    @Test
     @DisplayName("Should export empty CSV when no errors found")
     void shouldExportEmptyCsvWhenNoErrorsFound() {
         // Given
@@ -336,28 +310,6 @@ class ErrorAdminControllerTest {
     }
 
     @Test
-    @DisplayName("Should include metadata in error response")
-    void shouldIncludeMetadataInErrorResponse() {
-        // Given
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("sourceFile", "test.csv");
-        ErrorLog error = ErrorLog.create(testSiteId, testBatchId, "Error", "Type", "Message", null, null, metadata);
-        Page<ErrorLog> page = new PageImpl<>(Arrays.asList(error), PageRequest.of(0, 20), 1);
-
-        when(errorLogRepository.findAll(any(Pageable.class))).thenReturn(page);
-
-        // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(null, null, 0, 20);
-
-        // Then
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> content = (List<Map<String, Object>>) response.getBody().get("content");
-        assertEquals(1, content.size());
-        assertTrue(content.get(0).containsKey("metadata"));
-    }
-
-    @Test
     @DisplayName("Should handle pagination with custom page size")
     void shouldHandlePaginationWithCustomPageSize() {
         // Given
@@ -370,15 +322,15 @@ class ErrorAdminControllerTest {
         when(errorLogRepository.findAll(any(Pageable.class))).thenReturn(page);
 
         // When
-        ResponseEntity<Map<String, Object>> response = controller.listErrors(null, null, 0, 50);
+        ResponseEntity<PageResponseDto<ErrorLogSummaryDto>> response = controller.listErrors(null, null, 0, 50);
 
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(50, ((List<?>) response.getBody().get("content")).size());
-        assertEquals(50, response.getBody().get("size"));
-        assertEquals(100L, response.getBody().get("totalElements"));
-        assertEquals(2, response.getBody().get("totalPages"));
+        assertEquals(50, response.getBody().content().size());
+        assertEquals(50, response.getBody().size());
+        assertEquals(100L, response.getBody().totalElements());
+        assertEquals(2, response.getBody().totalPages());
     }
 
     @Test

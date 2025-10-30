@@ -1,0 +1,61 @@
+openapi: 3.0.3
+info:
+  title: Batch DTOs
+  version: 1.0.0
+  description: OpenAPI schema definitions for Batch response DTOs
+
+components:
+  schemas:
+    BatchResponseDto:
+      type: object
+      required:
+        - id
+        - batchId
+        - siteId
+        - status
+        - s3Path
+        - uploadedFilesCount
+        - totalSize
+        - hasErrors
+        - startedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique batch identifier
+        batchId:
+          type: string
+          format: uuid
+          description: Alias for id (backward compatibility)
+        siteId:
+          type: string
+          format: uuid
+          description: Site that owns this batch
+        status:
+          type: string
+          enum: [ACTIVE, COMPLETED, FAILED, CANCELLED, EXPIRED]
+          description: Current batch status
+        s3Path:
+          type: string
+          description: S3 path for uploaded files
+        uploadedFilesCount:
+          type: integer
+          minimum: 0
+          description: Number of files uploaded in this batch
+        totalSize:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total size of uploaded files in bytes
+        hasErrors:
+          type: boolean
+          description: Whether this batch has any error logs
+        startedAt:
+          type: string
+          format: date-time
+          description: When the batch was started
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the batch was completed (null if still active)

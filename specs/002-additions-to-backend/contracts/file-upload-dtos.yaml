@@ -1,0 +1,45 @@
+openapi: 3.0.3
+info:
+  title: File Upload DTOs
+  version: 1.0.0
+  description: OpenAPI schema definitions for FileUpload response DTOs
+
+components:
+  schemas:
+    FileUploadResponseDto:
+      type: object
+      required:
+        - id
+        - batchId
+        - filename
+        - s3Key
+        - fileSize
+        - checksum
+        - uploadedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique file upload identifier
+        batchId:
+          type: string
+          format: uuid
+          description: Batch this file belongs to
+        filename:
+          type: string
+          description: Original filename
+        s3Key:
+          type: string
+          description: S3 object key
+        fileSize:
+          type: integer
+          format: int64
+          minimum: 0
+          description: File size in bytes
+        checksum:
+          type: string
+          description: MD5 checksum for file integrity
+        uploadedAt:
+          type: string
+          format: date-time
+          description: When the file was uploaded

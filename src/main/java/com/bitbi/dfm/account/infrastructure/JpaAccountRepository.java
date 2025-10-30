@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -58,4 +59,40 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
      */
     @Query("SELECT a FROM Account a WHERE a.isActive = true ORDER BY a.createdAt DESC")
     List<Account> findAllActive();
+
+    /**
+     * Find account by Keycloak user ID.
+     *
+     * @param keycloakUserId Keycloak user UUID
+     * @return Optional containing account if found
+     */
+    Optional<Account> findByKeycloakUserId(String keycloakUserId);
+
+    /**
+     * Check if account exists with given Keycloak user ID.
+     *
+     * @param keycloakUserId Keycloak user UUID to check
+     * @return true if account exists
+     */
+    boolean existsByKeycloakUserId(String keycloakUserId);
+
+    /**
+     * Find all accounts with Keycloak integration and optional search filter.
+     * <p>
+     * This query filters accounts that have keycloakUserId (meaning they're integrated with Keycloak).
+     * If search parameter is provided, filters by email or name (case-insensitive).
+     * </p>
+     *
+     * @param search optional search term to filter by email or name
+     * @param pageable pagination parameters
+     * @return page of accounts with Keycloak integration
+     */
+    @Query("""
+            SELECT a FROM Account a
+            WHERE a.keycloakUserId IS NOT NULL
+            AND (:search IS NULL OR :search = ''
+                 OR LOWER(a.email) LIKE LOWER(CONCAT('%', :search, '%'))
+                 OR LOWER(a.name) LIKE LOWER(CONCAT('%', :search, '%')))
+            """)
+    Page<Account> findAccountsWithKeycloak(@Param("search") String search, Pageable pageable);
 }

@@ -1,15 +1,23 @@
 package com.bitbi.dfm.shared.exception;
 
+import com.bitbi.dfm.account.application.AccountService;
+import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
+import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
+import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
+
+import java.time.Instant;
 
 /**
  * Global exception handler for standardized error responses.
@@ -30,13 +38,14 @@ public class GlobalExceptionHandler {
      * Handle IllegalArgumentException (400 Bad Request).
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgument(
+    public ResponseEntity<ErrorResponseDto> handleIllegalArgument(
             IllegalArgumentException ex,
             HttpServletRequest request) {
 
         logger.warn("Bad request: {}", ex.getMessage());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.BAD_REQUEST.value(),
                 "Bad Request",
                 ex.getMessage(),
@@ -47,19 +56,89 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle MethodArgumentNotValidException (400 Bad Request).
+     * <p>
+     * This handler is triggered when @Valid validation fails on request body DTOs.
+     * It extracts all field validation errors and returns them in a user-friendly format.
+     * </p>
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponseDto> handleValidationErrors(
+            MethodArgumentNotValidException ex,
+            HttpServletRequest request) {
+
+        // Extract all validation error messages
+        String errorMessage = ex.getBindingResult().getFieldErrors().stream()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .collect(java.util.stream.Collectors.joining(", "));
+
+        if (errorMessage.isEmpty()) {
+            errorMessage = "Validation failed";
+        }
+
+        logger.warn("Validation failed: {}", errorMessage);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle ConstraintViolationException (400 Bad Request).
+     * <p>
+     * This handler is triggered when @RequestParam or @PathVariable validation fails
+     * (when @Validated is used on the controller class).
+     * It extracts all constraint violation messages and returns them in a user-friendly format.
+     * </p>
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponseDto> handleConstraintViolation(
+            ConstraintViolationException ex,
+            HttpServletRequest request) {
+
+        // Extract all constraint violation messages
+        String errorMessage = ex.getConstraintViolations().stream()
+                .map(violation -> violation.getPropertyPath() + ": " + violation.getMessage())
+                .collect(java.util.stream.Collectors.joining(", "));
+
+        if (errorMessage.isEmpty()) {
+            errorMessage = "Validation failed";
+        }
+
+        logger.warn("Constraint violation: {}", errorMessage);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle AccessDeniedException (403 Forbidden).
      */
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDenied(
+    public ResponseEntity<ErrorResponseDto> handleAccessDenied(
             AccessDeniedException ex,
             HttpServletRequest request) {
 
         logger.warn("Access denied: {}", ex.getMessage());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.FORBIDDEN.value(),
                 "Forbidden",
-                "Access denied: insufficient permissions",
+                ex.getMessage(),
                 request.getRequestURI()
         );
 
@@ -70,13 +149,14 @@ public class GlobalExceptionHandler {
      * Handle NoHandlerFoundException (404 Not Found).
      */
     @ExceptionHandler(NoHandlerFoundException.class)
-    public ResponseEntity<ErrorResponse> handleNotFound(
+    public ResponseEntity<ErrorResponseDto> handleNotFound(
             NoHandlerFoundException ex,
             HttpServletRequest request) {
 
         logger.warn("Endpoint not found: {}", request.getRequestURI());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.NOT_FOUND.value(),
                 "Not Found",
                 "Endpoint not found: " + request.getRequestURI(),
@@ -90,13 +170,14 @@ public class GlobalExceptionHandler {
      * Handle MaxUploadSizeExceededException (413 Payload Too Large).
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ErrorResponse> handleMaxUploadSizeExceeded(
+    public ResponseEntity<ErrorResponseDto> handleMaxUploadSizeExceeded(
             MaxUploadSizeExceededException ex,
             HttpServletRequest request) {
 
         logger.warn("Upload size exceeded: {}", ex.getMessage());
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.PAYLOAD_TOO_LARGE.value(),
                 "Payload Too Large",
                 "File upload size exceeds maximum allowed size",
@@ -107,19 +188,344 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle AccountNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(AccountService.AccountNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountNotFound(
+            AccountService.AccountNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyExistsException (409 Conflict).
+     */
+    @ExceptionHandler(AccountService.AccountAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyExists(
+            AccountService.AccountAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already exists: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle SiteNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(SiteService.SiteNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteNotFound(
+            SiteService.SiteNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle SiteAlreadyExistsException (409 Conflict).
+     */
+    @ExceptionHandler(SiteService.SiteAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteAlreadyExists(
+            SiteService.SiteAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site already exists: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle BatchNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleBatchNotFound(
+            com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Batch not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle ErrorLogNotFoundException (404 Not Found).
+     */
+    @ExceptionHandler(com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleErrorLogNotFound(
+            com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Error log not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle CannotLockOwnAccountException (403 Forbidden).
+     * <p>
+     * Prevents administrators from accidentally locking themselves out.
+     * </p>
+     */
+    @ExceptionHandler(KeycloakAccountSyncService.CannotLockOwnAccountException.class)
+    public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
+            KeycloakAccountSyncService.CannotLockOwnAccountException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Admin attempted to lock own account: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle AccountNotFoundException from KeycloakAccountSyncService (404 Not Found).
+     * <p>
+     * Thrown when account is not found during Keycloak sync operations.
+     * </p>
+     */
+    @ExceptionHandler(KeycloakAccountSyncService.AccountNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountNotFound(
+            KeycloakAccountSyncService.AccountNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account not found (Keycloak sync): {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle AccountNotFoundException from domain package (404 Not Found).
+     * <p>
+     * This handler catches the new domain-level AccountNotFoundException.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.AccountNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleDomainAccountNotFound(
+            com.bitbi.dfm.account.domain.exception.AccountNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account not found (domain exception): {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyLockedException from domain package (400 Bad Request).
+     * <p>
+     * Thrown when attempting to lock an account that is already locked.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.AccountAlreadyLockedException.class)
+    public ResponseEntity<ErrorResponseDto> handleDomainAccountAlreadyLocked(
+            com.bitbi.dfm.account.domain.exception.AccountAlreadyLockedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already locked (domain): {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyLockedException from KeycloakAccountSyncService (400 Bad Request).
+     * <p>
+     * Thrown when attempting to lock an account that is already locked in Keycloak.
+     * </p>
+     */
+    @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyLockedException.class)
+    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountAlreadyLocked(
+            KeycloakAccountSyncService.AccountAlreadyLockedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already locked (Keycloak sync): {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle KeycloakSyncException (503 Service Unavailable).
+     * <p>
+     * Thrown when synchronization with Keycloak fails.
+     * Returns 503 to indicate temporary service unavailability.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.KeycloakSyncException.class)
+    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncException(
+            com.bitbi.dfm.account.domain.exception.KeycloakSyncException ex,
+            HttpServletRequest request) {
+
+        logger.error("Keycloak sync failed: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Failed to synchronize with Keycloak: " + ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
+     * Handle AccountAlreadyUnlockedException (400 Bad Request).
+     * <p>
+     * Thrown when attempting to unlock an account that is already unlocked.
+     * </p>
+     */
+    @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyUnlockedException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyUnlocked(
+            KeycloakAccountSyncService.AccountAlreadyUnlockedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Account already unlocked: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle NoKeycloakIntegrationException (400 Bad Request).
+     * <p>
+     * Thrown when attempting to perform Keycloak operations on an account
+     * that doesn't have Keycloak integration.
+     * </p>
+     */
+    @ExceptionHandler(KeycloakAccountSyncService.NoKeycloakIntegrationException.class)
+    public ResponseEntity<ErrorResponseDto> handleNoKeycloakIntegration(
+            KeycloakAccountSyncService.NoKeycloakIntegrationException ex,
+            HttpServletRequest request) {
+
+        logger.warn("No Keycloak integration: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle IllegalStateException (500 Internal Server Error).
+     * <p>
+     * Returns generic error message to client to prevent information disclosure.
+     * Full technical details are logged server-side for debugging.
+     * </p>
      */
     @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalState(
+    public ResponseEntity<ErrorResponseDto> handleIllegalState(
             IllegalStateException ex,
             HttpServletRequest request) {
 
         logger.error("Illegal state: {}", ex.getMessage(), ex);
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Internal Server Error",
-                ex.getMessage(),
+                "An unexpected error occurred", // Generic message - details logged server-side
                 request.getRequestURI()
         );
 
@@ -130,13 +536,14 @@ public class GlobalExceptionHandler {
      * Handle generic exceptions (500 Internal Server Error).
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGenericException(
+    public ResponseEntity<ErrorResponseDto> handleGenericException(
             Exception ex,
             HttpServletRequest request) {
 
         logger.error("Unexpected error: {}", ex.getMessage(), ex);
 
-        ErrorResponse error = ErrorResponse.of(
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Internal Server Error",
                 "An unexpected error occurred",

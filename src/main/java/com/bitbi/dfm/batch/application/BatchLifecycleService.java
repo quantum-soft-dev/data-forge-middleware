@@ -1,5 +1,6 @@
 package com.bitbi.dfm.batch.application;
 
+import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
@@ -30,14 +31,18 @@ import java.util.UUID;
 public class BatchLifecycleService {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchLifecycleService.class);
-    private static final int MAX_CONCURRENT_BATCHES_PER_ACCOUNT = 5;
 
     private final BatchRepository batchRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final AccountProperties accountProperties;
 
-    public BatchLifecycleService(BatchRepository batchRepository, ApplicationEventPublisher eventPublisher) {
+    public BatchLifecycleService(
+            BatchRepository batchRepository,
+            ApplicationEventPublisher eventPublisher,
+            AccountProperties accountProperties) {
         this.batchRepository = batchRepository;
         this.eventPublisher = eventPublisher;
+        this.accountProperties = accountProperties;
     }
 
     /**
@@ -45,7 +50,7 @@ public class BatchLifecycleService {
      * <p>
      * Business rules:
      * - Only one active batch per site
-     * - Maximum 5 concurrent batches per account
+     * - Maximum concurrent batches per account (configurable in application.yml)
      * </p>
      *
      * @param accountId account identifier
@@ -65,10 +70,11 @@ public class BatchLifecycleService {
 
         // Enforce concurrent batch limit per account with pessimistic lock
         // This prevents race conditions by locking the count query
+        int maxConcurrentBatches = accountProperties.getMaxConcurrentBatches();
         int activeBatchCount = batchRepository.countActiveBatchesByAccountIdWithLock(accountId);
-        if (activeBatchCount >= MAX_CONCURRENT_BATCHES_PER_ACCOUNT) {
+        if (activeBatchCount >= maxConcurrentBatches) {
             throw new ConcurrentBatchLimitException(
-                    "Account exceeded concurrent batch limit: " + activeBatchCount + "/" + MAX_CONCURRENT_BATCHES_PER_ACCOUNT);
+                    "Account exceeded concurrent batch limit: " + activeBatchCount + "/" + maxConcurrentBatches);
         }
 
         Batch batch = Batch.start(accountId, siteId, domain);
@@ -92,7 +98,7 @@ public class BatchLifecycleService {
     @Transactional(readOnly = true)
     public Batch getBatch(UUID batchId) {
         return batchRepository.findById(batchId)
-                .orElseThrow(() -> new BatchNotFoundException("Batch not found: " + batchId));
+                .orElseThrow(() -> new BatchNotFoundException("Batch not found"));
     }
 
     /**

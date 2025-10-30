@@ -32,7 +32,7 @@ class FileUploadIntegrationTest extends BaseIntegrationTest {
         );
 
         // When: Upload files
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
+        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file1)
                         .file(file2)
                         .header("Authorization", generateTestToken()))
@@ -59,7 +59,7 @@ class FileUploadIntegrationTest extends BaseIntegrationTest {
         );
 
         // First upload succeeds
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
+        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
@@ -70,7 +70,7 @@ class FileUploadIntegrationTest extends BaseIntegrationTest {
                 "different content".getBytes()
         );
 
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
+        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(duplicate)
                         .header("Authorization", generateTestToken()))
 
@@ -89,7 +89,7 @@ class FileUploadIntegrationTest extends BaseIntegrationTest {
         );
 
         // When: Retry upload with same filename
-        mockMvc.perform(multipart("/api/v1/batch/{batchId}/upload", MOCK_BATCH_ID)
+        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", MOCK_BATCH_ID)
                         .file(file)
                         .header("Authorization", generateTestToken()))
 

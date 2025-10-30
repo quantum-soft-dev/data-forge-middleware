@@ -3,8 +3,10 @@ package com.bitbi.dfm.upload.presentation;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.upload.application.FileUploadService;
 import com.bitbi.dfm.upload.domain.UploadedFile;
+import com.bitbi.dfm.upload.presentation.dto.FileUploadResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -15,34 +17,42 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST controller for file upload operations.
+ * REST controller for file upload operations (Data Forge Client API).
  * <p>
  * Handles multipart file uploads to batch with S3 storage integration.
  * Requires JWT authentication.
  * </p>
+ * <p>
+ * URL change from v2.x: /api/v1/batch → /api/dfc/batch (breaking change)
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/v1/batch")
+@RequestMapping("/api/dfc/batch")
 public class FileUploadController {
 
     private static final Logger logger = LoggerFactory.getLogger(FileUploadController.class);
 
     private final FileUploadService fileUploadService;
     private final TokenService tokenService;
+    private final com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService;
 
-    public FileUploadController(FileUploadService fileUploadService, TokenService tokenService) {
+    public FileUploadController(FileUploadService fileUploadService,
+                                TokenService tokenService,
+                                com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService) {
         this.fileUploadService = fileUploadService;
         this.tokenService = tokenService;
+        this.batchLifecycleService = batchLifecycleService;
     }
 
     /**
-     * Upload files to batch.
+     * Upload files to active batch.
      * <p>
-     * POST /api/v1/batch/{id}/upload
+     * POST /api/dfc/batch/{batchId}/upload
      * Content-Type: multipart/form-data
+     * Uploads files to the authenticated site's active (IN_PROGRESS) batch.
      * </p>
      *
      * @param batchId    batch identifier
@@ -50,16 +60,32 @@ public class FileUploadController {
      * @param authHeader Authorization header with Bearer token
      * @return upload summary response
      */
-    @PostMapping("/{id}/upload")
+    @PostMapping("/{batchId}/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(
-            @PathVariable("id") UUID batchId,
+            @PathVariable("batchId") UUID batchId,
             @RequestParam("files") MultipartFile[] files,
             @RequestHeader("Authorization") String authHeader) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
+            UUID siteId = extractSiteId(authHeader); // Validate authentication
 
-            logger.info("Uploading {} files to batch: batchId={}", files.length, batchId);
+            // ✅ SECURITY FIX: Verify batch ownership before upload
+            try {
+                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+                if (!batch.getSiteId().equals(siteId)) {
+                    logger.warn("Unauthorized file upload attempt: siteId={}, batchId={}, batchOwner={}",
+                                siteId, batchId, batch.getSiteId());
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot upload files to batch owned by another site"));
+                }
+            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
+                logger.warn("Batch not found during authorization check: {}", batchId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+            }
+
+            logger.info("Uploading {} files to batch: batchId={}, siteId={}", files.length, batchId, siteId);
 
             if (files.length == 0) {
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -115,6 +141,19 @@ public class FileUploadController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
+        } catch (DataIntegrityViolationException e) {
+            // Handle duplicate S3 key constraint violation
+            logger.warn("Duplicate file upload attempt: batchId={}, error={}", batchId, e.getMessage());
+            String errorMessage = "File already uploaded";
+
+            // Extract more specific info if available
+            if (e.getMessage() != null && e.getMessage().contains("uploaded_files_s3_key_key")) {
+                errorMessage = "File with this name already exists at this location";
+            }
+
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, errorMessage));
+
         } catch (Exception e) {
             logger.error("Error uploading files: batchId={}", batchId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -134,13 +173,29 @@ public class FileUploadController {
      * @return file metadata response
      */
     @GetMapping("/{batchId}/files/{fileId}")
-    public ResponseEntity<Map<String, Object>> getFile(
+    public ResponseEntity<?> getFile(
             @PathVariable("batchId") UUID batchId,
             @PathVariable("fileId") UUID fileId,
             @RequestHeader("Authorization") String authHeader) {
 
         try {
-            extractSiteId(authHeader); // Validate authentication
+            UUID siteId = extractSiteId(authHeader); // Validate authentication
+
+            // ✅ SECURITY FIX: Verify batch ownership before retrieving file
+            try {
+                com.bitbi.dfm.batch.domain.Batch batch = batchLifecycleService.getBatch(batchId);
+                if (!batch.getSiteId().equals(siteId)) {
+                    logger.warn("Unauthorized file retrieval attempt: siteId={}, batchId={}, batchOwner={}",
+                                siteId, batchId, batch.getSiteId());
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot access files in batch owned by another site"));
+                }
+            } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
+                logger.warn("Batch not found during authorization check: {}", batchId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+            }
 
             UploadedFile file = fileUploadService.getFile(fileId);
 
@@ -150,7 +205,7 @@ public class FileUploadController {
                         .body(createErrorResponse(HttpStatus.NOT_FOUND, "File not found in batch"));
             }
 
-            Map<String, Object> response = createFileResponse(file);
+            FileUploadResponseDto response = FileUploadResponseDto.fromEntity(file);
             return ResponseEntity.ok(response);
 
         } catch (FileUploadService.FileNotFoundException e) {
@@ -175,19 +230,6 @@ public class FileUploadController {
             throw new IllegalArgumentException("Invalid Authorization header");
         }
         return authHeader.substring("Bearer ".length());
-    }
-
-    private Map<String, Object> createFileResponse(UploadedFile file) {
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", file.getId());
-        response.put("batchId", file.getBatchId());
-        response.put("originalFileName", file.getOriginalFileName());
-        response.put("s3Key", file.getS3Key());
-        response.put("fileSize", file.getFileSize());
-        response.put("contentType", file.getContentType());
-        response.put("checksum", file.getChecksum());
-        response.put("uploadedAt", file.getUploadedAt().toString());
-        return response;
     }
 
     private Map<String, Object> createErrorResponse(HttpStatus status, String message) {

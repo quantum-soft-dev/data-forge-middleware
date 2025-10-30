@@ -64,10 +64,9 @@ class AuthContractTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.token").exists())
                 .andExpect(jsonPath("$.token").isString())
-                .andExpect(jsonPath("$.expiresIn").exists())
-                .andExpect(jsonPath("$.expiresIn").value(86400))
-                .andExpect(jsonPath("$.tokenType").exists())
-                .andExpect(jsonPath("$.tokenType").value("Bearer"));
+                .andExpect(jsonPath("$.expiresAt").exists())
+                .andExpect(jsonPath("$.siteId").exists())
+                .andExpect(jsonPath("$.domain").exists());
     }
 
     /**

@@ -1,0 +1,487 @@
+openapi: 3.0.3
+info:
+  title: Data Forge Client API (JWT Authentication)
+  description: |
+    JWT-authenticated endpoints for file uploader clients.
+    All endpoints under `/api/dfc/**` require a valid JWT Bearer token.
+
+    **Breaking Change**: Migrated from `/api/v1/**` to `/api/dfc/**`
+  version: 1.0.0
+  contact:
+    name: Data Forge Team
+    email: support@example.com
+
+servers:
+  - url: https://api.example.com
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - JWTAuth: []
+
+paths:
+  /api/dfc/batch/start:
+    post:
+      summary: Start a new batch upload session
+      description: Creates a new batch and returns batch ID for subsequent file uploads
+      operationId: startBatch
+      tags:
+        - Batch Management
+      responses:
+        '201':
+          description: Batch created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Conflict - site already has an active batch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/dfc/batch/{batchId}/complete:
+    post:
+      summary: Complete a batch upload session
+      description: Marks the batch as complete and triggers processing
+      operationId: completeBatch
+      tags:
+        - Batch Management
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          description: Batch completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/dfc/batch:
+    get:
+      summary: List batches for authenticated site
+      description: Returns paginated list of batches for the site identified in JWT
+      operationId: listBatches
+      tags:
+        - Batch Management
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SortBy'
+      responses:
+        '200':
+          description: Paginated batch list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/dfc/batch/{batchId}:
+    get:
+      summary: Get batch details
+      description: Returns details for a specific batch
+      operationId: getBatch
+      tags:
+        - Batch Management
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200':
+          description: Batch details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/dfc/upload:
+    post:
+      summary: Upload a file to active batch
+      description: Uploads a file and associates it with the site's active batch
+      operationId: uploadFile
+      tags:
+        - File Upload
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: File to upload (max 500MB)
+      responses:
+        '201':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileUploadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: No active batch for site
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: File too large (>500MB)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/dfc/error:
+    post:
+      summary: Log an error for the current batch
+      description: Records an error event associated with the site's active batch
+      operationId: logError
+      tags:
+        - Error Logging
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorLogRequest'
+      responses:
+        '201':
+          description: Error logged successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorLogResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/dfc/error:
+    get:
+      summary: List errors for authenticated site
+      description: Returns paginated list of errors for batches belonging to the site
+      operationId: listErrors
+      tags:
+        - Error Logging
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - name: severity
+          in: query
+          description: Filter by error severity
+          schema:
+            type: string
+            enum: [ERROR, WARNING, INFO]
+        - name: batchId
+          in: query
+          description: Filter by batch ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Paginated error list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorLogPageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    JWTAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token obtained from `/api/v1/auth/token` endpoint (Basic Auth).
+        Token contains siteId, accountId, and domain claims.
+
+  parameters:
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      description: Batch identifier (UUID)
+      schema:
+        type: string
+        format: uuid
+
+    PageNumber:
+      name: page
+      in: query
+      description: Page number (0-indexed)
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+
+    PageSize:
+      name: size
+      in: query
+      description: Page size
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+    SortBy:
+      name: sort
+      in: query
+      description: Sort field and direction (e.g., "createdAt,desc")
+      schema:
+        type: string
+        default: "createdAt,desc"
+
+  schemas:
+    BatchResponse:
+      type: object
+      required:
+        - id
+        - batchId
+        - siteId
+        - status
+        - s3Path
+        - uploadedFilesCount
+        - totalSize
+        - hasErrors
+        - startedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Internal database ID
+        batchId:
+          type: string
+          format: uuid
+          description: Batch identifier (same as id)
+        siteId:
+          type: string
+          format: uuid
+          description: Site that owns this batch
+        status:
+          type: string
+          enum: [IN_PROGRESS, COMPLETED, EXPIRED, FAILED]
+        s3Path:
+          type: string
+          description: S3 bucket path for uploaded files
+        uploadedFilesCount:
+          type: integer
+          description: Number of files uploaded
+        totalSize:
+          type: integer
+          format: int64
+          description: Total size in bytes
+        hasErrors:
+          type: boolean
+          description: Whether this batch has logged errors
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    BatchPageResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    FileUploadResponse:
+      type: object
+      required:
+        - id
+        - batchId
+        - filename
+        - s3Key
+        - fileSize
+        - checksum
+        - uploadedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        batchId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        s3Key:
+          type: string
+        fileSize:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+          description: MD5 checksum
+        uploadedAt:
+          type: string
+          format: date-time
+
+    ErrorLogRequest:
+      type: object
+      required:
+        - severity
+        - message
+        - source
+      properties:
+        severity:
+          type: string
+          enum: [ERROR, WARNING, INFO]
+        message:
+          type: string
+          maxLength: 5000
+        source:
+          type: string
+          description: Source component or file
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional context (JSON)
+
+    ErrorLogResponse:
+      type: object
+      required:
+        - id
+        - batchId
+        - severity
+        - message
+        - source
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        batchId:
+          type: string
+          format: uuid
+        severity:
+          type: string
+          enum: [ERROR, WARNING, INFO]
+        message:
+          type: string
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        occurredAt:
+          type: string
+          format: date-time
+
+    ErrorLogPageResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorLogResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Authentication failed - invalid or missing JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Forbidden:
+      description: Authorization failed - wrong token type (Keycloak token on JWT endpoint)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

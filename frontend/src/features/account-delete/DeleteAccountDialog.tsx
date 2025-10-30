@@ -1,0 +1,112 @@
+/**
+ * DeleteAccountDialog Component
+ *
+ * Confirmation modal dialog for deleting accounts (soft delete).
+ * Shows account details and requires explicit confirmation.
+ */
+
+import { X } from 'lucide-react'
+import { useDeleteAccount } from '@/entities/account/api/useDeleteAccount'
+import type { Account } from '@/entities/account/model/types'
+
+interface DeleteAccountDialogProps {
+  account: Account | null
+  open: boolean
+  onClose: () => void
+}
+
+/**
+ * Confirmation dialog for deleting an account
+ *
+ * Features:
+ * - Shows account name and email for verification
+ * - Requires explicit confirmation (click Delete button)
+ * - Destructive styling on delete button (red)
+ * - Auto-close on success
+ * - ESC key to close
+ * - Disabled during mutation
+ */
+export function DeleteAccountDialog({ account, open, onClose }: DeleteAccountDialogProps) {
+  const deleteMutation = useDeleteAccount()
+
+  const handleDelete = () => {
+    if (!account) return
+
+    deleteMutation.mutate(account.id, {
+      onSuccess: () => {
+        onClose()
+      },
+    })
+  }
+
+  if (!open || !account) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-md rounded-lg bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-labelledby="dialog-title"
+        aria-modal="true"
+      >
+        {/* Header */}
+        <div className="mb-4 flex items-center justify-between">
+          <h2 id="dialog-title" className="text-xl font-semibold text-gray-900">
+            Delete Account
+          </h2>
+          <button
+            onClick={onClose}
+            disabled={deleteMutation.isPending}
+            className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Close dialog"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="mb-6">
+          <p className="text-sm text-gray-700 mb-4">
+            Are you sure you want to delete this account? This action will deactivate the account.
+          </p>
+
+          {/* Account details for verification */}
+          <div className="rounded-md bg-gray-50 p-4 space-y-2">
+            <div>
+              <span className="text-xs font-medium text-gray-500">Name:</span>
+              <p className="text-sm font-semibold text-gray-900">{account.name}</p>
+            </div>
+            <div>
+              <span className="text-xs font-medium text-gray-500">Email:</span>
+              <p className="text-sm text-gray-700">{account.email}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Buttons */}
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deleteMutation.isPending}
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleteMutation.isPending}
+            className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -5,6 +5,13 @@ spring:
         show_sql: false
         format_sql: false
 
+keycloak:
+  auth-server-url: ${KEYCLOAK_SERVER_URL}
+  realm: ${KEYCLOAK_REALM:dfm}
+  admin:
+    client-id: ${KEYCLOAK_ADMIN_CLIENT_ID}
+    client-secret: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
+
 logging:
   level:
     root: INFO

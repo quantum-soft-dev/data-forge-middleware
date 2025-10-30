@@ -51,9 +51,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain) throws ServletException, IOException {
 
-        // Only process /api/v1/** endpoints (except /api/v1/auth/token which uses Basic Auth)
+        // Only process /api/dfc/** endpoints (Data Forge Client endpoints)
+        // Filter is already registered only for /api/dfc/** in SecurityConfiguration
+        // This check is redundant but kept for safety
         String path = request.getRequestURI();
-        if (!path.startsWith("/api/v1/") || path.equals("/api/v1/auth/token")) {
+        if (!path.startsWith("/api/dfc/")) {
             filterChain.doFilter(request, response);
             return;
         }

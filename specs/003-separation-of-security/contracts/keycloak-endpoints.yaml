@@ -1,0 +1,578 @@
+openapi: 3.0.3
+info:
+  title: Data Forge Admin API (Keycloak Authentication)
+  description: |
+    Keycloak OAuth2-authenticated endpoints for administrative operations.
+    All endpoints under `/api/admin/**` require a valid Keycloak Bearer token with ROLE_ADMIN.
+
+    **Authentication**: Keycloak OAuth 2.0 / OpenID Connect
+  version: 1.0.0
+  contact:
+    name: Data Forge Team
+    email: support@example.com
+
+servers:
+  - url: https://api.example.com
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - KeycloakAuth: [admin]
+
+paths:
+  /api/admin/accounts:
+    get:
+      summary: List all accounts (paginated)
+      description: Returns paginated list of all accounts in the system
+      operationId: listAccounts
+      tags:
+        - Account Management
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SortBy'
+      responses:
+        '200':
+          description: Paginated account list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountPageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      summary: Create new account
+      description: Creates a new account with email and name
+      operationId: createAccount
+      tags:
+        - Account Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Account with email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/admin/accounts/{accountId}:
+    get:
+      summary: Get account details
+      description: Returns account details with statistics
+      operationId: getAccount
+      tags:
+        - Account Management
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDetailsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Update account
+      description: Updates account name
+      operationId: updateAccount
+      tags:
+        - Account Management
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRequest'
+      responses:
+        '200':
+          description: Account updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Deactivate account
+      description: Soft deletes account (sets isActive=false), cascades to sites
+      operationId: deactivateAccount
+      tags:
+        - Account Management
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '204':
+          description: Account deactivated successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/sites:
+    get:
+      summary: List all sites (paginated)
+      description: Returns paginated list of all sites across all accounts
+      operationId: listAllSites
+      tags:
+        - Site Management
+      parameters:
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SortBy'
+      responses:
+        '200':
+          description: Paginated site list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SitePageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/accounts/{accountId}/sites:
+    get:
+      summary: List sites for account
+      description: Returns all sites belonging to the specified account
+      operationId: listSitesByAccount
+      tags:
+        - Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: List of sites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SiteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      summary: Create site for account
+      description: Creates a new site with domain and display name
+      operationId: createSite
+      tags:
+        - Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSiteRequest'
+      responses:
+        '201':
+          description: Site created successfully (includes one-time plaintext clientSecret)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteCreationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Site with domain already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/admin/sites/{siteId}:
+    get:
+      summary: Get site details
+      description: Returns site details
+      operationId: getSite
+      tags:
+        - Site Management
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+      responses:
+        '200':
+          description: Site details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Update site
+      description: Updates site display name
+      operationId: updateSite
+      tags:
+        - Site Management
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSiteRequest'
+      responses:
+        '200':
+          description: Site updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Deactivate site
+      description: Soft deletes site (sets isActive=false)
+      operationId: deactivateSite
+      tags:
+        - Site Management
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+      responses:
+        '204':
+          description: Site deactivated successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    KeycloakAuth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/auth
+          tokenUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/token
+          scopes:
+            admin: Administrative access to all resources
+
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      description: Account identifier (UUID)
+      schema:
+        type: string
+        format: uuid
+
+    SiteId:
+      name: siteId
+      in: path
+      required: true
+      description: Site identifier (UUID)
+      schema:
+        type: string
+        format: uuid
+
+    PageNumber:
+      name: page
+      in: query
+      description: Page number (0-indexed)
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+
+    PageSize:
+      name: size
+      in: query
+      description: Page size
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+
+    SortBy:
+      name: sort
+      in: query
+      description: Sort field and direction (e.g., "createdAt,desc")
+      schema:
+        type: string
+        default: "createdAt,desc"
+
+  schemas:
+    AccountResponse:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - isActive
+        - createdAt
+        - maxConcurrentBatches
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        maxConcurrentBatches:
+          type: integer
+          description: Maximum concurrent batches allowed (default 5)
+
+    AccountDetailsResponse:
+      allOf:
+        - $ref: '#/components/schemas/AccountResponse'
+        - type: object
+          properties:
+            sitesCount:
+              type: integer
+            totalBatches:
+              type: integer
+              format: int64
+            totalUploadedFiles:
+              type: integer
+              format: int64
+
+    AccountPageResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    CreateAccountRequest:
+      type: object
+      required:
+        - email
+        - name
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          maxLength: 255
+
+    UpdateAccountRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          maxLength: 255
+
+    SiteResponse:
+      type: object
+      required:
+        - id
+        - accountId
+        - domain
+        - name
+        - isActive
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        domain:
+          type: string
+          description: Site domain (unique)
+        name:
+          type: string
+          description: Display name
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    SiteCreationResponse:
+      allOf:
+        - $ref: '#/components/schemas/SiteResponse'
+        - type: object
+          required:
+            - clientSecret
+          properties:
+            clientSecret:
+              type: string
+              description: Plaintext client secret (shown only once at creation)
+
+    SitePageResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/SiteResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    CreateSiteRequest:
+      type: object
+      required:
+        - domain
+        - displayName
+      properties:
+        domain:
+          type: string
+          maxLength: 255
+          description: Site domain (must be unique)
+        displayName:
+          type: string
+          maxLength: 255
+
+    UpdateSiteRequest:
+      type: object
+      required:
+        - displayName
+      properties:
+        displayName:
+          type: string
+          maxLength: 255
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    Unauthorized:
+      description: Authentication failed - invalid or missing Keycloak token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Forbidden:
+      description: Authorization failed - missing ROLE_ADMIN or wrong token type (JWT on Keycloak endpoint)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

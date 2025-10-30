@@ -1,0 +1,337 @@
+openapi: 3.0.3
+info:
+  title: Data Forge Middleware - Response DTOs
+  description: OpenAPI schemas for response DTOs used in admin controller refactoring
+  version: 1.0.0
+
+components:
+  schemas:
+    AccountWithStatsResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Account unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        email:
+          type: string
+          format: email
+          description: Account email address
+          example: admin@example.com
+        name:
+          type: string
+          description: Account display name
+          example: John Doe
+        isActive:
+          type: boolean
+          description: Whether account is active
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Account creation timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'
+        sitesCount:
+          type: integer
+          description: Total number of sites
+          example: 5
+        totalBatches:
+          type: integer
+          description: Total number of batches across all sites
+          example: 120
+        totalUploadedFiles:
+          type: integer
+          description: Total number of uploaded files across all batches
+          example: 1500
+
+    AccountStatisticsDto:
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+          description: Account unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        sitesCount:
+          type: integer
+          description: Total number of sites
+          example: 5
+        activeSites:
+          type: integer
+          description: Number of active sites
+          example: 4
+        totalBatches:
+          type: integer
+          description: Total number of batches
+          example: 120
+        completedBatches:
+          type: integer
+          description: Number of completed batches
+          example: 110
+        failedBatches:
+          type: integer
+          description: Number of failed batches
+          example: 5
+        totalFiles:
+          type: integer
+          description: Total number of uploaded files
+          example: 1500
+        totalStorageSize:
+          type: integer
+          format: int64
+          description: Total storage size in bytes
+          example: 52428800
+
+    SiteCreationResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Site unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        accountId:
+          type: string
+          format: uuid
+          description: Parent account identifier
+          example: 987fcdeb-51a2-43f7-9c3d-123456789abc
+        domain:
+          type: string
+          description: Site domain
+          example: example.com
+        name:
+          type: string
+          description: Site display name
+          example: Example Website
+        isActive:
+          type: boolean
+          description: Whether site is active
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Site creation timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'
+        clientSecret:
+          type: string
+          description: Plaintext client secret (only shown at creation)
+          example: secret_abc123xyz
+
+    SiteStatisticsDto:
+      type: object
+      properties:
+        siteId:
+          type: string
+          format: uuid
+          description: Site unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        totalBatches:
+          type: integer
+          description: Total number of batches for this site
+          example: 50
+        completedBatches:
+          type: integer
+          description: Number of completed batches
+          example: 45
+        failedBatches:
+          type: integer
+          description: Number of failed batches
+          example: 2
+        totalFiles:
+          type: integer
+          description: Total number of uploaded files
+          example: 600
+        totalStorageSize:
+          type: integer
+          format: int64
+          description: Total storage size in bytes
+          example: 20971520
+
+    BatchSummaryDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Batch unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        siteId:
+          type: string
+          format: uuid
+          description: Parent site identifier
+          example: 987fcdeb-51a2-43f7-9c3d-123456789abc
+        status:
+          type: string
+          enum: [ACTIVE, IN_PROGRESS, COMPLETED, EXPIRED]
+          description: Batch status
+          example: COMPLETED
+        s3Path:
+          type: string
+          description: S3 path prefix for batch files
+          example: account123/example.com/2025-01-15/batch_abc
+        uploadedFilesCount:
+          type: integer
+          description: Number of files uploaded
+          example: 25
+        totalSize:
+          type: integer
+          format: int64
+          description: Total size of all files in bytes
+          example: 10485760
+        hasErrors:
+          type: boolean
+          description: Whether batch has any error logs
+          example: false
+        startedAt:
+          type: string
+          format: date-time
+          description: Batch start timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Batch completion timestamp (null if not completed)
+          example: '2025-01-15T11:45:00Z'
+        createdAt:
+          type: string
+          format: date-time
+          description: Batch creation timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'
+
+    BatchDetailResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Batch unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        siteId:
+          type: string
+          format: uuid
+          description: Parent site identifier
+          example: 987fcdeb-51a2-43f7-9c3d-123456789abc
+        siteDomain:
+          type: string
+          description: Site domain name (for display purposes)
+          example: example.com
+        status:
+          type: string
+          enum: [ACTIVE, IN_PROGRESS, COMPLETED, EXPIRED]
+          description: Batch status
+          example: COMPLETED
+        s3Path:
+          type: string
+          description: S3 path prefix for batch files
+          example: account123/example.com/2025-01-15/batch_abc
+        uploadedFilesCount:
+          type: integer
+          description: Number of files uploaded
+          example: 25
+        totalSize:
+          type: integer
+          format: int64
+          description: Total size of all files in bytes
+          example: 10485760
+        hasErrors:
+          type: boolean
+          description: Whether batch has any error logs
+          example: false
+        startedAt:
+          type: string
+          format: date-time
+          description: Batch start timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Batch completion timestamp (null if not completed)
+          example: '2025-01-15T11:45:00Z'
+        createdAt:
+          type: string
+          format: date-time
+          description: Batch creation timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'
+        files:
+          type: array
+          description: List of uploaded files in this batch
+          items:
+            $ref: '#/components/schemas/UploadedFileDto'
+
+    UploadedFileDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: File unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        originalFileName:
+          type: string
+          description: Original filename as uploaded by client
+          example: data.csv
+        s3Key:
+          type: string
+          description: S3 object key (full path)
+          example: account123/example.com/2025-01-15/batch_abc/data.csv
+        fileSize:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 1048576
+        contentType:
+          type: string
+          description: MIME content type
+          example: text/csv
+        checksum:
+          type: string
+          description: MD5 checksum
+          example: d41d8cd98f00b204e9800998ecf8427e
+        uploadedAt:
+          type: string
+          format: date-time
+          description: File upload timestamp (ISO-8601)
+          example: '2025-01-15T10:35:00Z'
+
+    ErrorLogSummaryDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Error log unique identifier
+          example: 123e4567-e89b-12d3-a456-426614174000
+        batchId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Associated batch identifier (null for standalone errors)
+          example: 987fcdeb-51a2-43f7-9c3d-123456789abc
+        siteId:
+          type: string
+          format: uuid
+          description: Site that logged the error
+          example: abc12345-6789-0def-1234-56789abcdef0
+        type:
+          type: string
+          description: Error type/category
+          example: UPLOAD_FAILED
+        message:
+          type: string
+          description: Error message description
+          example: 'File upload failed: connection timeout'
+        metadata:
+          type: object
+          description: Additional error context (arbitrary JSON object)
+          example:
+            fileName: data.csv
+            fileSize: 1024
+          additionalProperties: true
+        occurredAt:
+          type: string
+          format: date-time
+          description: Error occurrence timestamp (ISO-8601)
+          example: '2025-01-15T10:30:00Z'

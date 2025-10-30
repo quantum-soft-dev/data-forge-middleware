@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: Site DTOs
+  version: 1.0.0
+  description: OpenAPI schema definitions for Site response DTOs
+
+components:
+  schemas:
+    SiteResponseDto:
+      type: object
+      required:
+        - id
+        - accountId
+        - domain
+        - name
+        - isActive
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique site identifier
+        accountId:
+          type: string
+          format: uuid
+          description: Account this site belongs to
+        domain:
+          type: string
+          description: Site domain name
+        name:
+          type: string
+          description: Site display name
+        isActive:
+          type: boolean
+          description: Whether the site is active
+        createdAt:
+          type: string
+          format: date-time
+          description: When the site was created

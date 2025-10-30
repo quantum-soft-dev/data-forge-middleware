@@ -17,8 +17,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
-import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -29,17 +29,28 @@ import java.util.stream.Collectors;
 
 /**
  * Test security configuration that mocks OAuth2/Keycloak authentication.
- * <p>
- * This configuration is used in contract and integration tests to avoid
- * the need for a running Keycloak instance.
- * </p>
- * <p>
- * Mock JWT tokens are decoded to provide ROLE_ADMIN or ROLE_USER authorities
- * based on the token content.
- * </p>
+ *
+ * <p>This configuration mirrors the production SecurityConfiguration architecture with
+ * three separate SecurityFilterChain beans, but uses mocked authentication for testing
+ * without requiring a running Keycloak instance.</p>
+ *
+ * <p><b>Filter Chain Architecture:</b></p>
+ * <ul>
+ *   <li><b>Order 1:</b> /api/dfc/** → Custom JWT authentication via JwtAuthenticationFilter</li>
+ *   <li><b>Order 2:</b> /api/admin/** → Mocked OAuth2 Resource Server (mock.admin.jwt.token grants ROLE_ADMIN)</li>
+ *   <li><b>Order 3:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
+ * </ul>
+ *
+ * <p><b>Mock Token Behavior:</b></p>
+ * <ul>
+ *   <li>"mock.admin.jwt.token" → Grants ROLE_ADMIN for admin endpoint testing</li>
+ *   <li>"mock.user.jwt.token" → Grants ROLE_USER for user endpoint testing</li>
+ *   <li>Any other token → No roles (authorization will fail)</li>
+ * </ul>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 1.1.0
+ * @see com.bitbi.dfm.shared.config.SecurityConfiguration Production security configuration
  */
 @TestConfiguration
 @EnableWebSecurity
@@ -153,15 +164,39 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for admin endpoints with OAuth2 Resource Server.
+     * Security filter chain for JWT-authenticated Data Forge Client endpoints.
      * <p>
-     * Higher priority (@Order(1)) to match /admin/** first.
+     * Order 1: Highest priority to match /api/dfc/** first.
+     * JWT tokens only - custom JwtAuthenticationFilter.
      * </p>
      */
     @Bean
-    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http) throws Exception {
+    @org.springframework.core.annotation.Order(1)
+    public SecurityFilterChain jwtFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/admin/**")
+            .securityMatcher("/api/dfc/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+
+    /**
+     * Security filter chain for Keycloak-authenticated admin endpoints.
+     * <p>
+     * Order 2: Second priority to match /api/admin/** (changed from /admin/**).
+     * Keycloak OAuth2 Resource Server only - ROLE_ADMIN required.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(2)
+    public SecurityFilterChain keycloakFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/admin/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -177,39 +212,23 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for client API endpoints with custom JWT filter.
+     * Default security filter chain for remaining endpoints.
      * <p>
-     * Lower priority (default order) to match after admin filter chain.
+     * Order 3: Lowest priority - catches all remaining requests.
+     * Allows public access to actuator, swagger, and auth token endpoint.
      * </p>
      */
     @Bean
-    @Primary
-    public SecurityFilterChain clientApiSecurityFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/v1/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
-                .anyRequest().authenticated()
-            )
-            .addFilterBefore(jwtAuthenticationFilter(), BearerTokenAuthenticationFilter.class);
-
-        return http.build();
-    }
-
-    /**
-     * Default security filter chain for remaining endpoints.
-     */
-    @Bean
+    @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                .anyRequest().authenticated()
+                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
+                .anyRequest().denyAll()
             );
 
         return http.build();

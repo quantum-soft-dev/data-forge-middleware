@@ -1,0 +1,94 @@
+openapi: 3.0.3
+info:
+  title: Data Forge Middleware - Request DTOs
+  description: OpenAPI schemas for request DTOs used in admin controller refactoring
+  version: 1.0.0
+
+components:
+  schemas:
+    CreateAccountRequestDto:
+      type: object
+      required:
+        - email
+        - name
+      properties:
+        email:
+          type: string
+          format: email
+          description: Account email address (unique)
+          example: admin@example.com
+          minLength: 1
+        name:
+          type: string
+          description: Account display name
+          example: John Doe
+          minLength: 2
+          maxLength: 100
+
+    UpdateAccountRequestDto:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: New account display name
+          example: Jane Smith
+          minLength: 2
+          maxLength: 100
+
+    CreateSiteRequestDto:
+      type: object
+      required:
+        - domain
+        - displayName
+      properties:
+        domain:
+          type: string
+          description: Site domain (unique within account, lowercase)
+          example: example.com
+          pattern: '^[a-z0-9.-]+$'
+          minLength: 3
+          maxLength: 255
+        displayName:
+          type: string
+          description: Site display name
+          example: Example Website
+          minLength: 2
+          maxLength: 100
+
+    UpdateSiteRequestDto:
+      type: object
+      required:
+        - displayName
+      properties:
+        displayName:
+          type: string
+          description: New site display name
+          example: Updated Website Name
+          minLength: 2
+          maxLength: 100
+
+    LogErrorRequestDto:
+      type: object
+      required:
+        - type
+        - message
+      properties:
+        type:
+          type: string
+          description: Error type/category (e.g., UPLOAD_FAILED, VALIDATION_ERROR)
+          example: UPLOAD_FAILED
+          maxLength: 100
+        message:
+          type: string
+          description: Error message description
+          example: 'File upload failed: connection timeout'
+          maxLength: 1000
+        metadata:
+          type: object
+          description: Optional additional error context (arbitrary JSON object)
+          example:
+            fileName: data.csv
+            fileSize: 1024
+          additionalProperties: true

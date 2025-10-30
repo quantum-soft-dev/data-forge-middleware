@@ -44,11 +44,12 @@ spring:
 
 # S3 Configuration
 s3:
-  endpoint: ${S3_ENDPOINT:https://s3.amazonaws.com}
-  region: ${S3_REGION:us-east-1}
-  bucket-name: ${S3_BUCKET_NAME:data-forge-bucket}
-  access-key: ${S3_ACCESS_KEY:}
-  secret-key: ${S3_SECRET_KEY:}
+  endpoint: ${AWS_S3_ENDPOINT:https://s3.amazonaws.com}
+  region: ${AWS_S3_REGION:us-east-1}
+  bucket:
+    name: ${AWS_S3_BUCKET_NAME:data-forge-bucket}
+  access-key: ${AWS_ACCESS_KEY_ID:}
+  secret-key: ${AWS_SECRET_ACCESS_KEY:}
   path-style-access-enabled: false
 
 # Batch Configuration
@@ -58,6 +59,10 @@ batch:
   max:
     active:
       per-account: ${BATCH_MAX_ACTIVE_PER_ACCOUNT:10}
+
+# Account Configuration
+account:
+  max-concurrent-batches: ${ACCOUNT_MAX_CONCURRENT_BATCHES:5}
 
 # Upload Configuration
 upload:
