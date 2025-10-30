@@ -11,7 +11,7 @@
  * - Accessibility (ARIA attributes)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -55,12 +55,19 @@ describe('ResetPasswordDialog', () => {
     })
     vi.clearAllMocks()
 
-    // Mock clipboard API
+    // Mock clipboard API - ensure navigator.clipboard exists first
+    if (!navigator.clipboard) {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {},
+        writable: true,
+        configurable: true,
+      })
+    }
+
+    // Now spy on writeText
     mockClipboardWriteText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', {
-      value: {
-        writeText: mockClipboardWriteText,
-      },
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      value: mockClipboardWriteText,
       writable: true,
       configurable: true,
     })
