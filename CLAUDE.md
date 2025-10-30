@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2025-10-30
 
 ## Active Technologies
+- Backend: Java 21, Frontend: TypeScript 5.6 with React 19.2 + Backend: Spring Boot 3.5.6, Spring Security 6, Spring Data JPA; Frontend: React 19.2, TanStack Query v5, TanStack Router, shadcn/ui, Tailwind CSS (007-adding-a-site)
+- PostgreSQL 16 (sites table already exists, extend with admin_action_logs table via Flyway migration) (007-adding-a-site)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
@@ -21,7 +23,7 @@ Auto-generated from all feature plans. Last updated: 2025-10-30
 - **Keycloak 23.0.1** - Admin Client SDK for user management
 
 ### Frontend Stack (Added 2025-10-30 - Spec 005/006)
-- **React 18.3** with TypeScript 5.6
+- **React 19.2** with TypeScript 5.6
 - **Vite 5.4** - Build tool and dev server
 - **TanStack Query v5** - Server state management
 - **React Router v6** - Client-side routing

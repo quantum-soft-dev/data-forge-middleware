@@ -1,0 +1,445 @@
+openapi: 3.0.3
+info:
+  title: User Site Management API
+  description: |
+    RESTful API for authenticated users to manage their own sites (domains) within the data-forge-middleware system.
+    Users can create, view, activate, deactivate, and delete sites associated with their account.
+  version: 1.0.0
+  contact:
+    name: Data Forge Middleware Team
+
+servers:
+  - url: https://api.dataforge.example.com/api
+    description: Production server
+  - url: http://localhost:8080/api
+    description: Local development server
+
+security:
+  - keycloakAuth: []
+
+paths:
+  /sites:
+    get:
+      summary: List all sites for authenticated user
+      description: |
+        Returns a list of all active sites owned by the authenticated user, sorted by creation date (newest first).
+        Implements FR-001, FR-008, FR-009.
+      operationId: listUserSites
+      tags:
+        - User Site Management
+      responses:
+        '200':
+          description: Successfully retrieved user's sites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SiteResponse'
+              examples:
+                multipleSites:
+                  summary: User with multiple sites
+                  value:
+                    - id: "550e8400-e29b-41d4-a716-446655440000"
+                      accountId: "123e4567-e89b-12d3-a456-426614174000"
+                      domain: "newsite.com"
+                      isActive: true
+                      createdAt: "2025-10-30T14:30:00Z"
+                      updatedAt: "2025-10-30T14:30:00Z"
+                    - id: "660e8400-e29b-41d4-a716-446655440001"
+                      accountId: "123e4567-e89b-12d3-a456-426614174000"
+                      domain: "example.com"
+                      isActive: true
+                      createdAt: "2025-10-29T10:15:00Z"
+                      updatedAt: "2025-10-29T10:15:00Z"
+                emptySites:
+                  summary: User with no sites
+                  value: []
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      summary: Create a new site
+      description: |
+        Creates a new site (domain) for the authenticated user with a specified password.
+        Implements FR-002, FR-015, FR-016, FR-017, FR-019, FR-020.
+      operationId: createSite
+      tags:
+        - User Site Management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSiteRequest'
+            examples:
+              basicSite:
+                summary: Create site with manual password
+                value:
+                  domain: "newsite.com"
+                  password: "SecurePass123"
+              generatedPassword:
+                summary: Create site with generated password
+                value:
+                  domain: "example.org"
+                  password: "aB3dEf8gH"
+      responses:
+        '201':
+          description: Site created successfully
+          headers:
+            Location:
+              description: URL of the created site resource
+              schema:
+                type: string
+                example: "/api/sites/550e8400-e29b-41d4-a716-446655440000"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+              examples:
+                createdSite:
+                  summary: Newly created site
+                  value:
+                    id: "550e8400-e29b-41d4-a716-446655440000"
+                    accountId: "123e4567-e89b-12d3-a456-426614174000"
+                    domain: "newsite.com"
+                    isActive: true
+                    createdAt: "2025-10-30T14:30:00Z"
+                    updatedAt: "2025-10-30T14:30:00Z"
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Conflict - Domain already exists for this account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 409
+                error: "Conflict"
+                message: "Domain 'example.com' already exists for this account"
+                path: "/api/sites"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sites/{siteId}/deactivate:
+    post:
+      summary: Deactivate a site
+      description: |
+        Deactivates (suspends) an active site, preventing it from accepting new data uploads.
+        In-progress uploads are allowed to complete gracefully.
+        Implements FR-004, FR-022, FR-023.
+      operationId: deactivateSite
+      tags:
+        - User Site Management
+      parameters:
+        - $ref: '#/components/parameters/SiteIdParam'
+      responses:
+        '200':
+          description: Site deactivated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                accountId: "123e4567-e89b-12d3-a456-426614174000"
+                domain: "example.com"
+                isActive: false
+                createdAt: "2025-10-29T10:15:00Z"
+                updatedAt: "2025-10-30T14:45:00Z"
+        '400':
+          description: Bad Request - Site is already inactive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T14:45:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Site is already inactive"
+                path: "/api/sites/550e8400-e29b-41d4-a716-446655440000/deactivate"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sites/{siteId}/activate:
+    post:
+      summary: Activate a site
+      description: |
+        Activates (resumes) an inactive site, allowing it to accept data uploads again.
+        Implements FR-005.
+      operationId: activateSite
+      tags:
+        - User Site Management
+      parameters:
+        - $ref: '#/components/parameters/SiteIdParam'
+      responses:
+        '200':
+          description: Site activated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                accountId: "123e4567-e89b-12d3-a456-426614174000"
+                domain: "example.com"
+                isActive: true
+                createdAt: "2025-10-29T10:15:00Z"
+                updatedAt: "2025-10-30T15:00:00Z"
+        '400':
+          description: Bad Request - Site is already active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T15:00:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Site is already active"
+                path: "/api/sites/550e8400-e29b-41d4-a716-446655440000/activate"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sites/{siteId}:
+    delete:
+      summary: Delete a site
+      description: |
+        Soft-deletes a site by marking it as inactive. Preserves historical batches and upload data.
+        Requires user confirmation before deletion (handled by frontend).
+        Implements FR-006, FR-021, FR-024.
+      operationId: deleteSite
+      tags:
+        - User Site Management
+      parameters:
+        - $ref: '#/components/parameters/SiteIdParam'
+      responses:
+        '204':
+          description: Site deleted successfully (no content returned)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    keycloakAuth:
+      type: oauth2
+      description: Keycloak OAuth 2.0 / OpenID Connect authentication
+      flows:
+        authorizationCode:
+          authorizationUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/auth
+          tokenUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/token
+          scopes:
+            openid: OpenID Connect scope
+            profile: User profile information
+            email: User email address
+
+  parameters:
+    SiteIdParam:
+      name: siteId
+      in: path
+      required: true
+      description: UUID of the site
+      schema:
+        type: string
+        format: uuid
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+  schemas:
+    CreateSiteRequest:
+      type: object
+      required:
+        - domain
+        - password
+      properties:
+        domain:
+          type: string
+          minLength: 3
+          maxLength: 255
+          pattern: '^[a-z0-9.-]+$'
+          description: Domain name (lowercase alphanumeric, dots, hyphens only)
+          example: "example.com"
+        password:
+          type: string
+          minLength: 8
+          format: password
+          description: Site password (minimum 8 characters, can be user-provided or generated)
+          example: "SecurePass123"
+
+    SiteResponse:
+      type: object
+      required:
+        - id
+        - accountId
+        - domain
+        - isActive
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the site
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        accountId:
+          type: string
+          format: uuid
+          description: ID of the owning account
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        domain:
+          type: string
+          description: Domain name
+          example: "example.com"
+        isActive:
+          type: boolean
+          description: Whether the site is active (true) or inactive/deleted (false)
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when the site was created (ISO 8601)
+          example: "2025-10-29T10:15:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp when the site was last modified (ISO 8601)
+          example: "2025-10-30T14:30:00Z"
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the error occurred (ISO 8601)
+          example: "2025-10-30T14:30:00Z"
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        error:
+          type: string
+          description: HTTP status text
+          example: "Bad Request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Domain is required"
+        path:
+          type: string
+          description: Request path that caused the error
+          example: "/api/sites"
+        validationErrors:
+          type: object
+          additionalProperties:
+            type: string
+          description: Field-level validation errors (optional, present only for 400 Bad Request)
+          example:
+            domain: "Domain must be at least 3 characters"
+            password: "Password must be at least 8 characters"
+
+  responses:
+    Unauthorized:
+      description: Unauthorized - Invalid or missing authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-30T14:30:00Z"
+            status: 401
+            error: "Unauthorized"
+            message: "Authentication token is missing or invalid"
+            path: "/api/sites"
+
+    NotFound:
+      description: Not Found - Site does not exist or does not belong to authenticated user
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-30T14:30:00Z"
+            status: 404
+            error: "Not Found"
+            message: "Site not found"
+            path: "/api/sites/550e8400-e29b-41d4-a716-446655440000"
+
+    ValidationError:
+      description: Bad Request - Validation errors in request body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            domainTooShort:
+              summary: Domain validation error
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Validation failed"
+                path: "/api/sites"
+                validationErrors:
+                  domain: "Domain must be at least 3 characters"
+            passwordTooShort:
+              summary: Password validation error
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Validation failed"
+                path: "/api/sites"
+                validationErrors:
+                  password: "Password must be at least 8 characters"
+            invalidDomainFormat:
+              summary: Domain format validation error
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Validation failed"
+                path: "/api/sites"
+                validationErrors:
+                  domain: "Domain can only contain lowercase letters, numbers, dots, and hyphens"
+
+    InternalServerError:
+      description: Internal Server Error - Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-30T14:30:00Z"
+            status: 500
+            error: "Internal Server Error"
+            message: "An unexpected error occurred. Please try again later."
+            path: "/api/sites"
+
+tags:
+  - name: User Site Management
+    description: Operations for authenticated users to manage their own sites
