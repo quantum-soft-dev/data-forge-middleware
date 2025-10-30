@@ -38,50 +38,50 @@
 
 ### Database Foundation
 
-- [ ] T005 Create Flyway migration `src/main/resources/db/migration/V008__add_admin_action_logs.sql` with admin_action_logs table, indexes, and sites table constraints (unique on account_id+domain, index on is_active)
+- [X] T005 Create Flyway migration `src/main/resources/db/migration/V014__extend_admin_action_logs_for_sites.sql` with admin_action_logs table extensions, indexes, and sites table constraints (unique on account_id+domain, index on is_active)
 - [ ] T006 Run migration and verify schema: `./gradlew flywayMigrate` and check admin_action_logs table exists
 
 ### Backend Foundation - Domain Layer
 
-- [ ] T007 [P] Create PasswordGenerator domain service in `src/main/java/com/bitbi/dfm/site/domain/PasswordGenerator.java` (generates 8-12 char alphanumeric passwords)
-- [ ] T008 [P] Create AdminActionLog entity in `src/main/java/com/bitbi/dfm/adminactionlog/domain/AdminActionLog.java` with AdminActionType enum
-- [ ] T009 [P] Create AdminActionLogRepository interface in `src/main/java/com/bitbi/dfm/adminactionlog/domain/AdminActionLogRepository.java`
+- [X] T007 [P] Create PasswordGenerator domain service in `src/main/java/com/bitbi/dfm/site/domain/PasswordGenerator.java` (generates 8-12 char alphanumeric passwords)
+- [X] T008 [P] Extend AdminActionLog entity in `src/main/java/com/bitbi/dfm/account/domain/AdminActionLog.java` with targetSiteId field and AdminActionType enum with site actions
+- [X] T009 [P] AdminActionLogRepository interface exists in `src/main/java/com/bitbi/dfm/account/infrastructure/AdminActionLogRepository.java`
 
 ### Backend Foundation - Infrastructure Layer
 
-- [ ] T010 Create JpaAdminActionLogRepository in `src/main/java/com/bitbi/dfm/adminactionlog/infrastructure/JpaAdminActionLogRepository.java`
-- [ ] T011 Update SiteRepository interface in `src/main/java/com/bitbi/dfm/site/domain/SiteRepository.java` with new methods: `findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc`, `findByIdAndAccountId`
+- [X] T010 JpaAdminActionLogRepository exists in `src/main/java/com/bitbi/dfm/account/infrastructure/AdminActionLogRepository.java`
+- [X] T011 Update SiteRepository interface in `src/main/java/com/bitbi/dfm/site/domain/SiteRepository.java` with new methods: `findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc`, `findByIdAndAccountId`
 
 ### Backend Foundation - Application Layer
 
-- [ ] T012 Extend SiteService in `src/main/java/com/bitbi/dfm/site/application/SiteService.java` with methods: `listAccountSites`, `deactivateSite`, `activateSite`, `deleteSite`
+- [X] T012 Extend SiteService in `src/main/java/com/bitbi/dfm/site/application/SiteService.java` with methods: `listAccountSites`, `deactivateSite`, `activateSite` (reactivateSite), `deleteSite`, `createSite` with custom password
 
 ### Backend Foundation - Presentation Layer (DTOs)
 
-- [ ] T013 [P] Create CreateSiteRequestDto in `src/main/java/com/bitbi/dfm/site/presentation/dto/CreateSiteRequestDto.java` with validation annotations
-- [ ] T014 [P] Update SiteResponseDto in `src/main/java/com/bitbi/dfm/site/presentation/dto/SiteResponseDto.java` to include all fields (id, accountId, domain, isActive, createdAt, updatedAt)
-- [ ] T015 [P] Create AdminActionLogResponseDto in `src/main/java/com/bitbi/dfm/site/presentation/dto/AdminActionLogResponseDto.java`
+- [X] T013 [P] CreateSiteRequestDto exists in `src/main/java/com/bitbi/dfm/site/presentation/dto/CreateSiteRequestDto.java` with validation annotations and optional password field
+- [X] T014 [P] SiteResponseDto exists in `src/main/java/com/bitbi/dfm/site/presentation/dto/SiteResponseDto.java` with all required fields
+- [X] T015 [P] AdminActionLogResponseDto exists in `src/main/java/com/bitbi/dfm/account/presentation/dto/AdminActionLogResponseDto.java`
 
 ### Backend Foundation - Unit Tests
 
-- [ ] T016 [P] Write unit test for PasswordGenerator in `src/test/java/com/bitbi/dfm/site/domain/PasswordGeneratorTest.java` (length, format, uniqueness)
-- [ ] T017 [P] Write unit tests for SiteService methods in `src/test/java/com/bitbi/dfm/site/application/SiteServiceTest.java`
+- [X] T016 [P] Write unit test for PasswordGenerator in `src/test/java/com/bitbi/dfm/site/domain/PasswordGeneratorTest.java` (length, format, uniqueness) - 7 tests passing
+- [X] T017 [P] Write unit tests for SiteService methods in `src/test/java/com/bitbi/dfm/site/application/SiteServiceTest.java` - 10 tests passing
 
 ### Frontend Foundation - Shared Layer
 
-- [ ] T018 [P] Create password generator utility in `frontend/src/shared/lib/password-generator.ts`
-- [ ] T019 [P] Write unit test for password generator in `frontend/src/shared/lib/password-generator.test.ts`
+- [X] T018 [P] Create password generator utility in `frontend/src/shared/lib/password-generator.ts`
+- [X] T019 [P] Write unit test for password generator in `frontend/src/shared/lib/password-generator.test.ts` - 15 tests passing
 
 ### Frontend Foundation - Entities Layer
 
-- [ ] T020 [P] Create Site types in `frontend/src/entities/site/model/types.ts` (Site, CreateSiteRequest interfaces)
-- [ ] T021 [P] Create Site API client in `frontend/src/entities/site/api/siteApi.ts` with all CRUD methods (user + admin endpoints)
-- [ ] T022 [P] Create public API export in `frontend/src/entities/site/index.ts`
+- [X] T020 [P] Create Site types in `frontend/src/entities/site/model/types.ts` (Site, CreateSiteRequest interfaces)
+- [X] T021 [P] Create Site API client in `frontend/src/entities/site/api/siteApi.ts` with all CRUD methods (user + admin endpoints)
+- [X] T022 [P] Create public API export in `frontend/src/entities/site/index.ts`
 
 ### Frontend Foundation - Features Layer
 
-- [ ] T023 [P] Create Zod validation schemas in `frontend/src/features/site-crud/model/schemas.ts` (CreateSiteFormSchema)
-- [ ] T024 Create TanStack Query hooks in `frontend/src/features/site-crud/model/queries.ts` (useSites, useCreateSite, useUpdateSiteStatus, useDeleteSite, useAdminSites, admin mutations)
+- [X] T023 [P] Create Zod validation schemas in `frontend/src/features/site-crud/model/schemas.ts` (CreateSiteFormSchema)
+- [X] T024 Create TanStack Query hooks in `frontend/src/features/site-crud/model/queries.ts` (useSites, useCreateSite, useUpdateSiteStatus, useDeleteSite, useAdminSites, admin mutations)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -105,10 +105,10 @@
 
 ### Backend Implementation for User Story 1
 
-- [ ] T030 [US1] Implement POST /api/sites endpoint in `src/main/java/com/bitbi/dfm/site/presentation/SiteController.java` (createSite method)
-- [ ] T031 [US1] Implement GET /api/sites endpoint in `src/main/java/com/bitbi/dfm/site/presentation/SiteController.java` (listUserSites method)
-- [ ] T032 [US1] Add duplicate domain validation in SiteService
-- [ ] T033 [US1] Add password hashing in Site entity (if not already present)
+- [X] T030 [US1] Implement POST /api/sites endpoint in `src/main/java/com/bitbi/dfm/site/presentation/SiteController.java` (createSite method with optional password)
+- [X] T031 [US1] Implement GET /api/sites endpoint in `src/main/java/com/bitbi/dfm/site/presentation/SiteController.java` (listUserSites method)
+- [X] T032 [US1] Duplicate domain validation exists in SiteService (SiteAlreadyExistsException)
+- [X] T033 [US1] Password hashing implemented via SiteCredentials.generateWithHash()
 
 ### Frontend Implementation for User Story 1
 
