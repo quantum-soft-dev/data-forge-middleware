@@ -66,6 +66,42 @@ public class SiteService {
     }
 
     /**
+     * Create new site for account with custom password.
+     *
+     * @param accountId   account identifier
+     * @param domain      site domain (must be unique)
+     * @param displayName site display name
+     * @param password    plaintext password (min 8 chars)
+     * @return SiteCreationResult with site and plaintext clientSecret
+     * @throws SiteAlreadyExistsException if domain already exists
+     * @throws IllegalArgumentException if password is invalid
+     */
+    public SiteCreationResult createSite(UUID accountId, String domain, String displayName, String password) {
+        logger.info("Creating new site with custom password: accountId={}, domain={}, displayName={}",
+                    accountId, domain, displayName);
+
+        if (password == null || password.length() < 8) {
+            throw new IllegalArgumentException("Password must be at least 8 characters");
+        }
+
+        if (siteRepository.findByDomain(domain).isPresent()) {
+            throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
+        }
+
+        // Hash the provided password
+        String[] secretPair = SiteCredentials.generateWithHash(domain, password);
+        String plaintextSecret = secretPair[0]; // Should be same as password
+        String hashedSecret = secretPair[1];
+
+        Site site = Site.create(accountId, domain, displayName, hashedSecret);
+        Site saved = siteRepository.save(site);
+
+        logger.info("Site created successfully with custom password: id={}, domain={}",
+                    saved.getId(), saved.getDomain());
+        return new SiteCreationResult(saved, password); // Return original password
+    }
+
+    /**
      * Result of site creation containing site entity and plaintext secret.
      *
      * @param site            created site entity

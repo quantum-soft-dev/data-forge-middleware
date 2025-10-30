@@ -38,6 +38,15 @@ public record CreateSiteRequestDto(
         )
         @NotBlank(message = "Display name is required")
         @Size(min = 2, max = 100, message = "Display name must be 2-100 characters")
-        String displayName
+        String displayName,
+
+        @Schema(
+                description = "Site password (optional, will be generated if not provided, 8-12 alphanumeric characters)",
+                example = "myPass123",
+                requiredMode = Schema.RequiredMode.NOT_REQUIRED
+        )
+        @Size(min = 8, max = 12, message = "Password must be 8-12 characters if provided")
+        @Pattern(regexp = "^[a-zA-Z0-9]*$", message = "Password must contain only letters and numbers")
+        String password
 ) {
 }
