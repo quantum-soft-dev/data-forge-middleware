@@ -29,11 +29,12 @@ import java.util.stream.Collectors;
 /**
  * Security configuration with path-based separated authentication systems (FR-005).
  *
- * <p>Implements three separate SecurityFilterChain beans with @Order precedence:</p>
+ * <p>Implements four separate SecurityFilterChain beans with @Order precedence:</p>
  * <ul>
  *   <li><b>Order 1:</b> /api/dfc/** → JWT authentication only (Data Forge Client endpoints)</li>
- *   <li><b>Order 2:</b> /api/admin/** → Keycloak OAuth2 authentication only (Admin UI endpoints)</li>
- *   <li><b>Order 3:</b> Default → Public endpoints + deny all others</li>
+ *   <li><b>Order 2:</b> /api/admin/** → Keycloak OAuth2 authentication only (Admin UI endpoints, ROLE_ADMIN)</li>
+ *   <li><b>Order 3:</b> /api/sites/**, /api/account/** → Keycloak OAuth2 (User endpoints, authenticated)</li>
+ *   <li><b>Order 4:</b> Default → Public endpoints + deny all others</li>
  * </ul>
  *
  * <p><b>Architecture:</b> Each filter chain operates independently. Requests are routed to the first
@@ -125,15 +126,46 @@ public class SecurityConfiguration {
     }
 
     /**
+     * User filter chain for authenticated user endpoints.
+     * <p>
+     * Order 3: Third priority.
+     * Matches: /api/sites/**, /api/account/**
+     * Authentication: Keycloak OAuth2 Resource Server (any authenticated user).
+     * </p>
+     */
+    @Bean
+    @Order(3)
+    public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/sites/**", "/api/account/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
+                    response.sendError(401, "Unauthorized - Authentication required");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
      * Default filter chain for public and remaining endpoints.
      * <p>
-     * Order 3: Lowest priority (catches all remaining requests).
+     * Order 4: Lowest priority (catches all remaining requests).
      * Public access: /api/v1/auth/token, /actuator/health, /actuator/info, /swagger-ui/**, /v3/api-docs/**
      * All other requests: Denied (403).
      * </p>
      */
     @Bean
-    @Order(3)
+    @Order(4)
     public SecurityFilterChain defaultFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
