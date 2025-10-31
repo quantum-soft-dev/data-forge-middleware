@@ -10,22 +10,23 @@ import java.util.UUID;
 /**
  * Response DTO for site creation.
  * <p>
- * Includes the plaintext client secret which is ONLY shown at creation time.
- * This secret cannot be retrieved later, so clients must store it securely.
+ * Includes the plaintext client secret and site identifier (FR-019).
+ * Secret is ONLY shown at creation time and cannot be retrieved later.
  * </p>
  *
- * @param id           Site unique identifier
- * @param accountId    Parent account identifier
- * @param domain       Site domain
- * @param name         Site display name
- * @param isActive     Whether site is active
- * @param createdAt    Site creation timestamp
- * @param clientSecret Plaintext client secret (ONLY shown at creation)
+ * @param id             Site unique identifier
+ * @param accountId      Parent account identifier
+ * @param domain         Site domain (display format)
+ * @param name           Site display name
+ * @param isActive       Whether site is active
+ * @param createdAt      Site creation timestamp
+ * @param clientSecret   Plaintext client secret (ONLY shown at creation)
+ * @param siteIdentifier Full identifier for Basic Auth (accountId_domain)
  * @author Data Forge Team
  * @version 1.0.0
  * @see com.bitbi.dfm.site.presentation.SiteAdminController
  */
-@Schema(description = "Site creation response with plaintext client secret (one-time only)")
+@Schema(description = "Site creation response with client secret and auth identifier")
 public record SiteCreationResponseDto(
         @Schema(description = "Site unique identifier", example = "123e4567-e89b-12d3-a456-426614174000")
         UUID id,
@@ -33,7 +34,7 @@ public record SiteCreationResponseDto(
         @Schema(description = "Parent account identifier", example = "987fcdeb-51a2-43f7-9c3d-123456789abc")
         UUID accountId,
 
-        @Schema(description = "Site domain", example = "example.com")
+        @Schema(description = "Site domain (display format)", example = "example.com")
         String domain,
 
         @Schema(description = "Site display name", example = "Example Website")
@@ -46,23 +47,28 @@ public record SiteCreationResponseDto(
         Instant createdAt,
 
         @Schema(description = "Plaintext client secret (only shown at creation)", example = "secret_abc123xyz")
-        String clientSecret
+        String clientSecret,
+
+        @Schema(description = "Site identifier for Basic Auth (accountId_domain)",
+                example = "987fcdeb-51a2-43f7-9c3d-123456789abc_example.com")
+        String siteIdentifier
 ) {
     /**
      * Create DTO from SiteCreationResult.
      *
      * @param result Site creation result from service
-     * @return SiteCreationResponseDto
+     * @return SiteCreationResponseDto with site identifier
      */
     public static SiteCreationResponseDto fromCreationResult(SiteService.SiteCreationResult result) {
         return new SiteCreationResponseDto(
                 result.site().getId(),
                 result.site().getAccountId(),
-                result.site().getDomain(),
+                result.site().getDisplayDomain(), // Display domain without accountId prefix
                 result.site().getDisplayName(),
                 result.site().getIsActive(),
                 result.site().getCreatedAt().toInstant(ZoneOffset.UTC),
-                result.plaintextSecret()
+                result.plaintextSecret(),
+                result.site().getDomain() // Full composite domain for auth
         );
     }
 }

@@ -49,19 +49,22 @@ public class SiteService {
     public SiteCreationResult createSite(UUID accountId, String domain, String displayName) {
         logger.info("Creating new site: accountId={}, domain={}, displayName={}", accountId, domain, displayName);
 
-        if (siteRepository.findByDomain(domain).isPresent()) {
+        // Create composite domain: accountId_domain (FR-019)
+        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+
+        if (siteRepository.findByDomain(compositeDomain).isPresent()) {
             throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
         }
 
         // Generate plaintext secret and bcrypt hash
-        String[] secretPair = SiteCredentials.generateWithHash(domain);
+        String[] secretPair = SiteCredentials.generateWithHash(compositeDomain);
         String plaintextSecret = secretPair[0];
         String hashedSecret = secretPair[1];
 
-        Site site = Site.create(accountId, domain, displayName, hashedSecret);
+        Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
         Site saved = siteRepository.save(site);
 
-        logger.info("Site created successfully: id={}, domain={}", saved.getId(), saved.getDomain());
+        logger.info("Site created successfully: id={}, compositeDomain={}", saved.getId(), saved.getDomain());
         return new SiteCreationResult(saved, plaintextSecret);
     }
 
@@ -84,19 +87,22 @@ public class SiteService {
             throw new IllegalArgumentException("Password must be at least 8 characters");
         }
 
-        if (siteRepository.findByDomain(domain).isPresent()) {
+        // Create composite domain: accountId_domain (FR-019)
+        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+
+        if (siteRepository.findByDomain(compositeDomain).isPresent()) {
             throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
         }
 
         // Hash the provided password
-        String[] secretPair = SiteCredentials.generateWithHash(domain, password);
+        String[] secretPair = SiteCredentials.generateWithHash(compositeDomain, password);
         String plaintextSecret = secretPair[0]; // Should be same as password
         String hashedSecret = secretPair[1];
 
-        Site site = Site.create(accountId, domain, displayName, hashedSecret);
+        Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
         Site saved = siteRepository.save(site);
 
-        logger.info("Site created successfully with custom password: id={}, domain={}",
+        logger.info("Site created successfully with custom password: id={}, compositeDomain={}",
                     saved.getId(), saved.getDomain());
         return new SiteCreationResult(saved, password); // Return original password
     }

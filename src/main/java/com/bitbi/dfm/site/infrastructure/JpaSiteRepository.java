@@ -24,8 +24,9 @@ public interface JpaSiteRepository extends JpaRepository<Site, UUID>, SiteReposi
 
     /**
      * Find site by domain (case-insensitive).
+     * Domain is stored as accountId_domain pattern per FR-019.
      *
-     * @param domain site domain
+     * @param domain site domain (accountId_domain format)
      * @return Optional containing site if found
      */
     @Query("SELECT s FROM Site s WHERE LOWER(s.domain) = LOWER(:domain)")

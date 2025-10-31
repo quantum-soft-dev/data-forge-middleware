@@ -11,7 +11,7 @@
  *
  * @property id - Unique site identifier
  * @property accountId - Account this site belongs to
- * @property domain - Site domain name (e.g., "example.com")
+ * @property domain - Site domain name for display (e.g., "example.com", without accountId prefix)
  * @property name - Display name for the site
  * @property isActive - Activation status (true = active, false = inactive/deleted)
  * @property createdAt - Creation timestamp (ISO 8601 string)
@@ -19,7 +19,7 @@
 export interface Site {
   id: string;
   accountId: string;
-  domain: string;
+  domain: string; // Display domain only (FR-019)
   name: string;
   isActive: boolean;
   createdAt: string;
@@ -41,12 +41,14 @@ export interface CreateSiteRequest {
 /**
  * Response from site creation endpoint.
  *
- * @property site - Created site entity
+ * @property site - Created site entity (domain is display format)
  * @property password - Plaintext password (only returned once at creation)
+ * @property siteIdentifier - Full site identifier for Basic Auth (accountId_domain format, FR-019)
  */
 export interface CreateSiteResponse {
   site: Site;
   password: string;
+  siteIdentifier: string; // accountId_domain for Basic Auth
 }
 
 /**

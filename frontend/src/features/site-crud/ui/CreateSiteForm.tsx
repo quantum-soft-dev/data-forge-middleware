@@ -40,9 +40,9 @@ interface CreateSiteFormProps {
 
   /**
    * Callback when site is successfully created.
-   * Receives the created site data and plaintext password.
+   * Receives the created site data, plaintext password, and site identifier.
    */
-  onSuccess?: (data: { site: any; password: string }) => void;
+  onSuccess?: (data: { site: any; password: string; siteIdentifier: string }) => void;
 
   /**
    * Whether to show the form in a card layout.
