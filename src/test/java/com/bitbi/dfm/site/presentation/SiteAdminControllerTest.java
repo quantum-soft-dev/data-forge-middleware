@@ -1,17 +1,21 @@
 package com.bitbi.dfm.site.presentation;
 
 import com.bitbi.dfm.account.application.AccountStatisticsService;
+import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.site.application.SiteService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.presentation.dto.CreateSiteRequestDto;
 import com.bitbi.dfm.site.presentation.dto.SiteCreationResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import com.bitbi.dfm.site.presentation.dto.UpdateSiteRequestDto;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -29,6 +33,9 @@ class SiteAdminControllerTest {
     private SiteAdminController controller;
     private SiteService siteService;
     private AccountStatisticsService accountStatisticsService;
+    private AdminActionLogRepository adminActionLogRepository;
+    private Authentication authentication;
+    private HttpServletRequest httpRequest;
 
     private UUID testSiteId;
     private UUID testAccountId;
@@ -38,12 +45,25 @@ class SiteAdminControllerTest {
     void setUp() {
         siteService = mock(SiteService.class);
         accountStatisticsService = mock(AccountStatisticsService.class);
-        controller = new SiteAdminController(siteService, accountStatisticsService);
+        adminActionLogRepository = mock(AdminActionLogRepository.class);
+        authentication = mock(Authentication.class);
+        httpRequest = mock(HttpServletRequest.class);
+
+        controller = new SiteAdminController(siteService, accountStatisticsService, adminActionLogRepository);
 
         testSiteId = UUID.randomUUID();
         testAccountId = UUID.randomUUID();
 
         testSite = Site.createForTesting(testAccountId, "test.example.com", "Test Site");
+
+        // Mock JWT authentication
+        Jwt jwt = mock(Jwt.class);
+        when(jwt.getClaimAsString("sub")).thenReturn(testAccountId.toString());
+        when(authentication.getPrincipal()).thenReturn(jwt);
+
+        // Mock HTTP request
+        when(httpRequest.getRemoteAddr()).thenReturn("127.0.0.1");
+        when(httpRequest.getHeader("User-Agent")).thenReturn("Test Agent");
     }
 
     @Test
@@ -57,7 +77,7 @@ class SiteAdminControllerTest {
                 .thenReturn(result);
 
         // When
-        ResponseEntity<SiteCreationResponseDto> response = controller.createSite(testAccountId, request);
+        ResponseEntity<SiteCreationResponseDto> response = controller.createSite(testAccountId, request, authentication, httpRequest);
 
         // Then
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
@@ -68,6 +88,7 @@ class SiteAdminControllerTest {
         assertNotNull(body.clientSecret());
         assertEquals("test-secret-plaintext", body.clientSecret());
         verify(siteService, times(1)).createSite(eq(testAccountId), eq("test.example.com"), eq("Test Site"));
+        verify(adminActionLogRepository, times(1)).save(any());
     }
 
     // NOTE: Validation tests removed - now handled by @Valid annotation and GlobalExceptionHandler

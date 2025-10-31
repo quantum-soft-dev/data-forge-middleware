@@ -1,6 +1,9 @@
 package com.bitbi.dfm.site.presentation;
 
 import com.bitbi.dfm.account.application.AccountStatisticsService;
+import com.bitbi.dfm.account.domain.AdminActionLog;
+import com.bitbi.dfm.account.domain.AdminActionType;
+import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.site.application.SiteService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.presentation.dto.CreateSiteRequestDto;
@@ -16,6 +19,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +30,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -56,10 +62,13 @@ public class SiteAdminController {
 
     private final SiteService siteService;
     private final AccountStatisticsService accountStatisticsService;
+    private final AdminActionLogRepository adminActionLogRepository;
 
-    public SiteAdminController(SiteService siteService, AccountStatisticsService accountStatisticsService) {
+    public SiteAdminController(SiteService siteService, AccountStatisticsService accountStatisticsService,
+                               AdminActionLogRepository adminActionLogRepository) {
         this.siteService = siteService;
         this.accountStatisticsService = accountStatisticsService;
+        this.adminActionLogRepository = adminActionLogRepository;
     }
 
     /**
@@ -89,15 +98,40 @@ public class SiteAdminController {
     @PostMapping("/api/admin/accounts/{accountId}/sites")
     public ResponseEntity<SiteCreationResponseDto> createSite(
             @PathVariable("accountId") UUID accountId,
-            @Valid @RequestBody CreateSiteRequestDto request) {
+            @Valid @RequestBody CreateSiteRequestDto request,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
 
         logger.info("Creating site: accountId={}, domain={}, displayName={}", accountId, request.domain(), request.displayName());
 
-        SiteService.SiteCreationResult result = siteService.createSite(accountId, request.domain(), request.displayName());
+        try {
+            SiteService.SiteCreationResult result = siteService.createSite(accountId, request.domain(), request.displayName());
 
-        SiteCreationResponseDto response = SiteCreationResponseDto.fromCreationResult(result);
+            // Log successful site creation
+            logAdminAction(
+                    AdminActionType.CREATE_SITE,
+                    accountId,
+                    result.site().getId(),
+                    authentication,
+                    httpRequest,
+                    null
+            );
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+            SiteCreationResponseDto response = SiteCreationResponseDto.fromCreationResult(result);
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+
+        } catch (Exception e) {
+            // Log failed site creation
+            logAdminAction(
+                    AdminActionType.CREATE_SITE,
+                    accountId,
+                    null,
+                    authentication,
+                    httpRequest,
+                    e.getMessage()
+            );
+            throw e;
+        }
     }
 
     /**
@@ -381,5 +415,74 @@ public class SiteAdminController {
         Map<String, Object> statistics = accountStatisticsService.getSiteStatistics(siteId);
         SiteStatisticsDto response = SiteStatisticsDto.fromMap(statistics);
         return ResponseEntity.ok(response);
+    }
+
+    // ========== Helper Methods ==========
+
+    /**
+     * Log admin action to admin_action_logs table.
+     *
+     * @param actionType      type of action (CREATE_SITE, DEACTIVATE_SITE, etc.)
+     * @param targetAccountId account ID being acted upon
+     * @param targetSiteId    site ID being acted upon (null for account-level actions)
+     * @param authentication  Spring Security authentication object
+     * @param httpRequest     HTTP request for IP and user agent extraction
+     * @param errorMessage    error message (null for successful actions)
+     */
+    private void logAdminAction(AdminActionType actionType, UUID targetAccountId, UUID targetSiteId,
+                                Authentication authentication, HttpServletRequest httpRequest, String errorMessage) {
+        try {
+            UUID adminAccountId = extractAccountIdFromJwt(authentication);
+            String ipAddress = extractIpAddress(httpRequest);
+            String userAgent = httpRequest.getHeader("User-Agent");
+
+            AdminActionLog log;
+            if (errorMessage == null) {
+                // Success
+                log = AdminActionLog.successForSite(actionType, targetAccountId, targetSiteId,
+                        adminAccountId, ipAddress, userAgent);
+            } else {
+                // Failure
+                log = AdminActionLog.failureForSite(actionType, targetAccountId, targetSiteId,
+                        adminAccountId, errorMessage, ipAddress, userAgent);
+            }
+
+            adminActionLogRepository.save(log);
+            logger.info("Admin action logged: actionType={}, targetAccountId={}, targetSiteId={}, adminAccountId={}, status={}",
+                    actionType, targetAccountId, targetSiteId, adminAccountId, errorMessage == null ? "SUCCESS" : "FAILED");
+
+        } catch (Exception e) {
+            logger.error("Failed to log admin action: actionType={}, targetAccountId={}, targetSiteId={}",
+                    actionType, targetAccountId, targetSiteId, e);
+        }
+    }
+
+    /**
+     * Extract account ID from JWT token.
+     *
+     * @param authentication Spring Security authentication object
+     * @return account ID from JWT sub claim
+     */
+    private UUID extractAccountIdFromJwt(Authentication authentication) {
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+            String sub = jwt.getClaimAsString("sub");
+            return UUID.fromString(sub);
+        }
+        return null;
+    }
+
+    /**
+     * Extract IP address from HTTP request (handles X-Forwarded-For header).
+     *
+     * @param request HTTP request
+     * @return IP address
+     */
+    private String extractIpAddress(HttpServletRequest request) {
+        String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
+            // X-Forwarded-For can contain multiple IPs, take the first one
+            return xForwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }
