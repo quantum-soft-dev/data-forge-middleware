@@ -11,8 +11,8 @@
  * Feature: 007-adding-a-site (T028, US1)
  */
 
-import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CreateSiteForm } from './CreateSiteForm';
@@ -477,8 +477,6 @@ describe('CreateSiteForm', () => {
 
   describe('Loading State', () => {
     it('should disable inputs during submission', async () => {
-      const user = userEvent.setup();
-
       // Mock pending state
       vi.mocked(queries.useCreateSite).mockReturnValue({
         mutateAsync: mockMutateAsync,

@@ -59,14 +59,15 @@ public class AdminActionLog {
 
     /**
      * Private constructor for building log entries.
+     * Parameter order matches factory methods for consistency.
      */
-    private AdminActionLog(AdminActionType actionType, UUID targetAccountId, UUID adminAccountId,
-                           UUID targetSiteId, ActionStatus status, String errorMessage,
+    private AdminActionLog(AdminActionType actionType, UUID targetAccountId, UUID targetSiteId,
+                           UUID adminAccountId, ActionStatus status, String errorMessage,
                            String ipAddress, String userAgent) {
         this.actionType = actionType;
         this.targetAccountId = targetAccountId;
-        this.adminAccountId = adminAccountId;
         this.targetSiteId = targetSiteId;
+        this.adminAccountId = adminAccountId;
         this.status = status;
         this.errorMessage = errorMessage;
         this.ipAddress = ipAddress;
@@ -86,8 +87,8 @@ public class AdminActionLog {
      */
     public static AdminActionLog success(AdminActionType actionType, UUID targetAccountId,
                                           UUID adminAccountId, String ipAddress, String userAgent) {
-        return new AdminActionLog(actionType, targetAccountId, adminAccountId,
-                null, ActionStatus.SUCCESS, null, ipAddress, userAgent);
+        return new AdminActionLog(actionType, targetAccountId, null,
+                adminAccountId, ActionStatus.SUCCESS, null, ipAddress, userAgent);
     }
 
     /**
@@ -125,8 +126,8 @@ public class AdminActionLog {
         if (errorMessage == null || errorMessage.isBlank()) {
             throw new IllegalArgumentException("Error message cannot be null or blank for failed action");
         }
-        return new AdminActionLog(actionType, targetAccountId, adminAccountId,
-                null, ActionStatus.FAILED, errorMessage, ipAddress, userAgent);
+        return new AdminActionLog(actionType, targetAccountId, null,
+                adminAccountId, ActionStatus.FAILED, errorMessage, ipAddress, userAgent);
     }
 
     /**
@@ -147,8 +148,8 @@ public class AdminActionLog {
         if (errorMessage == null || errorMessage.isBlank()) {
             throw new IllegalArgumentException("Error message cannot be null or blank for failed action");
         }
-        return new AdminActionLog(actionType, targetAccountId, adminAccountId,
-                targetSiteId, ActionStatus.FAILED, errorMessage, ipAddress, userAgent);
+        return new AdminActionLog(actionType, targetAccountId, targetSiteId,
+                adminAccountId, ActionStatus.FAILED, errorMessage, ipAddress, userAgent);
     }
 
     @PrePersist

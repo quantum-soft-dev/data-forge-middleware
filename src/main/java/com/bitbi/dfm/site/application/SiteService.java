@@ -112,8 +112,7 @@ public class SiteService {
         }
 
         // Hash the provided password
-        String[] secretPair = SiteCredentials.generateWithHash(compositeDomain, password);
-        String plaintextSecret = secretPair[0]; // Should be same as password
+        String[] secretPair = SiteCredentials.hashPassword(password);
         String hashedSecret = secretPair[1];
 
         Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
@@ -280,6 +279,12 @@ public class SiteService {
      * <p>
      * WARNING: This action cannot be undone. All data will be permanently lost.
      * For temporary disabling, use deactivateSite() instead.
+     * </p>
+     * <p>
+     * <b>Orphaned S3 Files:</b> If S3 deletion fails but database cleanup continues,
+     * orphaned files may remain in S3. The method logs errors at ERROR level and
+     * continues with database cleanup to prevent stuck state. Consider implementing
+     * periodic orphan detection and cleanup jobs for production environments.
      * </p>
      *
      * @param siteId site identifier

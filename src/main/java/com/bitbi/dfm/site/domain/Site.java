@@ -23,6 +23,12 @@ import java.util.UUID;
 @NoArgsConstructor
 public class Site {
 
+    /**
+     * Length of composite domain prefix (UUID + underscore).
+     * UUID is 36 characters + underscore (1 character) = 37 characters total.
+     */
+    private static final int COMPOSITE_DOMAIN_PREFIX_LENGTH = 37;
+
     @Id
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
@@ -130,11 +136,10 @@ public class Site {
      * @return display domain without accountId prefix
      */
     public String getDisplayDomain() {
-        if (domain == null || domain.length() <= 37) {
+        if (domain == null || domain.length() <= COMPOSITE_DOMAIN_PREFIX_LENGTH) {
             return domain; // Fallback for invalid format
         }
-        // UUID is 36 characters + underscore (1) = 37 characters
-        return domain.substring(37);
+        return domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
     }
 
     public boolean canAuthenticate() {

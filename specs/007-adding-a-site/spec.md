@@ -143,10 +143,10 @@ An administrator needs to deactivate, activate, or delete sites on behalf of use
 
 #### Data Integrity and State Management
 
-- **FR-021**: System MUST use soft-delete for site deletion to preserve historical audit trails and data references
+- **FR-021**: System MUST support permanent (hard) deletion of sites, which removes the site and all associated data (batches, uploads, error logs) from the system
 - **FR-022**: System MUST prevent data uploads to deactivated sites and return error messages including "Site is inactive", site domain, and account contact information
 - **FR-023**: System MUST allow in-progress uploads to complete when a site is deactivated (graceful degradation), but block new upload requests
-- **FR-024**: System MUST preserve existing batches and upload history when a site is deactivated or deleted (soft delete)
+- **FR-024**: System MUST preserve existing batches and upload history when a site is deactivated (soft delete via isActive=false), but permanently removes all data when site is deleted (hard delete)
 
 ### Key Entities
 

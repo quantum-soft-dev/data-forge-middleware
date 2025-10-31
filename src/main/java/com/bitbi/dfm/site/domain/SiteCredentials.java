@@ -63,11 +63,10 @@ public record SiteCredentials(String domain, String clientSecretHash) {
     /**
      * Generate credentials with provided password and bcrypt hash.
      *
-     * @param domain   the site domain
      * @param password the plaintext password to hash
      * @return array [0]=plaintext password (return to user), [1]=hashed password (store in DB)
      */
-    public static String[] generateWithHash(String domain, String password) {
+    public static String[] hashPassword(String password) {
         Objects.requireNonNull(password, "Password cannot be null");
         if (password.isBlank()) {
             throw new IllegalArgumentException("Password cannot be blank");

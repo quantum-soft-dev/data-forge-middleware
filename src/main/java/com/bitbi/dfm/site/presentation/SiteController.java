@@ -194,11 +194,11 @@ public class SiteController {
     }
 
     /**
-     * Delete a site (user operation, soft delete).
+     * Delete a site (user operation, hard delete).
      * <p>
-     * US3: User deletes own site (soft delete).
-     * FR-006: Soft delete preserves data.
-     * FR-024: Batch and upload history preserved.
+     * US3: User permanently deletes own site.
+     * FR-006: Permanent deletion removes site and all associated data.
+     * FR-021: Hard delete removes batches, uploads, and error logs.
      * <p>
      * DELETE /api/sites/{siteId}
      *
@@ -207,7 +207,7 @@ public class SiteController {
      * @return No content (204)
      */
     @DeleteMapping("/{siteId}")
-    @Operation(summary = "Delete a site (soft delete)")
+    @Operation(summary = "Delete a site (hard delete)")
     public ResponseEntity<Void> deleteSite(
             @PathVariable UUID siteId,
             Authentication authentication) {
