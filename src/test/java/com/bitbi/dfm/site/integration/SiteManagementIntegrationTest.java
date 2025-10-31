@@ -271,6 +271,139 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("8 characters")));
     }
 
+    /**
+     * T047: US2 - Test deactivate/activate flow.
+     * <p>
+     * Given: User has an active site
+     * When: User deactivates site, then activates it again
+     * Then: Site status changes correctly, appears/disappears from active list
+     * </p>
+     */
+    @Test
+    @DisplayName("Should deactivate and reactivate site successfully")
+    void shouldDeactivateAndReactivateSite() throws Exception {
+        // Given: Create a site
+        String requestBody = """
+                {
+                  "domain": "deactivate-reactivate-test.example.com",
+                  "displayName": "Deactivate Reactivate Test",
+                  "password": "testPassword123"
+                }
+                """;
+
+        MvcResult createResult = mockMvc.perform(post("/api/sites")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String siteId = extractSiteId(createResult);
+
+        // Verify site is in the active list
+        mockMvc.perform(get("/api/sites")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].isActive").value(true));
+
+        // When: Deactivate the site
+        mockMvc.perform(post("/api/sites/" + siteId + "/deactivate")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL))))
+                .andExpect(status().isNoContent());
+
+        // Then: Site should not appear in active sites list
+        MvcResult listAfterDeactivate = mockMvc.perform(get("/api/sites")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL))))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String sitesJson = listAfterDeactivate.getResponse().getContentAsString();
+        assertThat(sitesJson).doesNotContain(siteId);
+
+        // When: Activate the site again
+        mockMvc.perform(post("/api/sites/" + siteId + "/activate")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(siteId))
+                .andExpect(jsonPath("$.isActive").value(true));
+
+        // Then: Site should appear in active sites list again
+        mockMvc.perform(get("/api/sites")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].isActive").value(true));
+    }
+
+    /**
+     * T047: US2 - Test rapid status changes.
+     * <p>
+     * Given: User has an active site
+     * When: User rapidly deactivates and activates site multiple times
+     * Then: All status changes are handled correctly
+     * </p>
+     */
+    @Test
+    @DisplayName("Should handle rapid deactivate/activate cycles")
+    void shouldHandleRapidStatusChanges() throws Exception {
+        // Given: Create a site
+        String requestBody = """
+                {
+                  "domain": "rapid-status-test.example.com",
+                  "displayName": "Rapid Status Test",
+                  "password": "testPassword123"
+                }
+                """;
+
+        MvcResult createResult = mockMvc.perform(post("/api/sites")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String siteId = extractSiteId(createResult);
+
+        // When: Perform multiple rapid status changes
+        for (int i = 0; i < 3; i++) {
+            // Deactivate
+            mockMvc.perform(post("/api/sites/" + siteId + "/deactivate")
+                            .with(jwt().jwt(jwt -> jwt
+                                    .claim("sub", MOCK_ACCOUNT_ID)
+                                    .claim("email", MOCK_EMAIL))))
+                    .andExpect(status().isNoContent());
+
+            // Activate
+            mockMvc.perform(post("/api/sites/" + siteId + "/activate")
+                            .with(jwt().jwt(jwt -> jwt
+                                    .claim("sub", MOCK_ACCOUNT_ID)
+                                    .claim("email", MOCK_EMAIL))))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.isActive").value(true));
+        }
+
+        // Then: Site should be active at the end
+        mockMvc.perform(get("/api/sites")
+                        .with(jwt().jwt(jwt -> jwt
+                                .claim("sub", MOCK_ACCOUNT_ID)
+                                .claim("email", MOCK_EMAIL))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].isActive").value(true));
+    }
+
     // Helper methods
 
     private void createTestSite(String domain, String displayName) throws Exception {

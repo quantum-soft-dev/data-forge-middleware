@@ -226,4 +226,165 @@ class SiteContractTest {
         mockMvc.perform(get(SITES_ENDPOINT))
                 .andExpect(status().isUnauthorized());
     }
+
+    /**
+     * T045: Test Case 7 - Deactivate a site.
+     * <p>
+     * Given: User has an active site
+     * When: POST /api/sites/{siteId}/deactivate
+     * Then: 204 No Content, site deactivated
+     * </p>
+     */
+    @Test
+    @DisplayName("TC07: Should deactivate an active site")
+    void shouldDeactivateSite() throws Exception {
+        // First create a site
+        String requestBody = """
+            {
+                "domain": "deactivate-test.com",
+                "displayName": "Deactivate Test"
+            }
+            """;
+
+        String createResponse = mockMvc.perform(post(SITES_ENDPOINT)
+                        .header("Authorization", MOCK_JWT_HEADER)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        // Extract site ID from response
+        String siteId = com.jayway.jsonpath.JsonPath.read(createResponse, "$.site.id");
+
+        // Deactivate the site
+        mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/deactivate")
+                        .header("Authorization", MOCK_JWT_HEADER))
+                .andExpect(status().isNoContent());
+
+        // Verify site is deactivated (should not appear in list since we only return active sites)
+        mockMvc.perform(get(SITES_ENDPOINT)
+                        .header("Authorization", MOCK_JWT_HEADER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')]").doesNotExist());
+    }
+
+    /**
+     * T046: Test Case 8 - Activate a deactivated site.
+     * <p>
+     * Given: User has a deactivated site
+     * When: POST /api/sites/{siteId}/activate
+     * Then: 200 OK with activated site details
+     * </p>
+     */
+    @Test
+    @DisplayName("TC08: Should activate a deactivated site")
+    void shouldActivateSite() throws Exception {
+        // First create and deactivate a site
+        String requestBody = """
+            {
+                "domain": "activate-test.com",
+                "displayName": "Activate Test"
+            }
+            """;
+
+        String createResponse = mockMvc.perform(post(SITES_ENDPOINT)
+                        .header("Authorization", MOCK_JWT_HEADER)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String siteId = com.jayway.jsonpath.JsonPath.read(createResponse, "$.site.id");
+
+        // Deactivate
+        mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/deactivate")
+                        .header("Authorization", MOCK_JWT_HEADER))
+                .andExpect(status().isNoContent());
+
+        // Activate the site
+        mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/activate")
+                        .header("Authorization", MOCK_JWT_HEADER))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(siteId))
+                .andExpect(jsonPath("$.domain").value("activate-test.com"))
+                .andExpect(jsonPath("$.isActive").value(true));
+
+        // Verify site appears in list again
+        mockMvc.perform(get(SITES_ENDPOINT)
+                        .header("Authorization", MOCK_JWT_HEADER))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].isActive").value(true));
+    }
+
+    /**
+     * T045: Test Case 9 - Reject unauthorized deactivation.
+     * <p>
+     * Given: User tries to deactivate site they don't own
+     * When: POST /api/sites/{siteId}/deactivate with different user
+     * Then: 403 Forbidden or 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC09: Should reject deactivation of site not owned by user")
+    void shouldRejectUnauthorizedDeactivation() throws Exception {
+        // Create a site with account-1
+        String requestBody = """
+            {
+                "domain": "unauthorized-deactivate.com",
+                "displayName": "Unauthorized Test"
+            }
+            """;
+
+        String createResponse = mockMvc.perform(post(SITES_ENDPOINT)
+                        .header("Authorization", MOCK_JWT_HEADER)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String siteId = com.jayway.jsonpath.JsonPath.read(createResponse, "$.site.id");
+
+        // Try to deactivate with different account
+        mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/deactivate")
+                        .header("Authorization", "Bearer mock-jwt-token-account-2"))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * T046: Test Case 10 - Reject unauthorized activation.
+     * <p>
+     * Given: User tries to activate site they don't own
+     * When: POST /api/sites/{siteId}/activate with different user
+     * Then: 403 Forbidden or 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC10: Should reject activation of site not owned by user")
+    void shouldRejectUnauthorizedActivation() throws Exception {
+        // Create and deactivate a site with account-1
+        String requestBody = """
+            {
+                "domain": "unauthorized-activate.com",
+                "displayName": "Unauthorized Test"
+            }
+            """;
+
+        String createResponse = mockMvc.perform(post(SITES_ENDPOINT)
+                        .header("Authorization", MOCK_JWT_HEADER)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String siteId = com.jayway.jsonpath.JsonPath.read(createResponse, "$.site.id");
+
+        mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/deactivate")
+                .header("Authorization", MOCK_JWT_HEADER));
+
+        // Try to activate with different account
+        mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/activate")
+                        .header("Authorization", "Bearer mock-jwt-token-account-2"))
+                .andExpect(status().isForbidden());
+    }
 }
