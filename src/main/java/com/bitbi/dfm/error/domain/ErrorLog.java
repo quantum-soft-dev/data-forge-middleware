@@ -88,8 +88,29 @@ public class ErrorLog {
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
 
-        return new ErrorLog(id, siteId, batchId, type, title, message, stackTrace,
-                clientVersion, metadata, now, now);
+        // Sanitize strings to remove null bytes (0x00) which are invalid in PostgreSQL UTF-8
+        String sanitizedType = sanitizeString(type);
+        String sanitizedTitle = sanitizeString(title);
+        String sanitizedMessage = sanitizeString(message);
+        String sanitizedStackTrace = sanitizeString(stackTrace);
+        String sanitizedClientVersion = sanitizeString(clientVersion);
+
+        return new ErrorLog(id, siteId, batchId, sanitizedType, sanitizedTitle, sanitizedMessage,
+                sanitizedStackTrace, sanitizedClientVersion, metadata, now, now);
+    }
+
+    /**
+     * Sanitize string by removing null bytes (0x00) which are invalid in PostgreSQL UTF-8.
+     *
+     * @param input the input string to sanitize
+     * @return sanitized string without null bytes, or null if input is null
+     */
+    private static String sanitizeString(String input) {
+        if (input == null) {
+            return null;
+        }
+        // Remove all null bytes (0x00) from the string
+        return input.replace("\u0000", "");
     }
 
     @PrePersist
