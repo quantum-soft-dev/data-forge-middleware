@@ -1,4 +1,5 @@
 import { useAuth } from '@/entities/user-session/api/useAuth'
+import { LogOut } from 'lucide-react'
 
 /**
  * Logout button component
@@ -19,9 +20,11 @@ export function LogoutButton() {
   return (
     <button
       onClick={handleLogout}
-      className="rounded-md border border-input px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+      className="rounded-md border border-input p-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+      title="Sign Out"
+      aria-label="Sign Out"
     >
-      Sign Out
+      <LogOut className="h-4 w-4" />
     </button>
   )
 }

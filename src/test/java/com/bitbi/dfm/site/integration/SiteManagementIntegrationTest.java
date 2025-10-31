@@ -236,7 +236,7 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("lowercase letters, numbers, dots, and hyphens")));
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("letters, numbers, dots, and hyphens")));
     }
 
     /**

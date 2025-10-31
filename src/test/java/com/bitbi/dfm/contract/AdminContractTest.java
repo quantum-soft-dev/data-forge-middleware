@@ -890,12 +890,12 @@ class AdminContractTest {
     void shouldRejectSiteCreationWithInvalidDomainFormat() throws Exception {
         String requestBody = """
                 {
-                  "domain": "UPPERCASE.COM",
+                  "domain": "invalid domain!@#",
                   "displayName": "Test Site"
                 }
                 """;
 
-        // When: POST /admin/accounts/{accountId}/sites with uppercase domain
+        // When: POST /admin/accounts/{accountId}/sites with invalid characters
         mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)

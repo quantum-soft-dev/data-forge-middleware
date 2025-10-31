@@ -10,9 +10,10 @@ import jakarta.validation.constraints.Size;
  * <p>
  * Replaces Map<String, Object> input for site creation endpoint.
  * Provides type safety and automatic validation via Jakarta Bean Validation.
+ * Domain is case-insensitive (accepts uppercase but stored as lowercase).
  * </p>
  *
- * @param domain      Site domain (unique within account, lowercase, 3-255 characters)
+ * @param domain      Site domain (unique within account, case-insensitive, 3-255 characters)
  * @param displayName Site display name (2-100 characters, required)
  * @author Data Forge Team
  * @version 1.0.0
@@ -22,13 +23,13 @@ import jakarta.validation.constraints.Size;
 public record CreateSiteRequestDto(
 
         @Schema(
-                description = "Site domain (unique within account, lowercase)",
+                description = "Site domain (unique within account, case-insensitive)",
                 example = "example.com",
                 requiredMode = Schema.RequiredMode.REQUIRED
         )
         @NotBlank(message = "Domain is required")
         @Size(min = 3, max = 255, message = "Domain must be 3-255 characters")
-        @Pattern(regexp = "^[a-z0-9.-]+$", message = "Domain must contain only lowercase letters, numbers, dots, and hyphens")
+        @Pattern(regexp = "^[a-zA-Z0-9.-]+$", message = "Domain must contain only letters, numbers, dots, and hyphens")
         String domain,
 
         @Schema(

@@ -24,9 +24,9 @@ public record SiteCredentials(String domain, String clientSecretHash) {
     /**
      * Constructs SiteCredentials with validation.
      *
-     * @param domain             unique domain name (e.g., "store-01.example.com")
+     * @param domain             composite domain in accountId_domain format (e.g., "uuid_site-01")
      * @param clientSecretHash   bcrypt-hashed secret for authentication
-     * @throws IllegalArgumentException if domain or clientSecretHash is null/empty
+     * @throws IllegalArgumentException if domain or clientSecretHash is null/empty or invalid format
      */
     public SiteCredentials {
         Objects.requireNonNull(domain, "Domain cannot be null");
@@ -40,9 +40,11 @@ public record SiteCredentials(String domain, String clientSecretHash) {
             throw new IllegalArgumentException("Client secret hash cannot be blank");
         }
 
-        // Validate domain format (basic check)
-        if (!domain.contains(".")) {
-            throw new IllegalArgumentException("Domain must be a valid domain name");
+        // Validate domain format (FR-019: accountId_domain composite format)
+        // Domain must be at least 3 characters (basic validation only)
+        // Actual format validation handled by service layer
+        if (domain.length() < 3) {
+            throw new IllegalArgumentException("Domain must be at least 3 characters");
         }
     }
 

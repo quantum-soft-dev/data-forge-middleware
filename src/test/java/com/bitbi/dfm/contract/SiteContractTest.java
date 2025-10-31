@@ -151,7 +151,7 @@ class SiteContractTest {
     void shouldRejectInvalidDomainFormat() throws Exception {
         String requestBody = """
             {
-                "domain": "INVALID-DOMAIN",
+                "domain": "invalid domain with spaces",
                 "displayName": "Invalid Domain"
             }
             """;

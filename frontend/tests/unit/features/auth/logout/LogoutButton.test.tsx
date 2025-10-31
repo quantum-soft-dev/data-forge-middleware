@@ -19,7 +19,7 @@ describe('LogoutButton', () => {
     })
 
     render(<LogoutButton />)
-    expect(screen.getByText('Sign Out')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign Out' })).toBeInTheDocument()
   })
 
   it('does not render when not authenticated', () => {
@@ -50,7 +50,7 @@ describe('LogoutButton', () => {
     })
 
     render(<LogoutButton />)
-    const button = screen.getByText('Sign Out')
+    const button = screen.getByRole('button', { name: 'Sign Out' })
     fireEvent.click(button)
 
     expect(mockSignoutRedirect).toHaveBeenCalledTimes(1)
