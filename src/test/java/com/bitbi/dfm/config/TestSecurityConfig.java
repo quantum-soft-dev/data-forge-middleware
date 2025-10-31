@@ -92,6 +92,12 @@ public class TestSecurityConfig {
                 subject = accountId; // Subject is accountId for extraction
                 email = "user@test.com";
                 username = "user";
+            } else if ("mock-jwt-token-account-2".equals(token)) {
+                roles = List.of("USER");
+                accountId = "b2c3d4e5-f6a7-8901-bcde-f12345678901"; // Test account 2 (different from account-1)
+                subject = accountId; // Subject is accountId for extraction
+                email = "user2@test.com";
+                username = "user2";
             } else {
                 // Invalid token - no roles
                 roles = List.of();

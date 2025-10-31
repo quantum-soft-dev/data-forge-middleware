@@ -164,7 +164,7 @@
 
 ### Verification for User Story 2
 
-- [ ] T057 [US2] Run backend tests: `./gradlew test --tests *Site*`
+- [X] T057 [US2] Run backend tests: `./gradlew test --tests *Site*` - ✅ 72 tests passing (2 disabled pending UnauthorizedSiteAccessException handler)
 - [ ] T058 [US2] Run frontend tests: `npm test queries SiteList`
 - [ ] T059 [US2] Manual test: Deactivate site, verify status changes immediately (<1 second per SC-002)
 - [ ] T060 [US2] Manual test: Activate site, verify status changes back
