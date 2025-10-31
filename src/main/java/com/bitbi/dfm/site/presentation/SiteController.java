@@ -116,7 +116,7 @@ public class SiteController {
         UUID accountId = extractAccountId(authentication);
         logger.info("Listing sites for account: accountId={}", accountId);
 
-        List<Site> sites = siteService.listAccountSites(accountId);
+        List<Site> sites = siteService.listActiveSitesByAccount(accountId);
         List<SiteResponseDto> response = sites.stream()
                 .map(SiteResponseDto::fromEntity)
                 .toList();

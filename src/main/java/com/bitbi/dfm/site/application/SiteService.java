@@ -1,9 +1,14 @@
 package com.bitbi.dfm.site.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -32,9 +37,21 @@ public class SiteService {
     private static final Logger logger = LoggerFactory.getLogger(SiteService.class);
 
     private final SiteRepository siteRepository;
+    private final BatchRepository batchRepository;
+    private final ErrorLogRepository errorLogRepository;
+    private final UploadedFileRepository uploadedFileRepository;
+    private final S3FileStorageService s3FileStorageService;
 
-    public SiteService(SiteRepository siteRepository) {
+    public SiteService(SiteRepository siteRepository,
+                       BatchRepository batchRepository,
+                       ErrorLogRepository errorLogRepository,
+                       UploadedFileRepository uploadedFileRepository,
+                       S3FileStorageService s3FileStorageService) {
         this.siteRepository = siteRepository;
+        this.batchRepository = batchRepository;
+        this.errorLogRepository = errorLogRepository;
+        this.uploadedFileRepository = uploadedFileRepository;
+        this.s3FileStorageService = s3FileStorageService;
     }
 
     /**
@@ -165,14 +182,14 @@ public class SiteService {
     }
 
     /**
-     * List all active sites for account, sorted by creation date (newest first).
+     * List all sites for account (both active and inactive), sorted by creation date (newest first).
      *
      * @param accountId account identifier
-     * @return list of active sites sorted by createdAt DESC
+     * @return list of all sites sorted by createdAt DESC
      */
     @Transactional(readOnly = true)
     public List<Site> listAccountSites(UUID accountId) {
-        return siteRepository.findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(accountId);
+        return siteRepository.findByAccountId(accountId);
     }
 
     /**
@@ -252,18 +269,74 @@ public class SiteService {
     }
 
     /**
-     * Delete site (soft delete via deactivation).
+     * Delete site (hard delete with cascade).
      * <p>
-     * Preserves site data and history for audit purposes.
+     * Permanently deletes site and all associated data:
+     * - All batches for this site
+     * - All uploaded files for these batches
+     * - All error logs for this site
+     * - The site record itself
+     * </p>
+     * <p>
+     * WARNING: This action cannot be undone. All data will be permanently lost.
+     * For temporary disabling, use deactivateSite() instead.
      * </p>
      *
      * @param siteId site identifier
      * @throws SiteNotFoundException if site not found
      */
     public void deleteSite(UUID siteId) {
-        logger.info("Deleting site (soft delete): id={}", siteId);
-        deactivateSite(siteId);
-        logger.info("Site deleted successfully: id={}", siteId);
+        logger.warn("Hard deleting site and all associated data: id={}", siteId);
+
+        Site site = getSite(siteId);
+
+        // Step 1: Find all batches for this site
+        List<Batch> batches = batchRepository.findBySiteId(siteId, Pageable.unpaged()).getContent();
+        List<UUID> batchIds = batches.stream().map(Batch::getId).toList();
+
+        logger.info("Found {} batches to delete for site: {}", batches.size(), siteId);
+
+        // Step 2: Delete all uploaded files for these batches (from database AND S3)
+        if (!batchIds.isEmpty()) {
+            for (UUID batchId : batchIds) {
+                List<com.bitbi.dfm.upload.domain.UploadedFile> files = uploadedFileRepository.findByBatchId(batchId);
+                logger.info("Deleting {} uploaded files for batch: {}", files.size(), batchId);
+                for (com.bitbi.dfm.upload.domain.UploadedFile file : files) {
+                    // Delete from S3 first
+                    try {
+                        s3FileStorageService.deleteFile(file.getS3Key());
+                        logger.debug("Deleted S3 file: {}", file.getS3Key());
+                    } catch (Exception e) {
+                        logger.error("Failed to delete S3 file (continuing with database cleanup): key={}, error={}",
+                                   file.getS3Key(), e.getMessage());
+                        // Continue with database cleanup even if S3 deletion fails
+                    }
+                    // Delete from database
+                    uploadedFileRepository.deleteById(file.getId());
+                }
+            }
+        }
+
+        // Step 3: Delete all error logs for this site
+        List<com.bitbi.dfm.error.domain.ErrorLog> errorLogs = errorLogRepository.findBySiteId(siteId);
+        logger.info("Deleting {} error logs for site: {}", errorLogs.size(), siteId);
+        for (com.bitbi.dfm.error.domain.ErrorLog errorLog : errorLogs) {
+            errorLogRepository.deleteById(errorLog.getId());
+        }
+
+        // Step 4: Delete all batches for this site
+        if (!batches.isEmpty()) {
+            logger.info("Deleting {} batches for site: {}", batches.size(), siteId);
+            for (Batch batch : batches) {
+                batchRepository.deleteById(batch.getId());
+            }
+        }
+
+        // Step 5: Delete the site itself
+        logger.info("Deleting site record: id={}", siteId);
+        siteRepository.deleteById(siteId);
+
+        logger.warn("Site and all associated data permanently deleted: id={}, domain={}", siteId, site.getDomain());
     }
 
     /**

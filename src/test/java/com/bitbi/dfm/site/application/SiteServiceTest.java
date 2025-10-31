@@ -1,14 +1,21 @@
 package com.bitbi.dfm.site.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Optional;
@@ -23,10 +30,10 @@ import static org.mockito.Mockito.*;
  * Unit tests for SiteService application layer.
  * <p>
  * Tests business logic for site management operations:
- * - listAccountSites: Retrieve active sites sorted by creation date
+ * - listAccountSites: Retrieve ALL sites (active and inactive) sorted by creation date
  * - deactivateSite: Soft delete via isActive flag
  * - reactivateSite (activateSite): Re-enable deactivated site
- * - deleteSite: Permanent soft delete
+ * - deleteSite: Hard delete with cascade (removes all related data)
  * <p>
  * Feature: 007-adding-a-site (T017)
  */
@@ -37,7 +44,18 @@ class SiteServiceTest {
     @Mock
     private SiteRepository siteRepository;
 
-    @InjectMocks
+    @Mock
+    private BatchRepository batchRepository;
+
+    @Mock
+    private ErrorLogRepository errorLogRepository;
+
+    @Mock
+    private UploadedFileRepository uploadedFileRepository;
+
+    @Mock
+    private S3FileStorageService s3FileStorageService;
+
     private SiteService siteService;
 
     private UUID accountId;
@@ -47,17 +65,19 @@ class SiteServiceTest {
     void setUp() {
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
+        siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
+                                      uploadedFileRepository, s3FileStorageService);
     }
 
     @Test
-    @DisplayName("listAccountSites - Should return active sites sorted by creation date desc")
-    void listAccountSites_ShouldReturnActiveSitesSortedByCreationDate() {
+    @DisplayName("listAccountSites - Should return ALL sites (active and inactive) sorted by creation date desc")
+    void listAccountSites_ShouldReturnAllSitesSortedByCreationDate() {
         // Given
         Site site1 = mock(Site.class);
         Site site2 = mock(Site.class);
         List<Site> expectedSites = List.of(site2, site1); // Newest first
 
-        when(siteRepository.findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(accountId))
+        when(siteRepository.findByAccountId(accountId))
                 .thenReturn(expectedSites);
 
         // When
@@ -66,14 +86,14 @@ class SiteServiceTest {
         // Then
         assertThat(result).hasSize(2);
         assertThat(result).containsExactly(site2, site1);
-        verify(siteRepository).findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(accountId);
+        verify(siteRepository).findByAccountId(accountId);
     }
 
     @Test
-    @DisplayName("listAccountSites - Should return empty list when no active sites exist")
-    void listAccountSites_ShouldReturnEmptyListWhenNoActiveSites() {
+    @DisplayName("listAccountSites - Should return empty list when no sites exist")
+    void listAccountSites_ShouldReturnEmptyListWhenNoSites() {
         // Given
-        when(siteRepository.findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(accountId))
+        when(siteRepository.findByAccountId(accountId))
                 .thenReturn(List.of());
 
         // When
@@ -81,7 +101,7 @@ class SiteServiceTest {
 
         // Then
         assertThat(result).isEmpty();
-        verify(siteRepository).findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(accountId);
+        verify(siteRepository).findByAccountId(accountId);
     }
 
     @Test
@@ -186,20 +206,28 @@ class SiteServiceTest {
     }
 
     @Test
-    @DisplayName("deleteSite - Should soft delete site via deactivation")
-    void deleteSite_ShouldSoftDeleteViaDeactivation() {
+    @DisplayName("deleteSite - Should hard delete site with cascade deletion of all related data")
+    void deleteSite_ShouldHardDeleteWithCascade() {
         // Given
         Site mockSite = mock(Site.class);
+        when(mockSite.getDomain()).thenReturn("test.example.com");
         when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
-        when(mockSite.getIsActive()).thenReturn(true);
+
+        // Mock batches
+        Page<Batch> emptyBatchPage = new PageImpl<>(List.of());
+        when(batchRepository.findBySiteId(siteId, Pageable.unpaged())).thenReturn(emptyBatchPage);
+
+        // Mock error logs
+        when(errorLogRepository.findBySiteId(siteId)).thenReturn(List.of());
 
         // When
         siteService.deleteSite(siteId);
 
         // Then
         verify(siteRepository).findById(siteId);
-        verify(mockSite).deactivate();
-        verify(siteRepository).save(mockSite);
+        verify(batchRepository).findBySiteId(siteId, Pageable.unpaged());
+        verify(errorLogRepository).findBySiteId(siteId);
+        verify(siteRepository).deleteById(siteId);
     }
 
     @Test
@@ -214,6 +242,6 @@ class SiteServiceTest {
                 .hasMessageContaining("Site not found");
 
         verify(siteRepository).findById(siteId);
-        verify(siteRepository, never()).save(any());
+        verify(siteRepository, never()).deleteById(any());
     }
 }

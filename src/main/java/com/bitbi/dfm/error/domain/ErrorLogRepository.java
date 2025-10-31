@@ -44,4 +44,6 @@ public interface ErrorLogRepository {
     Page<ErrorLog> findByType(String type, Pageable pageable);
 
     Page<ErrorLog> findAll(Pageable pageable);
+
+    void deleteById(UUID id);
 }

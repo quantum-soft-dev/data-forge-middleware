@@ -1699,4 +1699,115 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.content").isArray())
                 .andExpect(jsonPath("$.content[?(@.name =~ /.*admin.*/i)]").exists());
     }
+
+    // ========== Site Management Tests (User Story 5 - Admin Site Operations) ==========
+
+    /**
+     * Test Case 29 (T096): Admin deactivate site should return 204 and log action.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND site exists
+     * When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate
+     * Then: 204 No Content (site soft-deleted, audit log created)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should deactivate site when admin authenticated (US5)")
+    void shouldDeactivateSiteWhenAdminAuthenticated() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 204 No Content
+                .andExpect(status().isNoContent());
+    }
+
+    /**
+     * Test Case 30 (T097): Admin activate site should return 200 and log action.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND site exists (deactivated)
+     * When: POST /admin/accounts/{accountId}/sites/{siteId}/activate
+     * Then: 200 OK with SiteResponseDto (site reactivated, audit log created)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should activate site when admin authenticated (US5)")
+    void shouldActivateSiteWhenAdminAuthenticated() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/activate
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/activate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK with site details
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.domain").exists())
+                .andExpect(jsonPath("$.isActive").value(true));
+    }
+
+    /**
+     * Test Case 31 (T098): Admin delete site should return 204 and log action.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND site exists
+     * When: DELETE /admin/accounts/{accountId}/sites/{siteId}
+     * Then: 204 No Content (site hard-deleted with cascade, audit log created)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should hard delete site when admin authenticated (US5)")
+    void shouldHardDeleteSiteWhenAdminAuthenticated() throws Exception {
+        // When: DELETE /admin/accounts/{accountId}/sites/{siteId}
+        mockMvc.perform(delete("/api/admin/accounts/{accountId}/sites/{siteId}",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 204 No Content
+                .andExpect(status().isNoContent());
+    }
+
+    /**
+     * Test Case 32: Non-admin should not be able to deactivate site.
+     */
+    @Test
+    @DisplayName("Should reject site deactivation when user lacks ROLE_ADMIN (US5)")
+    void shouldRejectSiteDeactivationWhenUserLacksRoleAdmin() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Test Case 33: Non-admin should not be able to activate site.
+     */
+    @Test
+    @DisplayName("Should reject site activation when user lacks ROLE_ADMIN (US5)")
+    void shouldRejectSiteActivationWhenUserLacksRoleAdmin() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/activate with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/activate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Test Case 34: Non-admin should not be able to delete site.
+     */
+    @Test
+    @DisplayName("Should reject site deletion when user lacks ROLE_ADMIN (US5)")
+    void shouldRejectSiteDeletionWhenUserLacksRoleAdmin() throws Exception {
+        // When: DELETE /admin/accounts/{accountId}/sites/{siteId} with non-admin token
+        mockMvc.perform(delete("/api/admin/accounts/{accountId}/sites/{siteId}",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
 }

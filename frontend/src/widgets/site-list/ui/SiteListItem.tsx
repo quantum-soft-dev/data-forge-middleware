@@ -44,13 +44,19 @@ export function SiteListItem({
   isLoading = false,
 }: SiteListItemProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
 
   const handleStatusToggle = () => {
     if (site.isActive) {
-      onDeactivate?.(site.id);
+      setShowDeactivateDialog(true);
     } else {
       onActivate?.(site.id);
     }
+  };
+
+  const handleDeactivateConfirm = () => {
+    onDeactivate?.(site.id);
+    setShowDeactivateDialog(false);
   };
 
   const handleDelete = () => {
@@ -126,23 +132,58 @@ export function SiteListItem({
         </CardContent>
       </Card>
 
-      {/* Delete confirmation dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      {/* Deactivate confirmation dialog */}
+      <AlertDialog open={showDeactivateDialog} onOpenChange={setShowDeactivateDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Site</AlertDialogTitle>
+            <AlertDialogTitle>Deactivate Site</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{site.domain}</strong>?
+              Are you sure you want to deactivate <strong>{site.domain}</strong>?
               <br />
               <br />
-              This action will deactivate the site and prevent new uploads. Historical data will
-              be preserved.
+              The site will be temporarily disabled. All historical data, batches, errors, and uploads will be preserved. You can reactivate the site at any time.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive">
-              Delete Site
+            <AlertDialogAction onClick={handleDeactivateConfirm} className="bg-orange-500 hover:bg-orange-600">
+              Deactivate Site
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently Delete Site</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <p className="font-semibold text-destructive">
+                ⚠️ WARNING: This action cannot be undone!
+              </p>
+              <p>
+                Are you sure you want to permanently delete <strong>{site.domain}</strong>?
+              </p>
+              <p>
+                This will permanently delete:
+              </p>
+              <ul className="list-disc list-inside pl-2 space-y-1">
+                <li>The site configuration</li>
+                <li>All batch history</li>
+                <li>All uploaded files</li>
+                <li>All error logs</li>
+                <li>All associated data</li>
+              </ul>
+              <p className="font-semibold mt-2">
+                If you want to temporarily disable the site, use "Deactivate" instead.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+              Yes, Permanently Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

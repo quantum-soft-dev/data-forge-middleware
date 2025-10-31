@@ -292,14 +292,40 @@ public class SiteAdminController {
     @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/activate")
     public ResponseEntity<SiteResponseDto> activateSite(
             @PathVariable("accountId") UUID accountId,
-            @PathVariable("siteId") UUID siteId) {
+            @PathVariable("siteId") UUID siteId,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
 
         logger.info("Activating site: siteId={}, accountId={}", siteId, accountId);
 
-        Site site = siteService.reactivateSite(siteId);
-        SiteResponseDto response = SiteResponseDto.fromEntity(site);
+        try {
+            Site site = siteService.reactivateSite(siteId);
 
-        return ResponseEntity.ok(response);
+            // Log successful activation
+            logAdminAction(
+                    AdminActionType.ACTIVATE_SITE,
+                    accountId,
+                    siteId,
+                    authentication,
+                    httpRequest,
+                    null
+            );
+
+            SiteResponseDto response = SiteResponseDto.fromEntity(site);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            // Log failed activation
+            logAdminAction(
+                    AdminActionType.ACTIVATE_SITE,
+                    accountId,
+                    siteId,
+                    authentication,
+                    httpRequest,
+                    e.getMessage()
+            );
+            throw e;
+        }
     }
 
     /**
@@ -324,28 +350,56 @@ public class SiteAdminController {
     @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate")
     public ResponseEntity<Void> deactivateSiteForAccount(
             @PathVariable("accountId") UUID accountId,
-            @PathVariable("siteId") UUID siteId) {
+            @PathVariable("siteId") UUID siteId,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
 
         logger.info("Deactivating site: siteId={}, accountId={}", siteId, accountId);
 
-        siteService.deactivateSite(siteId);
+        try {
+            siteService.deactivateSite(siteId);
 
-        return ResponseEntity.noContent().build();
+            // Log successful deactivation
+            logAdminAction(
+                    AdminActionType.DEACTIVATE_SITE,
+                    accountId,
+                    siteId,
+                    authentication,
+                    httpRequest,
+                    null
+            );
+
+            return ResponseEntity.noContent().build();
+
+        } catch (Exception e) {
+            // Log failed deactivation
+            logAdminAction(
+                    AdminActionType.DEACTIVATE_SITE,
+                    accountId,
+                    siteId,
+                    authentication,
+                    httpRequest,
+                    e.getMessage()
+            );
+            throw e;
+        }
     }
 
     /**
-     * Delete a site (admin operation, soft delete).
+     * Delete a site (admin operation, hard delete).
      * <p>
      * DELETE /admin/accounts/{accountId}/sites/{siteId}
      * </p>
      *
      * @param accountId account identifier
      * @param siteId site identifier
+     * @param authentication Spring Security authentication object
+     * @param httpRequest HTTP request for audit logging
      * @return no content response
      */
     @Operation(
             summary = "Delete a site",
-            description = "Soft-deletes a site by setting isActive=false."
+            description = "Hard-deletes a site and all related data (batches, uploads, error logs)."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Site deleted successfully"),
@@ -355,13 +409,39 @@ public class SiteAdminController {
     @DeleteMapping("/api/admin/accounts/{accountId}/sites/{siteId}")
     public ResponseEntity<Void> deleteSiteForAccount(
             @PathVariable("accountId") UUID accountId,
-            @PathVariable("siteId") UUID siteId) {
+            @PathVariable("siteId") UUID siteId,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
 
         logger.info("Deleting site: siteId={}, accountId={}", siteId, accountId);
 
-        siteService.deactivateSite(siteId);
+        try {
+            siteService.deleteSite(siteId);
 
-        return ResponseEntity.noContent().build();
+            // Log successful deletion
+            logAdminAction(
+                    AdminActionType.DELETE_SITE,
+                    accountId,
+                    siteId,
+                    authentication,
+                    httpRequest,
+                    null
+            );
+
+            return ResponseEntity.noContent().build();
+
+        } catch (Exception e) {
+            // Log failed deletion
+            logAdminAction(
+                    AdminActionType.DELETE_SITE,
+                    accountId,
+                    siteId,
+                    authentication,
+                    httpRequest,
+                    e.getMessage()
+            );
+            throw e;
+        }
     }
 
     /**
