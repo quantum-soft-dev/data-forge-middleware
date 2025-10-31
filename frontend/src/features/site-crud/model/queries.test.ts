@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ReactNode } from 'react';
+import { createElement, type ReactNode } from 'react';
 import { useUpdateSiteStatus, siteKeys } from './queries';
 import * as siteApi from '@/entities/site/api/siteApi';
 import type { Site } from '@/entities/site/model/types';
@@ -40,6 +40,11 @@ describe('useUpdateSiteStatus', () => {
     },
   ];
 
+  const createWrapper = () => {
+    return ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+  };
+
   beforeEach(() => {
     queryClient = new QueryClient({
       defaultOptions: {
@@ -56,10 +61,6 @@ describe('useUpdateSiteStatus', () => {
     vi.clearAllMocks();
   });
 
-  const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-
   describe('Optimistic Updates', () => {
     it('should optimistically update site status to inactive', async () => {
       // Set initial cache data
@@ -71,7 +72,7 @@ describe('useUpdateSiteStatus', () => {
         isActive: false,
       });
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       // Trigger mutation
       result.current.mutate({ siteId: 'site-1', isActive: false });
@@ -94,7 +95,7 @@ describe('useUpdateSiteStatus', () => {
         isActive: true,
       });
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       // Trigger mutation
       result.current.mutate({ siteId: 'site-2', isActive: true });
@@ -115,7 +116,7 @@ describe('useUpdateSiteStatus', () => {
         isActive: false,
       });
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-1', isActive: false });
 
@@ -137,7 +138,7 @@ describe('useUpdateSiteStatus', () => {
         new Error('Network error')
       );
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       // Trigger mutation
       result.current.mutate({ siteId: 'site-1', isActive: false });
@@ -163,7 +164,7 @@ describe('useUpdateSiteStatus', () => {
 
       vi.mocked(siteApi.deactivateUserSite).mockRejectedValue(forbiddenError);
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-1', isActive: false });
 
@@ -190,7 +191,7 @@ describe('useUpdateSiteStatus', () => {
 
       vi.mocked(siteApi.activateUserSite).mockRejectedValue(notFoundError);
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-2', isActive: true });
 
@@ -211,7 +212,7 @@ describe('useUpdateSiteStatus', () => {
 
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-1', isActive: false });
 
@@ -232,7 +233,7 @@ describe('useUpdateSiteStatus', () => {
 
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-1', isActive: false });
 
@@ -254,7 +255,7 @@ describe('useUpdateSiteStatus', () => {
         isActive: true,
       });
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-2', isActive: true });
 
@@ -272,7 +273,7 @@ describe('useUpdateSiteStatus', () => {
         isActive: false,
       });
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate({ siteId: 'site-1', isActive: false });
 
@@ -295,7 +296,7 @@ describe('useUpdateSiteStatus', () => {
 
       vi.mocked(siteApi.activateUserSite).mockReturnValue(activatePromise);
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       // Start mutation
       result.current.mutate({ siteId: 'site-2', isActive: true });
@@ -323,7 +324,7 @@ describe('useUpdateSiteStatus', () => {
 
       const onSuccess = vi.fn();
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate(
         { siteId: 'site-2', isActive: true },
@@ -342,7 +343,7 @@ describe('useUpdateSiteStatus', () => {
 
       const onError = vi.fn();
 
-      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper });
+      const { result } = renderHook(() => useUpdateSiteStatus(), { wrapper: createWrapper() });
 
       result.current.mutate(
         { siteId: 'site-1', isActive: false },
@@ -350,9 +351,15 @@ describe('useUpdateSiteStatus', () => {
       );
 
       await waitFor(() => expect(result.current.isError).toBe(true));
+
+      // TanStack Query v5 onError signature: (error, variables, context, mutationContext)
+      expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith(
         error,
         { siteId: 'site-1', isActive: false },
+        expect.objectContaining({
+          previousSites: mockSites,
+        }),
         expect.any(Object)
       );
     });
