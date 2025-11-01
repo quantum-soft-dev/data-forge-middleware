@@ -99,12 +99,8 @@ public class TestSecurityConfig {
                 email = "user2@test.com";
                 username = "user2";
             } else {
-                // Invalid token - no roles
-                roles = List.of();
-                accountId = "00000000-0000-0000-0000-000000000000";
-                subject = accountId;
-                email = "unknown@test.com";
-                username = "unknown";
+                // Invalid token - throw BadJwtException which Spring Security translates to 401
+                throw new org.springframework.security.oauth2.jwt.BadJwtException("Invalid JWT token: " + token);
             }
 
             return Jwt.withTokenValue(token)
@@ -226,7 +222,7 @@ public class TestSecurityConfig {
     /**
      * Security filter chain for user-facing authenticated endpoints.
      * <p>
-     * Order 3: Third priority to match /api/sites** and /api/account/**.
+     * Order 3: Third priority to match /api/sites**, /api/account/**, /api/user/**.
      * OAuth2 Resource Server - any authenticated user allowed.
      * </p>
      */
@@ -234,7 +230,7 @@ public class TestSecurityConfig {
     @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/sites/**", "/api/account/**")
+            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth

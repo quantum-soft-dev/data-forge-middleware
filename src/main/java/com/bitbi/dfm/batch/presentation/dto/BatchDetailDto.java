@@ -13,7 +13,7 @@ import java.util.UUID;
  * Detailed batch DTO for client API (Upload History feature).
  * <p>
  * Extends batch summary with full file list using simplified FileMetadataDto.
- * Used for GET /api/dfc/batches/{id} endpoint.
+ * Used for GET /api/user/batches/{id} endpoint.
  * </p>
  *
  * @param id                  Batch unique identifier

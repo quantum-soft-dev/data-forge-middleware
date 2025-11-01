@@ -139,6 +139,20 @@
             "claim.name": "email",
             "jsonType.label": "String"
           }
+        },
+        {
+          "name": "account-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "accountId",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "accountId",
+            "jsonType.label": "String"
+          }
         }
       ],
       "defaultClientScopes": [
@@ -225,6 +239,20 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "preferred_username",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "account-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "accountId",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "accountId",
             "jsonType.label": "String"
           }
         }

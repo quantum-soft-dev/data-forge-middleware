@@ -3,6 +3,7 @@ package com.bitbi.dfm.shared.auth;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter.JwtAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
@@ -11,20 +12,25 @@ import java.util.UUID;
  * Helper class for authorization checks.
  * <p>
  * Provides utility methods to verify that authenticated users can access
- * only their own resources.
+ * only their own resources. Supports both custom JWT tokens (/api/dfc endpoints)
+ * and Keycloak OAuth2 JWT tokens (/api/user, /api/admin endpoints).
  * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 2.0.0
  */
 @Component
 public class AuthorizationHelper {
 
     /**
      * Get the authenticated site ID from security context.
+     * <p>
+     * For custom JWT tokens: extracts from JwtAuthenticationToken.getSiteId()
+     * For OAuth2 JWT tokens: throws exception (not applicable for OAuth2 endpoints)
+     * </p>
      *
      * @return site ID from JWT token
-     * @throws UnauthorizedException if not authenticated or not a JWT token
+     * @throws UnauthorizedException if not authenticated or not a custom JWT token
      */
     public UUID getAuthenticatedSiteId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -34,7 +40,7 @@ public class AuthorizationHelper {
         }
 
         if (!(authentication instanceof JwtAuthenticationToken)) {
-            throw new UnauthorizedException("Invalid authentication type");
+            throw new UnauthorizedException("Invalid authentication type for client API");
         }
 
         JwtAuthenticationToken jwtAuth = (JwtAuthenticationToken) authentication;
@@ -43,9 +49,14 @@ public class AuthorizationHelper {
 
     /**
      * Get the authenticated account ID from security context.
+     * <p>
+     * Supports two authentication types:
+     * - Custom JWT tokens (JwtAuthenticationToken): extracts accountId from token claims
+     * - OAuth2 JWT tokens (org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken): extracts from "subject" or "accountId" claim
+     * </p>
      *
      * @return account ID from JWT token
-     * @throws UnauthorizedException if not authenticated or not a JWT token
+     * @throws UnauthorizedException if not authenticated or accountId claim not found
      */
     public UUID getAuthenticatedAccountId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -54,12 +65,60 @@ public class AuthorizationHelper {
             throw new UnauthorizedException("Not authenticated");
         }
 
-        if (!(authentication instanceof JwtAuthenticationToken)) {
-            throw new UnauthorizedException("Invalid authentication type");
+        // Custom JWT token (for /api/dfc endpoints)
+        if (authentication instanceof JwtAuthenticationToken) {
+            JwtAuthenticationToken jwtAuth = (JwtAuthenticationToken) authentication;
+            return jwtAuth.getAccountId();
         }
 
-        JwtAuthenticationToken jwtAuth = (JwtAuthenticationToken) authentication;
-        return jwtAuth.getAccountId();
+        // OAuth2 JWT token (for /api/user, /api/admin endpoints)
+        if (authentication instanceof org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) {
+            org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken oauth2JwtAuth =
+                    (org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) authentication;
+            Jwt jwt = oauth2JwtAuth.getToken();
+
+            // Strategy 1: Try to extract accountId from direct "accountId" claim
+            String accountIdClaim = jwt.getClaimAsString("accountId");
+            if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
+                try {
+                    return UUID.fromString(accountIdClaim);
+                } catch (IllegalArgumentException e) {
+                    // Not a valid UUID, try next strategy
+                }
+            }
+
+            // Strategy 2: Try to extract from Keycloak user attributes (custom mapper)
+            // Keycloak can be configured to include user attributes in JWT via mappers
+            Object accountIdAttr = jwt.getClaim("account_id");
+            if (accountIdAttr != null) {
+                try {
+                    return UUID.fromString(accountIdAttr.toString());
+                } catch (IllegalArgumentException e) {
+                    // Not a valid UUID, try next strategy
+                }
+            }
+
+            // Strategy 3: Extract from subject claim (if it's a UUID)
+            // This works when Keycloak subject is the account ID
+            String subject = jwt.getSubject();
+            if (subject != null && !subject.isEmpty()) {
+                try {
+                    return UUID.fromString(subject);
+                } catch (IllegalArgumentException e) {
+                    // Subject is not a UUID (probably Keycloak user ID)
+                    // This is expected - need to configure Keycloak mapper
+                }
+            }
+
+            // If we reach here, accountId is not configured in Keycloak JWT
+            // Log available claims for debugging
+            throw new UnauthorizedException(
+                "Account ID not found in JWT token. Please configure Keycloak user mapper to include 'accountId' attribute. " +
+                "Available claims: " + jwt.getClaims().keySet()
+            );
+        }
+
+        throw new UnauthorizedException("Invalid authentication type");
     }
 
     /**

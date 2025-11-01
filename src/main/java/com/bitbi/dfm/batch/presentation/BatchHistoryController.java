@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.exception.BatchNotFoundException;
 import com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException;
 import com.bitbi.dfm.batch.presentation.dto.*;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import com.bitbi.dfm.upload.application.ExcelExportService;
 import com.bitbi.dfm.upload.application.FileDownloadService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -42,7 +43,7 @@ import java.util.UUID;
  * @since User Story 1 (Phase 3)
  */
 @RestController
-@RequestMapping("/api/dfc/batches")
+@RequestMapping("/api/user/batches")
 @Tag(name = "Upload History", description = "View upload history and download files")
 @SecurityRequirement(name = "bearerAuth")
 public class BatchHistoryController {
@@ -51,22 +52,25 @@ public class BatchHistoryController {
 
     private final BatchHistoryService batchHistoryService;
     private final FileDownloadService fileDownloadService;
+    private final ExcelExportService excelExportService;
     private final AuthorizationHelper authorizationHelper;
 
     public BatchHistoryController(
             BatchHistoryService batchHistoryService,
             FileDownloadService fileDownloadService,
+            ExcelExportService excelExportService,
             AuthorizationHelper authorizationHelper
     ) {
         this.batchHistoryService = batchHistoryService;
         this.fileDownloadService = fileDownloadService;
+        this.excelExportService = excelExportService;
         this.authorizationHelper = authorizationHelper;
     }
 
     /**
      * List upload history with cursor-based pagination.
      * <p>
-     * GET /api/dfc/batches?cursor={cursor}&limit={limit}
+     * GET /api/user/batches?cursor={cursor}&limit={limit}
      * </p>
      *
      * @param cursor Pagination cursor (optional, null for first page)
@@ -117,7 +121,7 @@ public class BatchHistoryController {
     /**
      * Get batch details with file list.
      * <p>
-     * GET /api/dfc/batches/{batchId}
+     * GET /api/user/batches/{batchId}
      * </p>
      *
      * @param batchId Batch ID
@@ -171,7 +175,7 @@ public class BatchHistoryController {
     /**
      * Get presigned URL for single file download.
      * <p>
-     * GET /api/dfc/batches/{batchId}/files/{fileId}/download
+     * GET /api/user/batches/{batchId}/files/{fileId}/download
      * </p>
      * <p>
      * T068: Returns FileDownloadResponseDto with S3 presigned URL (15-minute expiry).
@@ -251,7 +255,7 @@ public class BatchHistoryController {
     /**
      * Download multiple files as ZIP archive.
      * <p>
-     * POST /api/dfc/batches/{batchId}/download-zip
+     * POST /api/user/batches/{batchId}/download-zip
      * </p>
      * <p>
      * T069: Streams files directly from S3 as ZIP archive.
@@ -326,11 +330,105 @@ public class BatchHistoryController {
     }
 
     /**
+     * Export selected CSV files to Excel workbook (.xlsx).
+     * <p>
+     * POST /api/user/batches/{batchId}/export-excel
+     * </p>
+     * <p>
+     * T092: Generates Excel workbook where each CSV becomes a separate sheet.
+     * Business rules:
+     * - Batch must belong to user's account
+     * - Batch must be COMPLETED (403 Forbidden for IN_PROGRESS batches)
+     * - All file IDs must belong to the specified batch
+     * - Automatically decompresses .csv.gz files
+     * - Auto-detects CSV encoding (UTF-8, Windows-1252, ISO-8859-1)
+     * - Sheet names limited to 31 characters with invalid char replacement
+     * - Duplicate sheet names get numeric suffix (e.g., "data (2)")
+     * </p>
+     *
+     * @param batchId  Batch ID
+     * @param request  List of file IDs to export
+     * @param response HTTP response for streaming Excel file
+     */
+    @PostMapping("/{batchId}/export-excel")
+    @Operation(
+            summary = "Generate Excel file from selected CSV files",
+            description = "Generates .xlsx Excel workbook where each CSV becomes a separate sheet. " +
+                    "Streams directly with SXSSF (memory efficient). Only available for COMPLETED batches. " +
+                    "Automatically handles .csv.gz decompression and encoding detection."
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Excel workbook generated successfully",
+                    content = @Content(mediaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            ),
+            @ApiResponse(responseCode = "400", description = "Invalid fileIds or CSV parsing error"),
+            @ApiResponse(responseCode = "403", description = "Batch not completed or unauthorized access"),
+            @ApiResponse(responseCode = "404", description = "Batch or files not found")
+    })
+    public void exportToExcel(
+            @Parameter(description = "Batch ID", required = true)
+            @PathVariable UUID batchId,
+
+            @RequestBody ExportExcelRequestDto request,
+            HttpServletResponse response
+    ) {
+        try {
+            // Get authenticated account ID
+            UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+
+            logger.info("Starting Excel export: batchId={}, fileCount={}, accountId={}",
+                    batchId, request.fileIds().size(), accountId);
+
+            excelExportService.exportToExcel(batchId, request.fileIds(), accountId, response);
+
+            logger.info("Excel export completed successfully: batchId={}", batchId);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized Excel export: {}", e.getMessage());
+            sendErrorResponse(response, HttpStatus.FORBIDDEN, "Unauthorized access");
+
+        } catch (UnauthorizedBatchAccessException e) {
+            logger.warn("Batch access denied for Excel export: batchId={}, {}", batchId, e.getMessage());
+            sendErrorResponse(response, HttpStatus.FORBIDDEN, "Batch does not belong to user");
+
+        } catch (IllegalStateException e) {
+            logger.warn("Excel export on non-completed batch: batchId={}, {}", batchId, e.getMessage());
+            sendErrorResponse(response, HttpStatus.FORBIDDEN, e.getMessage());
+
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid Excel export request: batchId={}, {}", batchId, e.getMessage());
+            sendErrorResponse(response, HttpStatus.BAD_REQUEST, e.getMessage());
+
+        } catch (ExcelExportService.ExcelExportException e) {
+            logger.error("Excel export failed: batchId={}, {}", batchId, e.getMessage(), e);
+            sendErrorResponse(response, HttpStatus.BAD_REQUEST,
+                    "Failed to generate Excel: " + e.getCause().getMessage());
+
+        } catch (Exception e) {
+            logger.error("Unexpected error during Excel export: batchId={}", batchId, e);
+            sendErrorResponse(response, HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Failed to generate Excel workbook");
+        }
+    }
+
+    /**
      * DTO for ZIP download request.
      */
     @Schema(description = "Request body for ZIP download")
     public record DownloadZipRequestDto(
             @Schema(description = "List of file IDs to include in ZIP", required = true)
+            List<UUID> fileIds
+    ) {
+    }
+
+    /**
+     * DTO for Excel export request.
+     */
+    @Schema(description = "Request body for Excel export")
+    public record ExportExcelRequestDto(
+            @Schema(description = "List of file IDs to export as Excel sheets (must belong to batch)", required = true)
             List<UUID> fileIds
     ) {
     }
