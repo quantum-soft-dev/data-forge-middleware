@@ -133,4 +133,59 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      */
     @Query("SELECT b FROM Batch b WHERE b.status = :status ORDER BY b.startedAt DESC")
     Page<Batch> findByStatus(BatchStatus status, Pageable pageable);
+
+    /**
+     * T025: Find first page of batches for user's sites with DTO projection.
+     * <p>
+     * Cursor-based pagination - first page query (no cursor).
+     * Returns batches ordered by startedAt DESC, id DESC for stable sorting.
+     * </p>
+     *
+     * @param siteIds list of site IDs owned by user
+     * @param limit maximum number of results
+     * @return list of batch projections
+     */
+    @Query("""
+        SELECT b.id as id, b.siteId as siteId, b.status as status,
+               b.hasErrors as hasErrors, b.startedAt as startedAt,
+               b.completedAt as completedAt, b.uploadedFilesCount as fileCount,
+               b.totalSize as totalSize
+        FROM Batch b
+        WHERE b.siteId IN :siteIds
+        ORDER BY b.startedAt DESC, b.id DESC
+        LIMIT :limit
+        """)
+    List<BatchWithFileCountProjection> findBySiteIdsFirstPage(List<UUID> siteIds, int limit);
+
+    /**
+     * T025: Find batches with cursor for pagination.
+     * <p>
+     * Cursor-based pagination - subsequent pages using cursor (startedAt + id).
+     * Uses composite condition for stable pagination across data changes.
+     * </p>
+     *
+     * @param siteIds list of site IDs owned by user
+     * @param cursorStartedAt startedAt value from cursor
+     * @param cursorId id value from cursor
+     * @param limit maximum number of results
+     * @return list of batch projections
+     */
+    @Query("""
+        SELECT b.id as id, b.siteId as siteId, b.status as status,
+               b.hasErrors as hasErrors, b.startedAt as startedAt,
+               b.completedAt as completedAt, b.uploadedFilesCount as fileCount,
+               b.totalSize as totalSize
+        FROM Batch b
+        WHERE b.siteId IN :siteIds
+          AND (b.startedAt < :cursorStartedAt
+               OR (b.startedAt = :cursorStartedAt AND b.id < :cursorId))
+        ORDER BY b.startedAt DESC, b.id DESC
+        LIMIT :limit
+        """)
+    List<BatchWithFileCountProjection> findBySiteIdsWithCursor(
+        List<UUID> siteIds,
+        LocalDateTime cursorStartedAt,
+        UUID cursorId,
+        int limit
+    );
 }

@@ -1,5 +1,7 @@
 package com.bitbi.dfm.batch.presentation.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
@@ -20,14 +22,18 @@ import java.util.List;
  * @see com.bitbi.dfm.batch.presentation.BatchHistoryController
  */
 @Schema(description = "Cursor-based pagination response")
+@JsonInclude(JsonInclude.Include.ALWAYS)  // Include all fields, even null values
 public record CursorPageResponseDto<T>(
         @Schema(description = "Current page items")
+        @JsonProperty("items")
         List<T> items,
 
         @Schema(description = "Cursor for next page (null if last page)", example = "2025-11-01T10:30:00_550e8400-e29b-41d4-a716-446655440000")
+        @JsonProperty("nextCursor")
         String nextCursor,
 
         @Schema(description = "True if more pages exist", example = "true")
+        @JsonProperty("hasNext")
         boolean hasNext
 ) {
     /**

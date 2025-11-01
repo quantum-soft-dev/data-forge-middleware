@@ -6,6 +6,14 @@ spring:
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
     url: jdbc:tc:postgresql:16-alpine:///dfm_test
 
+  # Disable Redis for tests (caching not critical for test execution)
+  cache:
+    type: none
+  data:
+    redis:
+      repositories:
+        enabled: false
+
   jpa:
     hibernate:
       ddl-auto: validate

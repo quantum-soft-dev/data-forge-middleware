@@ -1,6 +1,7 @@
 package com.bitbi.dfm.batch.presentation.dto;
 
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
@@ -78,6 +79,31 @@ public record BatchSummaryDto(
                 batch.getStartedAt().toInstant(ZoneOffset.UTC),
                 batch.getCompletedAt() != null ? batch.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
                 batch.getCreatedAt().toInstant(ZoneOffset.UTC)
+        );
+    }
+
+    /**
+     * T026: Create DTO from BatchWithFileCountProjection (optimized for list view).
+     * <p>
+     * Used by cursor-based pagination queries to avoid N+1 queries.
+     * S3Path is set to empty string as it's not needed for list view.
+     * </p>
+     *
+     * @param projection Batch projection with file count
+     * @return BatchSummaryDto
+     */
+    public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection) {
+        return new BatchSummaryDto(
+                projection.getId(),
+                projection.getSiteId(),
+                projection.getStatus(),
+                "",  // S3Path not included in projection (not needed for list view)
+                projection.getFileCount(),
+                projection.getTotalSize(),
+                projection.getHasErrors(),
+                projection.getStartedAt().toInstant(ZoneOffset.UTC),
+                projection.getCompletedAt() != null ? projection.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
+                projection.getStartedAt().toInstant(ZoneOffset.UTC)  // Use startedAt as createdAt approximation
         );
     }
 }

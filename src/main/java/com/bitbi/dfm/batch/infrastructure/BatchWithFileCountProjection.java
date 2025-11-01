@@ -80,19 +80,20 @@ public interface BatchWithFileCountProjection {
     /**
      * Number of files uploaded (from materialized column).
      * <p>
-     * Uses @Value annotation to map from uploadedFilesCount column.
+     * Maps to 'fileCount' alias in JPQL query projection.
      * </p>
      *
      * @return File count
      */
-    @Value("#{target.uploadedFilesCount}")
     Integer getFileCount();
 
     /**
      * Total size of all files in bytes.
+     * <p>
+     * Maps to 'totalSize' alias in JPQL query projection.
+     * </p>
      *
      * @return Total size in bytes
      */
-    @Value("#{target.totalSize}")
     Long getTotalSize();
 }

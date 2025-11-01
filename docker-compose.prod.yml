@@ -43,6 +43,21 @@ services:
       - "-c"
       - "max_parallel_maintenance_workers=2"
 
+  redis:
+    restart: unless-stopped
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-changeme_in_production}
+    volumes:
+      - redis_data_prod:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
   keycloak:
     restart: unless-stopped
     environment:
@@ -79,6 +94,11 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-dfm-prod-uploads}
 
+      # Redis
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme_in_production}
+
       # Keycloak with production hostname
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak.yourdomain.com/realms/dfm}
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-https://keycloak.yourdomain.com/realms/dfm/protocol/openid-connect/certs}
@@ -100,6 +120,11 @@ services:
         -XX:HeapDumpPath=/tmp/heapdump.hprof
         -Djava.security.egd=file:/dev/./urandom
         -Dspring.backgroundpreinitializer.ignore=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     deploy:
       resources:
         limits:
@@ -117,6 +142,8 @@ services:
 
 volumes:
   postgres_data_prod:
+    driver: local
+  redis_data_prod:
     driver: local
   keycloak_data_prod:
     driver: local

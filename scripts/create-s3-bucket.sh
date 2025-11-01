@@ -5,7 +5,7 @@
 
 set -e
 
-BUCKET_NAME="dfm-uploads"
+BUCKET_NAME="data-forge-bucket"
 ENDPOINT_URL="http://localhost:4566"
 REGION="us-east-1"
 

@@ -24,6 +24,22 @@ services:
     networks:
       - dfm-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: dfm-redis
+    command: redis-server --appendonly yes --requirepass redis_password
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dfm-network
+
   localstack:
     image: localstack/localstack:stable
     container_name: dfm-localstack
@@ -85,6 +101,8 @@ services:
 volumes:
   postgres_data_dev:
     driver: local
+  redis_data_dev:
+    driver: local
   localstack_data_dev:
     driver: local
   keycloak_data_dev:
@@ -114,6 +132,8 @@ networks:
 #    - PostgreSQL: localhost:5432/dfm (user: dfm, password: dfm_password)
 #    - Keycloak: http://localhost:8081 (admin/admin)
 #    - LocalStack S3: http://localhost:4566 (bucket: dfm-uploads)
+#
+#    - Redis: localhost:6379 (password: redis_password)
 #
 # 6. Stop infrastructure:
 #    docker-compose -f docker-compose.dev.yml down
