@@ -57,11 +57,11 @@
 
 ### Frontend Shared Types
 
-- [ ] T015 [P] Create `BatchSummary` TypeScript interface in frontend/src/entities/batch/model/types.ts matching BatchSummaryDto
-- [ ] T016 [P] Create `BatchDetail` TypeScript interface in frontend/src/entities/batch/model/types.ts matching BatchDetailDto
-- [ ] T017 [P] Create `FileMetadata` TypeScript interface in frontend/src/entities/batch/model/types.ts matching FileMetadataDto
-- [ ] T018 [P] Create `CursorPageResponse<T>` TypeScript generic interface in frontend/src/entities/batch/model/types.ts
-- [ ] T019 [P] Extend `frontend/src/shared/lib/formatters.ts` with `formatBytes(bytes: number): string` and `formatDateTime(iso: string): string` utility functions
+- [X] T015 [P] Create `BatchSummary` TypeScript interface in frontend/src/entities/batch/model/types.ts matching BatchSummaryDto
+- [X] T016 [P] Create `BatchDetail` TypeScript interface in frontend/src/entities/batch/model/types.ts matching BatchDetailDto
+- [X] T017 [P] Create `FileMetadata` TypeScript interface in frontend/src/entities/batch/model/types.ts matching FileMetadataDto
+- [X] T018 [P] Create `CursorPageResponse<T>` TypeScript generic interface in frontend/src/entities/batch/model/types.ts
+- [X] T019 [P] Extend `frontend/src/shared/lib/formatters.ts` with `formatBytes(bytes: number): string` and `formatDateTime(iso: string): string` utility functions
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
