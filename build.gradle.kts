@@ -67,6 +67,19 @@ dependencies {
     // Logging
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
 
+    // Upload History Feature Dependencies
+    // Excel generation
+    implementation("org.apache.poi:poi-ooxml:5.3.0")
+    // CSV parsing
+    implementation("org.apache.commons:commons-csv:1.12.0")
+    // Compression (ZIP + Gzip)
+    implementation("org.apache.commons:commons-compress:1.28.0")
+    // Encoding detection
+    implementation("com.ibm.icu:icu4j:76.1")
+    // Redis caching
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
+    implementation("org.springframework.boot:spring-boot-starter-cache")
+
     // Lombok
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")

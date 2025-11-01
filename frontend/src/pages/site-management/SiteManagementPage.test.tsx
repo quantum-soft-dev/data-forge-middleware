@@ -177,9 +177,12 @@ describe('SiteManagementPage', () => {
       await user.click(submitButton);
 
       // Wait for the site to appear in the list
+      // Use getAllByText since the text appears both in the form input and in the list
       await waitFor(() => {
-        expect(screen.getByText('Example Site')).toBeInTheDocument();
-        expect(screen.getByText('example.com')).toBeInTheDocument();
+        const siteElements = screen.getAllByText('Example Site');
+        expect(siteElements.length).toBeGreaterThan(0);
+        const domainElements = screen.getAllByText('example.com');
+        expect(domainElements.length).toBeGreaterThan(0);
       });
     });
 
