@@ -188,4 +188,22 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         UUID cursorId,
         int limit
     );
+
+    /**
+     * T045: Find batch by ID with all uploaded files eagerly loaded.
+     * <p>
+     * Uses LEFT JOIN FETCH to avoid N+1 query problem.
+     * All files are loaded in a single SQL query.
+     * </p>
+     *
+     * @param batchId batch identifier
+     * @return Optional containing batch with files, or empty if not found
+     */
+    @Query("""
+        SELECT b
+        FROM Batch b
+        LEFT JOIN FETCH b.uploadedFiles
+        WHERE b.id = :batchId
+        """)
+    Optional<Batch> findByIdWithFiles(UUID batchId);
 }

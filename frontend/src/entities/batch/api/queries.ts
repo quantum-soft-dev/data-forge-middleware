@@ -7,8 +7,8 @@
  * Feature: 008-upload-history-user (User Story 1)
  */
 
-import { useInfiniteQuery } from '@tanstack/react-query';
-import { listBatches } from './batchApi';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { listBatches, getBatchDetails } from './batchApi';
 
 /**
  * Query keys for batch-related queries
@@ -17,6 +17,7 @@ export const batchKeys = {
   all: ['batches'] as const,
   history: () => [...batchKeys.all, 'history'] as const,
   historyWithLimit: (limit: number) => [...batchKeys.history(), { limit }] as const,
+  detail: (batchId: string) => [...batchKeys.all, 'detail', batchId] as const,
 };
 
 /**
@@ -69,5 +70,51 @@ export function useBatchHistory(limit: number = 20) {
 
     // Refetch on window focus for fresh data
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * T053: Query hook for batch details with file list.
+ *
+ * Fetches detailed batch information including all uploaded files.
+ * Cached for 30 minutes (matches backend cache TTL for completed batches).
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @returns TanStack Query result with batch details
+ *
+ * @example
+ * ```tsx
+ * const { data, isLoading, error } = useBatchDetails(batchId);
+ *
+ * if (isLoading) return <Spinner />;
+ * if (error) return <ErrorAlert message={error.message} />;
+ *
+ * return (
+ *   <div>
+ *     <h2>Batch {data.id}</h2>
+ *     <p>Status: {data.status}</p>
+ *     <p>Files: {data.files.length}</p>
+ *   </div>
+ * );
+ * ```
+ */
+export function useBatchDetails(batchId: string) {
+  return useQuery({
+    queryKey: batchKeys.detail(batchId),
+
+    // Fetch function
+    queryFn: () => getBatchDetails(batchId),
+
+    // Stale time: 30 minutes (matches backend cache for COMPLETED batches)
+    staleTime: 30 * 60 * 1000,
+
+    // Cache time: 1 hour
+    gcTime: 60 * 60 * 1000,
+
+    // Don't refetch on window focus (batch details are relatively static)
+    refetchOnWindowFocus: false,
+
+    // Enable query only if batchId is provided
+    enabled: Boolean(batchId),
   });
 }

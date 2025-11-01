@@ -255,4 +255,95 @@ class BatchHistoryContractTest {
                 // Then: 403 Forbidden
                 .andExpect(status().isForbidden());
     }
+
+    // ============================================================================
+    // User Story 2: View Upload Details and File List (Phase 4)
+    // ============================================================================
+
+    /**
+     * T041 (TC05): Get batch details endpoint returns BatchDetailDto with file list
+     * <p>
+     * Given: Authenticated client with valid JWT and valid batchId
+     * When: GET /api/dfc/batches/{batchId}
+     * Then: 200 OK with BatchDetailDto including file list
+     * </p>
+     */
+    @Test
+    @DisplayName("TC05: GET /api/dfc/batches/{batchId} should return BatchDetailDto with file list")
+    void tc05_getBatchDetails_shouldReturn200WithFileList() throws Exception {
+        // Given: Use batch ID from test-data.sql (c3d4e5f6-a7b8-9012-cdef-123456789012 has 2 files)
+        String batchId = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+
+        // When: GET /api/dfc/batches/{batchId} with Bearer token
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", batchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andDo(print())
+
+                // Then: 200 OK with BatchDetailDto structure
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify BatchDetailDto fields
+                .andExpect(jsonPath("$.id").value(batchId))
+                .andExpect(jsonPath("$.siteId").exists())
+                .andExpect(jsonPath("$.status").exists())
+                .andExpect(jsonPath("$.hasErrors").isBoolean())
+                .andExpect(jsonPath("$.uploadedFilesCount").isNumber())
+                .andExpect(jsonPath("$.totalSize").isNumber())
+                .andExpect(jsonPath("$.startedAt").exists())
+
+                // Verify file list exists
+                .andExpect(jsonPath("$.files").isArray())
+                .andExpect(jsonPath("$.files[0].id").exists())
+                .andExpect(jsonPath("$.files[0].originalFileName").exists())
+                .andExpect(jsonPath("$.files[0].fileSize").isNumber())
+                .andExpect(jsonPath("$.files[0].uploadedAt").exists());
+    }
+
+    /**
+     * T042 (TC06): Get batch details returns 403 when batch doesn't belong to user
+     * <p>
+     * Given: Authenticated client with valid JWT
+     * When: GET /api/dfc/batches/{batchId} for batch owned by different account
+     * Then: 403 Forbidden
+     * </p>
+     */
+    @Test
+    @DisplayName("TC06: GET /api/dfc/batches/{batchId} should return 403 when batch doesn't belong to user")
+    void tc06_getBatchDetails_shouldReturn403WhenUnauthorized() throws Exception {
+        // Given: Use batch ID from different account (0199bab2-dddd-dddd-dddd-dddddddddddd belongs to account 0199bab1-fad2-bf76-c478-eae1f61e1c17)
+        String otherAccountBatchId = "0199bab2-dddd-dddd-dddd-dddddddddddd";
+
+        // When: GET /api/dfc/batches/{batchId} with token for store-01.example.com
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", otherAccountBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * T043 (TC07): Get batch details returns 404 when batchId doesn't exist
+     * <p>
+     * Given: Authenticated client with valid JWT
+     * When: GET /api/dfc/batches/{batchId} with non-existent UUID
+     * Then: 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC07: GET /api/dfc/batches/{batchId} should return 404 when batch doesn't exist")
+    void tc07_getBatchDetails_shouldReturn404WhenBatchNotFound() throws Exception {
+        // Given: Non-existent batch ID
+        String nonExistentBatchId = "00000000-0000-0000-0000-000000000000";
+
+        // When: GET /api/dfc/batches/{batchId}
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", nonExistentBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                // Then: 404 Not Found
+                .andExpect(status().isNotFound());
+    }
 }

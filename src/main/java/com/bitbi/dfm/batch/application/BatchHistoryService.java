@@ -1,7 +1,11 @@
 package com.bitbi.dfm.batch.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.exception.BatchNotFoundException;
+import com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException;
 import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
 import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
+import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
 import com.bitbi.dfm.site.domain.Site;
@@ -172,5 +176,44 @@ public class BatchHistoryService {
      */
     private String encodeCursor(LocalDateTime startedAt, UUID id) {
         return startedAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + CURSOR_DELIMITER + id.toString();
+    }
+
+    /**
+     * T046/T047: Get batch details with file list.
+     * <p>
+     * Loads batch with all uploaded files eagerly (JOIN FETCH) to avoid N+1 queries.
+     * Includes authorization check to ensure user owns the batch.
+     * Redis caching with 30-minute TTL for COMPLETED batches only (immutable data).
+     * </p>
+     *
+     * @param batchId   Batch identifier
+     * @param accountId User's account ID (from JWT)
+     * @return Batch details with file list
+     * @throws BatchNotFoundException              if batch doesn't exist
+     * @throws UnauthorizedBatchAccessException    if batch doesn't belong to user
+     */
+    @Cacheable(
+        value = "batch-details",
+        key = "#batchId",
+        condition = "#result != null && #result.status() == 'COMPLETED'"
+    )
+    public BatchDetailDto getBatchDetails(UUID batchId, UUID accountId) {
+        logger.info("Getting batch details for batchId={}, accountId={}", batchId, accountId);
+
+        // Load batch with files using JOIN FETCH
+        Batch batch = batchRepository.findByIdWithFiles(batchId)
+                .orElseThrow(() -> new BatchNotFoundException(batchId));
+
+        // Authorization check: verify batch belongs to user
+        if (!batch.getAccountId().equals(accountId)) {
+            logger.warn("Unauthorized batch access attempt: batchId={}, accountId={}, batchAccountId={}",
+                    batchId, accountId, batch.getAccountId());
+            throw new UnauthorizedBatchAccessException(batchId, accountId);
+        }
+
+        logger.info("Returning batch details for batchId={} with {} files",
+                batchId, batch.getUploadedFiles().size());
+
+        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles());
     }
 }

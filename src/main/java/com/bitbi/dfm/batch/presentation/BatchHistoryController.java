@@ -1,6 +1,7 @@
 package com.bitbi.dfm.batch.presentation;
 
 import com.bitbi.dfm.batch.application.BatchHistoryService;
+import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
@@ -18,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -144,6 +146,72 @@ public class BatchHistoryController {
         } finally {
             // T032: Record metrics
             sample.stop(meterRegistry.timer("batch.history.list"));
+        }
+    }
+
+    /**
+     * T048/T049: Get batch details with file list.
+     * <p>
+     * Returns batch metadata and complete file list for specified batch.
+     * Includes authorization check to ensure batch belongs to authenticated user.
+     * </p>
+     *
+     * @param batchId Batch identifier (UUID)
+     * @return Batch details with file list
+     */
+    @GetMapping(value = "/{batchId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Get batch details",
+            description = "Retrieve detailed information about a specific batch including all uploaded files. " +
+                    "Returns 403 if batch doesn't belong to authenticated user.",
+            security = @SecurityRequirement(name = "bearerAuth"),
+            responses = {
+                    @ApiResponse(
+                            responseCode = "200",
+                            description = "Batch details retrieved successfully",
+                            content = @Content(schema = @Schema(implementation = BatchDetailDto.class))
+                    ),
+                    @ApiResponse(
+                            responseCode = "403",
+                            description = "Forbidden - Batch doesn't belong to user or invalid JWT"
+                    ),
+                    @ApiResponse(
+                            responseCode = "404",
+                            description = "Not Found - Batch doesn't exist"
+                    )
+            }
+    )
+    public ResponseEntity<BatchDetailDto> getBatchDetails(
+            @Parameter(
+                    description = "Batch identifier (UUID)",
+                    example = "550e8400-e29b-41d4-a716-446655440000",
+                    required = true
+            )
+            @PathVariable UUID batchId
+    ) {
+        // T049: Start metrics timer
+        Timer.Sample sample = Timer.start(meterRegistry);
+
+        try {
+            // Extract accountId from JWT for authorization
+            UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+
+            logger.info("Getting batch details: batchId={}, accountId={}", batchId, accountId);
+
+            // Call service to fetch batch details (includes authorization check)
+            BatchDetailDto response = batchHistoryService.getBatchDetails(batchId, accountId);
+
+            logger.info("Returning batch details: batchId={}, fileCount={}", batchId, response.files().size());
+
+            return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch details access: batchId={}, error={}", batchId, e.getMessage());
+            throw e;  // GlobalExceptionHandler will handle
+
+        } finally {
+            // T049: Record metrics
+            sample.stop(meterRegistry.timer("batch.details.load"));
         }
     }
 }

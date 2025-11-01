@@ -317,6 +317,54 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle BatchNotFoundException from domain package (404 Not Found).
+     * <p>
+     * Thrown when batch is not found in batch history operations.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.domain.exception.BatchNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleDomainBatchNotFound(
+            com.bitbi.dfm.batch.domain.exception.BatchNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Batch not found (domain exception): {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle UnauthorizedBatchAccessException (403 Forbidden).
+     * <p>
+     * Thrown when user attempts to access a batch they don't own.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException.class)
+    public ResponseEntity<ErrorResponseDto> handleUnauthorizedBatchAccess(
+            com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Unauthorized batch access: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
      * Handle ErrorLogNotFoundException (404 Not Found).
      */
     @ExceptionHandler(com.bitbi.dfm.error.application.ErrorLoggingService.ErrorLogNotFoundException.class)

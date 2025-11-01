@@ -24,6 +24,8 @@ interface BatchListViewProps {
   onLoadMore: () => void;
   /** Error message if any */
   error?: string | null;
+  /** Callback when batch is clicked (T057) */
+  onBatchClick?: (batchId: string) => void;
 }
 
 /**
@@ -36,6 +38,7 @@ export function BatchListView({
   isFetchingNextPage,
   onLoadMore,
   error,
+  onBatchClick,
 }: BatchListViewProps) {
   // Loading state
   if (isLoading) {
@@ -75,7 +78,18 @@ export function BatchListView({
         {batches.map((batch) => (
           <div
             key={batch.id}
-            className="flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+            className={`flex items-center justify-between p-4 hover:bg-gray-50 transition-colors ${
+              onBatchClick ? 'cursor-pointer' : ''
+            }`}
+            onClick={() => onBatchClick?.(batch.id)}
+            role={onBatchClick ? 'button' : undefined}
+            tabIndex={onBatchClick ? 0 : undefined}
+            onKeyDown={(e) => {
+              if (onBatchClick && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                onBatchClick(batch.id);
+              }
+            }}
           >
             {/* Status indicator */}
             <div className="flex items-center space-x-4">

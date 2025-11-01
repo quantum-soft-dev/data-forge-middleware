@@ -12,6 +12,7 @@ const AccountDetailsPage = lazy(() => import('@/pages/accounts/details/AccountDe
 const UserSitesPage = lazy(() => import('@/pages/admin/user-sites/UserSitesPage'))
 const SiteManagementPage = lazy(() => import('@/pages/site-management').then(m => ({ default: m.SiteManagementPage })))
 const UploadHistoryPage = lazy(() => import('@/pages/upload-history/UploadHistoryPage'))
+const BatchDetailPage = lazy(() => import('@/pages/upload-history/BatchDetailPage'))
 
 // Router context type
 interface RouterContext {
@@ -192,6 +193,27 @@ const uploadHistoryRoute = createRoute({
   component: UploadHistoryPage,
 })
 
+// Batch Detail route (User Story 2 - Phase 4)
+const batchDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/upload-history/$batchId',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Redirect admins to admin panel instead
+    // Admins don't have user accounts, so they can't access batch details
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/admin/users' })
+    }
+  },
+  component: BatchDetailPage,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -204,6 +226,7 @@ const routeTree = rootRoute.addChildren([
   userSitesRoute,
   siteManagementRoute,
   uploadHistoryRoute,
+  batchDetailRoute,
 ])
 
 // Create router instance

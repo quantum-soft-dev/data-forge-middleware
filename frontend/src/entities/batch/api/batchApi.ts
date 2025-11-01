@@ -10,6 +10,7 @@
 import { apiClient } from '@/shared/api/client';
 import type {
   BatchSummary,
+  BatchDetail,
   CursorPageResponse
 } from '../model/types';
 
@@ -42,5 +43,21 @@ export async function listBatches(
     `/user/batches?${params.toString()}`
   );
 
+  return response.data;
+}
+
+/**
+ * T052: Get batch details with file list.
+ *
+ * GET /api/user/batches/{batchId}
+ *
+ * Returns detailed batch information including all uploaded files.
+ * Throws 403 if batch doesn't belong to user, 404 if batch doesn't exist.
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @returns Batch details with file list
+ */
+export async function getBatchDetails(batchId: string): Promise<BatchDetail> {
+  const response = await apiClient.get<BatchDetail>(`/user/batches/${batchId}`);
   return response.data;
 }

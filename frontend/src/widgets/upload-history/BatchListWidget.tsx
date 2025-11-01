@@ -7,6 +7,7 @@
  * Feature: 008-upload-history-user (User Story 1)
  */
 
+import { useNavigate } from '@tanstack/react-router';
 import { useBatchHistory } from '@/entities/batch/api/queries';
 import { BatchListView } from '@/features/upload-history/ui/BatchListView';
 
@@ -14,6 +15,7 @@ import { BatchListView } from '@/features/upload-history/ui/BatchListView';
  * T038: Batch list widget with data fetching
  */
 export function BatchListWidget() {
+  const navigate = useNavigate();
   const {
     data,
     isLoading,
@@ -26,6 +28,13 @@ export function BatchListWidget() {
   // Flatten all pages into single array
   const batches = data?.pages.flatMap((page) => page.items) ?? [];
 
+  /**
+   * T057: Navigate to batch detail page
+   */
+  const handleBatchClick = (batchId: string) => {
+    navigate({ to: '/account/upload-history/$batchId', params: { batchId } });
+  };
+
   return (
     <BatchListView
       batches={batches}
@@ -34,6 +43,7 @@ export function BatchListWidget() {
       isFetchingNextPage={isFetchingNextPage}
       onLoadMore={fetchNextPage}
       error={error?.message ?? null}
+      onBatchClick={handleBatchClick}
     />
   );
 }

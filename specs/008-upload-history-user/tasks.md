@@ -120,32 +120,32 @@
 
 ### Backend Tests for User Story 2
 
-- [ ] T041 [P] [US2] Contract test TC05 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify GET /api/dfc/batches/{batchId} returns BatchDetailDto with file list
-- [ ] T042 [P] [US2] Contract test TC06 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 403 Forbidden when batch doesn't belong to user
-- [ ] T043 [P] [US2] Contract test TC07 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 404 Not Found when batchId doesn't exist
-- [ ] T044 [P] [US2] Integration test in src/test/java/com/bitbi/dfm/integration/BatchHistoryIntegrationTest.java: Load batch details with JOIN FETCH to verify N+1 query prevention
+- [X] T041 [P] [US2] Contract test TC05 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify GET /api/dfc/batches/{batchId} returns BatchDetailDto with file list
+- [X] T042 [P] [US2] Contract test TC06 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 403 Forbidden when batch doesn't belong to user
+- [X] T043 [P] [US2] Contract test TC07 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 404 Not Found when batchId doesn't exist
+- [X] T044 [P] [US2] Integration test in src/test/java/com/bitbi/dfm/integration/BatchHistoryIntegrationTest.java: Load batch details with JOIN FETCH to verify N+1 query prevention
 
 ### Backend Implementation for User Story 2
 
-- [ ] T045 [US2] Add `findByIdWithFiles(batchId)` query to src/main/java/com/bitbi/dfm/batch/infrastructure/JpaBatchRepository.java using LEFT JOIN FETCH
-- [ ] T046 [US2] Add `getBatchDetails(batchId, accountId)` method to src/main/java/com/bitbi/dfm/batch/application/BatchHistoryService.java with authorization check
-- [ ] T047 [US2] Add Redis caching for batch details (30-minute TTL, condition: status == COMPLETED) in BatchHistoryService
-- [ ] T048 [US2] Add GET /api/dfc/batches/{batchId} endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java
-- [ ] T049 [US2] Add Micrometer metric for batch details load timer ("batch.details.load")
+- [X] T045 [US2] Add `findByIdWithFiles(batchId)` query to src/main/java/com/bitbi/dfm/batch/infrastructure/JpaBatchRepository.java using LEFT JOIN FETCH
+- [X] T046 [US2] Add `getBatchDetails(batchId, accountId)` method to src/main/java/com/bitbi/dfm/batch/application/BatchHistoryService.java with authorization check
+- [X] T047 [US2] Add Redis caching for batch details (30-minute TTL, condition: status == COMPLETED) in BatchHistoryService
+- [X] T048 [US2] Add GET /api/dfc/batches/{batchId} endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java
+- [X] T049 [US2] Add Micrometer metric for batch details load timer ("batch.details.load")
 
 ### Frontend Tests for User Story 2
 
-- [ ] T050 [P] [US2] Component test for `BatchDetailView` in frontend/src/features/upload-history/ui/BatchDetailView.test.tsx
-- [ ] T051 [P] [US2] Component test for `FileTable` in frontend/src/features/upload-history/ui/FileTable.test.tsx verifying checkbox selection logic
+- [X] T050 [P] [US2] Component test for `BatchDetailView` in frontend/src/features/upload-history/ui/BatchDetailView.test.tsx
+- [X] T051 [P] [US2] Component test for `FileTable` in frontend/src/features/upload-history/ui/FileTable.test.tsx verifying checkbox selection logic
 
 ### Frontend Implementation for User Story 2
 
-- [ ] T052 [P] [US2] Create `getBatchDetails(batchId)` API client function in frontend/src/entities/batch/api/batchApi.ts
-- [ ] T053 [US2] Create `useBatchDetails(batchId)` TanStack Query hook in frontend/src/entities/batch/api/queries.ts
-- [ ] T054 [US2] Create `FileTable` component in frontend/src/features/upload-history/ui/FileTable.tsx with checkbox selection (individual + "Select all")
-- [ ] T055 [US2] Create `BatchDetailView` component in frontend/src/features/upload-history/ui/BatchDetailView.tsx integrating FileTable and batch metadata
-- [ ] T056 [US2] Create `BatchDetailWidget` in frontend/src/widgets/upload-history/BatchDetailWidget.tsx as container
-- [ ] T057 [US2] Add navigation from BatchListView to detail page (onClick handler)
+- [X] T052 [P] [US2] Create `getBatchDetails(batchId)` API client function in frontend/src/entities/batch/api/batchApi.ts
+- [X] T053 [US2] Create `useBatchDetails(batchId)` TanStack Query hook in frontend/src/entities/batch/api/queries.ts
+- [X] T054 [US2] Create `FileTable` component in frontend/src/features/upload-history/ui/FileTable.tsx with checkbox selection (individual + "Select all")
+- [X] T055 [US2] Create `BatchDetailView` component in frontend/src/features/upload-history/ui/BatchDetailView.tsx integrating FileTable and batch metadata
+- [X] T056 [US2] Create `BatchDetailWidget` in frontend/src/widgets/upload-history/BatchDetailWidget.tsx as container
+- [X] T057 [US2] Add navigation from BatchListView to detail page (onClick handler)
 
 **Checkpoint**: User Story 2 complete - users can view detailed file list for any upload session
 
