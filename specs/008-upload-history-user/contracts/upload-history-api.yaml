@@ -1,0 +1,887 @@
+openapi: 3.0.3
+info:
+  title: Upload History API
+  description: |
+    REST API for viewing upload history, downloading files, and generating Excel exports.
+
+    **Feature**: 008-upload-history-user
+    **Authentication**: JWT Bearer token (client API)
+    **Base Path**: /api/dfc
+  version: 1.0.0
+  contact:
+    name: Data Forge Team
+
+servers:
+  - url: http://localhost:8080/api/dfc
+    description: Local development
+  - url: https://api.dataforge.example.com/api/dfc
+    description: Production
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Upload History
+    description: View and manage upload history
+  - name: File Downloads
+    description: Download files and generate Excel exports
+
+paths:
+  /batches:
+    get:
+      tags:
+        - Upload History
+      summary: List upload history (cursor-based pagination)
+      description: |
+        Returns paginated list of upload sessions (batches) for the authenticated user.
+
+        **User Story**: P1 - View Upload History List
+
+        **Authorization**: Returns only batches from sites owned by authenticated user (accountId extracted from JWT).
+
+        **Pagination**: Cursor-based for stable results and O(1) performance.
+
+        **Sorting**: Results sorted by startedAt DESC, id DESC (newest first).
+      operationId: listBatches
+      parameters:
+        - name: cursor
+          in: query
+          description: |
+            Cursor for next page. Format: `{startedAt}_{id}` (e.g., `"2025-11-01T10:30:00_550e8400-e29b-41d4-a716-446655440000"`).
+
+            Omit for first page.
+          required: false
+          schema:
+            type: string
+            example: "2025-11-01T10:30:00_550e8400-e29b-41d4-a716-446655440000"
+        - name: limit
+          in: query
+          description: Maximum number of results per page
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successfully retrieved upload history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CursorPageResponseBatchSummary'
+              examples:
+                successWithData:
+                  summary: Page with results
+                  value:
+                    items:
+                      - id: "550e8400-e29b-41d4-a716-446655440000"
+                        siteId: "123e4567-e89b-12d3-a456-426614174000"
+                        status: "COMPLETED"
+                        hasErrors: false
+                        uploadedFilesCount: 15
+                        totalSize: 52428800
+                        startedAt: "2025-11-01T10:30:00"
+                        completedAt: "2025-11-01T10:35:00"
+                      - id: "660f9511-f3ab-23e4-b827-537725285111"
+                        siteId: "123e4567-e89b-12d3-a456-426614174000"
+                        status: "COMPLETED"
+                        hasErrors: true
+                        uploadedFilesCount: 8
+                        totalSize: 20971520
+                        startedAt: "2025-10-31T14:20:00"
+                        completedAt: "2025-10-31T14:22:00"
+                    nextCursor: "2025-10-31T14:20:00_660f9511-f3ab-23e4-b827-537725285111"
+                    hasNext: true
+                emptyState:
+                  summary: No uploads yet
+                  value:
+                    items: []
+                    nextCursor: null
+                    hasNext: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /batches/{batchId}:
+    get:
+      tags:
+        - Upload History
+      summary: Get batch details with file list
+      description: |
+        Returns detailed information about a specific upload session including all uploaded files.
+
+        **User Story**: P2 - View Upload Details and File List
+
+        **Authorization**: Batch must belong to a site owned by authenticated user.
+
+        **File List**: Includes all files (no pagination within batch - assumption: <500 files per batch).
+      operationId: getBatchDetails
+      parameters:
+        - name: batchId
+          in: path
+          description: Batch identifier (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Successfully retrieved batch details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchDetailDto'
+              examples:
+                completedBatch:
+                  summary: Completed batch with files
+                  value:
+                    id: "550e8400-e29b-41d4-a716-446655440000"
+                    siteId: "123e4567-e89b-12d3-a456-426614174000"
+                    status: "COMPLETED"
+                    hasErrors: false
+                    uploadedFilesCount: 3
+                    totalSize: 10485760
+                    startedAt: "2025-11-01T10:30:00"
+                    completedAt: "2025-11-01T10:35:00"
+                    files:
+                      - id: "770fa622-g4bc-34f5-c938-648836396222"
+                        originalFileName: "sales-2024.csv.gz"
+                        fileSize: 3145728
+                        uploadedAt: "2025-11-01T10:32:00"
+                      - id: "880gb733-h5cd-45g6-d049-759947407333"
+                        originalFileName: "inventory.csv.gz"
+                        fileSize: 5242880
+                        uploadedAt: "2025-11-01T10:34:00"
+                      - id: "990hc844-i6de-56h7-e150-860058518444"
+                        originalFileName: "customers.csv.gz"
+                        fileSize: 2097152
+                        uploadedAt: "2025-11-01T10:35:00"
+                inProgressBatch:
+                  summary: Batch still in progress (no file actions available)
+                  value:
+                    id: "aa0id955-j7ef-67i8-f261-971169629555"
+                    siteId: "123e4567-e89b-12d3-a456-426614174000"
+                    status: "IN_PROGRESS"
+                    hasErrors: false
+                    uploadedFilesCount: 2
+                    totalSize: 5242880
+                    startedAt: "2025-11-01T11:00:00"
+                    completedAt: null
+                    files:
+                      - id: "bb1je066-k8fg-78j9-g372-082270730666"
+                        originalFileName: "data-part1.csv.gz"
+                        fileSize: 2621440
+                        uploadedAt: "2025-11-01T11:01:00"
+                      - id: "cc2kf177-l9gh-89k0-h483-193381841777"
+                        originalFileName: "data-part2.csv.gz"
+                        fileSize: 2621440
+                        uploadedAt: "2025-11-01T11:02:00"
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /batches/{batchId}/errors:
+    get:
+      tags:
+        - Upload History
+      summary: Get errors for batch
+      description: |
+        Returns list of errors that occurred during upload.
+
+        **User Story**: P1 - View Upload History List (error details)
+
+        **Authorization**: Batch must belong to a site owned by authenticated user.
+
+        **Pagination**: Supports pagination if error count > 100.
+      operationId: getBatchErrors
+      parameters:
+        - name: batchId
+          in: path
+          description: Batch identifier (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          description: Page number (0-indexed)
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          description: Page size
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Successfully retrieved error list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageResponseErrorSummary'
+              examples:
+                errorsFound:
+                  summary: Batch with errors
+                  value:
+                    content:
+                      - id: "dd3lg288-m0hi-90l1-i594-204492952888"
+                        severity: "ERROR"
+                        message: "Failed to parse CSV file: Invalid column count on line 42"
+                        source: "sales-2024.csv.gz"
+                        metadata:
+                          line: 42
+                          expectedColumns: 10
+                          actualColumns: 8
+                        occurredAt: "2025-11-01T10:33:15"
+                      - id: "ee4mh399-n1ij-01m2-j605-315503063999"
+                        severity: "WARNING"
+                        message: "Duplicate record detected (skipped)"
+                        source: "inventory.csv.gz"
+                        metadata:
+                          recordId: "PROD-12345"
+                        occurredAt: "2025-11-01T10:34:22"
+                    page: 0
+                    size: 20
+                    totalElements: 2
+                    totalPages: 1
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /batches/{batchId}/files/{fileId}/download:
+    get:
+      tags:
+        - File Downloads
+      summary: Get presigned URL for file download
+      description: |
+        Returns S3 presigned URL for direct file download (single file only).
+
+        **User Story**: P3 - Download Selected Files (single file)
+
+        **Authorization**: File's batch must belong to a site owned by authenticated user.
+
+        **Batch Status Check**: Only COMPLETED batches allow file downloads.
+
+        **Presigned URL**: 15-minute expiry for security.
+      operationId: getFileDownloadUrl
+      parameters:
+        - name: batchId
+          in: path
+          description: Batch identifier (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fileId
+          in: path
+          description: File identifier (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successfully generated presigned URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileDownloadResponseDto'
+              example:
+                downloadUrl: "https://s3.amazonaws.com/dataforge-uploads/123e4567-e89b-12d3-a456-426614174000/demo-1/2025-11-01/10-30-00/sales-2024.csv.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=..."
+                fileName: "sales-2024.csv.gz"
+                fileSize: 3145728
+                expiresAt: "2025-11-01T11:15:00"
+        '403':
+          description: Forbidden - batch not COMPLETED or unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+              examples:
+                batchNotCompleted:
+                  summary: Batch still in progress
+                  value:
+                    timestamp: "2025-11-01T11:05:00"
+                    status: 403
+                    error: "Forbidden"
+                    message: "Cannot download files from batch with status IN_PROGRESS. Wait for batch to complete."
+                    path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000/files/770fa622-g4bc-34f5-c938-648836396222/download"
+                unauthorized:
+                  summary: User doesn't own batch
+                  value:
+                    timestamp: "2025-11-01T11:05:00"
+                    status: 403
+                    error: "Forbidden"
+                    message: "Batch does not belong to authenticated user"
+                    path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000/files/770fa622-g4bc-34f5-c938-648836396222/download"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /batches/{batchId}/download-zip:
+    post:
+      tags:
+        - File Downloads
+      summary: Download multiple files as ZIP archive
+      description: |
+        Streams selected files as ZIP archive to client. Files remain in .csv.gz format (no double compression).
+
+        **User Story**: P3 - Download Selected Files (multiple files)
+
+        **Authorization**: Batch must belong to a site owned by authenticated user.
+
+        **Batch Status Check**: Only COMPLETED batches allow file downloads.
+
+        **Streaming**: Server streams ZIP on-the-fly (no intermediate file creation).
+
+        **File Selection**: If `fileIds` empty, downloads all files in batch.
+      operationId: downloadFilesAsZip
+      parameters:
+        - name: batchId
+          in: path
+          description: Batch identifier (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        description: List of file IDs to include in ZIP (empty = all files)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: File identifiers to download (empty array = all files in batch)
+                  example:
+                    - "770fa622-g4bc-34f5-c938-648836396222"
+                    - "880gb733-h5cd-45g6-d049-759947407333"
+      responses:
+        '200':
+          description: Successfully streamed ZIP archive
+          headers:
+            Content-Type:
+              description: MIME type
+              schema:
+                type: string
+                example: "application/zip"
+            Content-Disposition:
+              description: Suggested filename
+              schema:
+                type: string
+                example: "attachment; filename=\"batch-550e8400-e29b-41d4-a716-446655440000.zip\""
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Bad Request - invalid fileIds or empty selection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+              example:
+                timestamp: "2025-11-01T11:05:00"
+                status: 400
+                error: "Bad Request"
+                message: "File IDs must belong to the specified batch"
+                path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000/download-zip"
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /batches/{batchId}/export-excel:
+    post:
+      tags:
+        - File Downloads
+      summary: Generate Excel file from selected CSV files
+      description: |
+        Generates .xlsx Excel workbook where each CSV becomes a separate sheet. Decompresses .csv.gz files automatically.
+
+        **User Story**: P4 - Generate Excel from Selected Files
+
+        **Authorization**: Batch must belong to a site owned by authenticated user.
+
+        **Batch Status Check**: Only COMPLETED batches allow Excel export.
+
+        **Sheet Naming**: CSV filenames become sheet names (31-char limit, invalid chars replaced).
+
+        **Duplicate Handling**: Duplicate sheet names get numeric suffix (e.g., "data (2)", "data (3)").
+
+        **Memory Management**: Uses Apache POI SXSSF (streaming) with 100-row window.
+
+        **Encoding Detection**: Auto-detects CSV encoding (UTF-8, Windows-1252, ISO-8859-1).
+      operationId: exportBatchToExcel
+      parameters:
+        - name: batchId
+          in: path
+          description: Batch identifier (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        description: List of file IDs to include in Excel (empty = all files)
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fileIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: File identifiers to export (empty array = all files in batch)
+                  example:
+                    - "770fa622-g4bc-34f5-c938-648836396222"
+                    - "880gb733-h5cd-45g6-d049-759947407333"
+      responses:
+        '200':
+          description: Successfully generated Excel file
+          headers:
+            Content-Type:
+              description: MIME type
+              schema:
+                type: string
+                example: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            Content-Disposition:
+              description: Suggested filename
+              schema:
+                type: string
+                example: "attachment; filename=\"batch-550e8400-e29b-41d4-a716-446655440000.xlsx\""
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Bad Request - invalid fileIds, file format issues, or data parsing errors
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+              examples:
+                invalidFileIds:
+                  summary: File IDs don't belong to batch
+                  value:
+                    timestamp: "2025-11-01T11:05:00"
+                    status: 400
+                    error: "Bad Request"
+                    message: "File IDs must belong to the specified batch"
+                    path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000/export-excel"
+                csvParsingError:
+                  summary: CSV parsing failure
+                  value:
+                    timestamp: "2025-11-01T11:05:00"
+                    status: 400
+                    error: "Bad Request"
+                    message: "Failed to parse CSV file 'sales-2024.csv.gz': Invalid column count on line 42"
+                    path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000/export-excel"
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token for client authentication. Token contains siteId and accountId claims.
+
+        Header format: `Authorization: Bearer <token>`
+
+  schemas:
+    BatchSummaryDto:
+      type: object
+      description: Summary information for upload session (list view)
+      required:
+        - id
+        - siteId
+        - status
+        - hasErrors
+        - uploadedFilesCount
+        - totalSize
+        - startedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Batch identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        siteId:
+          type: string
+          format: uuid
+          description: Site reference
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        status:
+          type: string
+          enum: [IN_PROGRESS, COMPLETED, NOT_COMPLETED, FAILED, CANCELLED]
+          description: Batch lifecycle status
+          example: "COMPLETED"
+        hasErrors:
+          type: boolean
+          description: Whether errors were logged during upload
+          example: false
+        uploadedFilesCount:
+          type: integer
+          description: Number of files uploaded
+          minimum: 0
+          example: 15
+        totalSize:
+          type: integer
+          format: int64
+          description: Total bytes uploaded
+          minimum: 0
+          example: 52428800
+        startedAt:
+          type: string
+          format: date-time
+          description: Batch creation timestamp (ISO 8601)
+          example: "2025-11-01T10:30:00"
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Batch completion timestamp (null if IN_PROGRESS)
+          example: "2025-11-01T10:35:00"
+
+    BatchDetailDto:
+      type: object
+      description: Detailed batch information with file list
+      required:
+        - id
+        - siteId
+        - status
+        - hasErrors
+        - uploadedFilesCount
+        - totalSize
+        - startedAt
+        - files
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Batch identifier
+        siteId:
+          type: string
+          format: uuid
+          description: Site reference
+        status:
+          type: string
+          enum: [IN_PROGRESS, COMPLETED, NOT_COMPLETED, FAILED, CANCELLED]
+          description: Batch lifecycle status
+        hasErrors:
+          type: boolean
+          description: Whether errors were logged
+        uploadedFilesCount:
+          type: integer
+          description: Number of files
+          minimum: 0
+        totalSize:
+          type: integer
+          format: int64
+          description: Total bytes
+          minimum: 0
+        startedAt:
+          type: string
+          format: date-time
+          description: Batch start time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Batch completion time (null if IN_PROGRESS)
+        files:
+          type: array
+          description: List of uploaded files
+          items:
+            $ref: '#/components/schemas/FileMetadataDto'
+
+    FileMetadataDto:
+      type: object
+      description: File metadata for display in UI
+      required:
+        - id
+        - originalFileName
+        - fileSize
+        - uploadedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: File identifier
+          example: "770fa622-g4bc-34f5-c938-648836396222"
+        originalFileName:
+          type: string
+          description: Original filename (with .csv.gz extension)
+          example: "sales-2024.csv.gz"
+        fileSize:
+          type: integer
+          format: int64
+          description: File size in bytes
+          minimum: 1
+          example: 3145728
+        uploadedAt:
+          type: string
+          format: date-time
+          description: Upload timestamp
+          example: "2025-11-01T10:32:00"
+
+    FileDownloadResponseDto:
+      type: object
+      description: Presigned URL for direct S3 download
+      required:
+        - downloadUrl
+        - fileName
+        - fileSize
+        - expiresAt
+      properties:
+        downloadUrl:
+          type: string
+          format: uri
+          description: S3 presigned URL (15-minute expiry)
+          example: "https://s3.amazonaws.com/dataforge-uploads/..."
+        fileName:
+          type: string
+          description: Suggested filename for browser download
+          example: "sales-2024.csv.gz"
+        fileSize:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 3145728
+        expiresAt:
+          type: string
+          format: date-time
+          description: URL expiration timestamp
+          example: "2025-11-01T11:15:00"
+
+    ErrorSummaryDto:
+      type: object
+      description: Error details for troubleshooting
+      required:
+        - id
+        - severity
+        - message
+        - source
+        - metadata
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Error log identifier
+        severity:
+          type: string
+          enum: [ERROR, WARNING, INFO]
+          description: Error severity level
+          example: "ERROR"
+        message:
+          type: string
+          description: Error message
+          example: "Failed to parse CSV file: Invalid column count on line 42"
+        source:
+          type: string
+          description: File or component that logged error
+          example: "sales-2024.csv.gz"
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional context (from JSONB column)
+          example:
+            line: 42
+            expectedColumns: 10
+            actualColumns: 8
+        occurredAt:
+          type: string
+          format: date-time
+          description: Error timestamp
+          example: "2025-11-01T10:33:15"
+
+    CursorPageResponseBatchSummary:
+      type: object
+      description: Cursor-paginated response wrapper
+      required:
+        - items
+        - hasNext
+      properties:
+        items:
+          type: array
+          description: Current page items
+          items:
+            $ref: '#/components/schemas/BatchSummaryDto'
+        nextCursor:
+          type: string
+          nullable: true
+          description: Cursor for next page (null if last page)
+          example: "2025-10-31T14:20:00_660f9511-f3ab-23e4-b827-537725285111"
+        hasNext:
+          type: boolean
+          description: Whether more results exist
+          example: true
+
+    PageResponseErrorSummary:
+      type: object
+      description: Offset-paginated response wrapper (for errors)
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          description: Page items
+          items:
+            $ref: '#/components/schemas/ErrorSummaryDto'
+        page:
+          type: integer
+          description: Current page number (0-indexed)
+          example: 0
+        size:
+          type: integer
+          description: Page size
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of elements across all pages
+          example: 2
+        totalPages:
+          type: integer
+          description: Total number of pages
+          example: 1
+
+    ErrorResponseDto:
+      type: object
+      description: Standard error response
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Error timestamp (ISO 8601)
+          example: "2025-11-01T11:05:00"
+        status:
+          type: integer
+          description: HTTP status code
+          example: 404
+        error:
+          type: string
+          description: HTTP status reason phrase
+          example: "Not Found"
+        message:
+          type: string
+          description: Error message
+          example: "Batch not found with id: 550e8400-e29b-41d4-a716-446655440000"
+        path:
+          type: string
+          description: Request path
+          example: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000"
+
+  responses:
+    BadRequest:
+      description: Bad Request - invalid parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+          example:
+            timestamp: "2025-11-01T11:05:00"
+            status: 400
+            error: "Bad Request"
+            message: "Invalid cursor format. Expected: {startedAt}_{id}"
+            path: "/api/dfc/batches"
+
+    Unauthorized:
+      description: Unauthorized - missing or invalid JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+          example:
+            timestamp: "2025-11-01T11:05:00"
+            status: 401
+            error: "Unauthorized"
+            message: "JWT token is missing or invalid"
+            path: "/api/dfc/batches"
+
+    Forbidden:
+      description: Forbidden - insufficient permissions or batch not owned by user
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+          example:
+            timestamp: "2025-11-01T11:05:00"
+            status: 403
+            error: "Forbidden"
+            message: "Batch does not belong to authenticated user"
+            path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000"
+
+    NotFound:
+      description: Not Found - resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+          example:
+            timestamp: "2025-11-01T11:05:00"
+            status: 404
+            error: "Not Found"
+            message: "Batch not found with id: 550e8400-e29b-41d4-a716-446655440000"
+            path: "/api/dfc/batches/550e8400-e29b-41d4-a716-446655440000"
+
+    InternalServerError:
+      description: Internal Server Error - unexpected server failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponseDto'
+          example:
+            timestamp: "2025-11-01T11:05:00"
+            status: 500
+            error: "Internal Server Error"
+            message: "An unexpected error occurred"
+            path: "/api/dfc/batches"
