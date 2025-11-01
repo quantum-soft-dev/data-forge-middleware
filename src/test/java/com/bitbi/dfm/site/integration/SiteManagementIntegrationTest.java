@@ -315,7 +315,8 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
                         .with(jwt().jwt(jwt -> jwt
                                 .claim("sub", MOCK_ACCOUNT_ID)
                                 .claim("email", MOCK_EMAIL))))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isActive").value(false));
 
         // Then: Site should still appear in sites list but with isActive=false
         mockMvc.perform(get("/api/sites")
@@ -381,7 +382,8 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
                             .with(jwt().jwt(jwt -> jwt
                                     .claim("sub", MOCK_ACCOUNT_ID)
                                     .claim("email", MOCK_EMAIL))))
-                    .andExpect(status().isNoContent());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.isActive").value(false));
 
             // Activate
             mockMvc.perform(post("/api/sites/" + siteId + "/activate")

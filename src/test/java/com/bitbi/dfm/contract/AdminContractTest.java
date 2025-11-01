@@ -786,7 +786,7 @@ class AdminContractTest {
     }
 
     /**
-     * Test Case 9: Delete site should return 204.
+     * Test Case 9: Delete site should return 200 with deactivated site (soft delete via isActive=false).
      */
     @Test
     @DisplayName("Should soft delete site when admin authenticated")
@@ -795,8 +795,9 @@ class AdminContractTest {
         mockMvc.perform(delete("/api/admin/sites/{id}", MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
-                // Then: 204 No Content
-                .andExpect(status().isNoContent());
+                // Then: 200 OK with deactivated site
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isActive").value(false));
     }
 
     // ========== CreateSiteRequestDto Validation Tests ==========
@@ -1718,8 +1719,9 @@ class AdminContractTest {
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
-                // Then: 204 No Content
-                .andExpect(status().isNoContent());
+                // Then: 200 OK with deactivated site
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isActive").value(false));
     }
 
     /**

@@ -159,14 +159,20 @@ class SiteAdminControllerTest {
     @DisplayName("Should deactivate site successfully")
     void shouldDeactivateSiteSuccessfully() {
         // Given
+        Site deactivatedSite = Site.createForTesting(testAccountId, "test.example.com", "Test Site");
+        deactivatedSite.deactivate();
+
         doNothing().when(siteService).deactivateSite(testSiteId);
+        when(siteService.getSite(testSiteId)).thenReturn(deactivatedSite);
 
         // When
-        ResponseEntity<Void> response = controller.deactivateSite(testSiteId);
+        ResponseEntity<SiteResponseDto> response = controller.deactivateSite(testSiteId);
 
         // Then
-        assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
-        assertNull(response.getBody());
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertFalse(response.getBody().isActive());
         verify(siteService, times(1)).deactivateSite(testSiteId);
+        verify(siteService, times(1)).getSite(testSiteId);
     }
 }

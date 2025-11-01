@@ -301,7 +301,8 @@ class SiteContractTest {
         // Deactivate
         mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/deactivate")
                         .header("Authorization", MOCK_JWT_HEADER))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isActive").value(false));
 
         // Activate the site
         mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/activate")
