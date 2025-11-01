@@ -8,7 +8,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { Checkbox } from '@/shared/ui/checkbox';
+import { Checkbox } from '@/shared/ui/ui/checkbox';
 import type { FileMetadata } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 
