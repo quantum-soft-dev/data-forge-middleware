@@ -217,4 +217,56 @@ public class BatchHistoryAdminController {
             sample.stop(meterRegistry.timer("batch.history.user.list"));
         }
     }
+
+    /**
+     * T048: Get batch details with file list for current user.
+     * <p>
+     * Returns detailed batch information including all uploaded files.
+     * Only allows access to batches owned by the current user's account.
+     * </p>
+     *
+     * @param batchId Batch unique identifier
+     * @return Batch details with file list
+     */
+    @GetMapping(value = "/{batchId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Get batch details with file list",
+            description = "Returns detailed batch information including all uploaded files for current user",
+            security = @SecurityRequirement(name = "Keycloak OAuth2")
+    )
+    @ApiResponse(responseCode = "200", description = "Batch details retrieved successfully",
+            content = @Content(schema = @Schema(implementation = com.bitbi.dfm.batch.presentation.dto.BatchDetailDto.class)))
+    @ApiResponse(responseCode = "403", description = "Batch doesn't belong to user")
+    @ApiResponse(responseCode = "404", description = "Batch not found")
+    public ResponseEntity<com.bitbi.dfm.batch.presentation.dto.BatchDetailDto> getBatchDetails(
+            @Parameter(description = "Batch ID (UUID)", required = true)
+            @PathVariable UUID batchId) {
+
+        Timer.Sample sample = Timer.start(meterRegistry);
+
+        try {
+            UUID accountId = getCurrentUserAccountId();
+            logger.info("Fetching batch details: batchId={}, accountId={}", batchId, accountId);
+
+            com.bitbi.dfm.batch.presentation.dto.BatchDetailDto response = batchHistoryService.getBatchDetails(batchId, accountId);
+
+            logger.debug("Batch details retrieved: batchId={}, fileCount={}", batchId, response.uploadedFilesCount());
+            return ResponseEntity.ok(response);
+
+        } catch (com.bitbi.dfm.batch.domain.exception.BatchNotFoundException e) {
+            logger.warn("Batch not found: batchId={}", batchId);
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Batch not found");
+
+        } catch (com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException e) {
+            logger.warn("Unauthorized batch access: batchId={}, accountId={}", batchId, e.getAccountId());
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied");
+
+        } catch (ResponseStatusException e) {
+            logger.warn("User not linked to account: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not linked to account");
+
+        } finally {
+            sample.stop(meterRegistry.timer("batch.details.user.load"));
+        }
+    }
 }
