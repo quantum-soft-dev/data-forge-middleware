@@ -346,4 +346,105 @@ class BatchHistoryContractTest {
                 // Then: 404 Not Found
                 .andExpect(status().isNotFound());
     }
+
+    // ============================================================================
+    // User Story 3: Download Selected Files (Phase 5)
+    // ============================================================================
+
+    /**
+     * T058 (TC08): Get presigned download URL for single file
+     * <p>
+     * Given: Authenticated client with valid JWT and COMPLETED batch
+     * When: GET /api/dfc/batches/{batchId}/files/{fileId}/download
+     * Then: 200 OK with FileDownloadResponseDto containing presigned URL
+     * </p>
+     */
+    @Test
+    @DisplayName("TC08: GET /api/dfc/batches/{batchId}/files/{fileId}/download should return FileDownloadResponseDto with presigned URL")
+    void tc08_downloadFile_shouldReturnPresignedUrl() throws Exception {
+        // Given: Use batch and file from test-data.sql
+        // Batch c3d4e5f6-a7b8-9012-cdef-123456789012 (COMPLETED) has file 0199bab3-0429-c04f-9482-7f3b88456918
+        String batchId = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+        String fileId = "0199bab3-0429-c04f-9482-7f3b88456918";
+
+        // When: GET /api/dfc/batches/{batchId}/files/{fileId}/download
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/files/{fileId}/download", batchId, fileId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andDo(print())
+
+                // Then: 200 OK with FileDownloadResponseDto structure
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify FileDownloadResponseDto fields
+                .andExpect(jsonPath("$.downloadUrl").exists())
+                .andExpect(jsonPath("$.downloadUrl").isString())
+                .andExpect(jsonPath("$.fileName").exists())
+                .andExpect(jsonPath("$.fileName").isString())
+                .andExpect(jsonPath("$.fileSize").isNumber())
+                .andExpect(jsonPath("$.expiresAt").exists())
+                .andExpect(jsonPath("$.expiresAt").isString());
+    }
+
+    /**
+     * T059 (TC09): Download file returns 403 when batch status is IN_PROGRESS
+     * <p>
+     * Given: Authenticated client with valid JWT and IN_PROGRESS batch
+     * When: GET /api/dfc/batches/{batchId}/files/{fileId}/download
+     * Then: 403 Forbidden (downloads only allowed for COMPLETED batches)
+     * </p>
+     */
+    @Test
+    @DisplayName("TC09: GET /api/dfc/batches/{batchId}/files/{fileId}/download should return 403 when batch status is IN_PROGRESS")
+    void tc09_downloadFile_shouldReturn403WhenBatchInProgress() throws Exception {
+        // Given: Use IN_PROGRESS batch from test-data.sql
+        // Batch 0199bab2-8d63-8563-8340-edbf1c11c778 (IN_PROGRESS) has file 0199bab3-a134-e3e5-e76e-7ba0a7c44fa5
+        String inProgressBatchId = "0199bab2-8d63-8563-8340-edbf1c11c778";
+        String fileId = "0199bab3-a134-e3e5-e76e-7ba0a7c44fa5";
+
+        // When: GET /api/dfc/batches/{batchId}/files/{fileId}/download
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/files/{fileId}/download", inProgressBatchId, fileId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                // Then: 403 Forbidden (business rule: only COMPLETED batches can be downloaded)
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * T060 (TC10): Download multiple files as ZIP archive
+     * <p>
+     * Given: Authenticated client with valid JWT and COMPLETED batch
+     * When: POST /api/dfc/batches/{batchId}/download-zip with fileIds list
+     * Then: 200 OK with application/zip binary response
+     * </p>
+     */
+    @Test
+    @DisplayName("TC10: POST /api/dfc/batches/{batchId}/download-zip should return application/zip binary")
+    void tc10_downloadFilesAsZip_shouldReturnZipBinary() throws Exception {
+        // Given: Use COMPLETED batch with multiple files
+        String batchId = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+        String fileIdsJson = """
+            {
+                "fileIds": [
+                    "0199bab3-0429-c04f-9482-7f3b88456918",
+                    "0199bab3-69d1-d291-0fb6-c8dd6d09ee88"
+                ]
+            }
+            """;
+
+        // When: POST /api/dfc/batches/{batchId}/download-zip
+        mockMvc.perform(post(BATCH_HISTORY_ENDPOINT + "/{batchId}/download-zip", batchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(fileIdsJson))
+                .andDo(print())
+
+                // Then: 200 OK with application/zip content type
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("application/zip"))
+                .andExpect(header().exists("Content-Disposition"))
+                .andExpect(header().string("Content-Disposition", containsString("attachment")));
+    }
 }

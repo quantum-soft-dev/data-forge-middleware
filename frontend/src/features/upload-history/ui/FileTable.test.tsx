@@ -69,12 +69,12 @@ describe('FileTable', () => {
     it('should display formatted file sizes', () => {
       render(<FileTable files={mockFiles} />);
 
-      // 512000 bytes = 500 KB
-      expect(screen.getByText(/500 KB/i)).toBeInTheDocument();
-      // 768000 bytes = 750 KB
-      expect(screen.getByText(/750 KB/i)).toBeInTheDocument();
-      // 256000 bytes = 250 KB
-      expect(screen.getByText(/250 KB/i)).toBeInTheDocument();
+      // 512000 bytes = 500.0 KB (formatBytes uses .toFixed(1))
+      expect(screen.getByText(/500\.0 KB/i)).toBeInTheDocument();
+      // 768000 bytes = 750.0 KB
+      expect(screen.getByText(/750\.0 KB/i)).toBeInTheDocument();
+      // 256000 bytes = 250.0 KB
+      expect(screen.getByText(/250\.0 KB/i)).toBeInTheDocument();
     });
 
     it('should display formatted timestamps', () => {

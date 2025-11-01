@@ -4,13 +4,15 @@
  * Displays batch metadata and file list with selection capabilities.
  * Integrates FileTable component and shows batch status, timestamps, and file count.
  *
- * Feature: 008-upload-history-user (User Story 2)
+ * Feature: 008-upload-history-user (User Story 2, User Story 3)
  */
 
+import { useState } from 'react';
 import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import type { BatchDetail } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 import { FileTable } from './FileTable';
+import { DownloadButton } from './DownloadButton';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -21,12 +23,12 @@ interface BatchDetailViewProps {
   error?: string | null;
   /** Callback when user wants to go back to list */
   onBack?: () => void;
-  /** Callback when file selection changes */
+  /** Callback when file selection changes (optional - for external tracking) */
   onFileSelectionChange?: (selectedFileIds: string[]) => void;
 }
 
 /**
- * T055: Batch detail view integrating FileTable and batch metadata
+ * T055, T077: Batch detail view integrating FileTable, batch metadata, and download functionality
  */
 export function BatchDetailView({
   batch,
@@ -35,6 +37,14 @@ export function BatchDetailView({
   onBack,
   onFileSelectionChange,
 }: BatchDetailViewProps) {
+  // T077: Track selected file IDs for download functionality
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+
+  // Handle file selection changes from FileTable
+  const handleSelectionChange = (fileIds: string[]) => {
+    setSelectedFileIds(fileIds);
+    onFileSelectionChange?.(fileIds);
+  };
   // Loading state
   if (isLoading) {
     return (
@@ -166,12 +176,23 @@ export function BatchDetailView({
 
       {/* Files section */}
       <div>
-        <h3 className="mb-4 text-lg font-medium text-gray-900">
-          Files ({batch.files.length})
-        </h3>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-medium text-gray-900">
+            Files ({batch.files.length})
+          </h3>
+
+          {/* T077: Download button for selected files */}
+          <DownloadButton
+            batchId={batch.id}
+            selectedFileIds={selectedFileIds}
+            batchStatus={batch.status}
+            zipFilename={`batch-${batch.id}.zip`}
+          />
+        </div>
+
         <FileTable
           files={batch.files}
-          onSelectionChange={onFileSelectionChange}
+          onSelectionChange={handleSelectionChange}
         />
       </div>
     </div>

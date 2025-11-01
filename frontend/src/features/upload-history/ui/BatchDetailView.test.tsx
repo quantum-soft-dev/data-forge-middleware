@@ -10,10 +10,23 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BatchDetailView } from './BatchDetailView';
 import type { BatchDetail } from '@/entities/batch/model/types';
 
 describe('BatchDetailView', () => {
+  // Helper function to render with QueryClient
+  const renderWithQueryClient = (ui: React.ReactElement) => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    );
+  };
   const mockBatch: BatchDetail = {
     id: '550e8400-e29b-41d4-a716-446655440000',
     siteId: '123e4567-e89b-12d3-a456-426614174001',
@@ -47,7 +60,7 @@ describe('BatchDetailView', () => {
 
   describe('Loading State', () => {
     it('should display loading spinner when isLoading is true', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={undefined}
           isLoading={true}
@@ -61,7 +74,7 @@ describe('BatchDetailView', () => {
     });
 
     it('should not display loading spinner when isLoading is false', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -77,7 +90,7 @@ describe('BatchDetailView', () => {
     it('should display error message when error prop is provided', () => {
       const errorMessage = 'Failed to load batch details';
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={undefined}
           isLoading={false}
@@ -92,7 +105,7 @@ describe('BatchDetailView', () => {
       const onBack = vi.fn();
       const user = userEvent.setup();
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={undefined}
           isLoading={false}
@@ -111,7 +124,7 @@ describe('BatchDetailView', () => {
 
   describe('Empty State', () => {
     it('should display "Batch not found" when batch is undefined and not loading', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={undefined}
           isLoading={false}
@@ -125,7 +138,7 @@ describe('BatchDetailView', () => {
 
   describe('Batch Metadata Display', () => {
     it('should display batch ID and status', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -139,7 +152,7 @@ describe('BatchDetailView', () => {
     });
 
     it('should display success icon when hasErrors is false', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -155,7 +168,7 @@ describe('BatchDetailView', () => {
     it('should display error icon when hasErrors is true', () => {
       const batchWithErrors = { ...mockBatch, hasErrors: true };
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={batchWithErrors}
           isLoading={false}
@@ -169,7 +182,7 @@ describe('BatchDetailView', () => {
     });
 
     it('should display file count and total size', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -182,7 +195,7 @@ describe('BatchDetailView', () => {
     });
 
     it('should display started and completed timestamps', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -197,7 +210,7 @@ describe('BatchDetailView', () => {
     it('should not display completed timestamp for in-progress batches', () => {
       const inProgressBatch = { ...mockBatch, status: 'IN_PROGRESS' as const, completedAt: null };
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={inProgressBatch}
           isLoading={false}
@@ -212,7 +225,7 @@ describe('BatchDetailView', () => {
     it('should display error indicator when batch has errors', () => {
       const batchWithErrors = { ...mockBatch, hasErrors: true };
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={batchWithErrors}
           isLoading={false}
@@ -226,7 +239,7 @@ describe('BatchDetailView', () => {
 
   describe('File List Display', () => {
     it('should display file count heading', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -238,7 +251,7 @@ describe('BatchDetailView', () => {
     });
 
     it('should render FileTable component with files', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -248,7 +261,8 @@ describe('BatchDetailView', () => {
 
       // Check that file table headers are present
       expect(screen.getByText(/filename/i)).toBeInTheDocument();
-      expect(screen.getByText(/size/i)).toBeInTheDocument();
+      // "Size" appears twice (table header + batch metadata), so use getAllByText
+      expect(screen.getAllByText(/size/i).length).toBeGreaterThan(0);
       expect(screen.getByText(/uploaded at/i)).toBeInTheDocument();
 
       // Check that files are displayed
@@ -260,7 +274,7 @@ describe('BatchDetailView', () => {
 
   describe('Navigation', () => {
     it('should display back button when onBack is provided', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -273,7 +287,7 @@ describe('BatchDetailView', () => {
     });
 
     it('should not display back button when onBack is not provided', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -288,7 +302,7 @@ describe('BatchDetailView', () => {
       const onBack = vi.fn();
       const user = userEvent.setup();
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -309,7 +323,7 @@ describe('BatchDetailView', () => {
       const onFileSelectionChange = vi.fn();
       const user = userEvent.setup();
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -329,7 +343,7 @@ describe('BatchDetailView', () => {
 
   describe('Status Badge Colors', () => {
     it('should display green badge for COMPLETED status', () => {
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={mockBatch}
           isLoading={false}
@@ -344,7 +358,7 @@ describe('BatchDetailView', () => {
     it('should display blue badge for IN_PROGRESS status', () => {
       const inProgressBatch = { ...mockBatch, status: 'IN_PROGRESS' as const };
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={inProgressBatch}
           isLoading={false}
@@ -359,7 +373,7 @@ describe('BatchDetailView', () => {
     it('should display red badge for FAILED status', () => {
       const failedBatch = { ...mockBatch, status: 'FAILED' as const };
 
-      render(
+      renderWithQueryClient(
         <BatchDetailView
           batch={failedBatch}
           isLoading={false}

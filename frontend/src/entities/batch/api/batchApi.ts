@@ -61,3 +61,57 @@ export async function getBatchDetails(batchId: string): Promise<BatchDetail> {
   const response = await apiClient.get<BatchDetail>(`/user/batches/${batchId}`);
   return response.data;
 }
+
+/**
+ * T073: Download a single file from a batch.
+ *
+ * GET /api/user/batches/{batchId}/files/{fileId}/download
+ *
+ * Returns file download metadata with presigned S3 URL (15-minute expiry).
+ * The frontend uses this URL to trigger browser download directly from S3.
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @param fileId - File unique identifier (UUID)
+ * @returns Download metadata with presigned URL
+ */
+export async function downloadFile(
+  batchId: string,
+  fileId: string
+): Promise<{ downloadUrl: string; fileName: string; fileSize: number; expiresAt: string }> {
+  const response = await apiClient.get<{
+    downloadUrl: string;
+    fileName: string;
+    fileSize: number;
+    expiresAt: string;
+  }>(`/user/batches/${batchId}/files/${fileId}/download`);
+  return response.data;
+}
+
+/**
+ * T074: Download multiple files as a ZIP archive.
+ *
+ * POST /api/user/batches/{batchId}/download-zip
+ *
+ * Streams multiple files as a ZIP archive. For single file, use downloadFile() instead.
+ * The ZIP is generated server-side using Apache Commons Compress with streaming.
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @param fileIds - Array of file IDs to include in ZIP
+ * @returns Blob containing the ZIP archive
+ */
+export async function downloadFilesAsZip(
+  batchId: string,
+  fileIds: string[]
+): Promise<Blob> {
+  const response = await apiClient.post(
+    `/user/batches/${batchId}/download-zip`,
+    { fileIds },
+    {
+      responseType: 'blob',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return response.data;
+}

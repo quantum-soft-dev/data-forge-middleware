@@ -159,36 +159,36 @@
 
 ### Backend Tests for User Story 3
 
-- [ ] T058 [P] [US3] Contract test TC08 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify GET /api/dfc/batches/{batchId}/files/{fileId}/download returns FileDownloadResponseDto with presigned URL
-- [ ] T059 [P] [US3] Contract test TC09 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 403 Forbidden when batch status is IN_PROGRESS
-- [ ] T060 [P] [US3] Contract test TC10 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify POST /api/dfc/batches/{batchId}/download-zip returns application/zip binary
-- [ ] T061 [P] [US3] Integration test in src/test/java/com/bitbi/dfm/integration/FileDownloadIntegrationTest.java: Test presigned URL generation with LocalStack S3
-- [ ] T062 [P] [US3] Integration test in src/test/java/com/bitbi/dfm/integration/FileDownloadIntegrationTest.java: Test ZIP streaming with multiple files from S3
+- [X] T058 [P] [US3] Contract test TC08 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify GET /api/dfc/batches/{batchId}/files/{fileId}/download returns FileDownloadResponseDto with presigned URL
+- [X] T059 [P] [US3] Contract test TC09 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 403 Forbidden when batch status is IN_PROGRESS
+- [X] T060 [P] [US3] Contract test TC10 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify POST /api/dfc/batches/{batchId}/download-zip returns application/zip binary
+- [X] T061 [P] [US3] Integration test in src/test/java/com/bitbi/dfm/integration/FileDownloadIntegrationTest.java: Test presigned URL generation with LocalStack S3
+- [X] T062 [P] [US3] Integration test in src/test/java/com/bitbi/dfm/integration/FileDownloadIntegrationTest.java: Test ZIP streaming with multiple files from S3
 
 ### Backend Implementation for User Story 3
 
-- [ ] T063 [P] [US3] Create `S3PresignedUrlService` in src/main/java/com/bitbi/dfm/batch/infrastructure/S3PresignedUrlService.java with `generatePresignedUrl(s3Key, fileName, expiryMinutes)` method using AWS SDK v2
-- [ ] T064 [US3] Create `FileDownloadService` in src/main/java/com/bitbi/dfm/upload/application/FileDownloadService.java with `getPresignedUrlForFile(batchId, fileId, accountId)` method
-- [ ] T065 [US3] Add batch status validation (COMPLETED only) to FileDownloadService
-- [ ] T066 [US3] Add `downloadFilesAsZip(batchId, fileIds, accountId, response)` method to FileDownloadService using Apache Commons Compress ZipArchiveOutputStream
-- [ ] T067 [US3] Implement streaming ZIP logic: detect .gz files and use STORED compression (no double compression), use DEFLATED for non-gz files
-- [ ] T068 [US3] Add GET /api/dfc/batches/{batchId}/files/{fileId}/download endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java
-- [ ] T069 [US3] Add POST /api/dfc/batches/{batchId}/download-zip endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java with StreamingResponseBody
-- [ ] T070 [US3] Add Micrometer metrics for presigned URL generation ("s3.presigned.url.generation"), ZIP download count ("downloads.zip.files"), and ZIP duration timer ("downloads.zip.duration")
+- [X] T063 [P] [US3] Create `S3PresignedUrlService` in src/main/java/com/bitbi/dfm/batch/infrastructure/S3PresignedUrlService.java with `generatePresignedUrl(s3Key, fileName, expiryMinutes)` method using AWS SDK v2
+- [X] T064 [US3] Create `FileDownloadService` in src/main/java/com/bitbi/dfm/upload/application/FileDownloadService.java with `getPresignedUrlForFile(batchId, fileId, accountId)` method
+- [X] T065 [US3] Add batch status validation (COMPLETED only) to FileDownloadService
+- [X] T066 [US3] Add `downloadFilesAsZip(batchId, fileIds, accountId, response)` method to FileDownloadService using Apache Commons Compress ZipArchiveOutputStream
+- [X] T067 [US3] Implement streaming ZIP logic: detect .gz files and use STORED compression (no double compression), use DEFLATED for non-gz files
+- [X] T068 [US3] Add GET /api/dfc/batches/{batchId}/files/{fileId}/download endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java
+- [X] T069 [US3] Add POST /api/dfc/batches/{batchId}/download-zip endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java with StreamingResponseBody
+- [X] T070 [US3] Add Micrometer metrics for presigned URL generation ("s3.presigned.url.generation"), ZIP download count ("downloads.zip.files"), and ZIP duration timer ("downloads.zip.duration")
 
 ### Frontend Tests for User Story 3
 
-- [ ] T071 [P] [US3] Unit test for `useFileDownload` mutation in frontend/src/features/upload-history/lib/useFileDownload.test.ts
-- [ ] T072 [P] [US3] Component test for `DownloadButton` in frontend/src/features/upload-history/ui/DownloadButton.test.tsx verifying disabled state when no files selected
+- [X] T071 [P] [US3] Unit test for `useFileDownload` mutation in frontend/src/features/upload-history/lib/useFileDownload.test.ts
+- [X] T072 [P] [US3] Component test for `DownloadButton` in frontend/src/features/upload-history/ui/DownloadButton.test.tsx verifying disabled state when no files selected
 
 ### Frontend Implementation for User Story 3
 
-- [ ] T073 [P] [US3] Create `downloadFile(batchId, fileId, filename)` API client function in frontend/src/entities/batch/api/batchApi.ts using Axios responseType: 'blob'
-- [ ] T074 [P] [US3] Create `downloadFilesAsZip(batchId, fileIds)` API client function in frontend/src/entities/batch/api/batchApi.ts
-- [ ] T075 [US3] Create `useFileDownload()` TanStack Query mutation hook in frontend/src/features/upload-history/lib/useFileDownload.ts with progress tracking and blob download logic
-- [ ] T076 [US3] Create `DownloadButton` component in frontend/src/features/upload-history/ui/DownloadButton.tsx with disabled state when no files selected or batch not COMPLETED
-- [ ] T077 [US3] Integrate DownloadButton into BatchDetailView with selected files state
-- [ ] T078 [US3] Add URL.revokeObjectURL() cleanup after download in useFileDownload hook
+- [X] T073 [P] [US3] Create `downloadFile(batchId, fileId, filename)` API client function in frontend/src/entities/batch/api/batchApi.ts using Axios responseType: 'blob'
+- [X] T074 [P] [US3] Create `downloadFilesAsZip(batchId, fileIds)` API client function in frontend/src/entities/batch/api/batchApi.ts
+- [X] T075 [US3] Create `useFileDownload()` TanStack Query mutation hook in frontend/src/features/upload-history/lib/useFileDownload.ts with progress tracking and blob download logic
+- [X] T076 [US3] Create `DownloadButton` component in frontend/src/features/upload-history/ui/DownloadButton.tsx with disabled state when no files selected or batch not COMPLETED
+- [X] T077 [US3] Integrate DownloadButton into BatchDetailView with selected files state
+- [X] T078 [US3] Add URL.revokeObjectURL() cleanup after download in useFileDownload hook
 
 **Checkpoint**: User Story 3 complete - users can download files in original format
 

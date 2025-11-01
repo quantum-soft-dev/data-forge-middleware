@@ -2,7 +2,6 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
-import com.bitbi.dfm.config.TestS3Config;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -17,7 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * <p>
  * Provides common configuration and utilities for integration tests:
  * - Test security configuration with mock OAuth2
- * - Test S3 configuration with LocalStack
+ * - Real S3 configuration with LocalStack (from application-test.yml)
  * - Test data loaded from test-data.sql
  * - JWT token generation helper
  * </p>
@@ -28,7 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class})
+@Import({TestSecurityConfig.class})
 @Sql("/test-data.sql")
 public abstract class BaseIntegrationTest {
 
