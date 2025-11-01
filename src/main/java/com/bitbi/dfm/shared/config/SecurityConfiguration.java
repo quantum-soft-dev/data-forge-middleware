@@ -129,7 +129,7 @@ public class SecurityConfiguration {
      * User filter chain for authenticated user endpoints.
      * <p>
      * Order 3: Third priority.
-     * Matches: /api/sites/**, /api/account/**
+     * Matches: /api/sites/**, /api/account/**, /api/user/**
      * Authentication: Keycloak OAuth2 Resource Server (any authenticated user).
      * </p>
      */
@@ -137,7 +137,7 @@ public class SecurityConfiguration {
     @Order(3)
     public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/sites/**", "/api/account/**")
+            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
