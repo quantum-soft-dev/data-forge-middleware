@@ -29,6 +29,7 @@ import { CreateSiteFormSchema, type CreateSiteFormData } from '../model/schemas'
 import { useCreateSite, useCreateAdminSite } from '../model/queries';
 import { Loader2, RefreshCw, Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { SiteCreatedDialog } from './SiteCreatedDialog';
 
 interface CreateSiteFormProps {
   /**
@@ -54,6 +55,12 @@ interface CreateSiteFormProps {
 export function CreateSiteForm({ accountId, onSuccess, showCard = true }: CreateSiteFormProps) {
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
   const [passwordCopied, setPasswordCopied] = useState(false);
+  const [createdSiteData, setCreatedSiteData] = useState<{
+    site: any;
+    password: string;
+    siteIdentifier: string;
+  } | null>(null);
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false);
 
   const {
     register,
@@ -108,6 +115,10 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
       });
 
       toast.success(`Site "${data.domain}" created successfully!`);
+
+      // Store created site data and show success dialog
+      setCreatedSiteData(result);
+      setShowSuccessDialog(true);
 
       // Call success callback with result
       onSuccess?.(result);
@@ -257,11 +268,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
     </form>
   );
 
-  if (!showCard) {
-    return formContent;
-  }
-
-  return (
+  const content = showCard ? (
     <Card>
       <CardHeader>
         <CardTitle>Create New Site</CardTitle>
@@ -271,5 +278,25 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
       </CardHeader>
       <CardContent>{formContent}</CardContent>
     </Card>
+  ) : (
+    formContent
+  );
+
+  return (
+    <>
+      {content}
+
+      {/* Success Dialog */}
+      {createdSiteData && (
+        <SiteCreatedDialog
+          open={showSuccessDialog}
+          onOpenChange={setShowSuccessDialog}
+          site={createdSiteData.site}
+          password={createdSiteData.password}
+          siteIdentifier={createdSiteData.siteIdentifier}
+          accountId={accountId || createdSiteData.site.accountId}
+        />
+      )}
+    </>
   );
 }

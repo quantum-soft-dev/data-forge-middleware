@@ -259,13 +259,15 @@ class SiteContractTest {
         // Deactivate the site
         mockMvc.perform(post(SITES_ENDPOINT + "/" + siteId + "/deactivate")
                         .header("Authorization", MOCK_JWT_HEADER))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(siteId))
+                .andExpect(jsonPath("$.isActive").value(false));
 
-        // Verify site is deactivated (should not appear in list since we only return active sites)
+        // Verify site is deactivated (should still appear in list but with isActive=false)
         mockMvc.perform(get(SITES_ENDPOINT)
                         .header("Authorization", MOCK_JWT_HEADER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')]").doesNotExist());
+                .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].isActive").value(false));
     }
 
     /**

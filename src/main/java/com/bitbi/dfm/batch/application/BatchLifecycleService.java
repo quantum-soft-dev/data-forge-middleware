@@ -7,6 +7,8 @@ import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import com.bitbi.dfm.shared.domain.events.BatchExpiredEvent;
 import com.bitbi.dfm.shared.domain.events.BatchStartedEvent;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -35,20 +37,24 @@ public class BatchLifecycleService {
     private final BatchRepository batchRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final AccountProperties accountProperties;
+    private final SiteRepository siteRepository;
 
     public BatchLifecycleService(
             BatchRepository batchRepository,
             ApplicationEventPublisher eventPublisher,
-            AccountProperties accountProperties) {
+            AccountProperties accountProperties,
+            SiteRepository siteRepository) {
         this.batchRepository = batchRepository;
         this.eventPublisher = eventPublisher;
         this.accountProperties = accountProperties;
+        this.siteRepository = siteRepository;
     }
 
     /**
      * Start new batch for site.
      * <p>
      * Business rules:
+     * - Site must be active (isActive=true)
      * - Only one active batch per site
      * - Maximum concurrent batches per account (configurable in application.yml)
      * </p>
@@ -57,11 +63,21 @@ public class BatchLifecycleService {
      * @param siteId    site identifier
      * @param domain    site domain
      * @return started batch
+     * @throws SiteInactiveException if site is deactivated
      * @throws ActiveBatchExistsException   if site has active batch
      * @throws ConcurrentBatchLimitException if account exceeded concurrent batch limit
      */
     public Batch startBatch(UUID accountId, UUID siteId, String domain) {
         logger.info("Starting new batch: accountId={}, siteId={}, domain={}", accountId, siteId, domain);
+
+        // Validate site is active
+        Site site = siteRepository.findById(siteId)
+                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + siteId));
+
+        if (!site.getIsActive()) {
+            logger.warn("Attempted to start batch for inactive site: siteId={}", siteId);
+            throw new SiteInactiveException("Cannot start batch for inactive site. Please activate the site first.");
+        }
 
         // Enforce one active batch per site
         if (batchRepository.findActiveBySiteId(siteId).isPresent()) {
@@ -243,6 +259,15 @@ public class BatchLifecycleService {
             throw new InvalidBatchStatusException(
                     String.format("Cannot %s batch in status %s (expected %s): batchId=%s",
                                 operation, batch.getStatus(), expectedStatus, batch.getId()));
+        }
+    }
+
+    /**
+     * Exception thrown when attempting to start batch for inactive site.
+     */
+    public static class SiteInactiveException extends RuntimeException {
+        public SiteInactiveException(String message) {
+            super(message);
         }
     }
 

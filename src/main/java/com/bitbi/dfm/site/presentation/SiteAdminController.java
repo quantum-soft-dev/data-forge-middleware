@@ -336,19 +336,20 @@ public class SiteAdminController {
      *
      * @param accountId account identifier
      * @param siteId site identifier
-     * @return no content response
+     * @return deactivated site entity
      */
     @Operation(
             summary = "Deactivate a site",
             description = "Soft-deletes a site by setting isActive=false."
     )
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Site deactivated successfully"),
+            @ApiResponse(responseCode = "200", description = "Site deactivated successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteResponseDto.class))),
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
     @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate")
-    public ResponseEntity<Void> deactivateSiteForAccount(
+    public ResponseEntity<SiteResponseDto> deactivateSiteForAccount(
             @PathVariable("accountId") UUID accountId,
             @PathVariable("siteId") UUID siteId,
             Authentication authentication,
@@ -369,7 +370,11 @@ public class SiteAdminController {
                     null
             );
 
-            return ResponseEntity.noContent().build();
+            // Reload and return the deactivated site
+            Site deactivatedSite = siteService.getSite(siteId);
+            SiteResponseDto response = SiteResponseDto.fromEntity(deactivatedSite);
+
+            return ResponseEntity.ok(response);
 
         } catch (Exception e) {
             // Log failed deactivation
@@ -451,24 +456,29 @@ public class SiteAdminController {
      * </p>
      *
      * @param siteId site identifier
-     * @return no content response
+     * @return deactivated site entity
      */
     @Operation(
             summary = "Deactivate site",
             description = "Soft-deletes a site by setting isActive=false."
     )
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Site deactivated successfully"),
+            @ApiResponse(responseCode = "200", description = "Site deactivated successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteResponseDto.class))),
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
     @DeleteMapping("/api/admin/sites/{id}")
-    public ResponseEntity<Void> deactivateSite(@PathVariable("id") UUID siteId) {
+    public ResponseEntity<SiteResponseDto> deactivateSite(@PathVariable("id") UUID siteId) {
         logger.info("Deactivating site: siteId={}", siteId);
 
         siteService.deactivateSite(siteId);
 
-        return ResponseEntity.noContent().build();
+        // Reload and return the deactivated site
+        Site deactivatedSite = siteService.getSite(siteId);
+        SiteResponseDto response = SiteResponseDto.fromEntity(deactivatedSite);
+
+        return ResponseEntity.ok(response);
     }
 
     /**

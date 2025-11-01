@@ -272,6 +272,30 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle SiteInactiveException (403 Forbidden).
+     * <p>
+     * Thrown when attempting to perform operations on an inactive site.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.SiteInactiveException.class)
+    public ResponseEntity<ErrorResponseDto> handleSiteInactive(
+            com.bitbi.dfm.batch.application.BatchLifecycleService.SiteInactiveException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Site inactive: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
      * Handle BatchNotFoundException (404 Not Found).
      */
     @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException.class)

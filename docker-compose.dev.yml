@@ -37,6 +37,7 @@ services:
     volumes:
       - localstack_data_dev:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
@@ -100,8 +101,9 @@ networks:
 # 2. Wait for services to be healthy:
 #    docker-compose -f docker-compose.dev.yml ps
 #
-# 3. Create S3 bucket in LocalStack:
-#    aws --endpoint-url=http://localhost:4566 s3 mb s3://dfm-uploads
+# 3. S3 bucket is created automatically!
+#    The init-s3.sh script runs automatically when LocalStack starts.
+#    Verify bucket: aws --endpoint-url=http://localhost:4566 s3 ls s3://dfm-uploads
 #
 # 4. Run dfm-backend from IntelliJ IDEA with profile 'dev':
 #    - Edit Run Configuration
@@ -111,7 +113,10 @@ networks:
 # 5. Application will connect to:
 #    - PostgreSQL: localhost:5432/dfm (user: dfm, password: dfm_password)
 #    - Keycloak: http://localhost:8081 (admin/admin)
-#    - LocalStack S3: http://localhost:4566
+#    - LocalStack S3: http://localhost:4566 (bucket: dfm-uploads)
 #
 # 6. Stop infrastructure:
 #    docker-compose -f docker-compose.dev.yml down
+#
+# 7. Clean all data (WARNING: destroys all data):
+#    docker-compose -f docker-compose.dev.yml down -v

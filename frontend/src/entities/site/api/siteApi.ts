@@ -15,11 +15,11 @@ import type { Site, CreateSiteRequest, CreateSiteResponse } from '../model/types
  */
 
 /**
- * List all active sites for the authenticated user.
+ * List all sites (both active and inactive) for the authenticated user.
  *
  * GET /api/sites
  *
- * @returns List of active sites sorted by creation date (newest first)
+ * @returns List of all sites sorted by creation date (newest first)
  */
 export async function listUserSites(): Promise<Site[]> {
   const response = await apiClient.get<Site[]>('/sites');
@@ -81,12 +81,12 @@ export async function deleteUserSite(siteId: string): Promise<void> {
  */
 
 /**
- * List all active sites for a specific account (admin operation).
+ * List all sites (both active and inactive) for a specific account (admin operation).
  *
  * GET /api/admin/accounts/{accountId}/sites
  *
  * @param accountId - Account identifier
- * @returns List of active sites for the account
+ * @returns List of all sites for the account
  */
 export async function listAdminSites(accountId: string): Promise<Site[]> {
   const response = await apiClient.get<Site[]>(`/admin/accounts/${accountId}/sites`);

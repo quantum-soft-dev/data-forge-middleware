@@ -99,29 +99,29 @@ public class SiteController {
     }
 
     /**
-     * List all active sites for the authenticated user.
+     * List all sites (both active and inactive) for the authenticated user.
      * <p>
      * US1: User views site list sorted by creation date (newest first).
-     * FR-009: Only active sites returned.
+     * FR-009: Returns both active and inactive sites so user can reactivate deactivated sites.
      * <p>
      * GET /api/sites
      *
      * @param authentication Spring Security authentication object
-     * @return List of active sites sorted by createdAt DESC
+     * @return List of all sites (active and inactive) sorted by createdAt DESC
      */
     @GetMapping
-    @Operation(summary = "List user's active sites")
+    @Operation(summary = "List user's sites (active and inactive)")
     public ResponseEntity<List<SiteResponseDto>> listUserSites(Authentication authentication) {
 
         UUID accountId = extractAccountId(authentication);
         logger.info("Listing sites for account: accountId={}", accountId);
 
-        List<Site> sites = siteService.listActiveSitesByAccount(accountId);
+        List<Site> sites = siteService.listSitesByAccount(accountId);
         List<SiteResponseDto> response = sites.stream()
                 .map(SiteResponseDto::fromEntity)
                 .toList();
 
-        logger.info("Found {} active sites for account: accountId={}", sites.size(), accountId);
+        logger.info("Found {} sites for account: accountId={}", sites.size(), accountId);
         return ResponseEntity.ok(response);
     }
 
@@ -136,11 +136,11 @@ public class SiteController {
      *
      * @param siteId         Site identifier
      * @param authentication Spring Security authentication object
-     * @return No content (204)
+     * @return Deactivated site entity (200 OK)
      */
     @PostMapping("/{siteId}/deactivate")
     @Operation(summary = "Deactivate a site")
-    public ResponseEntity<Void> deactivateSite(
+    public ResponseEntity<SiteResponseDto> deactivateSite(
             @PathVariable UUID siteId,
             Authentication authentication) {
 
@@ -155,8 +155,12 @@ public class SiteController {
 
         siteService.deactivateSite(siteId);
 
+        // Reload and return the deactivated site
+        Site deactivatedSite = siteService.getSite(siteId);
+        SiteResponseDto response = SiteResponseDto.fromEntity(deactivatedSite);
+
         logger.info("Site deactivated: siteId={}", siteId);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(response);
     }
 
     /**

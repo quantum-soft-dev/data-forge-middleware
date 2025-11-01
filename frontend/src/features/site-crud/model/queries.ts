@@ -39,7 +39,7 @@ export const siteKeys = {
  */
 
 /**
- * Fetch all active sites for the authenticated user.
+ * Fetch all sites (both active and inactive) for the authenticated user.
  *
  * @param options - Query options
  * @returns Query result with sites list
@@ -142,7 +142,7 @@ export function useDeleteSite() {
  */
 
 /**
- * Fetch all active sites for a specific account (admin view).
+ * Fetch all sites (both active and inactive) for a specific account (admin view).
  *
  * @param accountId - Account identifier
  * @returns Query result with sites list
