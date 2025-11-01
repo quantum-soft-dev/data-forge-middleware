@@ -17,9 +17,9 @@ import type {
 /**
  * T035: List batch history for current user with cursor-based pagination.
  *
- * GET /api/dfc/batches?cursor={cursor}&limit={limit}
+ * GET /api/user/batches?cursor={cursor}&limit={limit}
  *
- * Uses JWT authentication. Returns batches filtered by user's account.
+ * Uses Keycloak OAuth2 authentication. Returns batches filtered by user's account.
  *
  * @param cursor - Cursor for next page (undefined for first page)
  * @param limit - Maximum items per page (default 20, max 100)
@@ -40,7 +40,7 @@ export async function listBatches(
   }
 
   const response = await apiClient.get<CursorPageResponse<BatchSummary>>(
-    `/dfc/batches?${params.toString()}`
+    `/user/batches?${params.toString()}`
   );
 
   return response.data;
@@ -49,7 +49,7 @@ export async function listBatches(
 /**
  * T052: Get batch details with file list.
  *
- * GET /api/dfc/batches/{batchId}
+ * GET /api/user/batches/{batchId}
  *
  * Returns detailed batch information including all uploaded files.
  * Throws 403 if batch doesn't belong to user, 404 if batch doesn't exist.
@@ -58,6 +58,6 @@ export async function listBatches(
  * @returns Batch details with file list
  */
 export async function getBatchDetails(batchId: string): Promise<BatchDetail> {
-  const response = await apiClient.get<BatchDetail>(`/dfc/batches/${batchId}`);
+  const response = await apiClient.get<BatchDetail>(`/user/batches/${batchId}`);
   return response.data;
 }

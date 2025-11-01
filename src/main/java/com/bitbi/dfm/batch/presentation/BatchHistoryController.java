@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.UUID;
 
 /**
- * T029: REST controller for Upload History feature (Data Forge Client API).
+ * T029: REST controller for Upload History feature (User Web UI API).
  * <p>
  * Provides cursor-based pagination for viewing batch upload history.
  * Authorized users can only view their own batches (filtered by accountId).
@@ -35,13 +35,14 @@ import java.util.UUID;
  *
  * <p><strong>Endpoints:</strong></p>
  * <ul>
- *   <li>GET /api/dfc/batches - List batch history (cursor pagination)</li>
+ *   <li>GET /api/user/batches - List batch history (cursor pagination)</li>
+ *   <li>GET /api/user/batches/{batchId} - Get batch details with file list</li>
  * </ul>
  *
  * <p><strong>Security:</strong></p>
  * <ul>
- *   <li>Requires JWT Bearer token</li>
- *   <li>Authorization via accountId extraction from JWT</li>
+ *   <li>Requires Keycloak OAuth2 Bearer token</li>
+ *   <li>Authorization via accountId extraction from Keycloak JWT</li>
  *   <li>Users only see batches from their own sites</li>
  * </ul>
  *
@@ -50,7 +51,7 @@ import java.util.UUID;
  * @see com.bitbi.dfm.batch.application.BatchHistoryService
  */
 @RestController
-@RequestMapping("/api/dfc/batches")
+@RequestMapping("/api/user/batches")
 @Tag(name = "Upload History", description = "Endpoints for viewing upload history")
 public class BatchHistoryController {
 
