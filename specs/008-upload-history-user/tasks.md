@@ -96,8 +96,8 @@
 
 ### Frontend Tests for User Story 1
 
-- [ ] T033 [P] [US1] Unit test for `useBatchHistory` hook in frontend/src/entities/batch/api/queries.test.ts using Vitest (SKIPPED - time constraint)
-- [ ] T034 [P] [US1] Component test for `BatchListView` in frontend/src/features/upload-history/ui/BatchListView.test.tsx using Testing Library (SKIPPED - time constraint)
+- [X] T033 [P] [US1] Unit test for `useBatchHistory` hook in frontend/src/entities/batch/api/queries.test.ts using Vitest
+- [X] T034 [P] [US1] Component test for `BatchListView` in frontend/src/features/upload-history/ui/BatchListView.test.tsx using Testing Library
 
 ### Frontend Implementation for User Story 1
 
