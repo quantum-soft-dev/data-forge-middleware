@@ -40,20 +40,20 @@
 
 ### Database Optimization
 
-- [ ] T007 Create Flyway migration V###__add_upload_history_indexes.sql with composite index `idx_batches_site_started_id ON batches(site_id, started_at DESC, id DESC)`
+- [X] T007 Create Flyway migration V###__add_upload_history_indexes.sql with composite index `idx_batches_site_started_id ON batches(site_id, started_at DESC, id DESC)`
 
 ### DTOs and Shared Utilities
 
-- [ ] T008 [P] Create `BatchSummaryDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/BatchSummaryDto.java with fields (id, siteId, status, hasErrors, uploadedFilesCount, totalSize, startedAt, completedAt) and `fromEntity()` method
-- [ ] T009 [P] Create `BatchDetailDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/BatchDetailDto.java with fields including `List<FileMetadataDto> files`
-- [ ] T010 [P] Create `FileMetadataDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/FileMetadataDto.java with fields (id, originalFileName, fileSize, uploadedAt)
-- [ ] T011 [P] Create `FileDownloadResponseDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/FileDownloadResponseDto.java with fields (downloadUrl, fileName, fileSize, expiresAt)
-- [ ] T012 [P] Create `CursorPageResponseDto<T>` generic record in src/main/java/com/bitbi/dfm/batch/presentation/dto/CursorPageResponseDto.java with fields (items, nextCursor, hasNext)
-- [ ] T013 [P] Create `ErrorSummaryDto` record in src/main/java/com/bitbi/dfm/error/presentation/dto/ErrorSummaryDto.java with fields (id, severity, message, source, metadata, occurredAt)
+- [X] T008 [P] Create `BatchSummaryDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/BatchSummaryDto.java with fields (id, siteId, status, hasErrors, uploadedFilesCount, totalSize, startedAt, completedAt) and `fromEntity()` method
+- [X] T009 [P] Create `BatchDetailDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/BatchDetailDto.java with fields including `List<FileMetadataDto> files`
+- [X] T010 [P] Create `FileMetadataDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/FileMetadataDto.java with fields (id, originalFileName, fileSize, uploadedAt)
+- [X] T011 [P] Create `FileDownloadResponseDto` record in src/main/java/com/bitbi/dfm/batch/presentation/dto/FileDownloadResponseDto.java with fields (downloadUrl, fileName, fileSize, expiresAt)
+- [X] T012 [P] Create `CursorPageResponseDto<T>` generic record in src/main/java/com/bitbi/dfm/batch/presentation/dto/CursorPageResponseDto.java with fields (items, nextCursor, hasNext)
+- [X] T013 [P] Create `ErrorSummaryDto` record in src/main/java/com/bitbi/dfm/error/presentation/dto/ErrorSummaryDto.java with fields (id, severity, message, source, metadata, occurredAt)
 
 ### Repository Projections
 
-- [ ] T014 Create `BatchWithFileCountProjection` interface in src/main/java/com/bitbi/dfm/batch/infrastructure/BatchWithFileCountProjection.java with getters for (id, siteId, status, hasErrors, startedAt, completedAt, fileCount, totalSize)
+- [X] T014 Create `BatchWithFileCountProjection` interface in src/main/java/com/bitbi/dfm/batch/infrastructure/BatchWithFileCountProjection.java with getters for (id, siteId, status, hasErrors, startedAt, completedAt, fileCount, totalSize)
 
 ### Frontend Shared Types
 
