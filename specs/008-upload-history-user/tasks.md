@@ -246,22 +246,22 @@
 
 ### Backend Tests for Error Details
 
-- [ ] T101 [P] [US1] Contract test TC13 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify GET /api/dfc/batches/{batchId}/errors returns PageResponseDto<ErrorSummaryDto>
-- [ ] T102 [P] [US1] Integration test in src/test/java/com/bitbi/dfm/integration/BatchHistoryIntegrationTest.java: Test error pagination with 100+ errors
+- [X] T101 [P] [US1] Contract test TC13 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify GET /api/user/batches/{batchId}/errors returns PageResponseDto<ErrorLogSummaryDto>
+- [X] T102 [P] [US1] Integration test in src/test/java/com/bitbi/dfm/integration/BatchHistoryIntegrationTest.java: Test error pagination with 100+ errors
 
 ### Backend Implementation for Error Details
 
-- [ ] T103 [US1] Add `getBatchErrors(batchId, accountId, page, size)` method to src/main/java/com/bitbi/dfm/error/application/ErrorLogService.java with authorization check
-- [ ] T104 [US1] Add GET /api/dfc/batches/{batchId}/errors endpoint to src/main/java/com/bitbi/dfm/error/presentation/ErrorLogController.java with pagination
+- [X] T103 [US1] Add `getBatchErrors(batchId, accountId, page, size)` method to src/main/java/com/bitbi/dfm/error/application/ErrorLoggingService.java with authorization check
+- [X] T104 [US1] Add GET /api/user/batches/{batchId}/errors endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java with pagination
 
 ### Frontend Implementation for Error Details
 
-- [ ] T105 [P] [US1] Create `getBatchErrors(batchId, page, size)` API client function in frontend/src/entities/batch/api/batchApi.ts
-- [ ] T106 [US1] Create `useBatchErrors(batchId)` TanStack Query hook in frontend/src/entities/batch/api/queries.ts
-- [ ] T107 [US1] Create `ErrorListView` component in frontend/src/features/upload-history/ui/ErrorListView.tsx with pagination
-- [ ] T108 [US1] Add "View errors" button navigation from BatchListView to error details modal/page
+- [X] T105 [P] [US1] Create `getBatchErrors(batchId, page, size)` API client function in frontend/src/entities/batch/api/batchApi.ts
+- [X] T106 [US1] Create `useBatchErrors(batchId, page, size)` TanStack Query hook in frontend/src/entities/batch/api/queries.ts
+- [X] T107 [US1] Create `ErrorListView` component in frontend/src/features/upload-history/ui/ErrorListView.tsx with pagination
+- [X] T108 [US1] Add "View errors" button navigation from BatchListView to error details modal/page
 
-**Checkpoint**: Error details view complete - users can troubleshoot failed uploads
+**Checkpoint**: ✅ Error details view complete - users can troubleshoot failed uploads
 
 ---
 

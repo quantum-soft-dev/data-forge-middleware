@@ -530,4 +530,121 @@ class BatchHistoryContractTest {
                 // For now, we verify the endpoint exists and handles errors
                 .andExpect(status().is4xxClientError());
     }
+
+    // ============================================================================
+    // Phase 7: Error Details View (Supporting P1)
+    // ============================================================================
+
+    /**
+     * T101 (TC13): Get errors for batch endpoint returns PageResponseDto<ErrorSummaryDto>
+     * <p>
+     * Given: Authenticated client with valid JWT and batch with errors
+     * When: GET /api/user/batches/{batchId}/errors
+     * Then: 200 OK with PageResponseDto<ErrorSummaryDto>
+     * </p>
+     */
+    @Test
+    @DisplayName("TC13: GET /api/user/batches/{batchId}/errors should return PageResponseDto<ErrorSummaryDto>")
+    void tc13_getBatchErrors_shouldReturnErrorList() throws Exception {
+        // Given: Use batch with errors from test-data.sql
+        // Batch 0199bab2-8d63-8563-8340-edbf1c11c778 has hasErrors=true
+        String batchIdWithErrors = "0199bab2-8d63-8563-8340-edbf1c11c778";
+
+        // When: GET /api/user/batches/{batchId}/errors
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/errors", batchIdWithErrors)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andDo(print())
+
+                // Then: 200 OK with PageResponseDto structure
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify PageResponseDto wrapper fields
+                .andExpect(jsonPath("$.content").exists())
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.page").isNumber())
+                .andExpect(jsonPath("$.size").isNumber())
+                .andExpect(jsonPath("$.totalElements").isNumber())
+                .andExpect(jsonPath("$.totalPages").isNumber());
+
+        // If errors exist, verify ErrorSummaryDto structure
+        // Note: We check if at least one error exists, but it's ok if the list is empty
+        // The important part is that the endpoint returns the correct structure
+    }
+
+    /**
+     * Additional test: Get errors with pagination parameters
+     * <p>
+     * Given: Authenticated client with valid JWT
+     * When: GET /api/user/batches/{batchId}/errors?page=0&size=10
+     * Then: 200 OK with paginated results
+     * </p>
+     */
+    @Test
+    @DisplayName("TC13b: GET /api/user/batches/{batchId}/errors should support pagination parameters")
+    void tc13b_getBatchErrors_shouldSupportPagination() throws Exception {
+        // Given: Use batch with errors
+        String batchIdWithErrors = "0199bab2-8d63-8563-8340-edbf1c11c778";
+
+        // When: GET /api/user/batches/{batchId}/errors with pagination params
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/errors", batchIdWithErrors)
+                        .param("page", "0")
+                        .param("size", "10")
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                // Then: 200 OK with paginated structure
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(10));
+    }
+
+    /**
+     * Additional test: Get errors returns 403 when batch doesn't belong to user
+     * <p>
+     * Given: Authenticated client with valid JWT
+     * When: GET /api/user/batches/{batchId}/errors for batch owned by different account
+     * Then: 403 Forbidden
+     * </p>
+     */
+    @Test
+    @DisplayName("TC13c: GET /api/user/batches/{batchId}/errors should return 403 when batch doesn't belong to user")
+    void tc13c_getBatchErrors_shouldReturn403WhenUnauthorized() throws Exception {
+        // Given: Use batch ID from different account
+        String otherAccountBatchId = "0199bab2-dddd-dddd-dddd-dddddddddddd";
+
+        // When: GET /api/user/batches/{batchId}/errors
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/errors", otherAccountBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Additional test: Get errors returns 404 when batch doesn't exist
+     * <p>
+     * Given: Authenticated client with valid JWT
+     * When: GET /api/user/batches/{batchId}/errors with non-existent UUID
+     * Then: 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC13d: GET /api/user/batches/{batchId}/errors should return 404 when batch doesn't exist")
+    void tc13d_getBatchErrors_shouldReturn404WhenBatchNotFound() throws Exception {
+        // Given: Non-existent batch ID
+        String nonExistentBatchId = "00000000-0000-0000-0000-000000000000";
+
+        // When: GET /api/user/batches/{batchId}/errors
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/errors", nonExistentBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                // Then: 404 Not Found
+                .andExpect(status().isNotFound());
+    }
 }

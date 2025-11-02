@@ -1,6 +1,7 @@
 package com.bitbi.dfm.error.application;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,7 @@ class ErrorLoggingServiceTest {
     private ErrorLoggingService errorLoggingService;
     private ErrorLogRepository errorLogRepository;
     private BatchLifecycleService batchLifecycleService;
+    private BatchRepository batchRepository;
 
     private UUID testSiteId;
     private UUID testBatchId;
@@ -32,7 +34,8 @@ class ErrorLoggingServiceTest {
     void setUp() {
         errorLogRepository = mock(ErrorLogRepository.class);
         batchLifecycleService = mock(BatchLifecycleService.class);
-        errorLoggingService = new ErrorLoggingService(errorLogRepository, batchLifecycleService);
+        batchRepository = mock(BatchRepository.class);
+        errorLoggingService = new ErrorLoggingService(errorLogRepository, batchLifecycleService, batchRepository);
 
         testSiteId = UUID.randomUUID();
         testBatchId = UUID.randomUUID();

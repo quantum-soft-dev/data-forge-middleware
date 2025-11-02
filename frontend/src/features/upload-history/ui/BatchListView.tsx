@@ -5,9 +5,10 @@
  * and infinite scroll for loading more batches.
  *
  * Feature: 008-upload-history-user (User Story 1)
+ * Phase 7: Added "View errors" button for batches with errors (T108)
  */
 
-import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, AlertCircle } from 'lucide-react';
 import type { BatchSummary } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 
@@ -26,6 +27,8 @@ interface BatchListViewProps {
   error?: string | null;
   /** Callback when batch is clicked (T057) */
   onBatchClick?: (batchId: string) => void;
+  /** Callback when "View errors" button is clicked (T108 - Phase 7) */
+  onViewErrors?: (batchId: string) => void;
 }
 
 /**
@@ -39,6 +42,7 @@ export function BatchListView({
   onLoadMore,
   error,
   onBatchClick,
+  onViewErrors,
 }: BatchListViewProps) {
   // Loading state
   if (isLoading) {
@@ -92,7 +96,7 @@ export function BatchListView({
             }}
           >
             {/* Status indicator */}
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-4 flex-1">
               {batch.hasErrors ? (
                 <XCircle className="h-6 w-6 text-red-500 flex-shrink-0" />
               ) : (
@@ -123,12 +127,29 @@ export function BatchListView({
               </div>
             </div>
 
-            {/* Completed timestamp */}
-            {batch.completedAt && (
-              <div className="text-sm text-gray-500">
-                Completed: {formatDateTime(batch.completedAt)}
-              </div>
-            )}
+            {/* Right side: Completed timestamp and View errors button */}
+            <div className="flex items-center space-x-4">
+              {/* Completed timestamp */}
+              {batch.completedAt && (
+                <div className="text-sm text-gray-500">
+                  Completed: {formatDateTime(batch.completedAt)}
+                </div>
+              )}
+
+              {/* T108: View errors button (Phase 7) */}
+              {batch.hasErrors && onViewErrors && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation(); // Prevent triggering batch click
+                    onViewErrors(batch.id);
+                  }}
+                  className="inline-flex items-center space-x-1 rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
+                >
+                  <AlertCircle className="h-4 w-4" />
+                  <span>View errors</span>
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>

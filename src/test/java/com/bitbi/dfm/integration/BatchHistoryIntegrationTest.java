@@ -6,11 +6,17 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.error.application.ErrorLoggingService;
+import com.bitbi.dfm.error.domain.ErrorLog;
+import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +24,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -149,5 +159,171 @@ class BatchHistoryIntegrationTest {
             assertThat(fileDto.fileSize()).isGreaterThan(0);
             assertThat(fileDto.uploadedAt()).isNotNull();
         });
+    }
+
+    // ============================================================================
+    // Phase 7: Error Details View (Supporting P1)
+    // ============================================================================
+
+    @Autowired(required = false)
+    private ErrorLoggingService errorLoggingService;
+
+    @Autowired(required = false)
+    private ErrorLogRepository errorLogRepository;
+
+    /**
+     * T102: Integration test for error pagination with 100+ errors
+     * <p>
+     * Given: Batch with 100+ error logs
+     * When: Get batch errors with pagination (page size 20)
+     * Then: Returns correct page with 20 errors, accurate totalElements count
+     * </p>
+     */
+    @Test
+    @Transactional
+    @DisplayName("T102: Error pagination should correctly handle 100+ errors")
+    void t102_getBatchErrors_shouldHandlePaginationWith100PlusErrors() {
+        // Given: Create a test batch with 100+ error logs
+        UUID testBatchId = UUID.fromString("0199bab2-8d63-8563-8340-edbf1c11c778");
+        UUID testAccountId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890"); // Correct account ID from test-data.sql
+
+        // Find the batch (cast to avoid ambiguity between BatchRepository.findById and CrudRepository.findById)
+        Optional<Batch> batchOptional = ((BatchRepository) batchRepository).findById(testBatchId);
+        assertThat(batchOptional).isPresent();
+
+        // Create 100 error logs for this batch
+        List<ErrorLog> errors = new ArrayList<>();
+        UUID testSiteId = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");  // Valid site ID from test-data.sql (store-01)
+        for (int i = 0; i < 100; i++) {
+            ErrorLog error = ErrorLog.create(
+                    testSiteId,
+                    testBatchId,
+                    "ERROR",
+                    "Test error " + i,
+                    "Test error message " + i,
+                    null, // stackTrace
+                    null, // clientVersion
+                    Map.of("index", i)
+            );
+            errors.add(error);
+        }
+
+        // Save all errors
+        for (ErrorLog error : errors) {
+            errorLogRepository.save(error);
+        }
+
+        // When: Get first page of errors (page 0, size 20)
+        PageResponseDto<ErrorLogSummaryDto> page1 = errorLoggingService.getBatchErrors(
+                testBatchId,
+                testAccountId,
+                0,
+                20
+        );
+
+        // Then: First page should have 20 errors
+        assertAll("First page of errors",
+                () -> assertThat(page1.content()).hasSize(20),
+                () -> assertThat(page1.page()).isEqualTo(0),
+                () -> assertThat(page1.size()).isEqualTo(20),
+                () -> assertThat(page1.totalElements()).isGreaterThanOrEqualTo(100),
+                () -> assertThat(page1.totalPages()).isGreaterThanOrEqualTo(5)
+        );
+
+        // When: Get last page (page 4, size 20)
+        PageResponseDto<ErrorLogSummaryDto> page5 = errorLoggingService.getBatchErrors(
+                testBatchId,
+                testAccountId,
+                4,
+                20
+        );
+
+        // Then: Last page should have remaining errors
+        assertAll("Last page of errors",
+                () -> assertThat(page5.content()).isNotEmpty(),
+                () -> assertThat(page5.content().size()).isLessThanOrEqualTo(20),
+                () -> assertThat(page5.page()).isEqualTo(4)
+        );
+
+        // Verify error DTOs have required fields
+        page1.content().forEach(errorDto -> {
+            assertThat(errorDto.id()).isNotNull();
+            assertThat(errorDto.type()).isNotBlank();
+            assertThat(errorDto.message()).isNotBlank();
+            assertThat(errorDto.title()).isNotBlank();
+            assertThat(errorDto.occurredAt()).isNotNull();
+        });
+    }
+
+    /**
+     * Additional test: Verify errors are sorted by occurredAt DESC
+     */
+    @Test
+    @Transactional
+    @DisplayName("T102b: Error list should be sorted by occurredAt DESC")
+    void t102b_getBatchErrors_shouldBeSortedByOccurredAtDesc() {
+        // Given: Batch with errors from test-data.sql
+        UUID testBatchId = UUID.fromString("0199bab2-8d63-8563-8340-edbf1c11c778");
+        UUID testAccountId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890"); // Correct account ID from test-data.sql
+
+        // Create test errors with different timestamps
+        List<ErrorLog> errors = new ArrayList<>();
+        UUID testSiteId = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");  // Valid site ID from test-data.sql (store-01)
+
+        errors.add(ErrorLog.create(
+                testSiteId,
+                testBatchId,
+                "ERROR",
+                "Oldest error",
+                "Oldest error message",
+                null,
+                null,
+                Map.of("order", "oldest")
+        ));
+
+        errors.add(ErrorLog.create(
+                testSiteId,
+                testBatchId,
+                "ERROR",
+                "Newest error",
+                "Newest error message",
+                null,
+                null,
+                Map.of("order", "newest")
+        ));
+
+        errors.add(ErrorLog.create(
+                testSiteId,
+                testBatchId,
+                "ERROR",
+                "Middle error",
+                "Middle error message",
+                null,
+                null,
+                Map.of("order", "middle")
+        ));
+
+        // Save all errors
+        for (ErrorLog error : errors) {
+            errorLogRepository.save(error);
+        }
+
+        // When: Get errors
+        PageResponseDto<ErrorLogSummaryDto> page = errorLoggingService.getBatchErrors(
+                testBatchId,
+                testAccountId,
+                0,
+                10
+        );
+
+        // Then: Errors should be sorted by occurredAt DESC (newest first)
+        List<ErrorLogSummaryDto> errorList = page.content();
+        assertThat(errorList).isNotEmpty();
+
+        // Verify first error is newer than second (if we have at least 2 errors)
+        if (errorList.size() >= 2) {
+            assertThat(errorList.get(0).occurredAt())
+                    .isAfterOrEqualTo(errorList.get(1).occurredAt());
+        }
     }
 }

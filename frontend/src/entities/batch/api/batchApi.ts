@@ -11,7 +11,9 @@ import { apiClient } from '@/shared/api/client';
 import type {
   BatchSummary,
   BatchDetail,
-  CursorPageResponse
+  CursorPageResponse,
+  PageResponse,
+  ErrorSummary
 } from '../model/types';
 
 /**
@@ -143,5 +145,37 @@ export async function exportToExcel(
       },
     }
   );
+  return response.data;
+}
+
+/**
+ * T105: Get errors for batch with offset-based pagination (Phase 7).
+ *
+ * GET /api/user/batches/{batchId}/errors?page={page}&size={size}
+ *
+ * Returns paginated list of errors for a specific batch.
+ * Authorization: Verifies batch belongs to user's account (throws 403 if unauthorized).
+ * Errors sorted by occurredAt DESC (newest first).
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @param page - Page number (0-indexed, default 0)
+ * @param size - Page size (default 20, max 100)
+ * @returns Paginated error list
+ * @throws 403 Forbidden if batch doesn't belong to user
+ * @throws 404 Not Found if batch doesn't exist
+ */
+export async function getBatchErrors(
+  batchId: string,
+  page: number = 0,
+  size: number = 20
+): Promise<PageResponse<ErrorSummary>> {
+  const params = new URLSearchParams();
+  params.append('page', page.toString());
+  params.append('size', size.toString());
+
+  const response = await apiClient.get<PageResponse<ErrorSummary>>(
+    `/user/batches/${batchId}/errors?${params.toString()}`
+  );
+
   return response.data;
 }

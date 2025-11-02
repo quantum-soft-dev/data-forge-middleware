@@ -101,6 +101,24 @@ export interface CursorPageResponse<T> {
 }
 
 /**
+ * Generic offset-based pagination wrapper
+ *
+ * Matches: PageResponseDto.java
+ */
+export interface PageResponse<T> {
+  /** Current page items */
+  content: T[];
+  /** Current page number (0-indexed) */
+  page: number;
+  /** Page size */
+  size: number;
+  /** Total number of elements across all pages */
+  totalElements: number;
+  /** Total number of pages */
+  totalPages: number;
+}
+
+/**
  * File download response with presigned URL
  *
  * Matches: FileDownloadResponseDto.java

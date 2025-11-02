@@ -8,7 +8,7 @@
  */
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { listBatches, getBatchDetails } from './batchApi';
+import { listBatches, getBatchDetails, getBatchErrors } from './batchApi';
 
 /**
  * Query keys for batch-related queries
@@ -18,6 +18,8 @@ export const batchKeys = {
   history: () => [...batchKeys.all, 'history'] as const,
   historyWithLimit: (limit: number) => [...batchKeys.history(), { limit }] as const,
   detail: (batchId: string) => [...batchKeys.all, 'detail', batchId] as const,
+  errors: (batchId: string, page: number, size: number) =>
+    [...batchKeys.all, 'errors', batchId, { page, size }] as const,
 };
 
 /**
@@ -112,6 +114,64 @@ export function useBatchDetails(batchId: string) {
     gcTime: 60 * 60 * 1000,
 
     // Don't refetch on window focus (batch details are relatively static)
+    refetchOnWindowFocus: false,
+
+    // Enable query only if batchId is provided
+    enabled: Boolean(batchId),
+  });
+}
+
+/**
+ * T106: Query hook for batch errors with offset-based pagination (Phase 7).
+ *
+ * Fetches paginated list of errors for a specific batch.
+ * Errors are sorted by occurredAt DESC (newest first).
+ * Cached for 5 minutes (errors are relatively static once logged).
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @param page - Page number (0-indexed, default 0)
+ * @param size - Page size (default 20)
+ * @returns TanStack Query result with paginated errors
+ *
+ * @example
+ * ```tsx
+ * const { data, isLoading, error } = useBatchErrors(batchId, 0, 20);
+ *
+ * if (isLoading) return <Spinner />;
+ * if (error) return <ErrorAlert message={error.message} />;
+ *
+ * return (
+ *   <div>
+ *     <h2>Errors ({data.totalElements})</h2>
+ *     {data.content.map(err => (
+ *       <ErrorCard key={err.id} error={err} />
+ *     ))}
+ *     <Pagination
+ *       currentPage={data.page}
+ *       totalPages={data.totalPages}
+ *     />
+ *   </div>
+ * );
+ * ```
+ */
+export function useBatchErrors(
+  batchId: string,
+  page: number = 0,
+  size: number = 20
+) {
+  return useQuery({
+    queryKey: batchKeys.errors(batchId, page, size),
+
+    // Fetch function
+    queryFn: () => getBatchErrors(batchId, page, size),
+
+    // Stale time: 5 minutes (errors don't change frequently)
+    staleTime: 5 * 60 * 1000,
+
+    // Cache time: 10 minutes
+    gcTime: 10 * 60 * 1000,
+
+    // Don't refetch on window focus (error list is static)
     refetchOnWindowFocus: false,
 
     // Enable query only if batchId is provided

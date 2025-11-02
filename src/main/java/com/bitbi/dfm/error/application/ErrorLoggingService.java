@@ -1,10 +1,17 @@
 package com.bitbi.dfm.error.application;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,10 +36,14 @@ public class ErrorLoggingService {
 
     private final ErrorLogRepository errorLogRepository;
     private final BatchLifecycleService batchLifecycleService;
+    private final BatchRepository batchRepository;
 
-    public ErrorLoggingService(ErrorLogRepository errorLogRepository, BatchLifecycleService batchLifecycleService) {
+    public ErrorLoggingService(ErrorLogRepository errorLogRepository,
+                               BatchLifecycleService batchLifecycleService,
+                               BatchRepository batchRepository) {
         this.errorLogRepository = errorLogRepository;
         this.batchLifecycleService = batchLifecycleService;
+        this.batchRepository = batchRepository;
     }
 
     /**
@@ -162,10 +173,81 @@ public class ErrorLoggingService {
     }
 
     /**
+     * Get paginated errors for batch (Phase 7 - Error Details View).
+     * <p>
+     * Authorization: Verifies batch belongs to user's account before returning errors.
+     * Returns errors sorted by occurredAt DESC (newest first).
+     * </p>
+     *
+     * @param batchId   batch identifier
+     * @param accountId account identifier (from JWT token)
+     * @param page      page number (0-indexed)
+     * @param size      page size (default 20)
+     * @return paginated error list
+     * @throws UnauthorizedBatchAccessException if batch doesn't belong to account
+     * @throws BatchNotFoundException           if batch not found
+     */
+    @Transactional(readOnly = true)
+    public PageResponseDto<ErrorLogSummaryDto> getBatchErrors(UUID batchId, UUID accountId, int page, int size) {
+        logger.debug("Getting errors for batch: batchId={}, accountId={}, page={}, size={}",
+                    batchId, accountId, page, size);
+
+        // Authorization check: Verify batch belongs to user's account
+        Batch batch = batchRepository.findById(batchId)
+                .orElseThrow(() -> new BatchNotFoundException("Batch not found: " + batchId));
+
+        if (!batch.getAccountId().equals(accountId)) {
+            logger.warn("Unauthorized access attempt: accountId={} tried to access batch={} owned by account={}",
+                       accountId, batchId, batch.getAccountId());
+            throw new UnauthorizedBatchAccessException("Batch does not belong to user account");
+        }
+
+        // Create pageable with sort by occurredAt DESC (newest errors first)
+        PageRequest pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "occurredAt"));
+
+        // Query errors with pagination
+        Page<ErrorLog> errorPage = errorLogRepository.findByBatchId(batchId, pageable);
+
+        // Convert to DTOs
+        List<ErrorLogSummaryDto> errorDtos = errorPage.getContent().stream()
+                .map(ErrorLogSummaryDto::fromEntity)
+                .toList();
+
+        logger.info("Retrieved {} errors for batch: batchId={}, page={}/{}, totalElements={}",
+                   errorDtos.size(), batchId, page, errorPage.getTotalPages(), errorPage.getTotalElements());
+
+        return new PageResponseDto<>(
+                errorDtos,
+                errorPage.getNumber(),
+                errorPage.getSize(),
+                errorPage.getTotalElements(),
+                errorPage.getTotalPages()
+        );
+    }
+
+    /**
      * Exception thrown when error log is not found.
      */
     public static class ErrorLogNotFoundException extends RuntimeException {
         public ErrorLogNotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when batch is not found.
+     */
+    public static class BatchNotFoundException extends RuntimeException {
+        public BatchNotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when user tries to access batch that doesn't belong to their account.
+     */
+    public static class UnauthorizedBatchAccessException extends RuntimeException {
+        public UnauthorizedBatchAccessException(String message) {
             super(message);
         }
     }

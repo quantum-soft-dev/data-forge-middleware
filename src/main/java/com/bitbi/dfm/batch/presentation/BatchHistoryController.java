@@ -4,7 +4,10 @@ import com.bitbi.dfm.batch.application.BatchHistoryService;
 import com.bitbi.dfm.batch.domain.exception.BatchNotFoundException;
 import com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException;
 import com.bitbi.dfm.batch.presentation.dto.*;
+import com.bitbi.dfm.error.application.ErrorLoggingService;
+import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.upload.application.ExcelExportService;
 import com.bitbi.dfm.upload.application.FileDownloadService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -53,17 +56,20 @@ public class BatchHistoryController {
     private final BatchHistoryService batchHistoryService;
     private final FileDownloadService fileDownloadService;
     private final ExcelExportService excelExportService;
+    private final ErrorLoggingService errorLoggingService;
     private final AuthorizationHelper authorizationHelper;
 
     public BatchHistoryController(
             BatchHistoryService batchHistoryService,
             FileDownloadService fileDownloadService,
             ExcelExportService excelExportService,
+            ErrorLoggingService errorLoggingService,
             AuthorizationHelper authorizationHelper
     ) {
         this.batchHistoryService = batchHistoryService;
         this.fileDownloadService = fileDownloadService;
         this.excelExportService = excelExportService;
+        this.errorLoggingService = errorLoggingService;
         this.authorizationHelper = authorizationHelper;
     }
 
@@ -432,6 +438,89 @@ public class BatchHistoryController {
             List<UUID> fileIds
     ) {
     }
+
+    // ============================================================================
+    // Phase 7: Error Details View (Supporting P1)
+    // ============================================================================
+
+    /**
+     * Get errors for batch with pagination (Phase 7 - T104).
+     * <p>
+     * GET /api/user/batches/{batchId}/errors?page={page}&size={size}
+     * </p>
+     *
+     * @param batchId Batch identifier
+     * @param page    Page number (0-indexed, default: 0)
+     * @param size    Page size (default: 20, max: 100)
+     * @return Paginated list of error summaries
+     */
+    @GetMapping("/{batchId}/errors")
+    @Operation(
+            summary = "Get errors for batch",
+            description = "Get paginated list of errors for a specific batch"
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Errors retrieved successfully"),
+            @ApiResponse(responseCode = "403", description = "Batch doesn't belong to user", content = @Content),
+            @ApiResponse(responseCode = "404", description = "Batch not found", content = @Content)
+    })
+    public ResponseEntity<?> getBatchErrors(
+            @Parameter(description = "Batch identifier")
+            @PathVariable UUID batchId,
+
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size (max: 100)")
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        try {
+            // Get authenticated account ID
+            UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+
+            logger.debug("Getting errors for batch: batchId={}, accountId={}, page={}, size={}",
+                        batchId, accountId, page, size);
+
+            // Validate page size
+            if (size > 100) {
+                size = 100;
+                logger.warn("Page size limited to 100 (requested: {})", size);
+            }
+
+            // Get paginated errors with authorization check
+            PageResponseDto<ErrorLogSummaryDto> errors = errorLoggingService.getBatchErrors(
+                    batchId,
+                    accountId,
+                    page,
+                    size
+            );
+
+            logger.info("Retrieved {} errors for batch: batchId={}, page={}/{}",
+                       errors.content().size(), batchId, page, errors.totalPages());
+
+            return ResponseEntity.ok(errors);
+
+        } catch (ErrorLoggingService.UnauthorizedBatchAccessException e) {
+            logger.warn("Unauthorized access to batch errors: batchId={}", batchId, e);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, "Batch does not belong to user"));
+
+        } catch (ErrorLoggingService.BatchNotFoundException e) {
+            logger.warn("Batch not found: batchId={}", batchId, e);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+
+        } catch (Exception e) {
+            logger.error("Failed to get batch errors: batchId={}", batchId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR,
+                            "Failed to retrieve errors: " + e.getMessage()));
+        }
+    }
+
+    // ============================================================================
+    // Helper Methods
+    // ============================================================================
 
     /**
      * Create error response map.
