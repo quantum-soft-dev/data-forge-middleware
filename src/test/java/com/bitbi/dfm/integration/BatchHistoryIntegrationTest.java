@@ -33,9 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  *
  * Feature: Upload History (User Stories 1 & 2)
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+    "keycloak.enabled=false"  // Disable Keycloak for integration tests
+})
 @ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
+@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
 @Testcontainers
 @Sql("/test-data.sql")
 @DisplayName("Upload History Integration Tests (Testcontainers)")
