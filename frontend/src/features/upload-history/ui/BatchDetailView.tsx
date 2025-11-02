@@ -4,7 +4,7 @@
  * Displays batch metadata and file list with selection capabilities.
  * Integrates FileTable component and shows batch status, timestamps, and file count.
  *
- * Feature: 008-upload-history-user (User Story 2, User Story 3)
+ * Feature: 008-upload-history-user (User Story 2, User Story 3, User Story 4)
  */
 
 import { useState } from 'react';
@@ -13,6 +13,7 @@ import type { BatchDetail } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 import { FileTable } from './FileTable';
 import { DownloadButton } from './DownloadButton';
+import { ExcelButton } from './ExcelButton';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -181,13 +182,24 @@ export function BatchDetailView({
             Files ({batch.files.length})
           </h3>
 
-          {/* T077: Download button for selected files */}
-          <DownloadButton
-            batchId={batch.id}
-            selectedFileIds={selectedFileIds}
-            batchStatus={batch.status}
-            zipFilename={`batch-${batch.id}.zip`}
-          />
+          {/* T077, T099: Action buttons for selected files */}
+          <div className="flex items-center gap-2">
+            {/* T077: Download button for selected files */}
+            <DownloadButton
+              batchId={batch.id}
+              selectedFileIds={selectedFileIds}
+              batchStatus={batch.status}
+              zipFilename={`batch-${batch.id}.zip`}
+            />
+
+            {/* T099: Excel export button for selected CSV files */}
+            <ExcelButton
+              batchId={batch.id}
+              selectedFileIds={selectedFileIds}
+              batchStatus={batch.status}
+              excelFilename={`batch-${batch.id}.xlsx`}
+            />
+          </div>
         </div>
 
         <FileTable

@@ -202,37 +202,37 @@
 
 ### Backend Tests for User Story 4
 
-- [ ] T079 [P] [US4] Contract test TC11 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify POST /api/dfc/batches/{batchId}/export-excel returns application/vnd.openxmlformats-officedocument.spreadsheetml.sheet binary
-- [ ] T080 [P] [US4] Contract test TC12 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 400 Bad Request when CSV parsing fails
-- [ ] T081 [P] [US4] Integration test in src/test/java/com/bitbi/dfm/integration/ExcelExportIntegrationTest.java: Test Excel generation with UTF-8 encoded CSV files
-- [ ] T082 [P] [US4] Integration test in src/test/java/com/bitbi/dfm/integration/ExcelExportIntegrationTest.java: Test Excel generation with Windows-1252 encoded CSV files
-- [ ] T083 [P] [US4] Integration test in src/test/java/com/bitbi/dfm/integration/ExcelExportIntegrationTest.java: Test sheet name deduplication (e.g., "data", "data (2)", "data (3)")
+- [X] T079 [P] [US4] Contract test TC11 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify POST /api/dfc/batches/{batchId}/export-excel returns application/vnd.openxmlformats-officedocument.spreadsheetml.sheet binary
+- [X] T080 [P] [US4] Contract test TC12 in src/test/java/com/bitbi/dfm/contract/BatchHistoryContractTest.java: Verify 400 Bad Request when CSV parsing fails
+- [X] T081 [P] [US4] Integration test in src/test/java/com/bitbi/dfm/integration/ExcelExportIntegrationTest.java: Test Excel generation with UTF-8 encoded CSV files
+- [X] T082 [P] [US4] Integration test in src/test/java/com/bitbi/dfm/integration/ExcelExportIntegrationTest.java: Test Excel generation with Windows-1252 encoded CSV files
+- [X] T083 [P] [US4] Integration test in src/test/java/com/bitbi/dfm/integration/ExcelExportIntegrationTest.java: Test sheet name deduplication (e.g., "data", "data (2)", "data (3)")
 
 ### Backend Implementation for User Story 4
 
-- [ ] T084 [P] [US4] Create `EncodingDetectionService` in src/main/java/com/bitbi/dfm/upload/application/EncodingDetectionService.java using ICU4J CharsetDetector
-- [ ] T085 [US4] Create `CsvDecompressionService` in src/main/java/com/bitbi/dfm/upload/application/CsvDecompressionService.java using Apache Commons Compress GzipCompressorInputStream
-- [ ] T086 [US4] Create `ExcelExportService` in src/main/java/com/bitbi/dfm/upload/application/ExcelExportService.java with `exportToExcel(batchId, fileIds, accountId, response)` method
-- [ ] T087 [US4] Implement Excel generation logic using Apache POI SXSSF (100-row window) with Apache Commons CSV parser
-- [ ] T088 [US4] Implement sheet naming with 31-character limit, invalid character replacement, and duplicate name handling (numeric suffix)
-- [ ] T089 [US4] Add encoding detection before CSV parsing (try UTF-8 → detect with ICU4J → fallback to Windows-1252)
-- [ ] T090 [US4] Add gzip decompression wrapper for .csv.gz files
-- [ ] T091 [US4] Add workbook.dispose() cleanup in finally block to delete SXSSF temp files
-- [ ] T092 [US4] Add POST /api/dfc/batches/{batchId}/export-excel endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java
-- [ ] T093 [US4] Add Micrometer metrics for Excel export sheet count ("exports.excel.sheets") and duration timer ("exports.excel.duration")
+- [X] T084 [P] [US4] Create `EncodingDetectionService` in src/main/java/com/bitbi/dfm/upload/application/EncodingDetectionService.java using ICU4J CharsetDetector
+- [X] T085 [US4] Create `CsvDecompressionService` in src/main/java/com/bitbi/dfm/upload/application/CsvDecompressionService.java using Apache Commons Compress GzipCompressorInputStream
+- [X] T086 [US4] Create `ExcelExportService` in src/main/java/com/bitbi/dfm/upload/application/ExcelExportService.java with `exportToExcel(batchId, fileIds, accountId, response)` method
+- [X] T087 [US4] Implement Excel generation logic using Apache POI SXSSF (100-row window) with Apache Commons CSV parser
+- [X] T088 [US4] Implement sheet naming with 31-character limit, invalid character replacement, and duplicate name handling (numeric suffix)
+- [X] T089 [US4] Add encoding detection before CSV parsing (try UTF-8 → detect with ICU4J → fallback to Windows-1252)
+- [X] T090 [US4] Add gzip decompression wrapper for .csv.gz files
+- [X] T091 [US4] Add workbook.dispose() cleanup in finally block to delete SXSSF temp files
+- [X] T092 [US4] Add POST /api/dfc/batches/{batchId}/export-excel endpoint to src/main/java/com/bitbi/dfm/batch/presentation/BatchHistoryController.java
+- [X] T093 [US4] Add Micrometer metrics for Excel export sheet count ("exports.excel.sheets") and duration timer ("exports.excel.duration")
 
 ### Frontend Tests for User Story 4
 
-- [ ] T094 [P] [US4] Unit test for `useExcelExport` mutation in frontend/src/features/upload-history/lib/useExcelExport.test.ts
-- [ ] T095 [P] [US4] Component test for `ExcelButton` in frontend/src/features/upload-history/ui/ExcelButton.test.tsx verifying disabled state
+- [X] T094 [P] [US4] Unit test for `useExcelExport` mutation in frontend/src/features/upload-history/lib/useExcelExport.test.ts
+- [X] T095 [P] [US4] Component test for `ExcelButton` in frontend/src/features/upload-history/ui/ExcelButton.test.tsx verifying disabled state
 
 ### Frontend Implementation for User Story 4
 
-- [ ] T096 [P] [US4] Create `exportToExcel(batchId, fileIds)` API client function in frontend/src/entities/batch/api/batchApi.ts using Axios responseType: 'blob'
-- [ ] T097 [US4] Create `useExcelExport()` TanStack Query mutation hook in frontend/src/features/upload-history/lib/useExcelExport.ts with progress tracking
-- [ ] T098 [US4] Create `ExcelButton` component in frontend/src/features/upload-history/ui/ExcelButton.tsx with disabled state when no files selected or batch not COMPLETED
-- [ ] T099 [US4] Integrate ExcelButton into BatchDetailView alongside DownloadButton
-- [ ] T100 [US4] Add URL.revokeObjectURL() cleanup after download in useExcelExport hook
+- [X] T096 [P] [US4] Create `exportToExcel(batchId, fileIds)` API client function in frontend/src/entities/batch/api/batchApi.ts using Axios responseType: 'blob'
+- [X] T097 [US4] Create `useExcelExport()` TanStack Query mutation hook in frontend/src/features/upload-history/lib/useExcelExport.ts with progress tracking
+- [X] T098 [US4] Create `ExcelButton` component in frontend/src/features/upload-history/ui/ExcelButton.tsx with disabled state when no files selected or batch not COMPLETED
+- [X] T099 [US4] Integrate ExcelButton into BatchDetailView alongside DownloadButton
+- [X] T100 [US4] Add URL.revokeObjectURL() cleanup after download in useExcelExport hook
 
 **Checkpoint**: User Story 4 complete - users can generate Excel workbooks from CSV files
 

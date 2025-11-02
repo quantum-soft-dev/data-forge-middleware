@@ -115,3 +115,33 @@ export async function downloadFilesAsZip(
   );
   return response.data;
 }
+
+/**
+ * T096: Export selected CSV files to Excel workbook (.xlsx).
+ *
+ * POST /api/user/batches/{batchId}/export-excel
+ *
+ * Generates Excel workbook with each CSV file as a separate sheet.
+ * Uses Apache POI SXSSF for memory-efficient streaming (100-row window).
+ * Handles gzip decompression and encoding detection (UTF-8/Windows-1252).
+ *
+ * @param batchId - Batch unique identifier (UUID)
+ * @param fileIds - Array of CSV file IDs to convert to Excel sheets
+ * @returns Blob containing the Excel workbook (.xlsx)
+ */
+export async function exportToExcel(
+  batchId: string,
+  fileIds: string[]
+): Promise<Blob> {
+  const response = await apiClient.post(
+    `/user/batches/${batchId}/export-excel`,
+    { fileIds },
+    {
+      responseType: 'blob',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return response.data;
+}
