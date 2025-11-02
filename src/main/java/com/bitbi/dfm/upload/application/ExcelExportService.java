@@ -269,14 +269,14 @@ public class ExcelExportService {
                         file.getOriginalFileName()
                     );
 
-                    // Detect encoding and create reader
-                    Reader reader = encodingDetectionService.detectEncodingAndCreateReader(
-                        decompressedStream,
-                        file.getOriginalFileName()
-                    );
-
-                    // Parse CSV and write to sheet
-                    writeCsvToSheet(reader, sheet, file.getOriginalFileName());
+                    // Detect encoding and create reader (auto-closed by try-with-resources)
+                    try (Reader reader = encodingDetectionService.detectEncodingAndCreateReader(
+                            decompressedStream,
+                            file.getOriginalFileName()
+                    )) {
+                        // Parse CSV and write to sheet
+                        writeCsvToSheet(reader, sheet, file.getOriginalFileName());
+                    }
                 }
             }
 

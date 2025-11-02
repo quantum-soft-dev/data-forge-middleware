@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -127,11 +128,14 @@ public class BatchHistoryService {
      * Sorts IDs before generating key to ensure consistent cache keys regardless of input order.
      * Example: [UUID2, UUID1] and [UUID1, UUID2] generate the same key.
      * </p>
+     * <p>
+     * <strong>Note:</strong> Must be public for Spring Cache SpEL expression access.
+     * </p>
      *
      * @param siteIds List of site IDs
      * @return Sorted, comma-separated string of site IDs
      */
-    private String generateCacheKey(List<UUID> siteIds) {
+    public String generateCacheKey(List<UUID> siteIds) {
         return siteIds.stream()
                 .sorted()
                 .map(UUID::toString)
@@ -170,6 +174,7 @@ public class BatchHistoryService {
      * @param cursor  Cursor string (startedAt_id format)
      * @param limit   Fetch limit
      * @return Batch projections
+     * @throws IllegalArgumentException if cursor format is invalid or cannot be parsed
      */
     protected List<BatchWithFileCountProjection> fetchWithCursor(List<UUID> siteIds, String cursor, int limit) {
         logger.debug("Fetching with cursor={}, siteIds={}, limit={}", cursor, siteIds.size(), limit);
@@ -180,10 +185,18 @@ public class BatchHistoryService {
             throw new IllegalArgumentException("Invalid cursor format. Expected: startedAt_id");
         }
 
-        LocalDateTime cursorStartedAt = LocalDateTime.parse(parts[0]);
-        UUID cursorId = UUID.fromString(parts[1]);
+        try {
+            LocalDateTime cursorStartedAt = LocalDateTime.parse(parts[0]);
+            UUID cursorId = UUID.fromString(parts[1]);
 
-        return batchRepository.findBySiteIdsWithCursor(siteIds, cursorStartedAt, cursorId, limit);
+            return batchRepository.findBySiteIdsWithCursor(siteIds, cursorStartedAt, cursorId, limit);
+        } catch (DateTimeParseException e) {
+            logger.warn("Invalid cursor timestamp format: {}", parts[0], e);
+            throw new IllegalArgumentException("Invalid cursor: malformed timestamp", e);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid cursor UUID format: {}", parts[1], e);
+            throw new IllegalArgumentException("Invalid cursor: malformed UUID", e);
+        }
     }
 
     /**
