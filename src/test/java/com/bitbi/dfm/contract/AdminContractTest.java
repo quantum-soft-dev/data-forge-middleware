@@ -50,6 +50,9 @@ class AdminContractTest {
     @MockBean
     private KeycloakAdminClient keycloakAdminClient;
 
+    @MockBean
+    private com.bitbi.dfm.account.application.KeycloakAccountSyncService keycloakAccountSyncService;
+
     private static final String MOCK_ADMIN_JWT_TOKEN = "mock.admin.jwt.token";
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
     private static final String MOCK_ACCOUNT_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
@@ -105,6 +108,144 @@ class AdminContractTest {
 
         // For reset password
         doNothing().when(keycloakAdminClient).resetPassword(anyString(), anyString());
+
+        // Mock KeycloakAccountSyncService methods
+        when(keycloakAccountSyncService.createAccount(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.CreateAccountResponse>) invocation -> {
+                    com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto request = invocation.getArgument(0);
+                    String keycloakUserId = UUID.randomUUID().toString();
+                    java.time.Instant now = java.time.Instant.now();
+
+                    // Create mock account response with all required fields
+                    com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse accountResponse =
+                            new com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse(
+                                    UUID.randomUUID(),
+                                    keycloakUserId,
+                                    request.email(),
+                                    request.name(),
+                                    request.phone(),
+                                    request.company(),
+                                    true,              // isActive
+                                    true,              // keycloakEnabled
+                                    true,              // passwordTemporary
+                                    now.plusSeconds(2592000), // passwordExpiresAt (30 days)
+                                    null,              // lastLogin
+                                    now,               // createdAt
+                                    now                // updatedAt
+                            );
+
+                    return new com.bitbi.dfm.account.presentation.dto.CreateAccountResponse(
+                            accountResponse,
+                            "TempPass123!"
+                    );
+                });
+
+        // Track locked accounts for stateful lock/unlock behavior
+        java.util.Set<UUID> lockedAccounts = new java.util.HashSet<>();
+
+        when(keycloakAccountSyncService.lockAccount(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse>) invocation -> {
+                    UUID accountId = invocation.getArgument(0);
+
+                    // Check if account without Keycloak integration (from test-data.sql)
+                    if (accountId.toString().equals("0199bab1-fad2-bf76-c478-eae1f61e1c17")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.NoKeycloakIntegrationException("Account does not have Keycloak integration");
+                    }
+
+                    // Check if account doesn't exist (non-existent UUIDs)
+                    if (accountId.toString().equals("99999999-9999-9999-9999-999999999999") ||
+                        accountId.toString().equals("00000000-0000-0000-0000-000000000000")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountNotFoundException("Account not found");
+                    }
+
+                    // Check if already locked
+                    if (lockedAccounts.contains(accountId)) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountAlreadyLockedException("Account is already locked");
+                    }
+
+                    // Mark as locked
+                    lockedAccounts.add(accountId);
+
+                    java.time.Instant now = java.time.Instant.now();
+                    return new com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse(
+                            accountId,
+                            MOCK_KEYCLOAK_USER_ID,
+                            "locked@example.com",
+                            "Locked User",
+                            null,              // phone
+                            null,              // company
+                            true,              // isActive (business logic)
+                            false,             // keycloakEnabled (authentication disabled)
+                            false,             // passwordTemporary
+                            null,              // passwordExpiresAt
+                            null,              // lastLogin
+                            now,               // createdAt
+                            now                // updatedAt
+                    );
+                });
+
+        when(keycloakAccountSyncService.unlockAccount(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse>) invocation -> {
+                    UUID accountId = invocation.getArgument(0);
+
+                    // Check if account without Keycloak integration (from test-data.sql)
+                    if (accountId.toString().equals("0199bab1-fad2-bf76-c478-eae1f61e1c17")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.NoKeycloakIntegrationException("Account does not have Keycloak integration");
+                    }
+
+                    // Check if account doesn't exist (non-existent UUIDs)
+                    if (accountId.toString().equals("99999999-9999-9999-9999-999999999999") ||
+                        accountId.toString().equals("00000000-0000-0000-0000-000000000000")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountNotFoundException("Account not found");
+                    }
+
+                    // Check if already unlocked (not in locked set)
+                    if (!lockedAccounts.contains(accountId)) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountAlreadyUnlockedException("Account is already unlocked");
+                    }
+
+                    // Remove from locked set
+                    lockedAccounts.remove(accountId);
+
+                    java.time.Instant now = java.time.Instant.now();
+                    return new com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse(
+                            accountId,
+                            MOCK_KEYCLOAK_USER_ID,
+                            "unlocked@example.com",
+                            "Unlocked User",
+                            null,              // phone
+                            null,              // company
+                            true,              // isActive (business logic)
+                            true,              // keycloakEnabled (authentication enabled)
+                            false,             // passwordTemporary
+                            null,              // passwordExpiresAt
+                            null,              // lastLogin
+                            now,               // createdAt
+                            now                // updatedAt
+                    );
+                });
+
+        when(keycloakAccountSyncService.resetPassword(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse>) invocation -> {
+                    UUID accountId = invocation.getArgument(0);
+
+                    // Check if account without Keycloak integration (from test-data.sql)
+                    if (accountId.toString().equals("0199bab1-fad2-bf76-c478-eae1f61e1c17")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.NoKeycloakIntegrationException("Account does not have Keycloak integration");
+                    }
+
+                    // Check if account doesn't exist (non-existent UUIDs)
+                    if (accountId.toString().equals("99999999-9999-9999-9999-999999999999") ||
+                        accountId.toString().equals("00000000-0000-0000-0000-000000000000")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountNotFoundException("Account not found");
+                    }
+
+                    return new com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse(
+                            accountId,
+                            "NewTempPass123!",
+                            java.time.Instant.now().plusSeconds(2592000)
+                    );
+                });
     }
 
     // ========== Account Management Tests ==========

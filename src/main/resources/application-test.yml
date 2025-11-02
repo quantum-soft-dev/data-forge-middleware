@@ -62,6 +62,7 @@ jwt:
 
 # Keycloak Configuration for tests
 keycloak:
+  enabled: false  # Disable Keycloak integration in tests
   realm: dfm-test
   auth-server-url: http://localhost:8081
   resource: dfm-backend-test
