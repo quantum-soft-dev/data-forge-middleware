@@ -46,6 +46,31 @@ jobs:
     runs-on: ubuntu-latest
     needs: setup
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: dataforge_test
+          POSTGRES_USER: dataforge
+          POSTGRES_PASSWORD: dataforge_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,6 +87,13 @@ jobs:
 
       - name: Run tests
         run: ./gradlew test --no-daemon
+        env:
+          SPRING_PROFILES_ACTIVE: test
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/dataforge_test
+          SPRING_DATASOURCE_USERNAME: dataforge
+          SPRING_DATASOURCE_PASSWORD: dataforge_test_password
+          SPRING_DATA_REDIS_HOST: localhost
+          SPRING_DATA_REDIS_PORT: 6379
 
       - name: Generate test report
         if: always()
