@@ -1,0 +1,26 @@
+# Test Profile Configuration
+# Overrides for integration tests
+
+spring:
+  main:
+    allow-bean-definition-overriding: true  # Allow test beans to override production beans
+
+# LocalStack S3 configuration for tests
+s3:
+  bucket:
+    name: data-forge-test-bucket  # LocalStack S3 bucket for tests
+  endpoint: http://localhost:4566  # LocalStack endpoint
+  region: us-east-1
+  access-key: test  # LocalStack dummy credentials
+  secret-key: test  # LocalStack dummy credentials
+
+# Keycloak configuration for tests (mock)
+keycloak:
+  enabled: false  # Disable Keycloak for tests
+  auth-server-url: http://localhost:8080
+  realm: test-realm
+  admin:
+    client-id: test-client
+    client-secret: test-secret
+    username: test-admin
+    password: test-password

@@ -1,8 +1,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/dfm
-    username: postgres
-    password: postgres
+    username: dfm
+    password: dfm_password
 
   data:
     redis:

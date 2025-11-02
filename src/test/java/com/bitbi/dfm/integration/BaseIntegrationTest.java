@@ -24,10 +24,12 @@ import org.springframework.test.web.servlet.MockMvc;
  * @author Data Forge Team
  * @version 1.0.0
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+    "keycloak.enabled=false"  // Disable Keycloak for integration tests
+})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class})
+@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
 @Sql("/test-data.sql")
 public abstract class BaseIntegrationTest {
 
