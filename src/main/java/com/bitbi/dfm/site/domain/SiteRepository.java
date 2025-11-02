@@ -23,6 +23,10 @@ public interface SiteRepository {
 
     List<Site> findActiveByAccountId(UUID accountId);
 
+    List<Site> findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(UUID accountId);
+
+    Optional<Site> findByIdAndAccountId(UUID siteId, UUID accountId);
+
     Page<Site> findAll(Pageable pageable);
 
     long countByAccountId(UUID accountId);

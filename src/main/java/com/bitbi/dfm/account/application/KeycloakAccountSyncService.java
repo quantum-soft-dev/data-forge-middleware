@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.Timer;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +39,7 @@ import java.util.UUID;
  */
 @Service
 @Transactional
+@ConditionalOnProperty(name = "keycloak.enabled", havingValue = "true", matchIfMissing = true)
 public class KeycloakAccountSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(KeycloakAccountSyncService.class);
@@ -156,8 +158,17 @@ public class KeycloakAccountSyncService {
             log.info("Account created in database with ID: {}", savedAccount.getId());
 
             // Phase 4: Bidirectional reference - update Keycloak user attributes
-            keycloakClient.updateUserAttributes(keycloakUserId, savedAccount.getId().toString());
-            log.info("Bidirectional mapping established for account ID: {}", savedAccount.getId());
+            // Only set accountId for regular users (ROLE_USER), not for admins
+            // Admins don't have accounts - they only manage the system
+            if ("USER".equalsIgnoreCase(request.role()) || "ROLE_USER".equalsIgnoreCase(request.role())) {
+                log.info("=== BEFORE updateUserAttributes call === keycloakUserId: {}, accountId: {}", keycloakUserId, savedAccount.getId());
+                log.info("=== keycloakClient instance: {}", keycloakClient.getClass().getName());
+                keycloakClient.updateUserAttributes(keycloakUserId, savedAccount.getId().toString());
+                log.info("=== AFTER updateUserAttributes call ===");
+                log.info("Bidirectional mapping established for account ID: {}", savedAccount.getId());
+            } else {
+                log.info("Skipping accountId attribute for admin user (role: {})", request.role());
+            }
 
             // Phase 5: Log success
             AdminActionLog auditLog = AdminActionLog.success(

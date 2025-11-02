@@ -9,6 +9,10 @@ const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
 const CreateAccountPage = lazy(() => import('@/pages/accounts/create/CreateAccountPage'))
 const AccountsListPage = lazy(() => import('@/pages/accounts/users/AccountsListPage'))
 const AccountDetailsPage = lazy(() => import('@/pages/accounts/details/AccountDetailsPage'))
+const UserSitesPage = lazy(() => import('@/pages/admin/user-sites/UserSitesPage'))
+const SiteManagementPage = lazy(() => import('@/pages/site-management').then(m => ({ default: m.SiteManagementPage })))
+const UploadHistoryPage = lazy(() => import('@/pages/upload-history/UploadHistoryPage'))
+const BatchDetailPage = lazy(() => import('@/pages/upload-history/BatchDetailPage'))
 
 // Router context type
 interface RouterContext {
@@ -127,6 +131,89 @@ const accountDetailsRoute = createRoute({
   component: AccountDetailsPage,
 })
 
+// Admin User Sites route (admin manages user's sites)
+const userSitesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/users/$id/sites',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Check for ADMIN role (Keycloak uses ROLE_ prefix)
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (!roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/dashboard' })
+    }
+  },
+  component: UserSitesPage,
+})
+
+// Site Management route (accessible to regular users only, not admins)
+const siteManagementRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/sites',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Redirect admins to admin panel instead
+    // Admins don't have user accounts, so they can't access user site management
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/admin/users' })
+    }
+  },
+  component: SiteManagementPage,
+})
+
+// Upload History route (accessible to regular users only, not admins)
+const uploadHistoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/upload-history',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Redirect admins to admin panel instead
+    // Admins don't have user accounts, so they can't access upload history
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/admin/users' })
+    }
+  },
+  component: UploadHistoryPage,
+})
+
+// Batch Detail route (User Story 2 - Phase 4)
+const batchDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/upload-history/$batchId',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Redirect admins to admin panel instead
+    // Admins don't have user accounts, so they can't access batch details
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/admin/users' })
+    }
+  },
+  component: BatchDetailPage,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -136,6 +223,10 @@ const routeTree = rootRoute.addChildren([
   usersListRoute,
   createAccountRoute,
   accountDetailsRoute,
+  userSitesRoute,
+  siteManagementRoute,
+  uploadHistoryRoute,
+  batchDetailRoute,
 ])
 
 // Create router instance

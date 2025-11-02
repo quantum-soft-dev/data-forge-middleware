@@ -1,0 +1,509 @@
+openapi: 3.0.3
+info:
+  title: Admin Site Management API
+  description: |
+    RESTful API for administrators with ROLE_ADMIN to manage sites on behalf of users.
+    Admins can view, create, activate, deactivate, and delete sites for any account.
+    All operations are audit-logged for compliance and security monitoring.
+  version: 1.0.0
+  contact:
+    name: Data Forge Middleware Team
+
+servers:
+  - url: https://api.dataforge.example.com/api/admin
+    description: Production server
+  - url: http://localhost:8080/api/admin
+    description: Local development server
+
+security:
+  - keycloakAuth: [admin]
+
+paths:
+  /accounts/{accountId}/sites:
+    get:
+      summary: List all sites for a specific account (admin view)
+      description: |
+        Returns a list of all active sites for the specified account, sorted by creation date (newest first).
+        Requires ROLE_ADMIN. Implements FR-010, FR-011.
+      operationId: listAccountSites
+      tags:
+        - Admin Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountIdParam'
+      responses:
+        '200':
+          description: Successfully retrieved account's sites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SiteResponse'
+              examples:
+                multipleSites:
+                  summary: Account with multiple sites
+                  value:
+                    - id: "550e8400-e29b-41d4-a716-446655440000"
+                      accountId: "123e4567-e89b-12d3-a456-426614174000"
+                      domain: "client-site.com"
+                      isActive: true
+                      createdAt: "2025-10-30T09:00:00Z"
+                      updatedAt: "2025-10-30T09:00:00Z"
+                    - id: "660e8400-e29b-41d4-a716-446655440001"
+                      accountId: "123e4567-e89b-12d3-a456-426614174000"
+                      domain: "example.com"
+                      isActive: false
+                      createdAt: "2025-10-28T14:30:00Z"
+                      updatedAt: "2025-10-29T16:45:00Z"
+                emptySites:
+                  summary: Account with no sites
+                  value: []
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 404
+                error: "Not Found"
+                message: "Account not found"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      summary: Create a new site for an account (admin operation)
+      description: |
+        Creates a new site for the specified account. Admin-created sites are identical to user-created sites.
+        Supports password generation feature for admin convenience.
+        Logs action to admin_action_logs with CREATE_SITE action type.
+        Requires ROLE_ADMIN. Implements FR-012, FR-014.
+      operationId: createSiteForAccount
+      tags:
+        - Admin Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSiteRequest'
+            examples:
+              basicSite:
+                summary: Create site with manual password
+                value:
+                  domain: "client-site.com"
+                  password: "AdminPass987"
+              generatedPassword:
+                summary: Create site with generated password
+                value:
+                  domain: "partner.org"
+                  password: "gH3kLm9Np"
+      responses:
+        '201':
+          description: Site created successfully for the account
+          headers:
+            Location:
+              description: URL of the created site resource
+              schema:
+                type: string
+                example: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites/550e8400-e29b-41d4-a716-446655440000"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                accountId: "123e4567-e89b-12d3-a456-426614174000"
+                domain: "client-site.com"
+                isActive: true
+                createdAt: "2025-10-30T14:30:00Z"
+                updatedAt: "2025-10-30T14:30:00Z"
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 404
+                error: "Not Found"
+                message: "Account not found"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+        '409':
+          description: Conflict - Domain already exists for this account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 409
+                error: "Conflict"
+                message: "Domain 'client-site.com' already exists for this account"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}/sites/{siteId}/deactivate:
+    post:
+      summary: Deactivate a site (admin operation)
+      description: |
+        Deactivates a site for the specified account. Logs action to admin_action_logs with DEACTIVATE_SITE action type.
+        Requires ROLE_ADMIN. Implements FR-013, FR-014.
+      operationId: deactivateSiteForAccount
+      tags:
+        - Admin Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountIdParam'
+        - $ref: '#/components/parameters/SiteIdParam'
+      responses:
+        '200':
+          description: Site deactivated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                accountId: "123e4567-e89b-12d3-a456-426614174000"
+                domain: "client-site.com"
+                isActive: false
+                createdAt: "2025-10-30T09:00:00Z"
+                updatedAt: "2025-10-30T14:45:00Z"
+        '400':
+          description: Bad Request - Site is already inactive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T14:45:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Site is already inactive"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites/550e8400-e29b-41d4-a716-446655440000/deactivate"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}/sites/{siteId}/activate:
+    post:
+      summary: Activate a site (admin operation)
+      description: |
+        Activates a site for the specified account. Logs action to admin_action_logs with ACTIVATE_SITE action type.
+        Requires ROLE_ADMIN. Implements FR-013, FR-014.
+      operationId: activateSiteForAccount
+      tags:
+        - Admin Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountIdParam'
+        - $ref: '#/components/parameters/SiteIdParam'
+      responses:
+        '200':
+          description: Site activated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                accountId: "123e4567-e89b-12d3-a456-426614174000"
+                domain: "client-site.com"
+                isActive: true
+                createdAt: "2025-10-30T09:00:00Z"
+                updatedAt: "2025-10-30T15:00:00Z"
+        '400':
+          description: Bad Request - Site is already active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-10-30T15:00:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Site is already active"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites/550e8400-e29b-41d4-a716-446655440000/activate"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}/sites/{siteId}:
+    delete:
+      summary: Delete a site (admin operation)
+      description: |
+        Soft-deletes a site for the specified account. Logs action to admin_action_logs with DELETE_SITE action type.
+        Requires ROLE_ADMIN. Implements FR-013, FR-014, FR-021.
+      operationId: deleteSiteForAccount
+      tags:
+        - Admin Site Management
+      parameters:
+        - $ref: '#/components/parameters/AccountIdParam'
+        - $ref: '#/components/parameters/SiteIdParam'
+      responses:
+        '204':
+          description: Site deleted successfully (no content returned)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    keycloakAuth:
+      type: oauth2
+      description: Keycloak OAuth 2.0 / OpenID Connect authentication with ROLE_ADMIN
+      flows:
+        authorizationCode:
+          authorizationUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/auth
+          tokenUrl: https://keycloak.example.com/realms/dataforge/protocol/openid-connect/token
+          scopes:
+            openid: OpenID Connect scope
+            profile: User profile information
+            email: User email address
+            admin: Administrative access (mapped from ROLE_ADMIN)
+
+  parameters:
+    AccountIdParam:
+      name: accountId
+      in: path
+      required: true
+      description: UUID of the account (user)
+      schema:
+        type: string
+        format: uuid
+      example: "123e4567-e89b-12d3-a456-426614174000"
+
+    SiteIdParam:
+      name: siteId
+      in: path
+      required: true
+      description: UUID of the site
+      schema:
+        type: string
+        format: uuid
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+  schemas:
+    CreateSiteRequest:
+      type: object
+      required:
+        - domain
+        - password
+      properties:
+        domain:
+          type: string
+          minLength: 3
+          maxLength: 255
+          pattern: '^[a-z0-9.-]+$'
+          description: Domain name (lowercase alphanumeric, dots, hyphens only)
+          example: "client-site.com"
+        password:
+          type: string
+          minLength: 8
+          format: password
+          description: Site password (minimum 8 characters, admin can provide or generate)
+          example: "AdminPass987"
+
+    SiteResponse:
+      type: object
+      required:
+        - id
+        - accountId
+        - domain
+        - isActive
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the site
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        accountId:
+          type: string
+          format: uuid
+          description: ID of the owning account
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        domain:
+          type: string
+          description: Domain name
+          example: "client-site.com"
+        isActive:
+          type: boolean
+          description: Whether the site is active (true) or inactive/deleted (false)
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when the site was created (ISO 8601)
+          example: "2025-10-30T09:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp when the site was last modified (ISO 8601)
+          example: "2025-10-30T14:30:00Z"
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the error occurred (ISO 8601)
+          example: "2025-10-30T14:30:00Z"
+        status:
+          type: integer
+          description: HTTP status code
+          example: 403
+        error:
+          type: string
+          description: HTTP status text
+          example: "Forbidden"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Access denied. Requires ROLE_ADMIN."
+        path:
+          type: string
+          description: Request path that caused the error
+          example: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+        validationErrors:
+          type: object
+          additionalProperties:
+            type: string
+          description: Field-level validation errors (optional, present only for 400 Bad Request)
+          example:
+            domain: "Domain must be at least 3 characters"
+            password: "Password must be at least 8 characters"
+
+  responses:
+    Unauthorized:
+      description: Unauthorized - Invalid or missing authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-30T14:30:00Z"
+            status: 401
+            error: "Unauthorized"
+            message: "Authentication token is missing or invalid"
+            path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+
+    Forbidden:
+      description: Forbidden - User does not have ROLE_ADMIN
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-30T14:30:00Z"
+            status: 403
+            error: "Forbidden"
+            message: "Access denied. Requires ROLE_ADMIN."
+            path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+
+    NotFound:
+      description: Not Found - Account or site does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            accountNotFound:
+              summary: Account not found
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 404
+                error: "Not Found"
+                message: "Account not found"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+            siteNotFound:
+              summary: Site not found
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 404
+                error: "Not Found"
+                message: "Site not found"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites/550e8400-e29b-41d4-a716-446655440000"
+
+    ValidationError:
+      description: Bad Request - Validation errors in request body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            domainTooShort:
+              summary: Domain validation error
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Validation failed"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+                validationErrors:
+                  domain: "Domain must be at least 3 characters"
+            passwordTooShort:
+              summary: Password validation error
+              value:
+                timestamp: "2025-10-30T14:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Validation failed"
+                path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+                validationErrors:
+                  password: "Password must be at least 8 characters"
+
+    InternalServerError:
+      description: Internal Server Error - Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-10-30T14:30:00Z"
+            status: 500
+            error: "Internal Server Error"
+            message: "An unexpected error occurred. Please try again later."
+            path: "/api/admin/accounts/123e4567-e89b-12d3-a456-426614174000/sites"
+
+tags:
+  - name: Admin Site Management
+    description: Operations for administrators to manage sites on behalf of users (requires ROLE_ADMIN)

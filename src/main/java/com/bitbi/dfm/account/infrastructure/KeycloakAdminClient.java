@@ -7,6 +7,9 @@ import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.representations.idm.CredentialRepresentation;
 import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.Collections;
@@ -23,7 +26,10 @@ import java.util.List;
  * @version 1.0.0
  */
 @Component
+@ConditionalOnProperty(name = "keycloak.enabled", havingValue = "true", matchIfMissing = true)
 public class KeycloakAdminClient {
+
+    private static final Logger log = LoggerFactory.getLogger(KeycloakAdminClient.class);
 
     private final Keycloak keycloak;
     private final String realm;
@@ -236,11 +242,32 @@ public class KeycloakAdminClient {
      */
     public void updateUserAttributes(String keycloakUserId, String accountId) {
         try {
+            log.debug("Updating user attributes for Keycloak user: {}, accountId: {}", keycloakUserId, accountId);
+
             UserResource userResource = keycloak.realm(realm).users().get(keycloakUserId);
             UserRepresentation user = userResource.toRepresentation();
-            user.singleAttribute("accountId", accountId);
+
+            // Initialize attributes map if null
+            if (user.getAttributes() == null) {
+                user.setAttributes(new java.util.HashMap<>());
+                log.debug("Initialized new attributes map for user {}", keycloakUserId);
+            } else {
+                log.debug("Existing attributes for user {}: {}", keycloakUserId, user.getAttributes());
+            }
+
+            // Set accountId attribute as List (Keycloak expects List<String> for attributes)
+            user.getAttributes().put("accountId", java.util.Collections.singletonList(accountId));
+            log.debug("Set accountId={} for user {}", accountId, keycloakUserId);
+            log.debug("Attributes before update: {}", user.getAttributes());
+
             userResource.update(user);
+            log.info("Successfully updated user attributes for Keycloak user: {}, accountId: {}", keycloakUserId, accountId);
+
+            // Verify the update by reading back
+            UserRepresentation updatedUser = userResource.toRepresentation();
+            log.info("VERIFICATION: Attributes after update: {}", updatedUser.getAttributes());
         } catch (Exception e) {
+            log.error("Failed to update user attributes for Keycloak user: {}, accountId: {}", keycloakUserId, accountId, e);
             throw new KeycloakOperationException("Error updating Keycloak user attributes: " + e.getMessage(), e);
         }
     }

@@ -1,9 +1,14 @@
 package com.bitbi.dfm.site.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -32,9 +37,21 @@ public class SiteService {
     private static final Logger logger = LoggerFactory.getLogger(SiteService.class);
 
     private final SiteRepository siteRepository;
+    private final BatchRepository batchRepository;
+    private final ErrorLogRepository errorLogRepository;
+    private final UploadedFileRepository uploadedFileRepository;
+    private final S3FileStorageService s3FileStorageService;
 
-    public SiteService(SiteRepository siteRepository) {
+    public SiteService(SiteRepository siteRepository,
+                       BatchRepository batchRepository,
+                       ErrorLogRepository errorLogRepository,
+                       UploadedFileRepository uploadedFileRepository,
+                       S3FileStorageService s3FileStorageService) {
         this.siteRepository = siteRepository;
+        this.batchRepository = batchRepository;
+        this.errorLogRepository = errorLogRepository;
+        this.uploadedFileRepository = uploadedFileRepository;
+        this.s3FileStorageService = s3FileStorageService;
     }
 
     /**
@@ -49,20 +66,61 @@ public class SiteService {
     public SiteCreationResult createSite(UUID accountId, String domain, String displayName) {
         logger.info("Creating new site: accountId={}, domain={}, displayName={}", accountId, domain, displayName);
 
-        if (siteRepository.findByDomain(domain).isPresent()) {
+        // Create composite domain: accountId_domain (FR-019)
+        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+
+        if (siteRepository.findByDomain(compositeDomain).isPresent()) {
             throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
         }
 
         // Generate plaintext secret and bcrypt hash
-        String[] secretPair = SiteCredentials.generateWithHash(domain);
+        String[] secretPair = SiteCredentials.generateWithHash(compositeDomain);
         String plaintextSecret = secretPair[0];
         String hashedSecret = secretPair[1];
 
-        Site site = Site.create(accountId, domain, displayName, hashedSecret);
+        Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
         Site saved = siteRepository.save(site);
 
-        logger.info("Site created successfully: id={}, domain={}", saved.getId(), saved.getDomain());
+        logger.info("Site created successfully: id={}, compositeDomain={}", saved.getId(), saved.getDomain());
         return new SiteCreationResult(saved, plaintextSecret);
+    }
+
+    /**
+     * Create new site for account with custom password.
+     *
+     * @param accountId   account identifier
+     * @param domain      site domain (must be unique)
+     * @param displayName site display name
+     * @param password    plaintext password (min 8 chars)
+     * @return SiteCreationResult with site and plaintext clientSecret
+     * @throws SiteAlreadyExistsException if domain already exists
+     * @throws IllegalArgumentException if password is invalid
+     */
+    public SiteCreationResult createSite(UUID accountId, String domain, String displayName, String password) {
+        logger.info("Creating new site with custom password: accountId={}, domain={}, displayName={}",
+                    accountId, domain, displayName);
+
+        if (password == null || password.length() < 8) {
+            throw new IllegalArgumentException("Password must be at least 8 characters");
+        }
+
+        // Create composite domain: accountId_domain (FR-019)
+        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+
+        if (siteRepository.findByDomain(compositeDomain).isPresent()) {
+            throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
+        }
+
+        // Hash the provided password
+        String[] secretPair = SiteCredentials.hashPassword(password);
+        String hashedSecret = secretPair[1];
+
+        Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
+        Site saved = siteRepository.save(site);
+
+        logger.info("Site created successfully with custom password: id={}, compositeDomain={}",
+                    saved.getId(), saved.getDomain());
+        return new SiteCreationResult(saved, password); // Return original password
     }
 
     /**
@@ -120,6 +178,17 @@ public class SiteService {
     @Transactional(readOnly = true)
     public List<Site> listActiveSitesByAccount(UUID accountId) {
         return siteRepository.findActiveByAccountId(accountId);
+    }
+
+    /**
+     * List all sites for account (both active and inactive), sorted by creation date (newest first).
+     *
+     * @param accountId account identifier
+     * @return list of all sites sorted by createdAt DESC
+     */
+    @Transactional(readOnly = true)
+    public List<Site> listAccountSites(UUID accountId) {
+        return siteRepository.findByAccountId(accountId);
     }
 
     /**
@@ -196,6 +265,83 @@ public class SiteService {
 
         logger.info("Site reactivated successfully: id={}", siteId);
         return saved;
+    }
+
+    /**
+     * Delete site (hard delete with cascade).
+     * <p>
+     * Permanently deletes site and all associated data:
+     * - All batches for this site
+     * - All uploaded files for these batches
+     * - All error logs for this site
+     * - The site record itself
+     * </p>
+     * <p>
+     * WARNING: This action cannot be undone. All data will be permanently lost.
+     * For temporary disabling, use deactivateSite() instead.
+     * </p>
+     * <p>
+     * <b>Orphaned S3 Files:</b> If S3 deletion fails but database cleanup continues,
+     * orphaned files may remain in S3. The method logs errors at ERROR level and
+     * continues with database cleanup to prevent stuck state. Consider implementing
+     * periodic orphan detection and cleanup jobs for production environments.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @throws SiteNotFoundException if site not found
+     */
+    public void deleteSite(UUID siteId) {
+        logger.warn("Hard deleting site and all associated data: id={}", siteId);
+
+        Site site = getSite(siteId);
+
+        // Step 1: Find all batches for this site
+        List<Batch> batches = batchRepository.findBySiteId(siteId, Pageable.unpaged()).getContent();
+        List<UUID> batchIds = batches.stream().map(Batch::getId).toList();
+
+        logger.info("Found {} batches to delete for site: {}", batches.size(), siteId);
+
+        // Step 2: Delete all uploaded files for these batches (from database AND S3)
+        if (!batchIds.isEmpty()) {
+            for (UUID batchId : batchIds) {
+                List<com.bitbi.dfm.upload.domain.UploadedFile> files = uploadedFileRepository.findByBatchId(batchId);
+                logger.info("Deleting {} uploaded files for batch: {}", files.size(), batchId);
+                for (com.bitbi.dfm.upload.domain.UploadedFile file : files) {
+                    // Delete from S3 first
+                    try {
+                        s3FileStorageService.deleteFile(file.getS3Key());
+                        logger.debug("Deleted S3 file: {}", file.getS3Key());
+                    } catch (Exception e) {
+                        logger.error("Failed to delete S3 file (continuing with database cleanup): key={}, error={}",
+                                   file.getS3Key(), e.getMessage());
+                        // Continue with database cleanup even if S3 deletion fails
+                    }
+                    // Delete from database
+                    uploadedFileRepository.deleteById(file.getId());
+                }
+            }
+        }
+
+        // Step 3: Delete all error logs for this site
+        List<com.bitbi.dfm.error.domain.ErrorLog> errorLogs = errorLogRepository.findBySiteId(siteId);
+        logger.info("Deleting {} error logs for site: {}", errorLogs.size(), siteId);
+        for (com.bitbi.dfm.error.domain.ErrorLog errorLog : errorLogs) {
+            errorLogRepository.deleteById(errorLog.getId());
+        }
+
+        // Step 4: Delete all batches for this site
+        if (!batches.isEmpty()) {
+            logger.info("Deleting {} batches for site: {}", batches.size(), siteId);
+            for (Batch batch : batches) {
+                batchRepository.deleteById(batch.getId());
+            }
+        }
+
+        // Step 5: Delete the site itself
+        logger.info("Deleting site record: id={}", siteId);
+        siteRepository.deleteById(siteId);
+
+        logger.warn("Site and all associated data permanently deleted: id={}, domain={}", siteId, site.getDomain());
     }
 
     /**

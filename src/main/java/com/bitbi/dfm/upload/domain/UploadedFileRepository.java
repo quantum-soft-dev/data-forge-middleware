@@ -27,4 +27,6 @@ public interface UploadedFileRepository {
     long count();
 
     UploadedFile save(UploadedFile file);
+
+    void deleteById(UUID id);
 }

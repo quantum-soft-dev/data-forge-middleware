@@ -57,7 +57,10 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["ROLE_ADMIN", "ROLE_USER"]
+      "realmRoles": ["ROLE_ADMIN", "ROLE_USER"],
+      "attributes": {
+        "accountId": ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
+      }
     },
     {
       "username": "user",
@@ -73,7 +76,10 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["ROLE_USER"]
+      "realmRoles": ["ROLE_USER"],
+      "attributes": {
+        "accountId": ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
+      }
     }
   ],
   "clients": [
@@ -137,6 +143,20 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "email",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "account-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "accountId",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "accountId",
             "jsonType.label": "String"
           }
         }
@@ -225,6 +245,20 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "preferred_username",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "account-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "accountId",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "accountId",
             "jsonType.label": "String"
           }
         }

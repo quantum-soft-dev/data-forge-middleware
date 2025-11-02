@@ -1,11 +1,14 @@
 package com.bitbi.dfm.batch.domain;
 
+import com.bitbi.dfm.upload.domain.UploadedFile;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -62,6 +65,9 @@ public class Batch {
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
+
+    @OneToMany(mappedBy = "batchId", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private List<UploadedFile> uploadedFiles = new ArrayList<>();
 
     protected Batch(UUID id, UUID accountId, UUID siteId, BatchStatus status, String s3Path,
                     Integer uploadedFilesCount, Long totalSize, Boolean hasErrors,

@@ -13,7 +13,11 @@ public enum AdminActionType {
     CREATE_ACCOUNT("Create Account"),
     LOCK_ACCOUNT("Lock Account"),
     UNLOCK_ACCOUNT("Unlock Account"),
-    RESET_PASSWORD("Reset Password");
+    RESET_PASSWORD("Reset Password"),
+    CREATE_SITE("Create Site"),
+    DEACTIVATE_SITE("Deactivate Site"),
+    ACTIVATE_SITE("Activate Site"),
+    DELETE_SITE("Delete Site");
 
     private final String displayName;
 

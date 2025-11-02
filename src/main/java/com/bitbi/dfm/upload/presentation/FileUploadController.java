@@ -38,13 +38,16 @@ public class FileUploadController {
     private final FileUploadService fileUploadService;
     private final TokenService tokenService;
     private final com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService;
+    private final com.bitbi.dfm.site.domain.SiteRepository siteRepository;
 
     public FileUploadController(FileUploadService fileUploadService,
                                 TokenService tokenService,
-                                com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService) {
+                                com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService,
+                                com.bitbi.dfm.site.domain.SiteRepository siteRepository) {
         this.fileUploadService = fileUploadService;
         this.tokenService = tokenService;
         this.batchLifecycleService = batchLifecycleService;
+        this.siteRepository = siteRepository;
     }
 
     /**
@@ -78,6 +81,15 @@ public class FileUploadController {
                     return ResponseEntity.status(HttpStatus.FORBIDDEN)
                             .body(createErrorResponse(HttpStatus.FORBIDDEN,
                                   "Cannot upload files to batch owned by another site"));
+                }
+
+                // ✅ SITE STATUS CHECK: Verify site is active before allowing uploads
+                com.bitbi.dfm.site.domain.Site site = getSiteById(batch.getSiteId());
+                if (!site.getIsActive()) {
+                    logger.warn("File upload attempt for inactive site: siteId={}, batchId={}", siteId, batchId);
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(createErrorResponse(HttpStatus.FORBIDDEN,
+                                  "Cannot upload files to inactive site. Please activate the site first."));
                 }
             } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
                 logger.warn("Batch not found during authorization check: {}", batchId);
@@ -238,5 +250,10 @@ public class FileUploadController {
         error.put("error", status.getReasonPhrase());
         error.put("message", message);
         return error;
+    }
+
+    private com.bitbi.dfm.site.domain.Site getSiteById(UUID siteId) {
+        return siteRepository.findById(siteId)
+                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + siteId));
     }
 }

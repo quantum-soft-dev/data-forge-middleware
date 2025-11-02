@@ -145,6 +145,36 @@ public class S3FileStorageService {
     }
 
     /**
+     * Delete file from S3.
+     * <p>
+     * Permanently deletes an object from S3 bucket.
+     * If the file doesn't exist, no error is thrown (idempotent operation).
+     * </p>
+     *
+     * @param s3Key full S3 object key
+     * @throws FileStorageException if deletion fails
+     */
+    public void deleteFile(String s3Key) {
+        try {
+            logger.debug("Deleting file from S3: bucket={}, key={}", bucketName, s3Key);
+
+            s3Client.deleteObject(builder -> builder
+                    .bucket(bucketName)
+                    .key(s3Key));
+
+            logger.info("Successfully deleted file from S3: key={}", s3Key);
+
+        } catch (S3Exception e) {
+            // 404 means file doesn't exist - treat as success (idempotent)
+            if (e.statusCode() == 404) {
+                logger.warn("File not found in S3 (already deleted?): key={}", s3Key);
+                return;
+            }
+            throw new FileStorageException("Failed to delete file from S3: " + s3Key, e);
+        }
+    }
+
+    /**
      * Calculate exponential backoff delay with jitter.
      * <p>
      * Formula: min(BASE_DELAY * 2^(attempt-1) + random(0, BASE_DELAY), MAX_DELAY)

@@ -11,6 +11,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
 
@@ -69,6 +70,47 @@ public class S3Configuration {
     @Profile("prod")
     public S3Client s3ClientAws() {
         return S3Client.builder()
+                .region(Region.of(region))
+                .credentialsProvider(DefaultCredentialsProvider.create())
+                .build();
+    }
+
+    /**
+     * S3Presigner for dev/test environments using LocalStack.
+     * <p>
+     * Used for generating presigned URLs for direct client-to-S3 downloads.
+     * IMPORTANT: LocalStack requires path-style URLs (bucket in path, not subdomain).
+     * </p>
+     */
+    @Bean
+    @Profile({"dev", "test"})
+    public S3Presigner s3PresignerLocalStack(
+            @Value("${s3.endpoint:http://localhost:4566}") String endpoint,
+            @Value("${s3.access-key:test}") String accessKey,
+            @Value("${s3.secret-key:test}") String secretKey) {
+
+        AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKey, secretKey);
+
+        return S3Presigner.builder()
+                .region(Region.of(region))
+                .endpointOverride(URI.create(endpoint))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .serviceConfiguration(software.amazon.awssdk.services.s3.S3Configuration.builder()
+                        .pathStyleAccessEnabled(true) // Required for LocalStack presigned URLs
+                        .build())
+                .build();
+    }
+
+    /**
+     * S3Presigner for production environment using AWS.
+     * <p>
+     * Uses DefaultCredentialsProvider (same as S3Client).
+     * </p>
+     */
+    @Bean
+    @Profile("prod")
+    public S3Presigner s3PresignerAws() {
+        return S3Presigner.builder()
                 .region(Region.of(region))
                 .credentialsProvider(DefaultCredentialsProvider.create())
                 .build();

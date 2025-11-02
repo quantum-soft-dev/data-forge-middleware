@@ -44,6 +44,32 @@ export function Header() {
               Dashboard
             </Link>
 
+            {/* Site Management - only visible for regular users (not admins) */}
+            {!isAdmin && (
+              <Link
+                to="/account/sites"
+                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                activeProps={{
+                  className: 'text-sm font-medium text-primary hover:text-primary',
+                }}
+              >
+                Site Management
+              </Link>
+            )}
+
+            {/* Upload History - only visible for regular users (not admins) */}
+            {!isAdmin && (
+              <Link
+                to="/account/upload-history"
+                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                activeProps={{
+                  className: 'text-sm font-medium text-primary hover:text-primary',
+                }}
+              >
+                Upload History
+              </Link>
+            )}
+
             {/* User Management - only visible for ADMIN role */}
             {isAdmin && (
               <Link

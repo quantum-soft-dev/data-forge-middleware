@@ -50,6 +50,9 @@ class AdminContractTest {
     @MockBean
     private KeycloakAdminClient keycloakAdminClient;
 
+    @MockBean
+    private com.bitbi.dfm.account.application.KeycloakAccountSyncService keycloakAccountSyncService;
+
     private static final String MOCK_ADMIN_JWT_TOKEN = "mock.admin.jwt.token";
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
     private static final String MOCK_ACCOUNT_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
@@ -105,6 +108,144 @@ class AdminContractTest {
 
         // For reset password
         doNothing().when(keycloakAdminClient).resetPassword(anyString(), anyString());
+
+        // Mock KeycloakAccountSyncService methods
+        when(keycloakAccountSyncService.createAccount(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.CreateAccountResponse>) invocation -> {
+                    com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto request = invocation.getArgument(0);
+                    String keycloakUserId = UUID.randomUUID().toString();
+                    java.time.Instant now = java.time.Instant.now();
+
+                    // Create mock account response with all required fields
+                    com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse accountResponse =
+                            new com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse(
+                                    UUID.randomUUID(),
+                                    keycloakUserId,
+                                    request.email(),
+                                    request.name(),
+                                    request.phone(),
+                                    request.company(),
+                                    true,              // isActive
+                                    true,              // keycloakEnabled
+                                    true,              // passwordTemporary
+                                    now.plusSeconds(2592000), // passwordExpiresAt (30 days)
+                                    null,              // lastLogin
+                                    now,               // createdAt
+                                    now                // updatedAt
+                            );
+
+                    return new com.bitbi.dfm.account.presentation.dto.CreateAccountResponse(
+                            accountResponse,
+                            "TempPass123!"
+                    );
+                });
+
+        // Track locked accounts for stateful lock/unlock behavior
+        java.util.Set<UUID> lockedAccounts = new java.util.HashSet<>();
+
+        when(keycloakAccountSyncService.lockAccount(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse>) invocation -> {
+                    UUID accountId = invocation.getArgument(0);
+
+                    // Check if account without Keycloak integration (from test-data.sql)
+                    if (accountId.toString().equals("0199bab1-fad2-bf76-c478-eae1f61e1c17")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.NoKeycloakIntegrationException("Account does not have Keycloak integration");
+                    }
+
+                    // Check if account doesn't exist (non-existent UUIDs)
+                    if (accountId.toString().equals("99999999-9999-9999-9999-999999999999") ||
+                        accountId.toString().equals("00000000-0000-0000-0000-000000000000")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountNotFoundException("Account not found");
+                    }
+
+                    // Check if already locked
+                    if (lockedAccounts.contains(accountId)) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountAlreadyLockedException("Account is already locked");
+                    }
+
+                    // Mark as locked
+                    lockedAccounts.add(accountId);
+
+                    java.time.Instant now = java.time.Instant.now();
+                    return new com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse(
+                            accountId,
+                            MOCK_KEYCLOAK_USER_ID,
+                            "locked@example.com",
+                            "Locked User",
+                            null,              // phone
+                            null,              // company
+                            true,              // isActive (business logic)
+                            false,             // keycloakEnabled (authentication disabled)
+                            false,             // passwordTemporary
+                            null,              // passwordExpiresAt
+                            null,              // lastLogin
+                            now,               // createdAt
+                            now                // updatedAt
+                    );
+                });
+
+        when(keycloakAccountSyncService.unlockAccount(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse>) invocation -> {
+                    UUID accountId = invocation.getArgument(0);
+
+                    // Check if account without Keycloak integration (from test-data.sql)
+                    if (accountId.toString().equals("0199bab1-fad2-bf76-c478-eae1f61e1c17")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.NoKeycloakIntegrationException("Account does not have Keycloak integration");
+                    }
+
+                    // Check if account doesn't exist (non-existent UUIDs)
+                    if (accountId.toString().equals("99999999-9999-9999-9999-999999999999") ||
+                        accountId.toString().equals("00000000-0000-0000-0000-000000000000")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountNotFoundException("Account not found");
+                    }
+
+                    // Check if already unlocked (not in locked set)
+                    if (!lockedAccounts.contains(accountId)) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountAlreadyUnlockedException("Account is already unlocked");
+                    }
+
+                    // Remove from locked set
+                    lockedAccounts.remove(accountId);
+
+                    java.time.Instant now = java.time.Instant.now();
+                    return new com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse(
+                            accountId,
+                            MOCK_KEYCLOAK_USER_ID,
+                            "unlocked@example.com",
+                            "Unlocked User",
+                            null,              // phone
+                            null,              // company
+                            true,              // isActive (business logic)
+                            true,              // keycloakEnabled (authentication enabled)
+                            false,             // passwordTemporary
+                            null,              // passwordExpiresAt
+                            null,              // lastLogin
+                            now,               // createdAt
+                            now                // updatedAt
+                    );
+                });
+
+        when(keycloakAccountSyncService.resetPassword(any(), any(), anyString(), anyString()))
+                .thenAnswer((Answer<com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse>) invocation -> {
+                    UUID accountId = invocation.getArgument(0);
+
+                    // Check if account without Keycloak integration (from test-data.sql)
+                    if (accountId.toString().equals("0199bab1-fad2-bf76-c478-eae1f61e1c17")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.NoKeycloakIntegrationException("Account does not have Keycloak integration");
+                    }
+
+                    // Check if account doesn't exist (non-existent UUIDs)
+                    if (accountId.toString().equals("99999999-9999-9999-9999-999999999999") ||
+                        accountId.toString().equals("00000000-0000-0000-0000-000000000000")) {
+                        throw new com.bitbi.dfm.account.application.KeycloakAccountSyncService.AccountNotFoundException("Account not found");
+                    }
+
+                    return new com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse(
+                            accountId,
+                            "NewTempPass123!",
+                            java.time.Instant.now().plusSeconds(2592000)
+                    );
+                });
     }
 
     // ========== Account Management Tests ==========
@@ -786,7 +927,7 @@ class AdminContractTest {
     }
 
     /**
-     * Test Case 9: Delete site should return 204.
+     * Test Case 9: Delete site should return 200 with deactivated site (soft delete via isActive=false).
      */
     @Test
     @DisplayName("Should soft delete site when admin authenticated")
@@ -795,8 +936,9 @@ class AdminContractTest {
         mockMvc.perform(delete("/api/admin/sites/{id}", MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
-                // Then: 204 No Content
-                .andExpect(status().isNoContent());
+                // Then: 200 OK with deactivated site
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isActive").value(false));
     }
 
     // ========== CreateSiteRequestDto Validation Tests ==========
@@ -890,12 +1032,12 @@ class AdminContractTest {
     void shouldRejectSiteCreationWithInvalidDomainFormat() throws Exception {
         String requestBody = """
                 {
-                  "domain": "UPPERCASE.COM",
+                  "domain": "invalid domain!@#",
                   "displayName": "Test Site"
                 }
                 """;
 
-        // When: POST /admin/accounts/{accountId}/sites with uppercase domain
+        // When: POST /admin/accounts/{accountId}/sites with invalid characters
         mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1698,5 +1840,117 @@ class AdminContractTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.content").isArray())
                 .andExpect(jsonPath("$.content[?(@.name =~ /.*admin.*/i)]").exists());
+    }
+
+    // ========== Site Management Tests (User Story 5 - Admin Site Operations) ==========
+
+    /**
+     * Test Case 29 (T096): Admin deactivate site should return 204 and log action.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND site exists
+     * When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate
+     * Then: 204 No Content (site soft-deleted, audit log created)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should deactivate site when admin authenticated (US5)")
+    void shouldDeactivateSiteWhenAdminAuthenticated() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK with deactivated site
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isActive").value(false));
+    }
+
+    /**
+     * Test Case 30 (T097): Admin activate site should return 200 and log action.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND site exists (deactivated)
+     * When: POST /admin/accounts/{accountId}/sites/{siteId}/activate
+     * Then: 200 OK with SiteResponseDto (site reactivated, audit log created)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should activate site when admin authenticated (US5)")
+    void shouldActivateSiteWhenAdminAuthenticated() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/activate
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/activate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 200 OK with site details
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.domain").exists())
+                .andExpect(jsonPath("$.isActive").value(true));
+    }
+
+    /**
+     * Test Case 31 (T098): Admin delete site should return 204 and log action.
+     * <p>
+     * Given: Admin authenticated with ROLE_ADMIN AND site exists
+     * When: DELETE /admin/accounts/{accountId}/sites/{siteId}
+     * Then: 204 No Content (site hard-deleted with cascade, audit log created)
+     * </p>
+     */
+    @Test
+    @DisplayName("Should hard delete site when admin authenticated (US5)")
+    void shouldHardDeleteSiteWhenAdminAuthenticated() throws Exception {
+        // When: DELETE /admin/accounts/{accountId}/sites/{siteId}
+        mockMvc.perform(delete("/api/admin/accounts/{accountId}/sites/{siteId}",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
+
+                // Then: 204 No Content
+                .andExpect(status().isNoContent());
+    }
+
+    /**
+     * Test Case 32: Non-admin should not be able to deactivate site.
+     */
+    @Test
+    @DisplayName("Should reject site deactivation when user lacks ROLE_ADMIN (US5)")
+    void shouldRejectSiteDeactivationWhenUserLacksRoleAdmin() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Test Case 33: Non-admin should not be able to activate site.
+     */
+    @Test
+    @DisplayName("Should reject site activation when user lacks ROLE_ADMIN (US5)")
+    void shouldRejectSiteActivationWhenUserLacksRoleAdmin() throws Exception {
+        // When: POST /admin/accounts/{accountId}/sites/{siteId}/activate with non-admin token
+        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/activate",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Test Case 34: Non-admin should not be able to delete site.
+     */
+    @Test
+    @DisplayName("Should reject site deletion when user lacks ROLE_ADMIN (US5)")
+    void shouldRejectSiteDeletionWhenUserLacksRoleAdmin() throws Exception {
+        // When: DELETE /admin/accounts/{accountId}/sites/{siteId} with non-admin token
+        mockMvc.perform(delete("/api/admin/accounts/{accountId}/sites/{siteId}",
+                        MOCK_ACCOUNT_ID, MOCK_SITE_ID)
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden());
     }
 }

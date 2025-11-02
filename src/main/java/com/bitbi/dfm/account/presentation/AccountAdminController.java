@@ -28,6 +28,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -75,9 +76,9 @@ public class AccountAdminController {
             AccountService accountService,
             AccountStatisticsService accountStatisticsService,
             AccountProperties accountProperties,
-            KeycloakAccountSyncService keycloakSyncService,
+            @Autowired(required = false) KeycloakAccountSyncService keycloakSyncService,
             AdminActionLogRepository auditLogRepository,
-            com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient,
+            @Autowired(required = false) com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient,
             com.bitbi.dfm.account.domain.AccountRepository accountRepository) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
@@ -197,6 +198,11 @@ public class AccountAdminController {
             throw new IllegalArgumentException("Account does not have Keycloak integration");
         }
 
+        if (keycloakAdminClient == null) {
+            logger.error("Keycloak integration is disabled - cannot fetch account details with Keycloak");
+            throw new IllegalStateException("Keycloak integration is disabled");
+        }
+
         try {
             String keycloakUserId = account.getKeycloakUserId();
             org.keycloak.representations.idm.UserRepresentation keycloakUser =
@@ -263,6 +269,11 @@ public class AccountAdminController {
 
         // Query database with filter applied at DB level (fixes N+1 and pagination issues)
         Page<Account> accountPage = accountRepository.findAccountsWithKeycloak(search, pageable);
+
+        if (keycloakAdminClient == null) {
+            logger.error("Keycloak integration is disabled - cannot list accounts with Keycloak");
+            throw new IllegalStateException("Keycloak integration is disabled");
+        }
 
         // Enrich with Keycloak data (only for accounts already filtered by DB)
         java.util.List<com.bitbi.dfm.account.presentation.dto.AccountWithKeycloakResponse> enrichedAccounts = accountPage.getContent().stream()
@@ -545,6 +556,12 @@ public class AccountAdminController {
                 request.phone() != null ? "[set]" : "[not set]",
                 request.company() != null ? "[set]" : "[not set]");
 
+        if (keycloakSyncService == null) {
+            logger.error("Keycloak integration is disabled - cannot create account with Keycloak");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(null);
+        }
+
         // TODO: Extract admin account ID from Spring Security context (Keycloak JWT sub claim)
         // For now, passing null - audit logs will have null admin_account_id until we implement
         // proper Keycloak user ID to local account ID mapping
@@ -597,6 +614,11 @@ public class AccountAdminController {
             @RequestHeader(value = "User-Agent", required = false) String userAgent) {
 
         logger.info("Locking account: accountId={}", accountId);
+
+        if (keycloakSyncService == null) {
+            logger.error("Keycloak integration is disabled - cannot lock account");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(null);
+        }
 
         // TODO: Extract admin account ID from Spring Security context
         // For now, passing null - audit logs will have null admin_account_id until we implement
@@ -651,6 +673,11 @@ public class AccountAdminController {
 
         logger.info("Unlocking account: accountId={}", accountId);
 
+        if (keycloakSyncService == null) {
+            logger.error("Keycloak integration is disabled - cannot unlock account");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(null);
+        }
+
         // TODO: Extract admin account ID from Spring Security context
         // For now, passing null - audit logs will have null admin_account_id until we implement
         // proper Keycloak user ID to Account mapping (V13 migration makes this column nullable)
@@ -704,6 +731,11 @@ public class AccountAdminController {
             @RequestHeader(value = "User-Agent", required = false) String userAgent) {
 
         logger.info("Resetting password for account: accountId={}", accountId);
+
+        if (keycloakSyncService == null) {
+            logger.error("Keycloak integration is disabled - cannot reset password");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(null);
+        }
 
         // TODO: Extract admin account ID from Spring Security context
         // For now, passing null - audit logs will have null admin_account_id until we implement

@@ -23,6 +23,12 @@ import java.util.UUID;
 @NoArgsConstructor
 public class Site {
 
+    /**
+     * Length of composite domain prefix (UUID + underscore).
+     * UUID is 36 characters + underscore (1 character) = 37 characters total.
+     */
+    private static final int COMPOSITE_DOMAIN_PREFIX_LENGTH = 37;
+
     @Id
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
@@ -121,6 +127,19 @@ public class Site {
         }
         this.isActive = true;
         this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Extract display domain from composite domain (accountId_domain format).
+     * Domain is stored as "uuid_domain" per FR-019.
+     *
+     * @return display domain without accountId prefix
+     */
+    public String getDisplayDomain() {
+        if (domain == null || domain.length() <= COMPOSITE_DOMAIN_PREFIX_LENGTH) {
+            return domain; // Fallback for invalid format
+        }
+        return domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
     }
 
     public boolean canAuthenticate() {

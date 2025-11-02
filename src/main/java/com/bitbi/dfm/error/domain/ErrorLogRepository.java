@@ -22,6 +22,8 @@ public interface ErrorLogRepository {
 
     List<ErrorLog> findByBatchId(UUID batchId);
 
+    Page<ErrorLog> findByBatchId(UUID batchId, Pageable pageable);
+
     List<ErrorLog> findBySiteId(UUID siteId);
 
     Page<ErrorLog> findBySiteId(UUID siteId, Pageable pageable);
@@ -44,4 +46,6 @@ public interface ErrorLogRepository {
     Page<ErrorLog> findByType(String type, Pageable pageable);
 
     Page<ErrorLog> findAll(Pageable pageable);
+
+    void deleteById(UUID id);
 }

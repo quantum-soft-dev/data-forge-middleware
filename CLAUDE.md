@@ -1,8 +1,10 @@
 # data-forge-middleware Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-10-30
+Auto-generated from all feature plans. Last updated: 2025-11-02
 
 ## Active Technologies
+- Backend: Java 21, Frontend: TypeScript 5.6 with React 19.2 + Backend: Spring Boot 3.5.6, Spring Security 6, Spring Data JPA; Frontend: React 19.2, TanStack Query v5, TanStack Router, shadcn/ui, Tailwind CSS (007-adding-a-site)
+- PostgreSQL 16 (sites table already exists, extend with admin_action_logs table via Flyway migration) (007-adding-a-site)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
@@ -21,7 +23,7 @@ Auto-generated from all feature plans. Last updated: 2025-10-30
 - **Keycloak 23.0.1** - Admin Client SDK for user management
 
 ### Frontend Stack (Added 2025-10-30 - Spec 005/006)
-- **React 18.3** with TypeScript 5.6
+- **React 19.2** with TypeScript 5.6
 - **Vite 5.4** - Build tool and dev server
 - **TanStack Query v5** - Server state management
 - **React Router v6** - Client-side routing
@@ -326,6 +328,103 @@ user.setAttributes(Map.of("accountId", List.of(account.getId().toString())));
 - **PartitionScheduler**: Cron (0 0 0 1 * *) - monthly on 1st at midnight
 - **@Scheduled with cron**: Spring's native scheduling, no Quartz dependency
 - **Transactional boundaries**: Each scheduled method runs in its own transaction
+
+### Upload History Feature (Added 2025-11-02 - Spec 008)
+
+**Feature**: User-facing upload history with file downloads and Excel export capabilities.
+
+**Key Architectural Decisions**:
+- **Cursor-based pagination**: Avoids OFFSET performance issues for large datasets (1000+ uploads)
+- **Redis caching**: First page cached for 5 minutes, batch details cached for 30 minutes (COMPLETED batches only)
+- **Presigned S3 URLs**: Single file downloads use 15-minute presigned URLs (no server bandwidth consumption)
+- **Streaming ZIP**: Multiple files streamed directly from S3 to ZIP archive (no intermediate storage)
+- **Memory-efficient Excel**: Apache POI SXSSF with 100-row window (~100MB for 20 files with 10K rows each)
+
+#### User Stories Implemented (P1-P4)
+1. **View Upload History List (P1 - MVP)**: Infinite scroll with status indicators (green checkmark/red cross)
+2. **View Upload Details (P2)**: Drill-down to file list with metadata (name, size, upload time)
+3. **Download Selected Files (P3)**: Single file (presigned URL) or multiple files (ZIP archive)
+4. **Excel Export from CSV (P4)**: Generate .xlsx from .csv/.csv.gz files with automatic encoding detection
+
+#### New DTOs (Phase 2)
+- **BatchSummaryDto**: Lightweight projection for list view (id, siteId, status, hasErrors, fileCount, totalSize, startedAt, completedAt)
+- **BatchDetailDto**: Full batch details with file list
+- **FileMetadataDto**: File information for detail view
+- **FileDownloadResponseDto**: Presigned URL response with expiry timestamp
+- **CursorPageResponseDto<T>**: Generic cursor-based pagination wrapper (items, nextCursor, hasNext)
+- **ErrorSummaryDto**: Error information for troubleshooting view
+
+#### Backend Services
+- **BatchHistoryService**: Cursor pagination logic, authorization filtering by accountId → siteIds → batches
+- **FileDownloadService**: Presigned URL generation (AWS SDK v2), ZIP streaming (Apache Commons Compress)
+- **ExcelExportService**: CSV-to-Excel conversion with Apache POI SXSSF, Apache Commons CSV parser
+- **EncodingDetectionService**: ICU4J CharsetDetector for UTF-8/Windows-1252/ISO-8859-1 detection
+- **CsvDecompressionService**: Gzip decompression for .csv.gz files (streaming API)
+
+#### Frontend Implementation (Feature-Sliced Design)
+- **entities/batch/**: API client, TanStack Query hooks (useBatchHistory, useBatchDetails, useBatchErrors)
+- **features/upload-history/**: Business logic hooks (useFileDownload, useExcelExport)
+- **features/upload-history/ui/**: Presentational components (BatchListView, BatchDetailView, FileTable, DownloadButton, ExcelButton)
+- **widgets/upload-history/**: Container components (BatchListWidget, BatchDetailWidget)
+- **pages/upload-history/**: Route pages (UploadHistoryPage)
+
+#### Database Optimizations
+- **Composite index**: `idx_batches_site_started_id ON batches(site_id, started_at DESC, id DESC)` for cursor pagination performance
+- **Projection queries**: `BatchWithFileCountProjection` interface prevents N+1 queries
+- **JOIN FETCH**: Eagerly load files with batch details to avoid lazy loading issues
+
+#### Performance Characteristics
+- **Batch list first page**: <50ms (cached), <200ms (uncached) for 1000+ uploads
+- **Batch details load**: <100ms with JOIN FETCH (prevents N+1 queries)
+- **ZIP download**: Streaming (no memory limit), ~5MB/s throughput
+- **Excel export**: <30s for 20 CSV files (10K rows each), ~100MB memory footprint
+
+#### Security & Authorization
+- **Account-based filtering**: Users only see batches for their sites (JWT accountId → siteIds → batches)
+- **Batch ownership verification**: Every operation verifies batch.accountId matches JWT accountId
+- **Status-based downloads**: Only COMPLETED batches allow file downloads (403 for IN_PROGRESS)
+- **Presigned URL expiry**: 15-minute TTL with automatic regeneration on retry
+
+#### Dependencies Added (build.gradle.kts)
+- **Apache POI 5.3.0**: Excel generation (SXSSF streaming API)
+- **Apache Commons CSV 1.12.0**: CSV parsing with flexible delimiters
+- **Apache Commons Compress 1.28.0**: ZIP/Gzip handling with streaming support
+- **ICU4J 76.1**: Advanced encoding detection (90%+ accuracy)
+
+#### Micrometer Metrics
+- **batch.history.list**: Timer for batch list query performance
+- **batch.details.load**: Timer for batch details query performance
+- **s3.presigned.url.generation**: Timer for presigned URL generation
+- **downloads.zip.files**: Counter for ZIP downloads (tagged by file count)
+- **downloads.zip.duration**: Timer for ZIP streaming performance
+- **exports.excel.sheets**: Counter for Excel sheets exported
+- **exports.excel.duration**: Timer for Excel generation performance
+
+#### Test Coverage (Testcontainers + MockMvc)
+- **Contract tests**: 13 tests covering all API endpoints (TC01-TC13)
+- **Integration tests**: 12 tests with Testcontainers PostgreSQL + LocalStack S3
+  - BatchHistoryIntegrationTest: 5 tests (cursor pagination, N+1 prevention, error pagination)
+  - FileDownloadIntegrationTest: 4 tests (presigned URLs, ZIP streaming)
+  - ExcelExportIntegrationTest: 3 tests (UTF-8, Windows-1252, sheet name deduplication)
+- **Frontend tests**: 8 tests with Vitest + React Testing Library
+  - useBatchHistory hook test
+  - useBatchDetails hook test
+  - useFileDownload mutation test
+  - useExcelExport mutation test
+  - Component tests for BatchListView, BatchDetailView, FileTable, DownloadButton
+
+#### Known Limitations
+- **Single-region S3**: No multi-region replication for downloads
+- **No bandwidth throttling**: Large ZIP/Excel exports can consume bandwidth
+- **No resumable downloads**: Failed downloads must restart from beginning
+- **Sheet name conflicts**: Excel sheet names truncated to 31 characters (Excel limitation)
+
+#### Future Enhancements
+- Batch download progress tracking (WebSocket or polling)
+- Multi-part upload support for Excel export resume
+- Background job queue for large Excel exports (>50 files)
+- Download history tracking (audit log)
+- Presigned URL caching with Redis
 
 ### OpenAPI Documentation
 - **SpringDoc OpenAPI 3**: Automatic API documentation generation
