@@ -141,8 +141,18 @@ public class EncodingDetectionService {
 
             return StandardCharsets.UTF_8;
 
+        } catch (IOException e) {
+            // Rethrow detection failures
+            throw e;
         } finally {
-            buffered.reset();
+            // Safe reset: catch and log errors to prevent finally block from throwing
+            try {
+                buffered.reset();
+            } catch (IOException e) {
+                logger.warn("Failed to reset stream for file '{}': {}. Stream may be in invalid state.",
+                        filename, e.getMessage());
+                // Don't rethrow - we've already returned/thrown from try block
+            }
         }
     }
 }

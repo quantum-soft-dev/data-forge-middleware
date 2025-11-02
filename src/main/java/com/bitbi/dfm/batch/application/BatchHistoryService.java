@@ -122,17 +122,39 @@ public class BatchHistoryService {
     }
 
     /**
+     * Generate cache key from site IDs list.
+     * <p>
+     * Sorts IDs before generating key to ensure consistent cache keys regardless of input order.
+     * Example: [UUID2, UUID1] and [UUID1, UUID2] generate the same key.
+     * </p>
+     *
+     * @param siteIds List of site IDs
+     * @return Sorted, comma-separated string of site IDs
+     */
+    private String generateCacheKey(List<UUID> siteIds) {
+        return siteIds.stream()
+                .sorted()
+                .map(UUID::toString)
+                .collect(Collectors.joining(","));
+    }
+
+    /**
      * T027: Fetch first page of batches (cacheable).
      * <p>
      * Cached with 5-minute TTL in Redis for performance.
-     * Cache key: "batch-first-page:{accountId}"
+     * Cache key: "batch-first-page:{sorted-siteIds}" (sorted to ensure consistent key)
+     * </p>
+     * <p>
+     * <strong>Cache Key Consistency:</strong>
+     * siteIds are sorted before creating cache key to ensure [UUID1, UUID2] and [UUID2, UUID1]
+     * generate the same cache key and can share cached results.
      * </p>
      *
-     * @param siteIds Site IDs to filter
+     * @param siteIds Site IDs to filter (will be sorted for cache key)
      * @param limit   Fetch limit
      * @return Batch projections
      */
-    @Cacheable(value = "batch-first-page", key = "#siteIds.toString()")
+    @Cacheable(value = "batch-first-page", key = "#root.target.generateCacheKey(#siteIds)")
     protected List<BatchWithFileCountProjection> fetchFirstPage(List<UUID> siteIds, int limit) {
         logger.debug("Fetching first page for siteIds={}, limit={}", siteIds.size(), limit);
         return batchRepository.findBySiteIdsFirstPage(siteIds, limit);

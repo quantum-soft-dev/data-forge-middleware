@@ -56,6 +56,11 @@ public class ExcelExportService {
     private static final int MAX_SHEET_NAME_LENGTH = 31; // Excel limitation
     private static final String INVALID_SHEET_NAME_CHARS = "[\\[\\]\\*\\?\\/\\\\:]"; // Excel forbidden chars
 
+    // Memory safety limits
+    private static final int MAX_FILES_PER_EXPORT = 20; // Max files to prevent memory exhaustion
+    private static final long MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB per file
+    private static final long MAX_TOTAL_SIZE_BYTES = 200 * 1024 * 1024; // 200MB total
+
     private final BatchRepository batchRepository;
     private final UploadedFileRepository uploadedFileRepository;
     private final S3Client s3Client;
@@ -98,13 +103,26 @@ public class ExcelExportService {
      * Each CSV file becomes a separate sheet in the workbook.
      * Sheet names are derived from filenames with automatic deduplication.
      *
+     * <p><strong>Memory Safety Limits:</strong></p>
+     * <ul>
+     *   <li>Max 20 files per export (prevents memory exhaustion)</li>
+     *   <li>Max 50MB per file (prevents individual large files)</li>
+     *   <li>Max 200MB total size (prevents excessive memory usage)</li>
+     *   <li>SXSSF with 100-row window (streaming, ~100MB footprint for typical files)</li>
+     * </ul>
+     *
+     * <p><strong>Memory Estimate:</strong></p>
+     * With SXSSF 100-row window, memory usage is approximately:
+     * - 100 rows × number of columns × 8 bytes + sheet overhead
+     * - For 20 files with 10K rows and 10 columns: ~100-150MB
+     *
      * @param batchId The batch ID containing the files
      * @param fileIds List of file IDs to export (must belong to batch)
      * @param accountId The account ID for authorization
      * @param response HTTP response to stream Excel output
      * @throws UnauthorizedAccessException If batch doesn't belong to account
      * @throws IllegalStateException If batch is not completed
-     * @throws IllegalArgumentException If fileIds is empty or files don't belong to batch
+     * @throws IllegalArgumentException If fileIds is empty, files don't belong to batch, or size limits exceeded
      * @throws ExcelExportException If Excel generation fails
      */
     public void exportToExcel(
@@ -119,6 +137,14 @@ public class ExcelExportService {
             // Validate inputs
             if (fileIds == null || fileIds.isEmpty()) {
                 throw new IllegalArgumentException("fileIds cannot be empty");
+            }
+
+            // Validate file count limit
+            if (fileIds.size() > MAX_FILES_PER_EXPORT) {
+                throw new IllegalArgumentException(
+                    String.format("Cannot export more than %d files at once (requested: %d). " +
+                        "Please split into multiple exports.", MAX_FILES_PER_EXPORT, fileIds.size())
+                );
             }
 
             // Load and authorize batch
@@ -146,6 +172,9 @@ public class ExcelExportService {
                 throw new IllegalArgumentException("Some fileIds not found or don't belong to batch");
             }
 
+            // Validate file sizes
+            validateFileSizes(files);
+
             // Set response headers
             String filename = "export-" + batchId + ".xlsx";
             response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -164,6 +193,49 @@ public class ExcelExportService {
             logger.error("Failed to generate Excel export for batch: {}", batchId, e);
             throw new ExcelExportException("Failed to generate Excel export", e);
         }
+    }
+
+    /**
+     * Validates file sizes to prevent memory exhaustion during Excel export.
+     *
+     * Checks:
+     * - Individual file size (max 50MB)
+     * - Total size of all files (max 200MB)
+     *
+     * @param files List of files to validate
+     * @throws IllegalArgumentException If size limits are exceeded
+     */
+    private void validateFileSizes(List<UploadedFile> files) {
+        long totalSize = 0;
+
+        for (UploadedFile file : files) {
+            long fileSize = file.getFileSize();
+
+            // Check individual file size
+            if (fileSize > MAX_FILE_SIZE_BYTES) {
+                throw new IllegalArgumentException(
+                    String.format("File '%s' is too large (%d MB). Max size per file is %d MB.",
+                        file.getOriginalFileName(),
+                        fileSize / (1024 * 1024),
+                        MAX_FILE_SIZE_BYTES / (1024 * 1024))
+                );
+            }
+
+            totalSize += fileSize;
+        }
+
+        // Check total size
+        if (totalSize > MAX_TOTAL_SIZE_BYTES) {
+            throw new IllegalArgumentException(
+                String.format("Total size of selected files (%d MB) exceeds limit of %d MB. " +
+                    "Please reduce the number of files or split into multiple exports.",
+                    totalSize / (1024 * 1024),
+                    MAX_TOTAL_SIZE_BYTES / (1024 * 1024))
+            );
+        }
+
+        logger.debug("File size validation passed: {} files, total size {} MB",
+            files.size(), totalSize / (1024 * 1024));
     }
 
     /**

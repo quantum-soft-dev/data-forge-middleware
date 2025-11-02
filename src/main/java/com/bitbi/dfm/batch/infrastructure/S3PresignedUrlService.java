@@ -42,10 +42,56 @@ public class S3PresignedUrlService {
     }
 
     /**
+     * Sanitize filename to prevent HTTP header injection attacks.
+     * <p>
+     * Removes or replaces characters that could be used for header injection:
+     * - Newlines (\r, \n) - prevent response splitting
+     * - Quotes (") - prevent header value escaping
+     * - Semicolons (;) - prevent directive injection
+     * - Non-ASCII characters - replaced with underscore
+     * </p>
+     *
+     * @param fileName Original filename
+     * @return Sanitized filename safe for HTTP headers
+     */
+    private String sanitizeFilename(String fileName) {
+        if (fileName == null) {
+            return "download";
+        }
+
+        // Remove dangerous characters that could enable header injection
+        String sanitized = fileName
+                .replace("\r", "")
+                .replace("\n", "")
+                .replace("\"", "'")
+                .replace(";", "_")
+                .replace("\\", "_");
+
+        // Replace non-ASCII characters to prevent encoding issues
+        sanitized = sanitized.replaceAll("[^\\x20-\\x7E]", "_");
+
+        // Ensure filename is not empty after sanitization
+        if (sanitized.isBlank()) {
+            return "download";
+        }
+
+        // Limit length to prevent excessively long headers (max 255 chars)
+        if (sanitized.length() > 255) {
+            sanitized = sanitized.substring(0, 255);
+        }
+
+        return sanitized;
+    }
+
+    /**
      * Generate presigned URL for S3 file download.
      * <p>
      * The generated URL allows direct download from S3 without authentication.
      * URL expires after 15 minutes.
+     * </p>
+     * <p>
+     * Security: Filename is sanitized to prevent HTTP header injection attacks.
+     * Dangerous characters (newlines, quotes, semicolons) are removed or replaced.
      * </p>
      *
      * @param s3Key    S3 object key
@@ -61,14 +107,17 @@ public class S3PresignedUrlService {
             throw new IllegalArgumentException("Filename cannot be null or empty");
         }
 
-        logger.debug("Generating presigned URL for s3Key={}, fileName={}", s3Key, fileName);
+        // Sanitize filename to prevent header injection attacks
+        String safeFileName = sanitizeFilename(fileName);
+        logger.debug("Generating presigned URL for s3Key={}, fileName={} (sanitized: {})",
+                s3Key, fileName, safeFileName);
 
         try {
             // Create GetObjectRequest with Content-Disposition hint
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                     .bucket(bucketName)
                     .key(s3Key)
-                    .responseContentDisposition("attachment; filename=\"" + fileName + "\"")
+                    .responseContentDisposition("attachment; filename=\"" + safeFileName + "\"")
                     .build();
 
             // Create presign request with 15-minute expiry
@@ -82,7 +131,8 @@ public class S3PresignedUrlService {
             URL presignedUrl = presignedRequest.url();
             Instant expiresAt = Instant.now().plus(PRESIGNED_URL_EXPIRY);
 
-            logger.info("Generated presigned URL for file={}, expiresAt={}", fileName, expiresAt);
+            logger.info("Generated presigned URL for file={} (sanitized: {}), expiresAt={}",
+                    fileName, safeFileName, expiresAt);
 
             return new PresignedUrlResult(presignedUrl.toString(), expiresAt);
 

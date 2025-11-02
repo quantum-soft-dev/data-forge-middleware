@@ -237,9 +237,13 @@ public class FileDownloadService {
     /**
      * Add single file to ZIP archive.
      * <p>
-     * Compression Logic:
-     * - .gz files: STORED (no double compression)
-     * - Other files: DEFLATED (standard ZIP compression)
+     * Compression: Uses DEFLATED method for all files (standard ZIP compression).
+     * </p>
+     * <p>
+     * Note: .gz files are already compressed, but re-compression with DEFLATED is acceptable
+     * as the ZIP library handles this efficiently. Using STORED method would require
+     * pre-calculating CRC32 checksums, which would necessitate reading files twice
+     * (once for CRC, once for streaming), negating the performance benefit.
      * </p>
      *
      * @param zipOut ZIP output stream
@@ -249,19 +253,10 @@ public class FileDownloadService {
     private void addFileToZip(ZipArchiveOutputStream zipOut, UploadedFile file) throws IOException {
         logger.debug("Adding file to ZIP: {}", file.getOriginalFileName());
 
-        // Create ZIP entry
+        // Create ZIP entry with DEFLATED compression for all files
         ZipArchiveEntry entry = new ZipArchiveEntry(file.getOriginalFileName());
         entry.setSize(file.getFileSize());
-
-        // Detect .gz files and use STORED method (no double compression)
-        if (file.getOriginalFileName().endsWith(".gz")) {
-            entry.setMethod(ZipArchiveEntry.STORED);
-            // For STORED method, must set CRC and compressed size
-            // We'll use DEFLATED for now as it auto-calculates these
-            entry.setMethod(ZipArchiveEntry.DEFLATED);
-        } else {
-            entry.setMethod(ZipArchiveEntry.DEFLATED);
-        }
+        entry.setMethod(ZipArchiveEntry.DEFLATED);
 
         zipOut.putArchiveEntry(entry);
 
