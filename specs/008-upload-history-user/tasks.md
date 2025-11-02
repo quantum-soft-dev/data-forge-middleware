@@ -269,19 +269,19 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T109 [P] Add comprehensive JavaDoc comments to all public methods in BatchHistoryService, FileDownloadService, ExcelExportService
-- [ ] T110 [P] Add JSDoc comments to frontend API client functions and hooks
-- [ ] T111 Add global error handling for presigned URL expiry (redirect to generate new URL)
-- [ ] T112 Add frontend error boundaries for upload history pages
-- [ ] T113 [P] Add loading skeletons for batch list and detail views
-- [ ] T114 [P] Add toast notifications for download/Excel export success and errors using Sonner
-- [ ] T115 Validate quickstart.md instructions by following step-by-step
-- [ ] T116 Run integration tests with Testcontainers to verify end-to-end flows
-- [ ] T117 Run Micrometer metrics verification (check batch.history.list, s3.presigned.url.generation, downloads.zip.duration, exports.excel.duration)
-- [ ] T118 Performance test: Verify batch list response time <200ms for 1000 uploads
-- [ ] T119 Performance test: Verify Excel export completes in <30s for 20 CSV files (10K rows each)
-- [ ] T120 Security review: Verify authorization checks prevent cross-account batch access
-- [ ] T121 Update CLAUDE.md with Upload History feature summary and implementation decisions
+- [X] T109 [P] Add comprehensive JavaDoc comments to all public methods in BatchHistoryService, FileDownloadService, ExcelExportService
+- [X] T110 [P] Add JSDoc comments to frontend API client functions and hooks
+- [X] T111 Add global error handling for presigned URL expiry (redirect to generate new URL)
+- [X] T112 Add frontend error boundaries for upload history pages
+- [X] T113 [P] Add loading skeletons for batch list and detail views
+- [X] T114 [P] Add toast notifications for download/Excel export success and errors using Sonner
+- [X] T115 Validate quickstart.md instructions by following step-by-step
+- [X] T116 Run integration tests with Testcontainers to verify end-to-end flows
+- [X] T117 Run Micrometer metrics verification (check batch.history.list, s3.presigned.url.generation, downloads.zip.duration, exports.excel.duration)
+- [X] T118 Performance test: Verify batch list response time <200ms for 1000 uploads
+- [X] T119 Performance test: Verify Excel export completes in <30s for 20 CSV files (10K rows each)
+- [X] T120 Security review: Verify authorization checks prevent cross-account batch access
+- [X] T121 Update CLAUDE.md with Upload History feature summary and implementation decisions
 
 ---
 
