@@ -63,7 +63,7 @@ services:
       - dfm-network
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0.0
+    image: quay.io/keycloak/keycloak:26.4.2
     container_name: dfm-keycloak
     environment:
       # Admin credentials

@@ -57,7 +57,10 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["ROLE_ADMIN", "ROLE_USER"]
+      "realmRoles": ["ROLE_ADMIN", "ROLE_USER"],
+      "attributes": {
+        "accountId": ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
+      }
     },
     {
       "username": "user",
@@ -73,7 +76,10 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["ROLE_USER"]
+      "realmRoles": ["ROLE_USER"],
+      "attributes": {
+        "accountId": ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
+      }
     }
   ],
   "clients": [

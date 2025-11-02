@@ -51,7 +51,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
 
     // Keycloak Admin Client
-    implementation("org.keycloak:keycloak-admin-client:23.0.1")
+    implementation("org.keycloak:keycloak-admin-client:26.0.7")
 
     // JWT
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
