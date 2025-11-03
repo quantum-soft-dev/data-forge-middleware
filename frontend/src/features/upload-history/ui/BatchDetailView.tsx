@@ -14,6 +14,7 @@ import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 import { FileTable } from './FileTable';
 import { DownloadButton } from './DownloadButton';
 import { ExcelButton } from './ExcelButton';
+import { CompareButton } from './CompareButton';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -198,6 +199,13 @@ export function BatchDetailView({
               selectedFileIds={selectedFileIds}
               batchStatus={batch.status}
               excelFilename={`batch-${batch.id}.xlsx`}
+            />
+
+            {/* Spec 009: Compare files button */}
+            <CompareButton
+              batchId={batch.id}
+              selectedFileIds={selectedFileIds}
+              batchStatus={batch.status}
             />
           </div>
         </div>

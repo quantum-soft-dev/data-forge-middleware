@@ -14,6 +14,7 @@ const SiteManagementPage = lazy(() => import('@/pages/site-management').then(m =
 const UploadHistoryPage = lazy(() => import('@/pages/upload-history/UploadHistoryPage'))
 const BatchDetailPage = lazy(() => import('@/pages/upload-history/BatchDetailPage'))
 const ComparisonPage = lazy(() => import('@/pages/comparison/ComparisonPage').then(m => ({ default: m.ComparisonPage })))
+const ComparisonDetailPage = lazy(() => import('@/pages/comparison/ComparisonDetailPage'))
 
 // Router context type
 interface RouterContext {
@@ -236,6 +237,27 @@ const comparisonCreateRoute = createRoute({
   component: ComparisonPage,
 })
 
+// Comparison Detail route (Spec 009 - User Story 2)
+const comparisonDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/comparisons/$comparisonId',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Redirect admins to admin panel instead
+    // Admins don't have user accounts, so they can't view comparisons
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/admin/users' })
+    }
+  },
+  component: ComparisonDetailPage,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -250,6 +272,7 @@ const routeTree = rootRoute.addChildren([
   uploadHistoryRoute,
   batchDetailRoute,
   comparisonCreateRoute,
+  comparisonDetailRoute,
 ])
 
 // Create router instance

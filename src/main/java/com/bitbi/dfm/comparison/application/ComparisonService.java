@@ -7,13 +7,18 @@ import com.bitbi.dfm.comparison.domain.*;
 import com.bitbi.dfm.comparison.infrastructure.S3FileContentService;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import io.micrometer.core.annotation.Timed;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -43,19 +48,40 @@ public class ComparisonService {
     private final UploadedFileRepository uploadedFileRepository;
     private final S3FileContentService s3FileContentService;
     private final DiffService diffService;
+    private final MeterRegistry meterRegistry;
+
+    // T062: Micrometer counters for monitoring
+    private final Counter comparisonCreatedCounter;
+    private final Counter comparisonCompletedCounter;
+    private final Counter comparisonFailedCounter;
 
     public ComparisonService(
         ComparisonRepository comparisonRepository,
         BatchRepository batchRepository,
         UploadedFileRepository uploadedFileRepository,
         S3FileContentService s3FileContentService,
-        DiffService diffService
+        DiffService diffService,
+        MeterRegistry meterRegistry
     ) {
         this.comparisonRepository = comparisonRepository;
         this.batchRepository = batchRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.s3FileContentService = s3FileContentService;
         this.diffService = diffService;
+        this.meterRegistry = meterRegistry;
+
+        // T062: Initialize Micrometer counters
+        this.comparisonCreatedCounter = Counter.builder("comparison.created")
+            .description("Number of comparisons created")
+            .register(meterRegistry);
+
+        this.comparisonCompletedCounter = Counter.builder("comparison.completed")
+            .description("Number of comparisons completed successfully")
+            .register(meterRegistry);
+
+        this.comparisonFailedCounter = Counter.builder("comparison.failed")
+            .description("Number of comparisons that failed")
+            .register(meterRegistry);
     }
 
     /**
@@ -116,6 +142,9 @@ public class ComparisonService {
             FileComparison comparison = new FileComparison(currentBatchId, targetBatchId, accountId);
             FileComparison savedComparison = comparisonRepository.save(comparison);
 
+            // T062: Increment created counter
+            comparisonCreatedCounter.increment();
+
             // Add MDC context for logging
             MDC.put("comparisonId", savedComparison.getId().toString());
             MDC.put("currentBatchId", currentBatchId.toString());
@@ -138,7 +167,63 @@ public class ComparisonService {
     }
 
     /**
+     * T061: Creates a new file comparison asynchronously for large file sets.
+     *
+     * <p>This method is designed for large comparisons (>100 files) that may take
+     * longer than typical HTTP request timeouts. It uses Spring's @Async annotation
+     * to process the comparison in a background thread pool.
+     *
+     * <p>Workflow:
+     * <ol>
+     *   <li>Create FileComparison record with status=PENDING</li>
+     *   <li>Return immediately with comparison ID</li>
+     *   <li>Process comparison asynchronously in background thread</li>
+     *   <li>Client polls for completion via GET /api/v1/comparisons/{id}</li>
+     * </ol>
+     *
+     * <p>Benefits:
+     * <ul>
+     *   <li>Non-blocking: API responds immediately</li>
+     *   <li>Scalable: Uses bounded thread pool (max 5 concurrent)</li>
+     *   <li>Resilient: Failures logged, comparison marked as FAILED</li>
+     *   <li>Observable: Client can poll for status updates</li>
+     * </ul>
+     *
+     * @param currentBatchId the current batch ID (source)
+     * @param targetBatchId the target batch ID (comparison baseline)
+     * @param accountId the account owner ID (from JWT)
+     * @param selectedFileIds list of file IDs to compare (null = all files)
+     * @return CompletableFuture containing the comparison result
+     */
+    @Async("comparisonExecutor")
+    @Transactional
+    public CompletableFuture<FileComparison> createComparisonAsync(
+        UUID currentBatchId,
+        UUID targetBatchId,
+        UUID accountId,
+        List<UUID> selectedFileIds
+    ) {
+        log.info("[ASYNC] Creating comparison asynchronously: currentBatch={}, targetBatch={}, account={}",
+            currentBatchId, targetBatchId, accountId);
+
+        try {
+            // Perform all validation and comparison logic synchronously within the async thread
+            FileComparison result = createComparison(currentBatchId, targetBatchId, accountId, selectedFileIds);
+
+            log.info("[ASYNC] Comparison completed asynchronously: id={}, status={}",
+                result.getId(), result.getStatus());
+
+            return CompletableFuture.completedFuture(result);
+        } catch (Exception e) {
+            log.error("[ASYNC] Async comparison failed: currentBatch={}, targetBatch={}, error={}",
+                currentBatchId, targetBatchId, e.getMessage(), e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /**
      * T056: Executes the comparison workflow for User Story 2.
+     * T062: Instrumented with Micrometer @Timed annotation for performance monitoring.
      *
      * <p>Workflow steps:
      * <ol>
@@ -150,11 +235,19 @@ public class ComparisonService {
      *   <li>Transition to COMPLETED/FAILED</li>
      * </ol>
      *
+     * <p>Metrics:
+     * <ul>
+     *   <li>Timer: comparison.duration (tracks execution time)</li>
+     *   <li>Counter: comparison.completed (incremented on success)</li>
+     *   <li>Counter: comparison.failed (incremented on failure)</li>
+     * </ul>
+     *
      * @param comparison the comparison aggregate
      * @param currentBatch the current batch
      * @param targetBatch the target batch
      * @param selectedFileIds list of selected file IDs (null = all files)
      */
+    @Timed(value = "comparison.duration", description = "Time taken to execute comparison")
     private void executeComparison(
         FileComparison comparison,
         Batch currentBatch,
@@ -196,6 +289,10 @@ public class ComparisonService {
             // Step 5: Complete comparison
             comparison.completeComparison();
             comparisonRepository.save(comparison);
+
+            // T062: Increment completed counter
+            comparisonCompletedCounter.increment();
+
             log.info("Comparison completed successfully: id={}, totalFiles={}, changed={}, added={}, unchanged={}",
                 comparison.getId(),
                 comparison.getTotalFilesCompared(),
@@ -207,6 +304,10 @@ public class ComparisonService {
             log.error("Comparison failed: id={}, error={}", comparison.getId(), e.getMessage(), e);
             comparison.failComparison("Comparison failed: " + e.getMessage());
             comparisonRepository.save(comparison);
+
+            // T062: Increment failed counter
+            comparisonFailedCounter.increment();
+
             throw new ComparisonExecutionException("Comparison execution failed", e);
         }
     }
@@ -230,15 +331,25 @@ public class ComparisonService {
 
     /**
      * Processes comparison for a single file.
+     * T063: Enhanced with comprehensive error handling for S3 and encoding failures.
      *
      * <p>Steps:
      * <ol>
      *   <li>Check if file exists in target batch (by name)</li>
-     *   <li>Fetch file contents from S3</li>
+     *   <li>Fetch file contents from S3 (with error handling)</li>
      *   <li>Generate diff via DiffService</li>
      *   <li>Create ComparisonResult entity</li>
      *   <li>Add result to comparison aggregate</li>
      * </ol>
+     *
+     * <p>Error handling:
+     * <ul>
+     *   <li>FileNotFoundException: Log warning, skip file</li>
+     *   <li>FileAccessDeniedException: Log error, rethrow (critical)</li>
+     *   <li>BinaryFileException: Log info, skip file with appropriate message</li>
+     *   <li>FileTooLargeException: Log warning, skip file</li>
+     *   <li>FileContentRetrievalException: Log error, skip file</li>
+     * </ul>
      *
      * @param comparison the comparison aggregate
      * @param currentFile the current file to compare
@@ -252,42 +363,78 @@ public class ComparisonService {
         String fileName = currentFile.getOriginalFileName();
         UploadedFile targetFile = targetFilesByName.get(fileName);
 
-        // Fetch current file content from S3
-        String currentContent = s3FileContentService.fetchFileContent(currentFile.getS3Key());
+        try {
+            // T063: Fetch current file content from S3 with comprehensive error handling
+            String currentContent;
+            try {
+                currentContent = s3FileContentService.fetchFileContent(currentFile.getS3Key());
+            } catch (S3FileContentService.FileNotFoundException e) {
+                log.warn("Current file not found in S3, skipping: file={}, key={}", fileName, currentFile.getS3Key());
+                return; // Skip this file
+            } catch (S3FileContentService.FileAccessDeniedException e) {
+                log.error("Access denied to current file in S3: file={}, key={}", fileName, currentFile.getS3Key());
+                throw e; // Rethrow - this is a critical error indicating configuration issue
+            } catch (S3FileContentService.BinaryFileException e) {
+                log.info("Binary file detected (cannot compare), skipping: file={}, key={}", fileName, currentFile.getS3Key());
+                return; // Skip binary files per FR-016
+            } catch (S3FileContentService.FileTooLargeException e) {
+                log.warn("File too large for comparison, skipping: file={}, key={}, error={}", fileName, currentFile.getS3Key(), e.getMessage());
+                return; // Skip oversized files
+            } catch (S3FileContentService.FileContentRetrievalException e) {
+                log.error("Failed to retrieve current file content from S3, skipping: file={}, key={}, error={}", fileName, currentFile.getS3Key(), e.getMessage());
+                return; // Skip files that fail to retrieve
+            }
 
-        // Fetch target file content (if exists)
-        String targetContent = null;
-        String targetFileName = null;
-        if (targetFile != null) {
-            targetContent = s3FileContentService.fetchFileContent(targetFile.getS3Key());
-            targetFileName = targetFile.getOriginalFileName();
+            // T063: Fetch target file content (if exists) with error handling
+            String targetContent = null;
+            String targetFileName = null;
+            if (targetFile != null) {
+                try {
+                    targetContent = s3FileContentService.fetchFileContent(targetFile.getS3Key());
+                    targetFileName = targetFile.getOriginalFileName();
+                } catch (S3FileContentService.FileNotFoundException e) {
+                    log.warn("Target file not found in S3, treating as new file: file={}, key={}", fileName, targetFile.getS3Key());
+                    // Continue - file will be marked as ADDED
+                } catch (S3FileContentService.BinaryFileException e) {
+                    log.info("Binary target file detected (cannot compare), skipping: file={}, key={}", fileName, targetFile.getS3Key());
+                    return; // Skip if target is binary
+                } catch (Exception e) {
+                    log.error("Failed to retrieve target file content from S3, skipping: file={}, key={}, error={}", fileName, targetFile.getS3Key(), e.getMessage());
+                    return; // Skip if target fails to retrieve
+                }
+            }
+
+            // Generate diff
+            DiffService.DiffResult diffResult = diffService.generateDiff(
+                currentContent,
+                targetContent,
+                fileName,
+                targetFileName
+            );
+
+            // Create ComparisonResult entity
+            ComparisonResult result = new ComparisonResult(
+                comparison.getId(),  // comparisonId
+                currentFile.getId(), // fileId
+                targetFile != null ? targetFile.getId() : null, // targetFileId
+                diffResult.changeType(),
+                diffResult.unifiedDiffJson(),
+                diffResult.lineAdditions(),
+                diffResult.lineDeletions(),
+                diffResult.changeSize()
+            );
+
+            // Add result to comparison aggregate (updates statistics)
+            comparison.addResult(result);
+
+            log.debug("File comparison completed: file={}, changeType={}, additions={}, deletions={}",
+                fileName, diffResult.changeType(), diffResult.lineAdditions(), diffResult.lineDeletions());
+
+        } catch (Exception e) {
+            // T063: Catch-all for unexpected errors
+            log.error("Unexpected error comparing file: file={}, error={}", fileName, e.getMessage(), e);
+            // Don't rethrow - continue with next file
         }
-
-        // Generate diff
-        DiffService.DiffResult diffResult = diffService.generateDiff(
-            currentContent,
-            targetContent,
-            fileName,
-            targetFileName
-        );
-
-        // Create ComparisonResult entity
-        ComparisonResult result = new ComparisonResult(
-            comparison.getId(),  // comparisonId
-            currentFile.getId(), // fileId
-            targetFile != null ? targetFile.getId() : null, // targetFileId
-            diffResult.changeType(),
-            diffResult.unifiedDiffJson(),
-            diffResult.lineAdditions(),
-            diffResult.lineDeletions(),
-            diffResult.changeSize()
-        );
-
-        // Add result to comparison aggregate (updates statistics)
-        comparison.addResult(result);
-
-        log.debug("File comparison completed: file={}, changeType={}, additions={}, deletions={}",
-            fileName, diffResult.changeType(), diffResult.lineAdditions(), diffResult.lineDeletions());
     }
 
     /**

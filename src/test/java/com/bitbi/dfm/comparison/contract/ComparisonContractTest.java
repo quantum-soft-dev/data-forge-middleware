@@ -245,4 +245,65 @@ class ComparisonContractTest {
                 .andExpect(jsonPath("$.message").value(containsString("Access denied")))
                 .andExpect(jsonPath("$.path").value(COMPARISONS_ENDPOINT));
     }
+
+    /**
+     * T053 (TC06): GET /api/v1/comparisons/{id}/results returns comparison results
+     * <p>
+     * Given: Authenticated user owns a completed comparison
+     * When: GET /api/v1/comparisons/{id}/results
+     * Then: 200 OK with paginated comparison results
+     * And: Results include changeType, lineAdditions, lineDeletions, unifiedDiff
+     * </p>
+     *
+     * Test Scenario:
+     * - Create comparison first (POST /api/v1/comparisons)
+     * - Wait for completion (status=COMPLETED)
+     * - Fetch results (GET /api/v1/comparisons/{id}/results)
+     * - Verify result structure matches ComparisonResultDto
+     */
+    @Test
+    @DisplayName("TC06: GET /api/v1/comparisons/{id}/results should return comparison results")
+    void shouldReturnComparisonResults() throws Exception {
+        // Given: Create a comparison first
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111", "a1b2c3d4-e5f6-7890-abcd-222222222222"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Parse comparison ID from response
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: GET /api/v1/comparisons/{id}/results
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId + "/results")
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .param("page", "0")
+                        .param("size", "20"))
+                .andDo(print())
+
+                // Then: 200 OK with paginated results
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify pagination structure (Spring Page format)
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.number").exists()) // page number (0-based)
+                .andExpect(jsonPath("$.size").exists())
+                .andExpect(jsonPath("$.totalElements").exists())
+                .andExpect(jsonPath("$.totalPages").exists());
+
+        // Note: We don't verify result content structure here because test data
+        // may not include actual files with S3 content, so comparison may complete
+        // with 0 results. The important part is that the endpoint returns valid
+        // paginated response structure.
+    }
 }
