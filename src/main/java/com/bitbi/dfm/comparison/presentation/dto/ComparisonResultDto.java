@@ -94,6 +94,41 @@ public record ComparisonResultDto(
     }
 
     /**
+     * Converts a ComparisonResult domain entity to a response DTO with file names.
+     *
+     * <p>This method is used when file names have been fetched from the database.
+     *
+     * @param result the domain entity
+     * @param fileName the original file name
+     * @param targetFileName the target file name
+     * @return the corresponding DTO
+     */
+    public static ComparisonResultDto fromEntityWithFileNames(
+        ComparisonResult result,
+        String fileName,
+        String targetFileName
+    ) {
+        if (result == null) {
+            return null;
+        }
+
+        return new ComparisonResultDto(
+            result.getId(),
+            result.getComparisonId(),
+            result.getFileId(),
+            result.getTargetFileId(),
+            fileName,
+            targetFileName,
+            result.getChangeType(),
+            result.getLineAdditions(),
+            result.getLineDeletions(),
+            result.getChangeSize(),
+            result.getUnifiedDiff(),
+            result.getCreatedAt()
+        );
+    }
+
+    /**
      * Gets a human-readable diff summary (e.g., "+25 -10").
      *
      * @return diff summary string

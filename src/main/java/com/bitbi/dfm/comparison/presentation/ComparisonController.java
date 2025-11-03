@@ -11,6 +11,8 @@ import com.bitbi.dfm.comparison.presentation.dto.ComparisonSummaryDto;
 import com.bitbi.dfm.comparison.presentation.dto.CreateComparisonRequestDto;
 import com.bitbi.dfm.comparison.presentation.dto.PagedComparisonResultResponse;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import com.bitbi.dfm.upload.domain.UploadedFile;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -58,15 +60,18 @@ public class ComparisonController {
     private final ComparisonService comparisonService;
     private final ComparisonQueryService comparisonQueryService;
     private final AuthorizationHelper authorizationHelper;
+    private final UploadedFileRepository uploadedFileRepository;
 
     public ComparisonController(
         ComparisonService comparisonService,
         ComparisonQueryService comparisonQueryService,
-        AuthorizationHelper authorizationHelper
+        AuthorizationHelper authorizationHelper,
+        UploadedFileRepository uploadedFileRepository
     ) {
         this.comparisonService = comparisonService;
         this.comparisonQueryService = comparisonQueryService;
         this.authorizationHelper = authorizationHelper;
+        this.uploadedFileRepository = uploadedFileRepository;
     }
 
     /**
@@ -265,8 +270,33 @@ public class ComparisonController {
         int start = (int) pageable.getOffset();
         int end = Math.min(start + pageable.getPageSize(), filteredResults.size());
 
+        // Collect all file IDs from the current page
+        List<UUID> fileIds = filteredResults.subList(start, end).stream()
+            .flatMap(result -> {
+                var ids = new java.util.ArrayList<UUID>();
+                ids.add(result.getFileId());
+                if (result.getTargetFileId() != null) {
+                    ids.add(result.getTargetFileId());
+                }
+                return ids.stream();
+            })
+            .distinct()
+            .collect(Collectors.toList());
+
+        // Batch fetch all files for the current page
+        java.util.Map<UUID, String> fileNameMap = uploadedFileRepository.findAllById(fileIds).stream()
+            .collect(Collectors.toMap(
+                UploadedFile::getId,
+                UploadedFile::getOriginalFileName
+            ));
+
+        // Convert to DTOs with file names
         List<ComparisonResultDto> dtoList = filteredResults.subList(start, end).stream()
-            .map(ComparisonResultDto::fromEntity)
+            .map(result -> ComparisonResultDto.fromEntityWithFileNames(
+                result,
+                fileNameMap.get(result.getFileId()),
+                result.getTargetFileId() != null ? fileNameMap.get(result.getTargetFileId()) : null
+            ))
             .collect(Collectors.toList());
 
         // Create Page object manually

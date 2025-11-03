@@ -339,10 +339,31 @@ export function ComparisonDetailPage(): React.ReactElement {
           <TabsContent value="list" className="mt-6">
             <Card>
               <CardHeader>
-                <CardTitle>File Differences</CardTitle>
-                <CardDescription>
-                  Click on a file to view its diff
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>File Differences</CardTitle>
+                    <CardDescription>
+                      Click on a file to view its diff
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <select
+                      value={changeTypeFilter || 'all'}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setChangeTypeFilter(value === 'all' ? undefined : value as ChangeType);
+                        setResultsPage(0); // Reset to first page when filtering
+                      }}
+                      className="h-10 px-3 py-2 text-sm border border-input bg-background rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      <option value="all">All Changes</option>
+                      <option value="MODIFIED">Modified</option>
+                      <option value="ADDED">Added</option>
+                      <option value="REMOVED">Removed</option>
+                      <option value="UNCHANGED">Unchanged</option>
+                    </select>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 {isLoadingResults ? (
