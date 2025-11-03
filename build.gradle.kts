@@ -80,6 +80,12 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("org.springframework.boot:spring-boot-starter-cache")
 
+    // File Comparison Feature Dependencies
+    // Diff library for file comparison
+    implementation("io.github.java-diff-utils:java-diff-utils:4.12")
+    // Hypersistence Utils for JSONB support
+    implementation("io.hypersistence:hypersistence-utils-hibernate-63:3.9.0")
+
     // Lombok
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
