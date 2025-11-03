@@ -73,7 +73,7 @@ PENDING → IN_PROGRESS → COMPLETED
 - currentBatchId must exist and belong to accountId
 - targetBatchId must exist and belong to accountId
 - currentBatchId != targetBatchId (cannot compare batch with itself)
-- Both batches must have status = COMPLETED (cannot compare incomplete uploads)
+- Both batches must have files (uploadedFilesCount > 0) *(Updated 2025-11-03: Removed COMPLETED status requirement - batches in any status can be compared)*
 
 ---
 
@@ -645,7 +645,7 @@ COMMENT ON COLUMN comparison_results.unified_diff IS 'Diff output stored as stru
 
 **Before Creating Comparison**:
 1. Verify both batches exist and belong to the same account
-2. Verify both batches have status = COMPLETED
+2. Verify both batches have files (uploadedFilesCount > 0) *(Updated 2025-11-03: Removed COMPLETED status requirement)*
 3. Verify currentBatchId != targetBatchId
 4. Verify selected files exist in current batch
 5. Verify user has permission to access both batches (JWT accountId matches batch.accountId)

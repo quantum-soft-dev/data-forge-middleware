@@ -89,7 +89,7 @@ public class ComparisonService {
      *
      * <p>Phase 3 (User Story 1) - Full validation workflow:
      * <ul>
-     *   <li>✅ Validate batches exist and are COMPLETED (T038)</li>
+     *   <li>✅ Validate batches exist and have files (T038 - Updated)</li>
      *   <li>✅ Verify user ownership via JWT accountId (T038)</li>
      *   <li>✅ Validate file selection (T038)</li>
      *   <li>✅ Create FileComparison aggregate with status=PENDING (T038)</li>
@@ -100,14 +100,17 @@ public class ComparisonService {
      *   <li>⏳ Update statistics and transition to COMPLETED/FAILED (US2 - T056)</li>
      * </ul>
      *
+     * <p><strong>Business Rule Change (2025-11-03):</strong> Batches no longer need to be in COMPLETED status.
+     * Any batch with files can be compared, regardless of status (IN_PROGRESS, COMPLETED, FAILED).
+     * This allows users to compare partial uploads or failed batches if needed.
+     *
      * @param currentBatchId the current batch ID (source)
      * @param targetBatchId the target batch ID (comparison baseline)
      * @param accountId the account owner ID (from JWT)
      * @param selectedFileIds list of file IDs to compare (null = all files)
      * @return the created comparison with ID
-     * @throws IllegalArgumentException if validation fails (same batch, empty file list)
+     * @throws IllegalArgumentException if validation fails (same batch, empty file list, no files in batch)
      * @throws BatchNotFoundException if either batch does not exist
-     * @throws BatchNotCompletedException if either batch is not in COMPLETED status
      * @throws UnauthorizedAccessException if accountId does not own the batches
      */
     public FileComparison createComparison(
@@ -123,9 +126,9 @@ public class ComparisonService {
             // T038: Validate file selection
             validateFileSelection(selectedFileIds);
 
-            // T038: Validate batches exist and are COMPLETED
-            Batch currentBatch = validateBatchExistsAndCompleted(currentBatchId, "Current");
-            Batch targetBatch = validateBatchExistsAndCompleted(targetBatchId, "Target");
+            // T038: Validate batches exist and have files (Updated: No longer requires COMPLETED status)
+            Batch currentBatch = validateBatchExistsAndHasFiles(currentBatchId, "Current");
+            Batch targetBatch = validateBatchExistsAndHasFiles(targetBatchId, "Target");
 
             // T038: Verify user ownership via JWT accountId
             validateBatchOwnership(currentBatch, accountId, "current");
@@ -452,25 +455,32 @@ public class ComparisonService {
     }
 
     /**
-     * Validates that a batch exists and is in COMPLETED status.
+     * Validates that a batch exists and has files available for comparison.
+     *
+     * <p><strong>Business Rule Change (2025-11-03):</strong> Removed COMPLETED status requirement.
+     * Batches in any status (IN_PROGRESS, COMPLETED, FAILED) can be compared as long as they have files.
      *
      * @param batchId the batch ID to validate
      * @param batchLabel label for error messages ("Current" or "Target")
      * @return the validated batch
      * @throws BatchNotFoundException if batch does not exist
-     * @throws BatchNotCompletedException if batch is not COMPLETED
+     * @throws IllegalArgumentException if batch has no files
      */
-    private Batch validateBatchExistsAndCompleted(UUID batchId, String batchLabel) {
+    private Batch validateBatchExistsAndHasFiles(UUID batchId, String batchLabel) {
         Batch batch = batchRepository.findById(batchId)
             .orElseThrow(() -> new BatchNotFoundException(
-                batchLabel + " batch " + batchId + " does not exist or is not in COMPLETED status"
+                batchLabel + " batch " + batchId + " does not exist"
             ));
 
-        if (batch.getStatus() != BatchStatus.COMPLETED) {
-            throw new BatchNotCompletedException(
-                batchLabel + " batch " + batchId + " is not in COMPLETED status (current status: " + batch.getStatus() + ")"
+        // Validate batch has files
+        if (batch.getUploadedFilesCount() == 0) {
+            throw new IllegalArgumentException(
+                batchLabel + " batch " + batchId + " has no files to compare (uploadedFilesCount=0)"
             );
         }
+
+        log.info("{} batch {} validated: status={}, fileCount={}",
+            batchLabel, batchId, batch.getStatus(), batch.getUploadedFilesCount());
 
         return batch;
     }

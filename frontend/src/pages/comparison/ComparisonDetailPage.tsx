@@ -16,13 +16,16 @@
  */
 
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, RefreshCw, Download, Trash2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Download, Trash2, AlertCircle, ChevronLeft, ChevronRight, Eye, List } from 'lucide-react';
 
 import { useComparisonDetails } from '@/features/file-comparison/hooks/useComparisonDetails';
 import { ComparisonSummary } from '@/features/file-comparison/ui/ComparisonSummary';
+import { DiffViewerWidget } from '@/widgets/comparison/DiffViewerWidget';
+import { DiffViewerProvider } from '@/features/file-comparison/model/DiffViewerContext';
 import { comparisonApi } from '@/features/file-comparison/api/comparisonApi';
+import type { ChangeType } from '@/entities/comparison/model/types';
 
 import { Button } from '@/shared/ui/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
@@ -37,6 +40,7 @@ import {
   TableHeader,
   TableRow
 } from '@/shared/ui/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 
 /**
  * Status badge colors mapping.
@@ -79,10 +83,12 @@ const changeTypeColors = {
  * ```
  */
 export function ComparisonDetailPage(): React.ReactElement {
-  const { comparisonId } = useParams<{ comparisonId: string }>();
+  const { comparisonId } = useParams({ from: '/account/comparisons/$comparisonId' });
   const navigate = useNavigate();
   const [resultsPage, setResultsPage] = useState(0);
-  const [changeTypeFilter, setChangeTypeFilter] = useState<string | undefined>(undefined);
+  const [changeTypeFilter, setChangeTypeFilter] = useState<ChangeType | undefined>(undefined);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
+  const [viewMode, setViewMode] = useState<'list' | 'diff'>('list');
 
   // Parse comparison ID
   const parsedId = comparisonId ? parseInt(comparisonId, 10) : null;
@@ -112,6 +118,7 @@ export function ComparisonDetailPage(): React.ReactElement {
   const {
     data: results,
     isLoading: isLoadingResults,
+    error: resultsError,
   } = useQuery({
     queryKey: ['comparison', parsedId, 'results', resultsPage, changeTypeFilter],
     queryFn: () =>
@@ -123,9 +130,15 @@ export function ComparisonDetailPage(): React.ReactElement {
     enabled: parsedId !== null && comparison?.status === 'COMPLETED',
   });
 
+  // Debug logging
+  console.log('[ComparisonDetailPage] Results data:', results);
+  console.log('[ComparisonDetailPage] Is loading results:', isLoadingResults);
+  console.log('[ComparisonDetailPage] Results error:', resultsError);
+  console.log('[ComparisonDetailPage] Comparison status:', comparison?.status);
+
   // Handle back navigation
   const handleBack = () => {
-    navigate('/comparisons');
+    navigate({ to: '/account/upload-history' });
   };
 
   // Handle download ZIP
@@ -168,10 +181,26 @@ export function ComparisonDetailPage(): React.ReactElement {
     }
     try {
       await comparisonApi.deleteComparison(parsedId);
-      navigate('/comparisons');
+      navigate({ to: '/account/upload-history' });
     } catch (error) {
       console.error('Failed to delete comparison:', error);
     }
+  };
+
+  // Handle file navigation
+  const handlePreviousFile = () => {
+    setCurrentFileIndex((prev) => Math.max(0, prev - 1));
+  };
+
+  const handleNextFile = () => {
+    if (results && results.content.length > 0) {
+      setCurrentFileIndex((prev) => Math.min(results.content.length - 1, prev + 1));
+    }
+  };
+
+  const handleFileSelect = (index: number) => {
+    setCurrentFileIndex(index);
+    setViewMode('diff');
   };
 
   // Loading state
@@ -210,8 +239,18 @@ export function ComparisonDetailPage(): React.ReactElement {
   const isCompleted = comparison.status === 'COMPLETED';
   const isFailed = comparison.status === 'FAILED';
 
+  // Get current file for diff viewer
+  const currentFile = results && results.content.length > 0 ? results.content[currentFileIndex] : null;
+  const hasMultipleFiles = results && results.content.length > 1;
+
+  // Parse unifiedDiff from JSON string to object
+  const parsedDiff = currentFile?.unifiedDiff
+    ? JSON.parse(currentFile.unifiedDiff)
+    : null;
+
   return (
-    <div className="container mx-auto py-8 space-y-6">
+    <DiffViewerProvider>
+      <div className="container mx-auto py-8 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -282,87 +321,164 @@ export function ComparisonDetailPage(): React.ReactElement {
         <ComparisonSummary summary={summary} />
       )}
 
-      {/* Results Table (only for completed comparisons) */}
+      {/* Results Section (only for completed comparisons) */}
       {isCompleted && (
-        <Card>
-          <CardHeader>
-            <CardTitle>File Differences</CardTitle>
-            <CardDescription>
-              Detailed list of all file changes
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoadingResults ? (
-              <div className="space-y-2">
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-              </div>
-            ) : results && results.content.length > 0 ? (
-              <>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>File Name</TableHead>
-                      <TableHead>Change Type</TableHead>
-                      <TableHead>Lines Added</TableHead>
-                      <TableHead>Lines Deleted</TableHead>
-                      <TableHead>Change Size</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {results.content.map((result) => (
-                      <TableRow key={result.id}>
-                        <TableCell className="font-medium">{result.fileName}</TableCell>
-                        <TableCell>
-                          <Badge variant={changeTypeColors[result.changeType]}>
-                            {result.changeType}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-green-600">+{result.lineAdditions}</TableCell>
-                        <TableCell className="text-red-600">-{result.lineDeletions}</TableCell>
-                        <TableCell>{result.changeSize} bytes</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+        <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'list' | 'diff')} className="w-full">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="list">
+              <List className="mr-2 h-4 w-4" />
+              List View
+            </TabsTrigger>
+            <TabsTrigger value="diff" disabled={!currentFile}>
+              <Eye className="mr-2 h-4 w-4" />
+              Diff View
+            </TabsTrigger>
+          </TabsList>
 
-                {/* Pagination */}
-                {results.totalPages > 1 && (
-                  <div className="flex items-center justify-between mt-4">
-                    <p className="text-sm text-muted-foreground">
-                      Showing {resultsPage * 20 + 1} to {Math.min((resultsPage + 1) * 20, results.totalElements)} of {results.totalElements} results
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setResultsPage(p => Math.max(0, p - 1))}
-                        disabled={resultsPage === 0}
-                      >
-                        Previous
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setResultsPage(p => p + 1)}
-                        disabled={resultsPage >= results.totalPages - 1}
-                      >
-                        Next
-                      </Button>
-                    </div>
+          {/* List View Tab */}
+          <TabsContent value="list" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>File Differences</CardTitle>
+                <CardDescription>
+                  Click on a file to view its diff
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoadingResults ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                  </div>
+                ) : results && results.content.length > 0 ? (
+                  <>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>File Name</TableHead>
+                          <TableHead>Change Type</TableHead>
+                          <TableHead>Lines Added</TableHead>
+                          <TableHead>Lines Deleted</TableHead>
+                          <TableHead>Change Size</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {results.content.map((result, index) => (
+                          <TableRow key={result.id}>
+                            <TableCell className="font-medium">{result.fileName || `File ${result.fileId.substring(0, 8)}`}</TableCell>
+                            <TableCell>
+                              <Badge variant={changeTypeColors[result.changeType]}>
+                                {result.changeType}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-green-600">+{result.lineAdditions}</TableCell>
+                            <TableCell className="text-red-600">-{result.lineDeletions}</TableCell>
+                            <TableCell>{result.changeSize} bytes</TableCell>
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleFileSelect(index)}
+                              >
+                                <Eye className="mr-1 h-4 w-4" />
+                                View Diff
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+
+                    {/* Pagination */}
+                    {results.totalPages > 1 && (
+                      <div className="flex items-center justify-between mt-4">
+                        <p className="text-sm text-muted-foreground">
+                          Showing {resultsPage * 20 + 1} to {Math.min((resultsPage + 1) * 20, results.totalElements)} of {results.totalElements} results
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setResultsPage(p => Math.max(0, p - 1))}
+                            disabled={resultsPage === 0}
+                          >
+                            Previous
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setResultsPage(p => p + 1)}
+                            disabled={resultsPage >= results.totalPages - 1}
+                          >
+                            Next
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-center text-muted-foreground py-8">
+                    No results found
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Diff View Tab */}
+          <TabsContent value="diff" className="mt-6 space-y-4">
+            {currentFile && parsedDiff ? (
+              <>
+                {/* File Navigation */}
+                {hasMultipleFiles && (
+                  <div className="flex items-center justify-between">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePreviousFile}
+                      disabled={currentFileIndex === 0}
+                    >
+                      <ChevronLeft className="mr-1 h-4 w-4" />
+                      Previous File
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      File {currentFileIndex + 1} of {results?.content.length || 0}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleNextFile}
+                      disabled={currentFileIndex >= (results?.content.length || 0) - 1}
+                    >
+                      Next File
+                      <ChevronRight className="ml-1 h-4 w-4" />
+                    </Button>
                   </div>
                 )}
+
+                {/* Diff Viewer Widget */}
+                <DiffViewerWidget
+                  diff={parsedDiff}
+                  fileName={currentFile.fileName || 'Unknown file'}
+                  changeType={currentFile.changeType}
+                />
               </>
             ) : (
-              <p className="text-center text-muted-foreground py-8">
-                No results found
-              </p>
+              <Card>
+                <CardContent className="py-8">
+                  <p className="text-center text-muted-foreground">
+                    Select a file from the list to view its diff
+                  </p>
+                </CardContent>
+              </Card>
             )}
-          </CardContent>
-        </Card>
+          </TabsContent>
+        </Tabs>
       )}
-    </div>
+      </div>
+    </DiffViewerProvider>
   );
 }
 

@@ -35,7 +35,7 @@ paths:
         generating diff results for modified files, marking new files, and skipping unchanged files.
 
         **Authorization**: User must own both batches (via JWT accountId).
-        **Prerequisites**: Both batches must have status = COMPLETED.
+        **Prerequisites**: Both batches must have files (uploadedFilesCount > 0). *(Updated 2025-11-03: Removed COMPLETED status requirement)*
       operationId: createComparison
       requestBody:
         required: true
@@ -85,12 +85,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               examples:
                 invalid-batch:
-                  summary: Batch not found or incomplete
+                  summary: Batch not found or has no files
                   value:
                     timestamp: "2025-11-03T10:30:00Z"
                     status: 400
                     error: "Bad Request"
-                    message: "Current batch 123 does not exist or is not in COMPLETED status"
+                    message: "Current batch 123 has no files to compare (uploadedFilesCount=0)"
                     path: "/api/v1/comparisons"
                 same-batch:
                   summary: Attempting to compare batch with itself
@@ -845,7 +845,7 @@ components:
         message:
           type: string
           description: Detailed error message
-          example: "Current batch 123 does not exist or is not in COMPLETED status"
+          example: "Current batch 123 has no files to compare (uploadedFilesCount=0)"
         path:
           type: string
           description: Request path that caused the error

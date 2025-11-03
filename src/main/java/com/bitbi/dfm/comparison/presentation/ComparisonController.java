@@ -9,6 +9,7 @@ import com.bitbi.dfm.comparison.presentation.dto.ComparisonResponseDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonResultDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonSummaryDto;
 import com.bitbi.dfm.comparison.presentation.dto.CreateComparisonRequestDto;
+import com.bitbi.dfm.comparison.presentation.dto.PagedComparisonResultResponse;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -158,6 +159,56 @@ public class ComparisonController {
     }
 
     /**
+     * GET /api/v1/comparisons/{comparisonId}
+     *
+     * <p>Retrieves comparison metadata by ID.
+     *
+     * @param comparisonId the comparison ID
+     * @param authentication the authentication object
+     * @return 200 OK with comparison metadata
+     */
+    @GetMapping("/{comparisonId}")
+    @Operation(
+        summary = "Get comparison by ID",
+        description = "Retrieves comparison metadata including status, batch IDs, and basic statistics."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Comparison retrieved successfully",
+            content = @Content(schema = @Schema(implementation = ComparisonResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden (user does not own this comparison)"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found"
+        )
+    })
+    public ResponseEntity<ComparisonResponseDto> getComparison(
+        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("GET /api/v1/comparisons/{} - account={}", comparisonId, accountId);
+
+        // Get comparison (without results for better performance)
+        FileComparison comparison = comparisonQueryService.findById(comparisonId, accountId);
+
+        // Convert to DTO
+        ComparisonResponseDto response = ComparisonResponseDto.fromDomain(comparison);
+
+        log.info("Returning comparison {}: status={}, batches=({} vs {})",
+            comparisonId, comparison.getStatus(),
+            comparison.getCurrentBatchId(), comparison.getTargetBatchId());
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * T059: GET /api/v1/comparisons/{comparisonId}/results
      *
      * <p>Retrieves detailed results for a specific comparison with filtering and pagination.
@@ -189,7 +240,7 @@ public class ComparisonController {
             description = "Comparison not found"
         )
     })
-    public ResponseEntity<Page<ComparisonResultDto>> getComparisonResults(
+    public ResponseEntity<PagedComparisonResultResponse> getComparisonResults(
         @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
         @Parameter(description = "Filter by change type") @RequestParam(required = false) ChangeType changeType,
         @Parameter(description = "Page number (zero-indexed)") @RequestParam(defaultValue = "0") int page,
@@ -225,9 +276,12 @@ public class ComparisonController {
             filteredResults.size()
         );
 
+        // Convert to custom DTO for consistent response structure
+        PagedComparisonResultResponse response = PagedComparisonResultResponse.fromPage(resultPage);
+
         log.info("Returning {} results (total: {}) for comparison {}", dtoList.size(), filteredResults.size(), comparisonId);
 
-        return ResponseEntity.ok(resultPage);
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -282,6 +336,58 @@ public class ComparisonController {
             summary.filesUnchanged());
 
         return ResponseEntity.ok(summary);
+    }
+
+    /**
+     * GET /api/v1/comparisons/by-batch/{batchId}
+     *
+     * Lists all comparisons for a specific batch (both as current and target).
+     *
+     * <p>Added 2025-11-03: Allows users to see comparison history on batch detail page.
+     * <p>Path changed from /comparisons/batch/{batchId} to /comparisons/by-batch/{batchId}
+     * to avoid routing conflicts with /comparisons/{comparisonId}.
+     *
+     * @param batchId the batch ID to get comparisons for
+     * @param authentication the authentication object (Spring Security OAuth2 JWT)
+     * @return 200 OK with list of comparisons
+     */
+    @GetMapping("/by-batch/{batchId}")
+    @Operation(
+        summary = "Get comparisons for a specific batch",
+        description = "Returns all comparisons where the batch is either current or target batch. " +
+            "Useful for displaying comparison history on batch detail page."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Comparisons retrieved successfully",
+            content = @Content(schema = @Schema(implementation = ComparisonResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "User does not own the batch"
+        )
+    })
+    public ResponseEntity<List<ComparisonResponseDto>> getComparisonsForBatch(
+        @Parameter(description = "Batch ID", required = true)
+        @PathVariable UUID batchId,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("GET /api/v1/comparisons/by-batch/{} - account={}", batchId, accountId);
+
+        // Get all comparisons for this batch
+        List<FileComparison> comparisons = comparisonQueryService.findByBatchId(batchId, accountId);
+
+        // Convert to DTOs
+        List<ComparisonResponseDto> response = comparisons.stream()
+            .map(ComparisonResponseDto::fromDomain)
+            .collect(Collectors.toList());
+
+        log.info("Found {} comparisons for batch {}", response.size(), batchId);
+
+        return ResponseEntity.ok(response);
     }
 
     /**

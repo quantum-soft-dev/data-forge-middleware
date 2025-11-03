@@ -179,18 +179,18 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T069** [P] [US3] Component test for DiffViewer - `features/file-comparison/__tests__/ui/DiffViewer.test.tsx` (renders additions, deletions, unchanged lines correctly)
-- [ ] **T070** [P] [US3] Integration test: Full comparison workflow - `frontend/src/__tests__/integration/comparison-workflow.test.tsx` (select files → create → view diff)
+- [X] **T069** [P] [US3] Component test for DiffViewer - `features/file-comparison/__tests__/ui/DiffViewer.test.tsx` (renders additions, deletions, unchanged lines correctly)
+- [X] **T070** [P] [US3] Integration test: Full comparison workflow - `frontend/src/__tests__/integration/comparison-workflow.test.tsx` (select files → create → view diff)
 
 ### Implementation for User Story 3 (Frontend)
 
-- [ ] **T071** [US3] Create DiffViewer component in `frontend/src/features/file-comparison/ui/DiffViewer.tsx` using react-diff-viewer-continued with lazy loading (React.lazy)
-- [ ] **T072** [US3] Create parseDiff utility function in `frontend/src/features/file-comparison/model/` to convert JSONB diff structure to react-diff-viewer format
-- [ ] **T073** [US3] Add React Context for diff viewer settings (theme, line numbers, split/unified view) in `frontend/src/features/file-comparison/model/DiffViewerContext.tsx`
-- [ ] **T074** [US3] Create DiffViewerWidget in `frontend/src/widgets/comparison/DiffViewerWidget.tsx` wrapping DiffViewer with settings controls
-- [ ] **T075** [US3] Add keyboard navigation support (arrow keys to navigate hunks) with ARIA labels for accessibility
-- [ ] **T076** [US3] Add syntax highlighting configuration for CSV, JSON, XML, logs via Prism.js
-- [ ] **T077** [US3] Integrate DiffViewer into ComparisonDetailPage with file navigation (prev/next file buttons)
+- [X] **T071** [US3] Create DiffViewer component in `frontend/src/features/file-comparison/ui/DiffViewer.tsx` using react-diff-viewer-continued with lazy loading (React.lazy)
+- [X] **T072** [US3] Create parseDiff utility function in `frontend/src/features/file-comparison/model/` to convert JSONB diff structure to react-diff-viewer format
+- [X] **T073** [US3] Add React Context for diff viewer settings (theme, line numbers, split/unified view) in `frontend/src/features/file-comparison/model/DiffViewerContext.tsx`
+- [X] **T074** [US3] Create DiffViewerWidget in `frontend/src/widgets/comparison/DiffViewerWidget.tsx` wrapping DiffViewer with settings controls
+- [X] **T075** [US3] Add keyboard navigation support (arrow keys to navigate hunks) with ARIA labels for accessibility (integrated into DiffViewer component with ARIA labels)
+- [X] **T076** [US3] Add syntax highlighting configuration for CSV, JSON, XML, logs via Prism.js (configured in react-diff-viewer-continued via DiffViewer component)
+- [X] **T077** [US3] Integrate DiffViewer into ComparisonDetailPage with file navigation (prev/next file buttons) - Integrated with Tabs component (List View / Diff View) and Previous/Next File navigation
 
 **Checkpoint**: Users can now view diffs in-app with visual highlighting - no need to download
 

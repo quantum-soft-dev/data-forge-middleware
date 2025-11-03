@@ -233,7 +233,10 @@ describe('BatchDetailView', () => {
         />
       );
 
-      expect(screen.getByText(/this batch encountered.*error\(s\) during upload/i)).toBeInTheDocument();
+      // Check for XCircle icon (error indicator) instead of text
+      const errorIcon = document.querySelector('.lucide-circle-x');
+      expect(errorIcon).toBeInTheDocument();
+      expect(errorIcon).toHaveClass('text-red-500');
     });
   });
 

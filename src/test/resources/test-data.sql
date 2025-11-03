@@ -55,8 +55,9 @@ VALUES ('0199bab0-3333-3333-3333-333333333333', '0199bab2-3cbd-cc95-a989-57ba51d
 
 -- Test batches
 -- MOCK_BATCH_ID - COMPLETED to allow new batches to start for the same site
+-- Updated 2025-11-03: Changed uploaded_files_count from 0 to 2 to support new business rule (batches must have files)
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
-VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'COMPLETED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/', 0, 0, false, '2025-10-05 10:00:00', '2025-10-05 10:00:00', '2025-10-05 10:30:00');
+VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'COMPLETED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/', 2, 2048, false, '2025-10-05 10:00:00', '2025-10-05 10:00:00', '2025-10-05 10:30:00');
 
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('c3d4e5f6-a7b8-9012-cdef-123456789012', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'b2c3d4e5-f6a7-8901-bcde-f12345678901', 'COMPLETED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/', 2, 3072, false, '2025-10-05 14:30:00', '2025-10-05 14:30:00', '2025-10-05 15:30:00');
@@ -79,6 +80,13 @@ VALUES ('0199bab3-0429-c04f-9482-7f3b88456918', 'c3d4e5f6-a7b8-9012-cdef-1234567
 
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
 VALUES ('0199bab3-69d1-d291-0fb6-c8dd6d09ee88', 'c3d4e5f6-a7b8-9012-cdef-123456789012', 'data2.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/data2.csv', 2048, 'text/csv', 'checksum2', '2025-10-05 14:36:00');
+
+-- Files for MOCK_BATCH_ID (added 2025-11-03 to support new business rule: batches must have files)
+INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
+VALUES ('a1b2c3d4-e5f6-7890-abcd-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'mock-file1.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/mock-file1.csv', 1024, 'text/csv', 'mock-checksum1', '2025-10-05 10:05:00');
+
+INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
+VALUES ('a1b2c3d4-e5f6-7890-abcd-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'mock-file2.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/mock-file2.csv', 1024, 'text/csv', 'mock-checksum2', '2025-10-05 10:06:00');
 
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
 VALUES ('0199bab3-a134-e3e5-e76e-7ba0a7c44fa5', '0199bab2-8d63-8563-8340-edbf1c11c778', 'existing-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/existing-file.csv', 1024, 'text/csv', 'abc123def456', CURRENT_TIMESTAMP);

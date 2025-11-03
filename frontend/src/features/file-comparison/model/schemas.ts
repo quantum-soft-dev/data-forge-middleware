@@ -58,9 +58,9 @@ export const unifiedDiffSchema = z.object({
  */
 export const comparisonSchema = z.object({
   id: z.number().int().positive(),
-  currentBatchId: z.number().int().positive(),
-  targetBatchId: z.number().int().positive(),
-  accountId: z.number().int().positive(),
+  currentBatchId: z.string().uuid(),
+  targetBatchId: z.string().uuid(),
+  accountId: z.string().uuid(),
   status: comparisonStatusSchema,
   createdAt: z.string().datetime(),
   startedAt: z.string().datetime().nullable(),
@@ -79,15 +79,15 @@ export const comparisonSchema = z.object({
 export const comparisonResultSchema = z.object({
   id: z.number().int().positive(),
   comparisonId: z.number().int().positive(),
-  fileId: z.number().int().positive(),
-  targetFileId: z.number().int().positive().nullable(),
-  fileName: z.string(),
+  fileId: z.string().uuid(),
+  targetFileId: z.string().uuid().nullable(),
+  fileName: z.string().nullable(), // Can be null (backend TODO)
   targetFileName: z.string().nullable(),
   changeType: changeTypeSchema,
   lineAdditions: z.number().int().min(0),
   lineDeletions: z.number().int().min(0),
   changeSize: z.number().int().min(0),
-  unifiedDiff: unifiedDiffSchema.nullable(),
+  unifiedDiff: z.string().nullable(), // Backend returns JSON string, not parsed object
   createdAt: z.string().datetime(),
 });
 
@@ -101,8 +101,8 @@ export const comparisonSummarySchema = z.object({
   filesUnchanged: z.number().int().min(0),
   totalChangeSize: z.number().int().min(0),
   comparisonTimestamp: z.string().datetime(),
-  currentBatchId: z.number().int().positive(),
-  targetBatchId: z.number().int().positive(),
+  currentBatchId: z.string().uuid(),
+  targetBatchId: z.string().uuid(),
 });
 
 /**
@@ -110,13 +110,13 @@ export const comparisonSummarySchema = z.object({
  */
 export const createComparisonRequestSchema = z
   .object({
-    currentBatchId: z.number().int().positive({
-      message: 'Current batch ID must be a positive integer',
+    currentBatchId: z.string().uuid({
+      message: 'Current batch ID must be a valid UUID',
     }),
-    targetBatchId: z.number().int().positive({
-      message: 'Target batch ID must be a positive integer',
+    targetBatchId: z.string().uuid({
+      message: 'Target batch ID must be a valid UUID',
     }),
-    fileIds: z.array(z.number().int().positive()).nullable().optional(),
+    fileIds: z.array(z.string().uuid()).nullable().optional(),
   })
   .refine((data) => data.currentBatchId !== data.targetBatchId, {
     message: 'Cannot compare a batch with itself',

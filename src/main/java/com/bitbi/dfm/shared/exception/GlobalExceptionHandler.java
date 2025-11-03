@@ -628,14 +628,24 @@ public class GlobalExceptionHandler {
 
     /**
      * Handle BatchNotCompletedException (400 Bad Request).
-     * Thrown when a batch exists but is not in COMPLETED status.
+     *
+     * <p><strong>DEPRECATED (2025-11-03):</strong> This exception is no longer thrown after business rule change.
+     * Batches no longer need to be COMPLETED to be compared. This handler is kept for backward compatibility
+     * in case the exception class is still referenced elsewhere.
+     *
+     * <p>Previous behavior: Thrown when a batch exists but is not in COMPLETED status.
+     * <p>Current behavior: Batches with any status can be compared if they have files.
+     *
+     * @deprecated Since 2025-11-03. Will be removed in next major version.
      */
+    @Deprecated
     @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.BatchNotCompletedException.class)
     public ResponseEntity<ErrorResponseDto> handleBatchNotCompleted(
             com.bitbi.dfm.comparison.application.ComparisonService.BatchNotCompletedException ex,
             HttpServletRequest request) {
 
-        logger.warn("Batch not completed: {}", ex.getMessage());
+        logger.warn("[DEPRECATED] Batch not completed exception thrown (this should not happen after business rule change): {}",
+            ex.getMessage());
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),

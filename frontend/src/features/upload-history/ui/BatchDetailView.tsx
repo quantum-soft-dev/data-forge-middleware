@@ -15,6 +15,7 @@ import { FileTable } from './FileTable';
 import { DownloadButton } from './DownloadButton';
 import { ExcelButton } from './ExcelButton';
 import { CompareButton } from './CompareButton';
+import { ComparisonHistorySection } from './ComparisonHistorySection';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -208,6 +209,9 @@ export function BatchDetailView({
           onSelectionChange={handleSelectionChange}
         />
       </div>
+
+      {/* Comparison History Section (Added 2025-11-03) */}
+      <ComparisonHistorySection batchId={batch.id} />
     </div>
   );
 }
