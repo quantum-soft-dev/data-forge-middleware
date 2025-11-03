@@ -421,6 +421,135 @@ public class ComparisonController {
     }
 
     /**
+     * DELETE /api/v1/comparisons/{comparisonId}
+     *
+     * Deletes a comparison and all its results.
+     *
+     * @param comparisonId the comparison ID
+     * @param authentication the authentication object
+     * @return 204 No Content
+     */
+    @DeleteMapping("/{comparisonId}")
+    @Operation(
+        summary = "Delete comparison",
+        description = "Deletes a comparison and all its results. The user must own the comparison."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "204",
+            description = "Comparison deleted successfully"
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "User does not own this comparison"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found"
+        )
+    })
+    public ResponseEntity<Void> deleteComparison(
+        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("DELETE /api/v1/comparisons/{} - account={}", comparisonId, accountId);
+
+        // Get comparison to verify ownership
+        FileComparison comparison = comparisonQueryService.findById(comparisonId, accountId);
+
+        // Delete comparison (cascade will delete results)
+        comparisonService.deleteComparison(comparisonId, accountId);
+
+        log.info("Deleted comparison {}", comparisonId);
+
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * GET /api/v1/comparisons/{comparisonId}/download
+     *
+     * Downloads comparison results as ZIP archive.
+     *
+     * @param comparisonId the comparison ID
+     * @param authentication the authentication object
+     * @return ZIP file with all comparison results
+     */
+    @GetMapping("/{comparisonId}/download")
+    @Operation(
+        summary = "Download comparison as ZIP",
+        description = "Downloads all comparison results as a ZIP archive containing diff files."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "ZIP archive generated successfully"
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "User does not own this comparison"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found"
+        )
+    })
+    public ResponseEntity<byte[]> downloadComparisonZip(
+        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("GET /api/v1/comparisons/{}/download - account={}", comparisonId, accountId);
+
+        // TODO: Implement ZIP download functionality
+        // For now, return 501 Not Implemented
+        return ResponseEntity.status(501).build();
+    }
+
+    /**
+     * GET /api/v1/comparisons/{comparisonId}/summary/download
+     *
+     * Downloads comparison summary report as text file.
+     *
+     * @param comparisonId the comparison ID
+     * @param authentication the authentication object
+     * @return Text file with summary report
+     */
+    @GetMapping("/{comparisonId}/summary/download")
+    @Operation(
+        summary = "Download summary report",
+        description = "Downloads comparison summary as a text file."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Summary report generated successfully"
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "User does not own this comparison"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found"
+        )
+    })
+    public ResponseEntity<byte[]> downloadSummaryReport(
+        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("GET /api/v1/comparisons/{}/summary/download - account={}", comparisonId, accountId);
+
+        // TODO: Implement summary report download
+        // For now, return 501 Not Implemented
+        return ResponseEntity.status(501).build();
+    }
+
+    /**
      * Error response DTO for OpenAPI documentation.
      * Note: Actual error handling is done by GlobalExceptionHandler.
      */

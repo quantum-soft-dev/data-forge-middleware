@@ -136,9 +136,14 @@ export function ComparisonDetailPage(): React.ReactElement {
   console.log('[ComparisonDetailPage] Results error:', resultsError);
   console.log('[ComparisonDetailPage] Comparison status:', comparison?.status);
 
-  // Handle back navigation
+  // Handle back navigation - return to the current batch (source) detail page
   const handleBack = () => {
-    navigate({ to: '/account/upload-history' });
+    if (comparison?.currentBatchId) {
+      navigate({ to: `/account/upload-history/${comparison.currentBatchId}` });
+    } else {
+      // Fallback to upload history list if batch ID is not available
+      navigate({ to: '/account/upload-history' });
+    }
   };
 
   // Handle download ZIP
@@ -181,7 +186,12 @@ export function ComparisonDetailPage(): React.ReactElement {
     }
     try {
       await comparisonApi.deleteComparison(parsedId);
-      navigate({ to: '/account/upload-history' });
+      // After deletion, return to the batch detail page
+      if (comparison?.currentBatchId) {
+        navigate({ to: `/account/upload-history/${comparison.currentBatchId}` });
+      } else {
+        navigate({ to: '/account/upload-history' });
+      }
     } catch (error) {
       console.error('Failed to delete comparison:', error);
     }
@@ -227,9 +237,9 @@ export function ComparisonDetailPage(): React.ReactElement {
             {comparisonError?.message || 'Comparison not found'}
           </AlertDescription>
         </Alert>
-        <Button onClick={handleBack} className="mt-4" variant="outline">
+        <Button onClick={() => navigate({ to: '/account/upload-history' })} className="mt-4" variant="outline">
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Comparisons
+          Back to Upload History
         </Button>
       </div>
     );
