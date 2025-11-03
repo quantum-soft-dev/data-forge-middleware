@@ -43,8 +43,12 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
         newSet.add(fileId);
       }
 
-      // Notify parent component
-      onSelectionChange?.(Array.from(newSet));
+      // Notify parent after state update using queueMicrotask
+      const selectedArray = Array.from(newSet);
+      console.log('[FileTable] Selection changed, calling parent with:', selectedArray);
+      queueMicrotask(() => {
+        onSelectionChange?.(selectedArray);
+      });
 
       return newSet;
     });
@@ -59,8 +63,12 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
         ? new Set<string>() // Deselect all
         : new Set(files.map(f => f.id)); // Select all
 
-      // Notify parent component
-      onSelectionChange?.(Array.from(newSet));
+      // Notify parent after state update using queueMicrotask
+      const selectedArray = Array.from(newSet);
+      console.log('[FileTable] Selection changed (toggle all), calling parent with:', selectedArray);
+      queueMicrotask(() => {
+        onSelectionChange?.(selectedArray);
+      });
 
       return newSet;
     });

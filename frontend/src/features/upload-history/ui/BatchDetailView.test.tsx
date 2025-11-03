@@ -233,7 +233,7 @@ describe('BatchDetailView', () => {
         />
       );
 
-      expect(screen.getByText(/this batch has errors/i)).toBeInTheDocument();
+      expect(screen.getByText(/this batch encountered.*error\(s\) during upload/i)).toBeInTheDocument();
     });
   });
 

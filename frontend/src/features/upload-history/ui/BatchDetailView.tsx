@@ -7,7 +7,7 @@
  * Feature: 008-upload-history-user (User Story 2, User Story 3, User Story 4)
  */
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import type { BatchDetail } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
@@ -43,10 +43,11 @@ export function BatchDetailView({
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
 
   // Handle file selection changes from FileTable
-  const handleSelectionChange = (fileIds: string[]) => {
+  const handleSelectionChange = useCallback((fileIds: string[]) => {
+    console.log('[BatchDetailView] handleSelectionChange called with:', fileIds);
     setSelectedFileIds(fileIds);
     onFileSelectionChange?.(fileIds);
-  };
+  }, [onFileSelectionChange]);
   // Loading state
   if (isLoading) {
     return (
@@ -165,15 +166,6 @@ export function BatchDetailView({
             </dd>
           </div>
         </div>
-
-        {/* Error indicator */}
-        {batch.hasErrors && (
-          <div className="mt-4 rounded-md bg-red-50 p-3">
-            <p className="text-sm text-red-800">
-              This batch has errors. Check the error logs for details.
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Files section */}
@@ -185,6 +177,7 @@ export function BatchDetailView({
 
           {/* T077, T099: Action buttons for selected files */}
           <div className="flex items-center gap-2">
+            {console.log('[BatchDetailView] Rendering buttons with selectedFileIds:', selectedFileIds)}
             {/* T077: Download button for selected files */}
             <DownloadButton
               batchId={batch.id}
