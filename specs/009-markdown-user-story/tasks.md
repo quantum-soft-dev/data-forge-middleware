@@ -115,9 +115,9 @@
 
 - [X] **T042** [P] [US1] Create FileSelector component - **REUSING** existing `FileTable` component from Upload History feature (already has "Select All", checkboxes, selection callbacks)
 - [X] **T043** [P] [US1] Create useCreateComparison mutation hook in `frontend/src/features/file-comparison/lib/useCreateComparison.ts` using TanStack Query + comparisonApi client
-- [ ] **T044** [US1] Create ComparisonPage in `frontend/src/pages/comparison/ComparisonPage.tsx` integrating FileTable with batch selection UI
-- [ ] **T045** [US1] Add TanStack Router route for `/comparisons/create` in `frontend/src/app/routes/`
-- [ ] **T046** [US1] Add form validation with React Hook Form + Zod for file selection form
+- [X] **T044** [US1] Create ComparisonPage in `frontend/src/pages/comparison/ComparisonPage.tsx` integrating FileTable with batch selection UI
+- [X] **T045** [US1] Add TanStack Router route for `/comparisons/create` in `frontend/src/app/routes/`
+- [X] **T046** [US1] Add form validation with React Hook Form + Zod for file selection form
 
 **Checkpoint**: At this point, users can select files and initiate a comparison (creates record with status=PENDING)
 
