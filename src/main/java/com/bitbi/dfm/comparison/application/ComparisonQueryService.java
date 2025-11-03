@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Query service for read-side comparison operations.
@@ -52,7 +53,7 @@ public class ComparisonQueryService {
      * @throws ComparisonService.ComparisonNotFoundException if comparison does not exist
      * @throws ComparisonService.UnauthorizedAccessException if accountId does not own the comparison
      */
-    public FileComparison findById(Long comparisonId, Long accountId) {
+    public FileComparison findById(Long comparisonId, UUID accountId) {
         log.debug("Finding comparison: id={}, account={}", comparisonId, accountId);
 
         FileComparison comparison = comparisonRepository.findById(comparisonId)
@@ -80,7 +81,7 @@ public class ComparisonQueryService {
      * @throws ComparisonService.ComparisonNotFoundException if comparison does not exist
      * @throws ComparisonService.UnauthorizedAccessException if accountId does not own the comparison
      */
-    public FileComparison findByIdWithResults(Long comparisonId, Long accountId) {
+    public FileComparison findByIdWithResults(Long comparisonId, UUID accountId) {
         log.debug("Finding comparison with results: id={}, account={}", comparisonId, accountId);
 
         FileComparison comparison = comparisonRepository.findByIdWithResults(comparisonId)
@@ -106,7 +107,7 @@ public class ComparisonQueryService {
      * @param pageable pagination information
      * @return page of comparisons
      */
-    public Page<FileComparison> findByAccountId(Long accountId, Pageable pageable) {
+    public Page<FileComparison> findByAccountId(UUID accountId, Pageable pageable) {
         log.debug("Listing comparisons for account: id={}, page={}", accountId, pageable.getPageNumber());
         return comparisonRepository.findByAccountIdOrderByCreatedAtDesc(accountId, pageable);
     }
@@ -120,7 +121,7 @@ public class ComparisonQueryService {
      * @param accountId the account owner ID (for authorization filtering)
      * @return list of comparisons
      */
-    public List<FileComparison> findByBatchId(Long batchId, Long accountId) {
+    public List<FileComparison> findByBatchId(UUID batchId, UUID accountId) {
         log.debug("Finding comparisons for batch: id={}, account={}", batchId, accountId);
 
         List<FileComparison> comparisons = comparisonRepository.findByCurrentBatchId(batchId);
@@ -148,7 +149,7 @@ public class ComparisonQueryService {
      * @param accountId the account owner ID
      * @return count of comparisons
      */
-    public long countByAccountId(Long accountId) {
+    public long countByAccountId(UUID accountId) {
         return comparisonRepository.countByAccountId(accountId);
     }
 }

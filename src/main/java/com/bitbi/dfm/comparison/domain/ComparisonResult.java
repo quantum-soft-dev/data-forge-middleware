@@ -1,6 +1,7 @@
 package com.bitbi.dfm.comparison.domain;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Domain entity representing the diff result for a single file comparison.
@@ -20,8 +21,8 @@ import java.time.Instant;
 public class ComparisonResult {
     private Long id;
     private Long comparisonId;
-    private Long fileId;
-    private Long targetFileId;
+    private UUID fileId;
+    private UUID targetFileId;
     private ChangeType changeType;
     private String unifiedDiff;  // JSONB structure as String
     private Integer lineAdditions;
@@ -49,8 +50,8 @@ public class ComparisonResult {
      */
     public ComparisonResult(
         Long comparisonId,
-        Long fileId,
-        Long targetFileId,
+        UUID fileId,
+        UUID targetFileId,
         ChangeType changeType,
         String unifiedDiff,
         Integer lineAdditions,
@@ -77,7 +78,7 @@ public class ComparisonResult {
      */
     private void validateBusinessRules(
         ChangeType changeType,
-        Long targetFileId,
+        UUID targetFileId,
         Integer lineAdditions,
         Integer lineDeletions
     ) {
@@ -146,11 +147,11 @@ public class ComparisonResult {
         return comparisonId;
     }
 
-    public Long getFileId() {
+    public UUID getFileId() {
         return fileId;
     }
 
-    public Long getTargetFileId() {
+    public UUID getTargetFileId() {
         return targetFileId;
     }
 

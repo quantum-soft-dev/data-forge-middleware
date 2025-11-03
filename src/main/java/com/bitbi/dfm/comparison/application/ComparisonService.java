@@ -1,5 +1,8 @@
 package com.bitbi.dfm.comparison.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.comparison.domain.ComparisonRepository;
 import com.bitbi.dfm.comparison.domain.FileComparison;
 import org.slf4j.Logger;
@@ -7,6 +10,9 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.UUID;
 
 /**
  * Application service for file comparison operations.
@@ -22,8 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>Managing comparison lifecycle (PENDING → IN_PROGRESS → COMPLETED/FAILED)</li>
  * </ul>
  *
- * <p>Note: Full implementation will be completed in Phase 3 (User Story 1) and Phase 4 (User Story 2).
- * This is a skeleton for Phase 2 (Foundational).
+ * <p>Phase 3 (User Story 1) implementation: Full validation workflow.
  */
 @Service
 @Transactional
@@ -32,25 +37,30 @@ public class ComparisonService {
     private static final Logger log = LoggerFactory.getLogger(ComparisonService.class);
 
     private final ComparisonRepository comparisonRepository;
+    private final BatchRepository batchRepository;
 
-    public ComparisonService(ComparisonRepository comparisonRepository) {
+    public ComparisonService(
+        ComparisonRepository comparisonRepository,
+        BatchRepository batchRepository
+    ) {
         this.comparisonRepository = comparisonRepository;
+        this.batchRepository = batchRepository;
     }
 
     /**
      * Creates a new file comparison between two batches.
      *
-     * <p>This is a skeleton method for Phase 2. Full implementation will include:
+     * <p>Phase 3 (User Story 1) - Full validation workflow:
      * <ul>
-     *   <li>Validate batches exist and belong to accountId (US1 - T038)</li>
-     *   <li>Verify user ownership via JWT (US1 - T038)</li>
-     *   <li>Validate file selection (US1 - T038)</li>
-     *   <li>Create FileComparison aggregate with status=PENDING (US1 - T038)</li>
-     *   <li>Transition to IN_PROGRESS (US2 - T056)</li>
-     *   <li>Fetch file contents from S3 (US2 - T056)</li>
-     *   <li>Generate diffs via DiffService (US2 - T056)</li>
-     *   <li>Create ComparisonResult entities (US2 - T056)</li>
-     *   <li>Update statistics and transition to COMPLETED/FAILED (US2 - T056)</li>
+     *   <li>✅ Validate batches exist and are COMPLETED (T038)</li>
+     *   <li>✅ Verify user ownership via JWT accountId (T038)</li>
+     *   <li>✅ Validate file selection (T038)</li>
+     *   <li>✅ Create FileComparison aggregate with status=PENDING (T038)</li>
+     *   <li>⏳ Transition to IN_PROGRESS (US2 - T056)</li>
+     *   <li>⏳ Fetch file contents from S3 (US2 - T056)</li>
+     *   <li>⏳ Generate diffs via DiffService (US2 - T056)</li>
+     *   <li>⏳ Create ComparisonResult entities (US2 - T056)</li>
+     *   <li>⏳ Update statistics and transition to COMPLETED/FAILED (US2 - T056)</li>
      * </ul>
      *
      * @param currentBatchId the current batch ID (source)
@@ -58,21 +68,40 @@ public class ComparisonService {
      * @param accountId the account owner ID (from JWT)
      * @param selectedFileIds list of file IDs to compare (null = all files)
      * @return the created comparison with ID
-     * @throws IllegalArgumentException if validation fails
+     * @throws IllegalArgumentException if validation fails (same batch, empty file list)
      * @throws BatchNotFoundException if either batch does not exist
+     * @throws BatchNotCompletedException if either batch is not in COMPLETED status
      * @throws UnauthorizedAccessException if accountId does not own the batches
      */
     public FileComparison createComparison(
-        Long currentBatchId,
-        Long targetBatchId,
-        Long accountId,
-        java.util.List<Long> selectedFileIds
+        UUID currentBatchId,
+        UUID targetBatchId,
+        UUID accountId,
+        List<UUID> selectedFileIds
     ) {
         log.info("Creating comparison: currentBatch={}, targetBatch={}, account={}",
             currentBatchId, targetBatchId, accountId);
 
         try {
-            // Phase 2: Basic creation only (validation and diff generation in Phase 3-4)
+            // T038: Validate file selection
+            validateFileSelection(selectedFileIds);
+
+            // T038: Validate batches exist and are COMPLETED
+            Batch currentBatch = validateBatchExistsAndCompleted(currentBatchId, "Current");
+            Batch targetBatch = validateBatchExistsAndCompleted(targetBatchId, "Target");
+
+            // T038: Verify user ownership via JWT accountId
+            validateBatchOwnership(currentBatch, accountId, "current");
+            validateBatchOwnership(targetBatch, accountId, "target");
+
+            // T038: Validate batches belong to the same account (redundant but defensive)
+            if (!currentBatch.getAccountId().equals(targetBatch.getAccountId())) {
+                throw new IllegalArgumentException(
+                    "Batches must belong to the same account"
+                );
+            }
+
+            // T038: Create FileComparison aggregate with status=PENDING
             FileComparison comparison = new FileComparison(currentBatchId, targetBatchId, accountId);
             FileComparison savedComparison = comparisonRepository.save(comparison);
 
@@ -81,7 +110,8 @@ public class ComparisonService {
             MDC.put("currentBatchId", currentBatchId.toString());
             MDC.put("targetBatchId", targetBatchId.toString());
 
-            log.info("Comparison created successfully: id={}", savedComparison.getId());
+            log.info("Comparison created successfully: id={}, status={}",
+                savedComparison.getId(), savedComparison.getStatus());
             return savedComparison;
 
         } finally {
@@ -89,6 +119,60 @@ public class ComparisonService {
             MDC.remove("comparisonId");
             MDC.remove("currentBatchId");
             MDC.remove("targetBatchId");
+        }
+    }
+
+    /**
+     * Validates file selection input.
+     *
+     * @param selectedFileIds list of file IDs (can be null for "all files")
+     * @throws IllegalArgumentException if list is empty (not null but empty)
+     */
+    private void validateFileSelection(List<UUID> selectedFileIds) {
+        if (selectedFileIds != null && selectedFileIds.isEmpty()) {
+            throw new IllegalArgumentException(
+                "At least one file must be selected for comparison. Use null to compare all files."
+            );
+        }
+    }
+
+    /**
+     * Validates that a batch exists and is in COMPLETED status.
+     *
+     * @param batchId the batch ID to validate
+     * @param batchLabel label for error messages ("Current" or "Target")
+     * @return the validated batch
+     * @throws BatchNotFoundException if batch does not exist
+     * @throws BatchNotCompletedException if batch is not COMPLETED
+     */
+    private Batch validateBatchExistsAndCompleted(UUID batchId, String batchLabel) {
+        Batch batch = batchRepository.findById(batchId)
+            .orElseThrow(() -> new BatchNotFoundException(
+                batchLabel + " batch " + batchId + " does not exist or is not in COMPLETED status"
+            ));
+
+        if (batch.getStatus() != BatchStatus.COMPLETED) {
+            throw new BatchNotCompletedException(
+                batchLabel + " batch " + batchId + " is not in COMPLETED status (current status: " + batch.getStatus() + ")"
+            );
+        }
+
+        return batch;
+    }
+
+    /**
+     * Validates that the authenticated user owns the batch.
+     *
+     * @param batch the batch to validate
+     * @param accountId the account ID from JWT
+     * @param batchType type for error messages ("current" or "target")
+     * @throws UnauthorizedAccessException if user does not own the batch
+     */
+    private void validateBatchOwnership(Batch batch, UUID accountId, String batchType) {
+        if (!batch.getAccountId().equals(accountId)) {
+            throw new UnauthorizedAccessException(
+                "Access denied: You do not have permission to access " + batchType + " batch " + batch.getId()
+            );
         }
     }
 
@@ -103,7 +187,7 @@ public class ComparisonService {
      * @throws UnauthorizedAccessException if accountId does not own the comparison
      * @throws IllegalStateException if comparison is IN_PROGRESS
      */
-    public void deleteComparison(Long comparisonId, Long accountId) {
+    public void deleteComparison(Long comparisonId, UUID accountId) {
         log.info("Deleting comparison: id={}, account={}", comparisonId, accountId);
 
         FileComparison comparison = comparisonRepository.findById(comparisonId)
@@ -126,6 +210,12 @@ public class ComparisonService {
     // Custom exceptions
     public static class BatchNotFoundException extends RuntimeException {
         public BatchNotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    public static class BatchNotCompletedException extends RuntimeException {
+        public BatchNotCompletedException(String message) {
             super(message);
         }
     }

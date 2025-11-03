@@ -33,7 +33,13 @@
       "Bash(.specify/scripts/bash/setup-plan.sh:*)",
       "Read(//Users/boris/Desktop/Shottr Screenshots/**)",
       "Bash(cat:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(.specify/scripts/bash/create-new-feature.sh --json \"$(cat <<''EOF''\n```markdown\n# User Story: View Changes Between File Uploads\n\n**As a user**, I want to see what has changed in my files between different uploads, so I can easily track the history of changes.\n\n## Usage Scenario:\n\n1. I go to the **File History** section and select the **Upload Session** I need\n\n2. I select the files I''m interested in:\n   - I can select all files at once\n   - I can select individual files\n\n3. After selecting files, a new **File Diffs** section appears\n\n4. In this section, I select an earlier upload to compare with the current files\n\n5. The system automatically creates change files for each selected file:\n   - If a file was modified - shows exactly what changed\n   - If a file is new (didn''t exist in the older upload) - shows it as completely new\n   - If a file hasn''t changed - no comparison file is created\n\n6. All change files are saved within the current **Upload Session** with an indication of which upload the comparison was made against\n\n7. I can:\n   - **View changes** in a convenient visual editor (highlighting added/removed content)\n   - **Download all changes** as a single archive\n   - **Delete** saved comparisons if they are no longer needed\n\n## Summary Report\n\nAfter the file comparison is complete, the system generates a summary report that includes:\n\n- **Total number of files compared**\n- **Number of files with changes**\n- **Number of new files** (files that didn''t exist in the previous upload)\n- **Number of unchanged files**\n- **Total size of changes**\n- **Timestamp of the comparison**\n- **Which Upload Sessions were compared** (current and previous)\n\nThe user can:\n- **View the summary report** directly in the interface\n- **Download the report** as a separate file\n- **Include the report** when downloading the archive with all changes\n```\nEOF\n)\")",
+      "Bash(.specify/scripts/bash/update-agent-context.sh:*)",
+      "Bash(if [ -d \"/Users/boris/projects/bit-bi/data-forge-middleware/specs/009-markdown-user-story/checklists\" ])",
+      "Bash(then find \"/Users/boris/projects/bit-bi/data-forge-middleware/specs/009-markdown-user-story/checklists\" -name \"*.md\" -type f)",
+      "Bash(else echo \"No checklists directory\")",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []

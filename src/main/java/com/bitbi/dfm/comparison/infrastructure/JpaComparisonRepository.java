@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -55,27 +56,27 @@ public class JpaComparisonRepository implements ComparisonRepository {
     }
 
     @Override
-    public List<FileComparison> findByAccountId(Long accountId) {
+    public List<FileComparison> findByAccountId(UUID accountId) {
         return springDataRepository.findByAccountId(accountId).stream()
             .map(FileComparisonEntity::toDomain)
             .collect(Collectors.toList());
     }
 
     @Override
-    public Page<FileComparison> findByAccountIdOrderByCreatedAtDesc(Long accountId, Pageable pageable) {
+    public Page<FileComparison> findByAccountIdOrderByCreatedAtDesc(UUID accountId, Pageable pageable) {
         return springDataRepository.findByAccountIdOrderByCreatedAtDesc(accountId, pageable)
             .map(FileComparisonEntity::toDomain);
     }
 
     @Override
-    public List<FileComparison> findByCurrentBatchId(Long batchId) {
+    public List<FileComparison> findByCurrentBatchId(UUID batchId) {
         return springDataRepository.findByCurrentBatchId(batchId).stream()
             .map(FileComparisonEntity::toDomain)
             .collect(Collectors.toList());
     }
 
     @Override
-    public List<FileComparison> findByTargetBatchId(Long batchId) {
+    public List<FileComparison> findByTargetBatchId(UUID batchId) {
         return springDataRepository.findByTargetBatchId(batchId).stream()
             .map(FileComparisonEntity::toDomain)
             .collect(Collectors.toList());
@@ -83,8 +84,8 @@ public class JpaComparisonRepository implements ComparisonRepository {
 
     @Override
     public boolean existsByCurrentBatchIdAndTargetBatchIdAndStatus(
-        Long currentBatchId,
-        Long targetBatchId,
+        UUID currentBatchId,
+        UUID targetBatchId,
         ComparisonStatus status
     ) {
         return springDataRepository.existsByCurrentBatchIdAndTargetBatchIdAndStatus(
@@ -100,7 +101,7 @@ public class JpaComparisonRepository implements ComparisonRepository {
     }
 
     @Override
-    public long countByAccountId(Long accountId) {
+    public long countByAccountId(UUID accountId) {
         return springDataRepository.countByAccountId(accountId);
     }
 
@@ -126,7 +127,7 @@ public class JpaComparisonRepository implements ComparisonRepository {
     }
 
     @Override
-    public long deleteByAccountId(Long accountId) {
+    public long deleteByAccountId(UUID accountId) {
         return springDataRepository.deleteByAccountId(accountId);
     }
 }

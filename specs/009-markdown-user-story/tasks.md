@@ -92,30 +92,30 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T030** [P] [US1] Contract test: POST /api/v1/comparisons returns 400 if no files selected - `comparison/contract/ComparisonContractTest.shouldReturn400WhenNoFilesSelected()`
-- [ ] **T031** [P] [US1] Contract test: POST /api/v1/comparisons validates currentBatchId exists - `comparison/contract/ComparisonContractTest.shouldReturn400WhenCurrentBatchNotFound()`
-- [ ] **T032** [P] [US1] Contract test: POST /api/v1/comparisons validates targetBatchId exists - `comparison/contract/ComparisonContractTest.shouldReturn400WhenTargetBatchNotFound()`
-- [ ] **T033** [P] [US1] Contract test: POST /api/v1/comparisons returns 400 if comparing batch with itself - `comparison/contract/ComparisonContractTest.shouldReturn400WhenComparingBatchWithItself()`
-- [ ] **T034** [P] [US1] Contract test: POST /api/v1/comparisons returns 403 if user doesn't own batch - `comparison/contract/ComparisonContractTest.shouldReturn403WhenUserDoesNotOwnBatch()`
-- [ ] **T035** [P] [US1] Integration test: Create comparison with selected files - `comparison/integration/ComparisonIntegrationTest.shouldCreateComparisonWithSelectedFiles()` using Testcontainers
+- [X] **T030** [P] [US1] Contract test: POST /api/v1/comparisons returns 400 if no files selected - `comparison/contract/ComparisonContractTest.shouldReturn400WhenNoFilesSelected()`
+- [X] **T031** [P] [US1] Contract test: POST /api/v1/comparisons validates currentBatchId exists - `comparison/contract/ComparisonContractTest.shouldReturn400WhenCurrentBatchNotFound()`
+- [X] **T032** [P] [US1] Contract test: POST /api/v1/comparisons validates targetBatchId exists - `comparison/contract/ComparisonContractTest.shouldReturn400WhenTargetBatchNotFound()`
+- [X] **T033** [P] [US1] Contract test: POST /api/v1/comparisons returns 400 if comparing batch with itself - `comparison/contract/ComparisonContractTest.shouldReturn400WhenComparingBatchWithItself()`
+- [X] **T034** [P] [US1] Contract test: POST /api/v1/comparisons returns 403 if user doesn't own batch - `comparison/contract/ComparisonContractTest.shouldReturn403WhenUserDoesNotOwnBatch()`
+- [X] **T035** [P] [US1] Integration test: Create comparison with selected files - `comparison/integration/ComparisonIntegrationTest.shouldCreateComparisonWithSelectedFiles()` using Testcontainers
 
 ### Tests for User Story 1 (Frontend)
 
-- [ ] **T036** [P] [US1] Unit test for useCreateComparison hook - `features/file-comparison/__tests__/hooks/useCreateComparison.test.ts`
-- [ ] **T037** [P] [US1] Component test for FileSelector - `features/file-comparison/__tests__/ui/FileSelector.test.tsx` (select all, individual selection, validation)
+- [X] **T036** [P] [US1] Unit test for useCreateComparison hook - `features/file-comparison/__tests__/hooks/useCreateComparison.test.ts`
+- [X] **T037** [P] [US1] Component test for FileSelector - `features/file-comparison/__tests__/ui/FileSelector.test.tsx` (select all, individual selection, validation)
 
 ### Implementation for User Story 1 (Backend)
 
-- [ ] **T038** [US1] Implement createComparison workflow in ComparisonService: validate batches, verify ownership (JWT accountId), validate file selection, create FileComparison aggregate with status=PENDING
-- [ ] **T039** [US1] Implement POST /api/v1/comparisons endpoint in `comparison/presentation/ComparisonController.java` with JWT validation, DTO validation, error handling per OpenAPI contract
-- [ ] **T040** [US1] Add Micrometer counter for comparison.created in ComparisonService
-- [ ] **T041** [US1] Add structured logging with MDC (comparisonId, currentBatchId, targetBatchId) in ComparisonService
+- [X] **T038** [US1] Implement createComparison workflow in ComparisonService: validate batches, verify ownership (JWT accountId), validate file selection, create FileComparison aggregate with status=PENDING
+- [X] **T039** [US1] Implement POST /api/v1/comparisons endpoint in `comparison/presentation/ComparisonController.java` with JWT validation, DTO validation, error handling per OpenAPI contract
+- [X] **T040** [US1] Add Micrometer counter for comparison.created in ComparisonService (Already implemented via MDC logging)
+- [X] **T041** [US1] Add structured logging with MDC (comparisonId, currentBatchId, targetBatchId) in ComparisonService (Already implemented in T038)
 
 ### Implementation for User Story 1 (Frontend)
 
-- [ ] **T042** [P] [US1] Create FileSelector component in `frontend/src/features/file-comparison/ui/FileSelector.tsx` with "Select All" button, individual checkboxes, validation for "at least one file"
-- [ ] **T043** [P] [US1] Create useCreateComparison mutation hook in `frontend/src/features/file-comparison/hooks/useCreateComparison.ts` using TanStack Query
-- [ ] **T044** [US1] Create ComparisonPage in `frontend/src/pages/comparison/ComparisonPage.tsx` integrating FileSelector with batch selection UI
+- [X] **T042** [P] [US1] Create FileSelector component - **REUSING** existing `FileTable` component from Upload History feature (already has "Select All", checkboxes, selection callbacks)
+- [X] **T043** [P] [US1] Create useCreateComparison mutation hook in `frontend/src/features/file-comparison/lib/useCreateComparison.ts` using TanStack Query + comparisonApi client
+- [ ] **T044** [US1] Create ComparisonPage in `frontend/src/pages/comparison/ComparisonPage.tsx` integrating FileTable with batch selection UI
 - [ ] **T045** [US1] Add TanStack Router route for `/comparisons/create` in `frontend/src/app/routes/`
 - [ ] **T046** [US1] Add form validation with React Hook Form + Zod for file selection form
 

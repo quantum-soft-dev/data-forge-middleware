@@ -110,10 +110,6 @@ public class S3FileContentService {
             }
             log.error("S3 error fetching file: bucket={}, key={}", bucketName, s3Key, e);
             throw new FileContentRetrievalException("Failed to fetch file from S3: " + s3Key, e);
-
-        } catch (IOException e) {
-            log.error("IO error reading file content: bucket={}, key={}", bucketName, s3Key, e);
-            throw new FileContentRetrievalException("Failed to read file content: " + s3Key, e);
         }
     }
 

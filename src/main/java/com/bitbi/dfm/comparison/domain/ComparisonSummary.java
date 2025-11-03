@@ -1,6 +1,7 @@
 package com.bitbi.dfm.comparison.domain;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Immutable value object representing summary statistics for a file comparison operation.
@@ -27,8 +28,8 @@ public record ComparisonSummary(
     int filesUnchanged,
     long totalChangeSize,
     Instant comparisonTimestamp,
-    Long currentBatchId,
-    Long targetBatchId
+    UUID currentBatchId,
+    UUID targetBatchId
 ) {
     /**
      * Creates a ComparisonSummary from a FileComparison aggregate.

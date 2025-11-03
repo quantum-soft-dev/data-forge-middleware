@@ -5,6 +5,7 @@ import com.bitbi.dfm.comparison.domain.ComparisonResult;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Response DTO for individual file comparison results.
@@ -33,10 +34,10 @@ public record ComparisonResultDto(
     Long comparisonId,
 
     @Schema(description = "Current file ID", example = "501")
-    Long fileId,
+    UUID fileId,
 
     @Schema(description = "Target file ID (null for new files)", example = "450")
-    Long targetFileId,
+    UUID targetFileId,
 
     @Schema(description = "Current file name", example = "data.csv")
     String fileName,

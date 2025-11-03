@@ -5,6 +5,7 @@ import com.bitbi.dfm.comparison.domain.FileComparison;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Response DTO for file comparison operations.
@@ -33,13 +34,13 @@ public record ComparisonResponseDto(
     Long id,
 
     @Schema(description = "Current batch ID", example = "123")
-    Long currentBatchId,
+    UUID currentBatchId,
 
     @Schema(description = "Target batch ID", example = "120")
-    Long targetBatchId,
+    UUID targetBatchId,
 
     @Schema(description = "Account owner ID", example = "10")
-    Long accountId,
+    UUID accountId,
 
     @Schema(description = "Comparison status", example = "COMPLETED")
     ComparisonStatus status,
@@ -98,5 +99,15 @@ public record ComparisonResponseDto(
             comparison.getTotalChangeSize(),
             comparison.getErrorMessage()
         );
+    }
+
+    /**
+     * Alias for fromEntity - converts domain entity to DTO.
+     *
+     * @param comparison the domain entity
+     * @return the corresponding DTO
+     */
+    public static ComparisonResponseDto fromDomain(FileComparison comparison) {
+        return fromEntity(comparison);
     }
 }

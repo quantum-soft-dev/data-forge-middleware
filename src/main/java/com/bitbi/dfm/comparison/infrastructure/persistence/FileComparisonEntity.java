@@ -10,6 +10,7 @@ import lombok.NoArgsConstructor;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -32,13 +33,13 @@ public class FileComparisonEntity {
     private Long id;
 
     @Column(name = "current_batch_id", nullable = false)
-    private Long currentBatchId;
+    private UUID currentBatchId;
 
     @Column(name = "target_batch_id", nullable = false)
-    private Long targetBatchId;
+    private UUID targetBatchId;
 
     @Column(name = "account_id", nullable = false)
-    private Long accountId;
+    private UUID accountId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)

@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Aggregate root representing a comparison operation between two upload sessions (batches).
@@ -24,9 +25,9 @@ import java.util.List;
  */
 public class FileComparison {
     private Long id;
-    private Long currentBatchId;
-    private Long targetBatchId;
-    private Long accountId;
+    private UUID currentBatchId;
+    private UUID targetBatchId;
+    private UUID accountId;
     private ComparisonStatus status;
     private Instant createdAt;
     private Instant startedAt;
@@ -59,7 +60,7 @@ public class FileComparison {
      * @param accountId the account owner ID
      * @throws IllegalArgumentException if validation fails
      */
-    public FileComparison(Long currentBatchId, Long targetBatchId, Long accountId) {
+    public FileComparison(UUID currentBatchId, UUID targetBatchId, UUID accountId) {
         this();
         validateCreationArguments(currentBatchId, targetBatchId, accountId);
 
@@ -75,7 +76,7 @@ public class FileComparison {
      *
      * @throws IllegalArgumentException if validation fails
      */
-    private void validateCreationArguments(Long currentBatchId, Long targetBatchId, Long accountId) {
+    private void validateCreationArguments(UUID currentBatchId, UUID targetBatchId, UUID accountId) {
         if (currentBatchId == null) {
             throw new IllegalArgumentException("Current batch ID cannot be null");
         }
@@ -254,15 +255,15 @@ public class FileComparison {
         return id;
     }
 
-    public Long getCurrentBatchId() {
+    public UUID getCurrentBatchId() {
         return currentBatchId;
     }
 
-    public Long getTargetBatchId() {
+    public UUID getTargetBatchId() {
         return targetBatchId;
     }
 
-    public Long getAccountId() {
+    public UUID getAccountId() {
         return accountId;
     }
 

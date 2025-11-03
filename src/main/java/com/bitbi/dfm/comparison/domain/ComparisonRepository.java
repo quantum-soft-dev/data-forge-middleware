@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Repository interface for {@link FileComparison} aggregate operations.
@@ -48,7 +49,7 @@ public interface ComparisonRepository {
      * @param accountId the account ID
      * @return list of comparisons belonging to the account
      */
-    List<FileComparison> findByAccountId(Long accountId);
+    List<FileComparison> findByAccountId(UUID accountId);
 
     /**
      * Finds all comparisons for a specific account with pagination, ordered by created date descending.
@@ -57,7 +58,7 @@ public interface ComparisonRepository {
      * @param pageable pagination information
      * @return page of comparisons
      */
-    Page<FileComparison> findByAccountIdOrderByCreatedAtDesc(Long accountId, Pageable pageable);
+    Page<FileComparison> findByAccountIdOrderByCreatedAtDesc(UUID accountId, Pageable pageable);
 
     /**
      * Finds all comparisons that reference a specific batch as the current batch.
@@ -65,7 +66,7 @@ public interface ComparisonRepository {
      * @param batchId the batch ID
      * @return list of comparisons
      */
-    List<FileComparison> findByCurrentBatchId(Long batchId);
+    List<FileComparison> findByCurrentBatchId(UUID batchId);
 
     /**
      * Finds all comparisons that reference a specific batch as the target batch.
@@ -73,7 +74,7 @@ public interface ComparisonRepository {
      * @param batchId the batch ID
      * @return list of comparisons
      */
-    List<FileComparison> findByTargetBatchId(Long batchId);
+    List<FileComparison> findByTargetBatchId(UUID batchId);
 
     /**
      * Checks if a comparison already exists between two batches with a specific status.
@@ -85,8 +86,8 @@ public interface ComparisonRepository {
      * @return true if such a comparison exists
      */
     boolean existsByCurrentBatchIdAndTargetBatchIdAndStatus(
-        Long currentBatchId,
-        Long targetBatchId,
+        UUID currentBatchId,
+        UUID targetBatchId,
         ComparisonStatus status
     );
 
@@ -115,7 +116,7 @@ public interface ComparisonRepository {
      * @param accountId the account ID
      * @return count of comparisons
      */
-    long countByAccountId(Long accountId);
+    long countByAccountId(UUID accountId);
 
     /**
      * Deletes a FileComparison aggregate.
@@ -142,5 +143,5 @@ public interface ComparisonRepository {
      * @param accountId the account ID
      * @return number of comparisons deleted
      */
-    long deleteByAccountId(Long accountId);
+    long deleteByAccountId(UUID accountId);
 }

@@ -5,9 +5,9 @@
 -- Table: file_comparisons
 CREATE TABLE file_comparisons (
     id BIGSERIAL PRIMARY KEY,
-    current_batch_id BIGINT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
-    target_batch_id BIGINT NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
-    account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    current_batch_id UUID NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    target_batch_id UUID NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     started_at TIMESTAMP,
@@ -41,8 +41,8 @@ CREATE INDEX idx_file_comparisons_account_created ON file_comparisons(account_id
 CREATE TABLE comparison_results (
     id BIGSERIAL PRIMARY KEY,
     comparison_id BIGINT NOT NULL REFERENCES file_comparisons(id) ON DELETE CASCADE,
-    file_id BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    target_file_id BIGINT REFERENCES files(id) ON DELETE CASCADE,
+    file_id UUID NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    target_file_id UUID REFERENCES uploaded_files(id) ON DELETE CASCADE,
     change_type VARCHAR(20) NOT NULL,
     unified_diff JSONB,
     line_additions INTEGER NOT NULL DEFAULT 0,

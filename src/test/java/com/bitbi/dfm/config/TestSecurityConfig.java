@@ -222,7 +222,7 @@ public class TestSecurityConfig {
     /**
      * Security filter chain for user-facing authenticated endpoints.
      * <p>
-     * Order 3: Third priority to match /api/sites**, /api/account/**, /api/user/**.
+     * Order 3: Third priority to match /api/sites**, /api/account/**, /api/user/**, /api/v1/** (except /api/v1/auth/token).
      * OAuth2 Resource Server - any authenticated user allowed.
      * </p>
      */
@@ -230,10 +230,11 @@ public class TestSecurityConfig {
     @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
+            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**", "/api/v1/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/auth/token").permitAll() // Public token endpoint
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2

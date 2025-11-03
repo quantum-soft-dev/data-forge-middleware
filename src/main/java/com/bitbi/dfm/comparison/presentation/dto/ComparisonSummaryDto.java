@@ -4,6 +4,7 @@ import com.bitbi.dfm.comparison.domain.ComparisonSummary;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Response DTO for comparison summary statistics.
@@ -41,10 +42,10 @@ public record ComparisonSummaryDto(
     Instant comparisonTimestamp,
 
     @Schema(description = "Current batch ID", example = "123")
-    Long currentBatchId,
+    UUID currentBatchId,
 
     @Schema(description = "Target batch ID", example = "120")
-    Long targetBatchId
+    UUID targetBatchId
 ) {
     /**
      * Converts a ComparisonSummary value object to a response DTO.

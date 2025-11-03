@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Type;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * JPA entity for persisting {@link ComparisonResult} domain entities.
@@ -32,10 +33,10 @@ public class ComparisonResultEntity {
     private Long comparisonId;
 
     @Column(name = "file_id", nullable = false)
-    private Long fileId;
+    private UUID fileId;
 
     @Column(name = "target_file_id")
-    private Long targetFileId;
+    private UUID targetFileId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "change_type", nullable = false, length = 20)

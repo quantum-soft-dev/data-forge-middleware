@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Spring Data JPA repository interface for FileComparisonEntity.
@@ -36,7 +37,7 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @param accountId the account ID
      * @return list of comparisons
      */
-    List<FileComparisonEntity> findByAccountId(Long accountId);
+    List<FileComparisonEntity> findByAccountId(UUID accountId);
 
     /**
      * Finds all comparisons for a specific account with pagination, ordered by created date descending.
@@ -45,7 +46,7 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @param pageable pagination information
      * @return page of comparisons
      */
-    Page<FileComparisonEntity> findByAccountIdOrderByCreatedAtDesc(Long accountId, Pageable pageable);
+    Page<FileComparisonEntity> findByAccountIdOrderByCreatedAtDesc(UUID accountId, Pageable pageable);
 
     /**
      * Finds all comparisons that reference a specific batch as the current batch.
@@ -53,7 +54,7 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @param currentBatchId the current batch ID
      * @return list of comparisons
      */
-    List<FileComparisonEntity> findByCurrentBatchId(Long currentBatchId);
+    List<FileComparisonEntity> findByCurrentBatchId(UUID currentBatchId);
 
     /**
      * Finds all comparisons that reference a specific batch as the target batch.
@@ -61,7 +62,7 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @param targetBatchId the target batch ID
      * @return list of comparisons
      */
-    List<FileComparisonEntity> findByTargetBatchId(Long targetBatchId);
+    List<FileComparisonEntity> findByTargetBatchId(UUID targetBatchId);
 
     /**
      * Checks if a comparison exists between two batches with a specific status.
@@ -72,8 +73,8 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @return true if such a comparison exists
      */
     boolean existsByCurrentBatchIdAndTargetBatchIdAndStatus(
-        Long currentBatchId,
-        Long targetBatchId,
+        UUID currentBatchId,
+        UUID targetBatchId,
         ComparisonStatus status
     );
 
@@ -91,7 +92,7 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @param accountId the account ID
      * @return count of comparisons
      */
-    long countByAccountId(Long accountId);
+    long countByAccountId(UUID accountId);
 
     /**
      * Deletes all comparisons for a specific account.
@@ -99,5 +100,5 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @param accountId the account ID
      * @return number of comparisons deleted
      */
-    long deleteByAccountId(Long accountId);
+    long deleteByAccountId(UUID accountId);
 }
