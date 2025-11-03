@@ -1,10 +1,16 @@
 package com.bitbi.dfm.comparison.presentation;
 
+import com.bitbi.dfm.comparison.application.ComparisonQueryService;
 import com.bitbi.dfm.comparison.application.ComparisonService;
+import com.bitbi.dfm.comparison.domain.ChangeType;
+import com.bitbi.dfm.comparison.domain.ComparisonResult;
 import com.bitbi.dfm.comparison.domain.FileComparison;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonResponseDto;
+import com.bitbi.dfm.comparison.presentation.dto.ComparisonResultDto;
+import com.bitbi.dfm.comparison.presentation.dto.ComparisonSummaryDto;
 import com.bitbi.dfm.comparison.presentation.dto.CreateComparisonRequestDto;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -14,13 +20,18 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * REST controller for file comparison operations.
@@ -43,9 +54,14 @@ public class ComparisonController {
     private static final Logger log = LoggerFactory.getLogger(ComparisonController.class);
 
     private final ComparisonService comparisonService;
+    private final ComparisonQueryService comparisonQueryService;
 
-    public ComparisonController(ComparisonService comparisonService) {
+    public ComparisonController(
+        ComparisonService comparisonService,
+        ComparisonQueryService comparisonQueryService
+    ) {
         this.comparisonService = comparisonService;
+        this.comparisonQueryService = comparisonQueryService;
     }
 
     /**
@@ -149,6 +165,133 @@ public class ComparisonController {
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException("JWT subject is not a valid UUID: " + subject, e);
         }
+    }
+
+    /**
+     * T059: GET /api/v1/comparisons/{comparisonId}/results
+     *
+     * <p>Retrieves detailed results for a specific comparison with filtering and pagination.
+     *
+     * @param comparisonId the comparison ID
+     * @param changeType optional filter by change type (ADDED, MODIFIED, UNCHANGED)
+     * @param page page number (zero-indexed)
+     * @param size page size
+     * @param authentication the authentication object
+     * @return 200 OK with paginated comparison results
+     */
+    @GetMapping("/{comparisonId}/results")
+    @Operation(
+        summary = "Get comparison results",
+        description = "Retrieves detailed results for a specific comparison, including diffs for each file. " +
+            "Results can be filtered by change type and are paginated."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Comparison results retrieved successfully"
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden (user does not own this comparison)"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found"
+        )
+    })
+    public ResponseEntity<Page<ComparisonResultDto>> getComparisonResults(
+        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+        @Parameter(description = "Filter by change type") @RequestParam(required = false) ChangeType changeType,
+        @Parameter(description = "Page number (zero-indexed)") @RequestParam(defaultValue = "0") int page,
+        @Parameter(description = "Page size") @RequestParam(defaultValue = "50") int size,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("GET /api/v1/comparisons/{}/results - account={}, changeType={}, page={}, size={}",
+            comparisonId, accountId, changeType, page, size);
+
+        // Get comparison with results eagerly loaded
+        FileComparison comparison = comparisonQueryService.findByIdWithResults(comparisonId, accountId);
+
+        // Filter results by change type if specified
+        List<ComparisonResult> filteredResults = comparison.getResults().stream()
+            .filter(result -> changeType == null || result.getChangeType() == changeType)
+            .toList();
+
+        // Manual pagination (since results are already in memory)
+        Pageable pageable = PageRequest.of(page, size);
+        int start = (int) pageable.getOffset();
+        int end = Math.min(start + pageable.getPageSize(), filteredResults.size());
+
+        List<ComparisonResultDto> dtoList = filteredResults.subList(start, end).stream()
+            .map(ComparisonResultDto::fromEntity)
+            .collect(Collectors.toList());
+
+        // Create Page object manually
+        Page<ComparisonResultDto> resultPage = new org.springframework.data.domain.PageImpl<>(
+            dtoList,
+            pageable,
+            filteredResults.size()
+        );
+
+        log.info("Returning {} results (total: {}) for comparison {}", dtoList.size(), filteredResults.size(), comparisonId);
+
+        return ResponseEntity.ok(resultPage);
+    }
+
+    /**
+     * T060: GET /api/v1/comparisons/{comparisonId}/summary
+     *
+     * <p>Retrieves a summary report for a specific comparison.
+     *
+     * @param comparisonId the comparison ID
+     * @param authentication the authentication object
+     * @return 200 OK with comparison summary
+     */
+    @GetMapping("/{comparisonId}/summary")
+    @Operation(
+        summary = "Get comparison summary report",
+        description = "Retrieves a summary report including statistics and metadata for a specific comparison. " +
+            "This is a lightweight alternative to fetching full comparison details."
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Comparison summary retrieved successfully",
+            content = @Content(schema = @Schema(implementation = ComparisonSummaryDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden (user does not own this comparison)"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found"
+        )
+    })
+    public ResponseEntity<ComparisonSummaryDto> getComparisonSummary(
+        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+        Authentication authentication
+    ) {
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        log.info("GET /api/v1/comparisons/{}/summary - account={}", comparisonId, accountId);
+
+        // Get comparison (without results for better performance)
+        FileComparison comparison = comparisonQueryService.findById(comparisonId, accountId);
+
+        // Generate summary from comparison aggregate
+        ComparisonSummaryDto summary = ComparisonSummaryDto.fromValueObject(comparison.getSummary());
+
+        log.info("Returning summary for comparison {}: {} files, {} changed, {} added, {} unchanged",
+            comparisonId,
+            summary.totalFilesCompared(),
+            summary.filesChanged(),
+            summary.filesAdded(),
+            summary.filesUnchanged());
+
+        return ResponseEntity.ok(summary);
     }
 
     /**

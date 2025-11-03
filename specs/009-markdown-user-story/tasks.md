@@ -133,10 +133,10 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T047** [P] [US2] Unit test for DiffService with identical files - `comparison/domain/DiffServiceTest.shouldReturnUnchangedForIdenticalFiles()`
-- [ ] **T048** [P] [US2] Unit test for DiffService with modified file - `comparison/domain/DiffServiceTest.shouldReturnModifiedWithCorrectDiff()`
-- [ ] **T049** [P] [US2] Unit test for DiffService with new file (no target) - `comparison/domain/DiffServiceTest.shouldReturnAddedForNewFile()`
-- [ ] **T050** [P] [US2] Unit test for FileComparison.addResult updating statistics - `comparison/domain/FileComparisonTest.shouldUpdateStatisticsWhenAddingResult()`
+- [X] **T047** [P] [US2] Unit test for DiffService with identical files - `comparison/domain/DiffServiceTest.shouldReturnUnchangedForIdenticalFiles()`
+- [X] **T048** [P] [US2] Unit test for DiffService with modified file - `comparison/domain/DiffServiceTest.shouldReturnModifiedWithCorrectDiff()`
+- [X] **T049** [P] [US2] Unit test for DiffService with new file (no target) - `comparison/domain/DiffServiceTest.shouldReturnAddedForNewFile()`
+- [X] **T050** [P] [US2] Unit test for FileComparison.addResult updating statistics - `comparison/domain/FileComparisonTest.shouldUpdateStatisticsWhenAddingResult()`
 - [ ] **T051** [P] [US2] Integration test: Compare files end-to-end with LocalStack S3 - `comparison/integration/ComparisonIntegrationTest.shouldCompareFilesEndToEnd()` with 3 files (modified, new, unchanged)
 - [ ] **T052** [P] [US2] Integration test: Handle large file (100MB) with streaming - `comparison/integration/DiffServiceIntegrationTest.shouldHandleLargeFileWithStreaming()`
 - [ ] **T053** [P] [US2] Contract test: GET /api/v1/comparisons/{id}/results returns results - `comparison/contract/ComparisonContractTest.shouldReturnComparisonResults()`
@@ -148,11 +148,11 @@
 
 ### Implementation for User Story 2 (Backend)
 
-- [ ] **T056** [US2] Implement diff generation logic in ComparisonService.createComparison: transition to IN_PROGRESS, fetch file contents from S3, call DiffService for each file pair, create ComparisonResult entities, update statistics, transition to COMPLETED/FAILED
-- [ ] **T057** [US2] Implement binary file detection in S3FileContentService (return error for non-text files per FR-016)
-- [ ] **T058** [US2] Implement encoding detection using EncodingDetectionService (reuse from Upload History feature)
-- [ ] **T059** [US2] Implement GET /api/v1/comparisons/{id}/results endpoint in ComparisonController with pagination, changeType filter
-- [ ] **T060** [US2] Implement GET /api/v1/comparisons/{id}/summary endpoint in ComparisonController returning ComparisonSummaryDto
+- [X] **T056** [US2] Implement diff generation logic in ComparisonService.createComparison: transition to IN_PROGRESS, fetch file contents from S3, call DiffService for each file pair, create ComparisonResult entities, update statistics, transition to COMPLETED/FAILED
+- [X] **T057** [US2] Implement binary file detection in S3FileContentService (return error for non-text files per FR-016)
+- [X] **T058** [US2] Implement encoding detection using EncodingDetectionService (reuse from Upload History feature)
+- [X] **T059** [US2] Implement GET /api/v1/comparisons/{id}/results endpoint in ComparisonController with pagination, changeType filter
+- [X] **T060** [US2] Implement GET /api/v1/comparisons/{id}/summary endpoint in ComparisonController returning ComparisonSummaryDto
 - [ ] **T061** [US2] Add @Async support for large comparisons (>100 files) with @Async("comparisonExecutor") configuration
 - [ ] **T062** [US2] Add Micrometer timer for comparison.duration in ComparisonService
 - [ ] **T063** [US2] Add error handling for S3 access denied, file not found, encoding detection failures with structured error messages
