@@ -23,7 +23,7 @@ export async function createComparison(
   request: CreateComparisonRequest
 ): Promise<ComparisonResponse> {
   const response = await apiClient.post<ComparisonResponse>(
-    '/api/v1/comparisons',
+    '/v1/comparisons',
     request
   );
   return response.data;
@@ -52,7 +52,7 @@ export async function listComparisons(
   }
 
   const response = await apiClient.get<PagedComparisonResponse>(
-    `/api/v1/comparisons?${params.toString()}`
+    `/v1/comparisons?${params.toString()}`
   );
   return response.data;
 }
@@ -67,7 +67,7 @@ export async function getComparison(
   comparisonId: number
 ): Promise<ComparisonResponse> {
   const response = await apiClient.get<ComparisonResponse>(
-    `/api/v1/comparisons/${comparisonId}`
+    `/v1/comparisons/${comparisonId}`
   );
   return response.data;
 }
@@ -81,5 +81,5 @@ export async function getComparison(
 export async function deleteComparison(
   comparisonId: number
 ): Promise<void> {
-  await apiClient.delete(`/api/v1/comparisons/${comparisonId}`);
+  await apiClient.delete(`/v1/comparisons/${comparisonId}`);
 }

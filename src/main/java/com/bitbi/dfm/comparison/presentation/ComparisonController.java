@@ -9,6 +9,7 @@ import com.bitbi.dfm.comparison.presentation.dto.ComparisonResponseDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonResultDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonSummaryDto;
 import com.bitbi.dfm.comparison.presentation.dto.CreateComparisonRequestDto;
+import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -55,13 +56,16 @@ public class ComparisonController {
 
     private final ComparisonService comparisonService;
     private final ComparisonQueryService comparisonQueryService;
+    private final AuthorizationHelper authorizationHelper;
 
     public ComparisonController(
         ComparisonService comparisonService,
-        ComparisonQueryService comparisonQueryService
+        ComparisonQueryService comparisonQueryService,
+        AuthorizationHelper authorizationHelper
     ) {
         this.comparisonService = comparisonService;
         this.comparisonQueryService = comparisonQueryService;
+        this.authorizationHelper = authorizationHelper;
     }
 
     /**
@@ -140,31 +144,17 @@ public class ComparisonController {
     }
 
     /**
-     * Extracts accountId from JWT token.
+     * Extracts accountId from JWT token using AuthorizationHelper.
      *
-     * <p>For Keycloak OAuth2 tokens, the accountId is expected to be in the "sub" claim.
-     * This follows the pattern established in the Upload History feature (Spec 008).
+     * <p>Delegates to shared helper that handles multiple JWT claim strategies
+     * (accountId claim, account_id attribute, subject claim).
      *
-     * @param authentication the authentication object
+     * @param authentication the authentication object (not used - helper extracts from SecurityContext)
      * @return the account ID from JWT
-     * @throws IllegalStateException if JWT is missing or accountId cannot be extracted
+     * @throws UnauthorizedException if JWT is missing or accountId cannot be extracted
      */
     private UUID extractAccountIdFromJwt(Authentication authentication) {
-        if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)) {
-            throw new IllegalStateException("Authentication principal is not a valid JWT");
-        }
-
-        // Extract "sub" claim (subject) which contains the account/user ID
-        String subject = jwt.getSubject();
-        if (subject == null || subject.isBlank()) {
-            throw new IllegalStateException("JWT subject (accountId) is missing");
-        }
-
-        try {
-            return UUID.fromString(subject);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("JWT subject is not a valid UUID: " + subject, e);
-        }
+        return authorizationHelper.getAuthenticatedAccountId();
     }
 
     /**
