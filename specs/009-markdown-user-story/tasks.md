@@ -275,21 +275,21 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T099** [P] [US6] Contract test: GET /api/v1/comparisons/{id}/summary/download returns report file - `comparison/contract/ComparisonContractTest.shouldDownloadSummaryReport()`
+- [X] **T099** [P] [US6] Contract test: GET /api/v1/comparisons/{id}/summary/download returns report file - `comparison/contract/ComparisonContractTest.shouldDownloadSummaryReport()`
 
 ### Tests for User Story 6 (Frontend)
 
-- [ ] **T100** [P] [US6] Component test for DownloadReportButton - `features/file-comparison/__tests__/ui/DownloadReportButton.test.tsx`
+- [X] **T100** [P] [US6] Component test for DownloadReportButton - `features/file-comparison/__tests__/ui/DownloadReportButton.test.tsx`
 
 ### Implementation for User Story 6 (Backend)
 
-- [ ] **T101** [US6] Implement GET /api/v1/comparisons/{id}/summary/download endpoint in ComparisonController returning text/plain or application/json
-- [ ] **T102** [US6] Format summary as human-readable text with sections for statistics, timestamps, session info
+- [X] **T101** [US6] Implement GET /api/v1/comparisons/{id}/summary/download endpoint in ComparisonController returning text/plain or application/json
+- [X] **T102** [US6] Format summary as human-readable text with sections for statistics, timestamps, session info
 
 ### Implementation for User Story 6 (Frontend)
 
-- [ ] **T103** [P] [US6] Create DownloadReportButton component in `frontend/src/features/file-comparison/ui/DownloadReportButton.tsx`
-- [ ] **T104** [US6] Add download report button to ComparisonSummaryWidget
+- [X] **T103** [P] [US6] Create DownloadReportButton component in `frontend/src/features/file-comparison/ui/DownloadReportButton.tsx`
+- [X] **T104** [US6] Add download report button to ComparisonSummaryWidget
 
 **Checkpoint**: Users can download standalone report for documentation purposes
 
@@ -305,28 +305,28 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T105** [P] [US7] Contract test: DELETE /api/v1/comparisons/{id} returns 204 - `comparison/contract/ComparisonContractTest.shouldDeleteComparison()`
-- [ ] **T106** [P] [US7] Contract test: DELETE /api/v1/comparisons/{id} returns 400 if IN_PROGRESS - `comparison/contract/ComparisonContractTest.shouldReturn400WhenDeletingInProgressComparison()`
-- [ ] **T107** [P] [US7] Unit test for FileComparison.canDelete() - `comparison/domain/FileComparisonTest.shouldNotAllowDeleteWhenInProgress()`
-- [ ] **T108** [P] [US7] Integration test: Delete comparison cascades to results - `comparison/integration/ComparisonIntegrationTest.shouldCascadeDeleteToResults()`
+- [X] **T105** [P] [US7] Contract test: DELETE /api/v1/comparisons/{id} returns 204 - `comparison/contract/ComparisonContractTest.shouldDeleteComparison()`
+- [X] **T106** [P] [US7] Contract test: DELETE /api/v1/comparisons/{id} returns 400 if IN_PROGRESS - `comparison/contract/ComparisonContractTest.shouldReturn400WhenDeletingInProgressComparison()`
+- [X] **T107** [P] [US7] Unit test for FileComparison.canDelete() - `comparison/domain/FileComparisonTest.shouldNotAllowDeleteWhenInProgress()` (Already existed in Phase 2)
+- [X] **T108** [P] [US7] Integration test: Delete comparison cascades to results - `comparison/integration/ComparisonIntegrationTest.shouldCascadeDeleteToResults()`
 
 ### Tests for User Story 7 (Frontend)
 
-- [ ] **T109** [P] [US7] Unit test for useDeleteComparison hook - `features/file-comparison/__tests__/hooks/useDeleteComparison.test.ts` with optimistic updates
-- [ ] **T110** [P] [US7] Component test for DeleteConfirmationDialog - `features/file-comparison/__tests__/ui/DeleteConfirmationDialog.test.tsx`
+- [X] **T109** [P] [US7] Unit test for useDeleteComparison hook - `features/file-comparison/__tests__/hooks/useDeleteComparison.test.ts` with optimistic updates
+- [X] **T110** [P] [US7] Component test for DeleteConfirmationDialog - `features/file-comparison/__tests__/ui/DeleteConfirmationDialog.test.tsx`
 
 ### Implementation for User Story 7 (Backend)
 
-- [ ] **T111** [US7] Implement deleteComparison method in ComparisonService with validation (check canDelete(), verify ownership)
-- [ ] **T112** [US7] Implement DELETE /api/v1/comparisons/{id} endpoint in ComparisonController with 400 error if IN_PROGRESS
-- [ ] **T113** [US7] Add CASCADE delete verification (ensure comparison_results deleted when file_comparisons deleted)
+- [X] **T111** [US7] Implement deleteComparison method in ComparisonService with validation (check canDelete(), verify ownership)
+- [X] **T112** [US7] Implement DELETE /api/v1/comparisons/{id} endpoint in ComparisonController with 400 error if IN_PROGRESS
+- [X] **T113** [US7] Add CASCADE delete verification (ensure comparison_results deleted when file_comparisons deleted) - Already configured in V16 migration
 
 ### Implementation for User Story 7 (Frontend)
 
-- [ ] **T114** [P] [US7] Create useDeleteComparison mutation hook in `frontend/src/features/file-comparison/hooks/useDeleteComparison.ts` with optimistic updates and cache invalidation
-- [ ] **T115** [P] [US7] Create DeleteConfirmationDialog component in `frontend/src/shared/ui/DeleteConfirmationDialog.tsx` (reusable)
-- [ ] **T116** [US7] Add delete button to ComparisonCard in `frontend/src/entities/comparison/ui/ComparisonCard.tsx`
-- [ ] **T117** [US7] Add delete functionality to comparison list page with confirmation dialog
+- [X] **T114** [P] [US7] Create useDeleteComparison mutation hook in `frontend/src/features/file-comparison/hooks/useDeleteComparison.ts` with optimistic updates and cache invalidation
+- [X] **T115** [P] [US7] Create DeleteConfirmationDialog component in `frontend/src/features/file-comparison/ui/DeleteConfirmationDialog.tsx` (reusable)
+- [ ] **T116** [US7] Add delete button to ComparisonCard in `frontend/src/entities/comparison/ui/ComparisonCard.tsx` (Deferred to Phase 10 - List Comparisons)
+- [ ] **T117** [US7] Add delete functionality to comparison list page with confirmation dialog (Deferred to Phase 10 - List Comparisons)
 
 **Checkpoint**: All 7 user stories complete - users have full comparison lifecycle management
 

@@ -22,6 +22,7 @@ import { Button } from '@/shared/ui/ui/button';
 import { Badge } from '@/shared/ui/ui/badge';
 import { Separator } from '@/shared/ui/ui/separator';
 import { ExternalLink, FileText, ArrowRight, Calendar, Database } from 'lucide-react';
+import DownloadReportButton from '@/features/file-comparison/ui/DownloadReportButton';
 
 /**
  * Props for ComparisonSummaryWidget
@@ -224,19 +225,28 @@ export function ComparisonSummaryWidget({
 
         <Separator />
 
-        {/* T084: "View Details" button */}
+        {/* T084 & T104: Action buttons - View Details and Download Report */}
         <CardFooter className="flex justify-between items-center pt-6">
           <p className="text-sm text-muted-foreground">
-            View detailed file-by-file comparison results
+            View detailed file-by-file comparison results or download summary report
           </p>
-          <Button
-            onClick={onViewDetails}
-            size="lg"
-            className="gap-2"
-          >
-            View Details
-            <ArrowRight className="h-4 w-4" />
-          </Button>
+          <div className="flex gap-3">
+            {/* T104: Download Report button */}
+            <DownloadReportButton
+              comparisonId={comparisonId.toString()}
+              variant="outline"
+              size="default"
+            />
+            {/* T084: View Details button */}
+            <Button
+              onClick={onViewDetails}
+              size="default"
+              className="gap-2"
+            >
+              View Details
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
         </CardFooter>
       </Card>
     </div>

@@ -307,4 +307,60 @@ class ComparisonIntegrationTest extends BaseIntegrationTest {
         // is that endpoint returns valid ZIP with correct headers.
         // Content structure validation can be done in unit tests for ComparisonDownloadService.
     }
+
+    /**
+     * T108: Integration test - Delete comparison works end-to-end
+     * <p>
+     * Verifies that deleting a FileComparison entity works correctly with proper authorization.
+     * CASCADE DELETE to comparison_results is verified at the database level (V16 migration).
+     * </p>
+     *
+     * User Story: US7 - Delete Saved Comparisons (Phase 9)
+     * Priority: P4
+     *
+     * Note: CASCADE behavior is tested at the database constraint level. This test focuses on
+     * the delete endpoint functionality and authorization.
+     */
+    @Test
+    @DisplayName("IT08: should delete comparison end-to-end")
+    void shouldDeleteComparisonEndToEnd() throws Exception {
+        // Given: Authenticated user token
+        String token = "Bearer mock-jwt-token-account-1";
+
+        // Given: Create a comparison with 2 files
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{
+                        "a1b2c3d4-e5f6-7890-abcd-111111111111",
+                        "a1b2c3d4-e5f6-7890-abcd-222222222222"
+                }
+        );
+
+        String createResponse = mockMvc.perform(post("/api/v1/comparisons")
+                        .header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: DELETE the comparison
+        mockMvc.perform(delete("/api/v1/comparisons/" + comparisonId)
+                        .header("Authorization", token))
+                .andDo(print())
+                .andExpect(status().isNoContent());
+
+        // Then: Comparison should be deleted (404)
+        mockMvc.perform(get("/api/v1/comparisons/" + comparisonId)
+                        .header("Authorization", token))
+                .andExpect(status().isNotFound());
+
+        // Note: CASCADE deletion of comparison_results is handled by database constraint
+        // (ON DELETE CASCADE in V16 migration). The results endpoint will also return 404
+        // because the parent comparison no longer exists.
+    }
 }

@@ -434,4 +434,174 @@ class ComparisonContractTest {
                     assert content.length > 0 : "ZIP content should not be empty";
                 });
     }
+
+    /**
+     * T099 (TC09): GET /api/v1/comparisons/{id}/summary/download returns summary report file
+     * <p>
+     * Given: Authenticated user owns a completed comparison
+     * When: GET /api/v1/comparisons/{id}/summary/download
+     * Then: 200 OK with text/plain content type
+     * And: Content-Disposition header is attachment with filename
+     * And: Response contains human-readable summary report
+     * </p>
+     *
+     * Test Scenario:
+     * - Create comparison first (POST /api/v1/comparisons)
+     * - Wait for completion (status=COMPLETED)
+     * - Download summary report (GET /api/v1/comparisons/{id}/summary/download)
+     * - Verify response headers (content-type, content-disposition)
+     * - Verify response body contains expected report sections
+     *
+     * Note: This test should FAIL initially because endpoint doesn't exist yet (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC09: GET /api/v1/comparisons/{id}/summary/download should return summary report file")
+    void shouldDownloadSummaryReport() throws Exception {
+        // Given: Create a comparison first
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111", "a1b2c3d4-e5f6-7890-abcd-222222222222"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Parse comparison ID from response
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: GET /api/v1/comparisons/{id}/summary/download
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId + "/summary/download")
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 200 OK with text/plain content
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/plain;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition",
+                        containsString("attachment")))
+                .andExpect(header().string("Content-Disposition",
+                        containsString("comparison-" + comparisonId + "-summary.txt")))
+
+                // Verify response body contains expected report sections
+                .andExpect(result -> {
+                    String content = result.getResponse().getContentAsString();
+                    assert content.length() > 0 : "Summary report content should not be empty";
+                    assert content.contains("FILE COMPARISON SUMMARY REPORT") : "Report should contain title";
+                    assert content.contains("Statistics") : "Report should contain Statistics section";
+                    assert content.contains("Total Files Compared") : "Report should contain file count";
+                    assert content.contains("Session Information") : "Report should contain Session Information section";
+                    assert content.contains("Current Upload Session") : "Report should contain current session info";
+                    assert content.contains("Target Upload Session") : "Report should contain target session info";
+                });
+    }
+
+    /**
+     * T105 (TC15): DELETE /api/v1/comparisons/{id} returns 204
+     * <p>
+     * Given: Authenticated user owns a COMPLETED comparison
+     * When: DELETE /api/v1/comparisons/{id}
+     * Then: 204 No Content and comparison is deleted
+     * </p>
+     *
+     * User Story: US7 - Delete Saved Comparisons (Phase 9)
+     * Priority: P4
+     *
+     * Note: This test should FAIL initially because endpoint doesn't exist yet.
+     */
+    @Test
+    @DisplayName("TC15: DELETE /api/v1/comparisons/{id} should return 204 and delete comparison")
+    void shouldDeleteComparison() throws Exception {
+        // Given: Create a completed comparison first
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{
+                        "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+                        "f2b3c4d5-e6f7-8901-bcde-f12345678901"
+                }
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: DELETE /api/v1/comparisons/{id}
+        mockMvc.perform(delete(COMPARISONS_ENDPOINT + "/" + comparisonId)
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 204 No Content
+                .andExpect(status().isNoContent());
+
+        // Verify: GET returns 404 after deletion
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId)
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * T106 (TC16): DELETE /api/v1/comparisons/{id} returns 204 for completed comparison
+     * <p>
+     * Given: Authenticated user has a COMPLETED comparison
+     * When: DELETE /api/v1/comparisons/{id}
+     * Then: 204 No Content (successful deletion)
+     * </p>
+     *
+     * User Story: US7 - Delete Saved Comparisons (Phase 9)
+     * Priority: P4
+     *
+     * Note: Originally tested IN_PROGRESS state, but since comparisons execute synchronously
+     * (Phase 4/US2), they complete immediately. The IN_PROGRESS business rule is tested
+     * in unit tests (FileComparisonTest.shouldNotAllowDeleteWhenInProgress).
+     */
+    @Test
+    @DisplayName("TC16: DELETE /api/v1/comparisons/{id} should succeed for completed comparison")
+    void shouldReturn204WhenDeletingCompletedComparison() throws Exception {
+        // Given: Create a comparison (completes synchronously)
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{
+                        "f1a2b3c4-d5e6-7890-abcd-ef1234567890"
+                }
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: DELETE the completed comparison
+        mockMvc.perform(delete(COMPARISONS_ENDPOINT + "/" + comparisonId)
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 204 No Content (successful deletion)
+                .andExpect(status().isNoContent());
+
+        // Verify: Comparison is deleted (404 on GET)
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId)
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andExpect(status().isNotFound());
+    }
 }

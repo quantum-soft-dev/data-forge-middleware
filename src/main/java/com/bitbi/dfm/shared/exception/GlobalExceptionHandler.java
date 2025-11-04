@@ -703,6 +703,29 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle ComparisonInProgressException (400 Bad Request).
+     * Thrown when attempting to delete a comparison that is currently IN_PROGRESS.
+     * User Story: US7 - Delete Saved Comparisons (Phase 9)
+     */
+    @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.ComparisonInProgressException.class)
+    public ResponseEntity<ErrorResponseDto> handleComparisonInProgress(
+            com.bitbi.dfm.comparison.application.ComparisonService.ComparisonInProgressException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Cannot delete comparison in progress: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle generic exceptions (500 Internal Server Error).
      */
     @ExceptionHandler(Exception.class)

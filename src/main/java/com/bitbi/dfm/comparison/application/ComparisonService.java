@@ -512,6 +512,27 @@ public class ComparisonService {
      * @throws UnauthorizedAccessException if accountId does not own the comparison
      * @throws IllegalStateException if comparison is IN_PROGRESS
      */
+    /**
+     * T111: Deletes a comparison with validation.
+     *
+     * <p>User Story: US7 - Delete Saved Comparisons (Phase 9)
+     * <p>Priority: P4
+     *
+     * <p>Business Rules:
+     * <ul>
+     *   <li>Comparison must exist (throw ComparisonNotFoundException if not found)</li>
+     *   <li>User must own the comparison (verify accountId matches JWT)</li>
+     *   <li>Comparison must NOT be IN_PROGRESS (check canDelete())</li>
+     *   <li>Database CASCADE delete handles comparison_results deletion</li>
+     * </ul>
+     *
+     * @param comparisonId ID of the comparison to delete
+     * @param accountId Account ID from JWT (for authorization)
+     * @throws ComparisonNotFoundException if comparison doesn't exist
+     * @throws UnauthorizedAccessException if user doesn't own the comparison
+     * @throws ComparisonInProgressException if comparison status is IN_PROGRESS
+     */
+    @Timed(value = "comparison.delete.duration", description = "Time taken to delete a comparison")
     public void deleteComparison(Long comparisonId, UUID accountId) {
         log.info("Deleting comparison: id={}, account={}", comparisonId, accountId);
 
@@ -523,8 +544,9 @@ public class ComparisonService {
         }
 
         if (!comparison.canDelete()) {
-            throw new IllegalStateException(
-                "Cannot delete comparison with status " + comparison.getStatus()
+            throw new ComparisonInProgressException(
+                "Comparison cannot be deleted while status is IN_PROGRESS. " +
+                "Please wait for comparison to complete or fail before deleting."
             );
         }
 
@@ -560,6 +582,12 @@ public class ComparisonService {
     public static class ComparisonExecutionException extends RuntimeException {
         public ComparisonExecutionException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    public static class ComparisonInProgressException extends RuntimeException {
+        public ComparisonInProgressException(String message) {
+            super(message);
         }
     }
 }

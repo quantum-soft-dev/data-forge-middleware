@@ -160,10 +160,81 @@ public class ComparisonDownloadService {
      * - Total Change Size: 15.2 KB
      * </pre>
      */
+    /**
+     * T102: Generate human-readable summary report as text.
+     * <p>
+     * Generates a formatted summary report for download as a standalone file.
+     * Report format follows the same structure as summary.txt in ZIP archives.
+     * <p>
+     * Report sections:
+     * - Title and separator
+     * - Comparison metadata (ID, status, timestamps)
+     * - Session information (current and target batch IDs)
+     * - Statistics (file counts, change size)
+     * - Error message (if applicable)
+     *
+     * @param comparisonId Comparison ID
+     * @param accountId    Account ID (for authorization)
+     * @return Human-readable summary report as string
+     * @throws IllegalArgumentException if comparison not found or access denied
+     */
+    @Transactional(readOnly = true)
+    public String generateSummaryReport(Long comparisonId, UUID accountId) {
+        logger.info("Generating summary report for comparison {} (account={})", comparisonId, accountId);
+
+        // Retrieve comparison (includes authorization check)
+        FileComparison comparison = comparisonRepository.findById(comparisonId)
+                .orElseThrow(() -> {
+                    logger.warn("Comparison {} not found", comparisonId);
+                    return new IllegalArgumentException("Comparison not found");
+                });
+
+        // Verify ownership
+        if (!comparison.getAccountId().equals(accountId)) {
+            logger.warn("Access denied: account {} attempted to access comparison {} owned by account {}",
+                    accountId, comparisonId, comparison.getAccountId());
+            throw new IllegalArgumentException("Access denied: you do not own this comparison");
+        }
+
+        // Set MDC context for logging
+        MDC.put("comparisonId", comparisonId.toString());
+        MDC.put("accountId", accountId.toString());
+
+        try {
+            // Generate summary text (reuse formatting logic)
+            String summaryText = formatSummaryReport(comparison);
+
+            logger.info("Successfully generated summary report for comparison {} ({} bytes)",
+                    comparisonId, summaryText.length());
+
+            return summaryText;
+        } finally {
+            MDC.remove("comparisonId");
+            MDC.remove("accountId");
+        }
+    }
+
     private void addSummaryFile(ZipArchiveOutputStream zipOut, FileComparison comparison) throws IOException {
+        String summaryText = formatSummaryReport(comparison);
+
+        ZipArchiveEntry summaryEntry = new ZipArchiveEntry("summary.txt");
+        summaryEntry.setSize(summaryText.length());
+        zipOut.putArchiveEntry(summaryEntry);
+        zipOut.write(summaryText.getBytes(StandardCharsets.UTF_8));
+        zipOut.closeArchiveEntry();
+    }
+
+    /**
+     * Format summary report as human-readable text.
+     * <p>
+     * This method generates the text content for summary reports, used by both:
+     * - ZIP archive summary.txt files
+     * - Standalone summary report downloads
+     */
+    private String formatSummaryReport(FileComparison comparison) {
         StringBuilder summary = new StringBuilder();
-        summary.append("File Comparison Summary\n");
-        summary.append("======================\n\n");
+        summary.append("FILE COMPARISON SUMMARY REPORT\n");
+        summary.append("==============================\n\n");
 
         summary.append("Comparison ID: ").append(comparison.getId()).append("\n");
         summary.append("Status: ").append(comparison.getStatus()).append("\n");
@@ -173,12 +244,12 @@ public class ComparisonDownloadService {
         }
         summary.append("\n");
 
-        summary.append("Batches Compared:\n");
-        summary.append("- Current Batch ID: ").append(comparison.getCurrentBatchId()).append("\n");
-        summary.append("- Target Batch ID: ").append(comparison.getTargetBatchId()).append("\n");
+        summary.append("Session Information:\n");
+        summary.append("- Current Upload Session: ").append(comparison.getCurrentBatchId()).append("\n");
+        summary.append("- Target Upload Session: ").append(comparison.getTargetBatchId()).append("\n");
         summary.append("\n");
 
-        summary.append("Results:\n");
+        summary.append("Statistics:\n");
         summary.append("- Total Files Compared: ").append(comparison.getTotalFilesCompared()).append("\n");
         summary.append("- Files Changed: ").append(comparison.getFilesChanged()).append("\n");
         summary.append("- Files Added: ").append(comparison.getFilesAdded()).append("\n");
@@ -189,11 +260,7 @@ public class ComparisonDownloadService {
             summary.append("\nError: ").append(comparison.getErrorMessage()).append("\n");
         }
 
-        ZipArchiveEntry summaryEntry = new ZipArchiveEntry("summary.txt");
-        summaryEntry.setSize(summary.length());
-        zipOut.putArchiveEntry(summaryEntry);
-        zipOut.write(summary.toString().getBytes(StandardCharsets.UTF_8));
-        zipOut.closeArchiveEntry();
+        return summary.toString();
     }
 
     /**

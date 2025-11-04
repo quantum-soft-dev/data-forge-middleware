@@ -553,6 +553,76 @@ public class ComparisonController {
     }
 
     /**
+     * Download comparison summary report as text file.
+     * <p>
+     * T101: GET /api/v1/comparisons/{id}/summary/download endpoint implementation.
+     * <p>
+     * Generates a human-readable summary report containing:
+     * - Comparison metadata (ID, status, timestamps)
+     * - Session information (current and target batch IDs)
+     * - Statistics (file counts, change size)
+     * - Error message (if applicable)
+     * <p>
+     * Filename format: comparison-{id}-summary.txt
+     *
+     * @param id Comparison ID
+     * @param authentication JWT authentication
+     * @return Summary report as plain text file with appropriate headers
+     *
+     * Phase 8 (User Story 6) - Task T101
+     */
+    @GetMapping("/{id}/summary/download")
+    @Operation(
+        summary = "Download comparison summary report",
+        description = "Downloads the comparison summary report as a plain text file containing statistics and metadata"
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Summary report generated successfully",
+            content = @Content(mediaType = "text/plain;charset=UTF-8")
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Access denied - user does not own this comparison",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Comparison not found",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "500",
+            description = "Internal server error during report generation",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
+        )
+    })
+    public ResponseEntity<String> downloadSummaryReport(
+        @Parameter(description = "Comparison ID", required = true, example = "123")
+        @PathVariable Long id,
+        Authentication authentication
+    ) {
+        log.info("Summary report download request for comparison {}", id);
+
+        // Extract account ID from JWT using helper method
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        // Generate summary report (includes authorization check)
+        String summaryText = comparisonDownloadService.generateSummaryReport(id, accountId);
+
+        // Set response headers
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("text/plain;charset=UTF-8"));
+        headers.setContentDispositionFormData("attachment", "comparison-" + id + "-summary.txt");
+        headers.setContentLength(summaryText.length());
+
+        log.info("Successfully generated summary report for comparison {} ({} bytes)", id, summaryText.length());
+
+        return new ResponseEntity<>(summaryText, headers, HttpStatus.OK);
+    }
+
+    /**
      * Error response DTO for OpenAPI documentation.
      * Note: Actual error handling is done by GlobalExceptionHandler.
      */

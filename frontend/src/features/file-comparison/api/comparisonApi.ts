@@ -177,34 +177,6 @@ export const comparisonApi = {
   },
 
   /**
-   * Downloads comparison summary report as a text file.
-   *
-   * @param comparisonId - The comparison ID
-   * @returns Promise resolving to the report file blob
-   * @throws {AxiosError} If the request fails
-   *
-   * @example
-   * ```typescript
-   * const blob = await comparisonApi.downloadSummaryReport(45);
-   * const url = URL.createObjectURL(blob);
-   * const link = document.createElement('a');
-   * link.href = url;
-   * link.download = `comparison-summary-${comparisonId}.txt`;
-   * link.click();
-   * URL.revokeObjectURL(url);
-   * ```
-   */
-  downloadSummaryReport: async (comparisonId: number): Promise<Blob> => {
-    const response = await apiClient.get<Blob>(
-      `${BASE_PATH}/${comparisonId}/summary/download`,
-      {
-        responseType: 'blob',
-      }
-    );
-    return response.data;
-  },
-
-  /**
    * Deletes a comparison and all its results.
    *
    * @param comparisonId - The comparison ID
@@ -249,6 +221,45 @@ export const comparisonApi = {
   downloadComparison: async (comparisonId: string) => {
     const response = await apiClient.get(`${BASE_PATH}/${comparisonId}/download`, {
       responseType: 'blob', // Important: Request binary data
+    });
+    return response;
+  },
+
+  /**
+   * Download comparison summary report as text file.
+   * <p>
+   * T103: API client method for downloading summary report.
+   * <p>
+   * Returns the summary report as a plain text file with Content-Disposition header.
+   * The response includes:
+   * - Blob data (text/plain content type)
+   * - Content-Disposition header with filename: comparison-{id}-summary.txt
+   *
+   * @param comparisonId - Comparison ID (can be string or number)
+   * @returns Promise resolving to AxiosResponse with Blob data and headers
+   * @throws Error if comparison not found or user lacks permission
+   *
+   * @example
+   * ```typescript
+   * const response = await comparisonApi.downloadSummaryReport('123');
+   * const blob = response.data;
+   * const filename = response.headers['content-disposition']
+   *   .split('filename=')[1]
+   *   .replace(/"/g, '');
+   * // Create download link
+   * const url = URL.createObjectURL(blob);
+   * const link = document.createElement('a');
+   * link.href = url;
+   * link.download = filename;
+   * link.click();
+   * URL.revokeObjectURL(url);
+   * ```
+   *
+   * Phase 8 (User Story 6) - Task T103
+   */
+  downloadSummaryReport: async (comparisonId: string) => {
+    const response = await apiClient.get(`${BASE_PATH}/${comparisonId}/summary/download`, {
+      responseType: 'blob', // Important: Request binary data (text file)
     });
     return response;
   },
