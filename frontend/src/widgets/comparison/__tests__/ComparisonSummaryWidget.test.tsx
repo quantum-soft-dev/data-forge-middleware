@@ -22,13 +22,44 @@
  * - Change percentage badge color logic
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ComparisonSummaryWidget } from '../ComparisonSummaryWidget';
 import type { ComparisonSummary } from '@/entities/comparison/model/types';
 
+// Mock the useDownloadSummaryReport hook
+vi.mock('@/features/file-comparison/hooks/useDownloadSummaryReport', () => ({
+  useDownloadSummaryReport: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isSuccess: false,
+    isError: false,
+    error: null,
+    data: undefined,
+  }),
+}));
+
 describe('ComparisonSummaryWidget', () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    vi.clearAllMocks();
+  });
+
+  const renderWithProviders = (ui: React.ReactElement) => {
+    return render(
+      <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    );
+  };
+
   const mockSummary: ComparisonSummary = {
     totalFilesCompared: 10,
     filesChanged: 5,
@@ -41,7 +72,7 @@ describe('ComparisonSummaryWidget', () => {
   };
 
   it('should render summary statistics correctly', () => {
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -66,7 +97,7 @@ describe('ComparisonSummaryWidget', () => {
   });
 
   it('should display change percentage badge with correct color', () => {
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -81,7 +112,7 @@ describe('ComparisonSummaryWidget', () => {
   });
 
   it('should display formatted timestamp correctly', () => {
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -94,7 +125,7 @@ describe('ComparisonSummaryWidget', () => {
   });
 
   it('should display formatted change size', () => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -113,7 +144,7 @@ describe('ComparisonSummaryWidget', () => {
     const onViewCurrentSession = vi.fn();
     const onViewTargetSession = vi.fn();
 
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -154,7 +185,7 @@ describe('ComparisonSummaryWidget', () => {
     const user = userEvent.setup();
     const onViewDetails = vi.fn();
 
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -171,7 +202,7 @@ describe('ComparisonSummaryWidget', () => {
   });
 
   it('should display icons for enhanced visual styling', () => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
@@ -192,7 +223,7 @@ describe('ComparisonSummaryWidget', () => {
       filesUnchanged: 9,
     };
 
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={lowChangeSummary}
         comparisonId={1}
@@ -215,7 +246,7 @@ describe('ComparisonSummaryWidget', () => {
       filesUnchanged: 7,
     };
 
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={mediumChangeSummary}
         comparisonId={1}
@@ -241,7 +272,7 @@ describe('ComparisonSummaryWidget', () => {
       totalChangeSize: 0,
     };
 
-    render(
+    renderWithProviders(
       <ComparisonSummaryWidget
         summary={noChangeSummary}
         comparisonId={1}
@@ -255,7 +286,7 @@ describe('ComparisonSummaryWidget', () => {
   });
 
   it('should apply custom className if provided', () => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <ComparisonSummaryWidget
         summary={mockSummary}
         comparisonId={1}
