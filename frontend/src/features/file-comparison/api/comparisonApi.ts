@@ -220,6 +220,38 @@ export const comparisonApi = {
   deleteComparison: async (comparisonId: number): Promise<void> => {
     await apiClient.delete(`${BASE_PATH}/${comparisonId}`);
   },
+
+  /**
+   * Downloads comparison results as a ZIP archive.
+   *
+   * @param comparisonId - The ID of the comparison to download
+   * @returns Promise resolving to axios response with Blob data and headers
+   * @throws {AxiosError} If the request fails
+   *
+   * @example
+   * ```typescript
+   * const response = await comparisonApi.downloadComparison(123);
+   * const blob = response.data;
+   * const filename = response.headers['content-disposition']
+   *   .split('filename=')[1]
+   *   .replace(/"/g, '');
+   * // Create download link
+   * const url = URL.createObjectURL(blob);
+   * const link = document.createElement('a');
+   * link.href = url;
+   * link.download = filename;
+   * link.click();
+   * URL.revokeObjectURL(url);
+   * ```
+   *
+   * Phase 7 (User Story 4) - Task T095
+   */
+  downloadComparison: async (comparisonId: string) => {
+    const response = await apiClient.get(`${BASE_PATH}/${comparisonId}/download`, {
+      responseType: 'blob', // Important: Request binary data
+    });
+    return response;
+  },
 };
 
 /**

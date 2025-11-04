@@ -25,6 +25,7 @@ import { ComparisonSummary } from '@/features/file-comparison/ui/ComparisonSumma
 import { DiffViewerWidget } from '@/widgets/comparison/DiffViewerWidget';
 import { DiffViewerProvider } from '@/features/file-comparison/model/DiffViewerContext';
 import { comparisonApi } from '@/features/file-comparison/api/comparisonApi';
+import DownloadButton from '@/features/file-comparison/ui/DownloadButton';
 import type { ChangeType } from '@/entities/comparison/model/types';
 
 import { Button } from '@/shared/ui/ui/button';
@@ -146,37 +147,7 @@ export function ComparisonDetailPage(): React.ReactElement {
     }
   };
 
-  // Handle download ZIP
-  const handleDownloadZip = async () => {
-    if (!parsedId) return;
-    try {
-      const blob = await comparisonApi.downloadComparisonZip(parsedId);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `comparison-${parsedId}.zip`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Failed to download ZIP:', error);
-    }
-  };
-
-  // Handle download report
-  const handleDownloadReport = async () => {
-    if (!parsedId) return;
-    try {
-      const blob = await comparisonApi.downloadSummaryReport(parsedId);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `comparison-summary-${parsedId}.txt`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Failed to download report:', error);
-    }
-  };
+  // Download handled by DownloadButton component (Phase 7 - Task T097)
 
   // Handle delete
   const handleDelete = async () => {
@@ -308,17 +279,10 @@ export function ComparisonDetailPage(): React.ReactElement {
         </Alert>
       )}
 
-      {/* Actions */}
+      {/* Actions (Phase 7 - Task T097) */}
       {isCompleted && (
         <div className="flex gap-2">
-          <Button onClick={handleDownloadZip} variant="outline">
-            <Download className="mr-2 h-4 w-4" />
-            Download ZIP
-          </Button>
-          <Button onClick={handleDownloadReport} variant="outline">
-            <Download className="mr-2 h-4 w-4" />
-            Download Report
-          </Button>
+          <DownloadButton comparisonId={comparisonId} variant="outline" />
           <Button onClick={handleDelete} variant="destructive" className="ml-auto">
             <Trash2 className="mr-2 h-4 w-4" />
             Delete

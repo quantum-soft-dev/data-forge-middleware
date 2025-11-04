@@ -1,5 +1,6 @@
 package com.bitbi.dfm.comparison.presentation;
 
+import com.bitbi.dfm.comparison.application.ComparisonDownloadService;
 import com.bitbi.dfm.comparison.application.ComparisonQueryService;
 import com.bitbi.dfm.comparison.application.ComparisonService;
 import com.bitbi.dfm.comparison.domain.ChangeType;
@@ -28,12 +29,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -60,17 +64,20 @@ public class ComparisonController {
 
     private final ComparisonService comparisonService;
     private final ComparisonQueryService comparisonQueryService;
+    private final ComparisonDownloadService comparisonDownloadService;
     private final AuthorizationHelper authorizationHelper;
     private final UploadedFileRepository uploadedFileRepository;
 
     public ComparisonController(
         ComparisonService comparisonService,
         ComparisonQueryService comparisonQueryService,
+        ComparisonDownloadService comparisonDownloadService,
         AuthorizationHelper authorizationHelper,
         UploadedFileRepository uploadedFileRepository
     ) {
         this.comparisonService = comparisonService;
         this.comparisonQueryService = comparisonQueryService;
+        this.comparisonDownloadService = comparisonDownloadService;
         this.authorizationHelper = authorizationHelper;
         this.uploadedFileRepository = uploadedFileRepository;
     }
@@ -477,86 +484,72 @@ public class ComparisonController {
         return ResponseEntity.noContent().build();
     }
 
+
     /**
-     * GET /api/v1/comparisons/{comparisonId}/download
+     * Download comparison results as ZIP archive.
+     * <p>
+     * Generates a ZIP file containing:
+     * - summary.txt: Comparison statistics and metadata
+     * - Individual .diff files for each comparison result
+     * <p>
+     * Filename format: comparison-{id}.zip
      *
-     * Downloads comparison results as ZIP archive.
+     * @param id Comparison ID
+     * @param authentication JWT authentication
+     * @return ZIP file as byte array with appropriate headers
+     * @throws IOException if ZIP generation fails
      *
-     * @param comparisonId the comparison ID
-     * @param authentication the authentication object
-     * @return ZIP file with all comparison results
+     * Phase 7 (User Story 4) - Task T091
      */
-    @GetMapping("/{comparisonId}/download")
+    @GetMapping("/{id}/download")
     @Operation(
-        summary = "Download comparison as ZIP",
-        description = "Downloads all comparison results as a ZIP archive containing diff files."
+        summary = "Download comparison results as ZIP",
+        description = "Downloads all comparison results as a ZIP archive containing diff files and summary report"
     )
-    @ApiResponses({
+    @ApiResponses(value = {
         @ApiResponse(
             responseCode = "200",
-            description = "ZIP archive generated successfully"
+            description = "ZIP archive generated successfully",
+            content = @Content(mediaType = "application/zip")
         ),
         @ApiResponse(
             responseCode = "403",
-            description = "User does not own this comparison"
+            description = "Access denied - user does not own this comparison",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
         ),
         @ApiResponse(
             responseCode = "404",
-            description = "Comparison not found"
-        )
-    })
-    public ResponseEntity<byte[]> downloadComparisonZip(
-        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
-        Authentication authentication
-    ) {
-        UUID accountId = extractAccountIdFromJwt(authentication);
-
-        log.info("GET /api/v1/comparisons/{}/download - account={}", comparisonId, accountId);
-
-        // TODO: Implement ZIP download functionality
-        // For now, return 501 Not Implemented
-        return ResponseEntity.status(501).build();
-    }
-
-    /**
-     * GET /api/v1/comparisons/{comparisonId}/summary/download
-     *
-     * Downloads comparison summary report as text file.
-     *
-     * @param comparisonId the comparison ID
-     * @param authentication the authentication object
-     * @return Text file with summary report
-     */
-    @GetMapping("/{comparisonId}/summary/download")
-    @Operation(
-        summary = "Download summary report",
-        description = "Downloads comparison summary as a text file."
-    )
-    @ApiResponses({
-        @ApiResponse(
-            responseCode = "200",
-            description = "Summary report generated successfully"
+            description = "Comparison not found",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
         ),
         @ApiResponse(
-            responseCode = "403",
-            description = "User does not own this comparison"
-        ),
-        @ApiResponse(
-            responseCode = "404",
-            description = "Comparison not found"
+            responseCode = "500",
+            description = "Internal server error during ZIP generation",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
         )
     })
-    public ResponseEntity<byte[]> downloadSummaryReport(
-        @Parameter(description = "Comparison ID") @PathVariable Long comparisonId,
+    public ResponseEntity<byte[]> downloadComparison(
+        @Parameter(description = "Comparison ID", required = true, example = "123")
+        @PathVariable Long id,
         Authentication authentication
-    ) {
+    ) throws IOException {
+        log.info("Download request for comparison {}", id);
+
+        // Extract account ID from JWT using helper method
         UUID accountId = extractAccountIdFromJwt(authentication);
 
-        log.info("GET /api/v1/comparisons/{}/summary/download - account={}", comparisonId, accountId);
+        // Generate ZIP archive (includes authorization check)
+        byte[] zipBytes = comparisonDownloadService.generateZipArchive(id, accountId);
 
-        // TODO: Implement summary report download
-        // For now, return 501 Not Implemented
-        return ResponseEntity.status(501).build();
+        // Set response headers
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType("application/zip"));
+        headers.setContentDispositionFormData("attachment", "comparison-" + id + ".zip");
+        headers.setContentLength(zipBytes.length);
+
+        log.info("Successfully generated ZIP for comparison {} ({} bytes)", id, zipBytes.length);
+
+        return new ResponseEntity<>(zipBytes, headers, HttpStatus.OK);
     }
 
     /**

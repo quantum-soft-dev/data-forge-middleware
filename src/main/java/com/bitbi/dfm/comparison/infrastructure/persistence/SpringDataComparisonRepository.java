@@ -101,4 +101,16 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
      * @return number of comparisons deleted
      */
     long deleteByAccountId(UUID accountId);
+
+    /**
+     * Finds all comparison results for a specific comparison.
+     *
+     * This method is used by ComparisonDownloadService to retrieve all
+     * comparison results for ZIP archive generation.
+     *
+     * @param comparisonId the comparison ID
+     * @return list of comparison result entities
+     */
+    @Query("SELECT r FROM ComparisonResultEntity r WHERE r.comparisonId = :comparisonId")
+    List<ComparisonResultEntity> findByComparisonIdWithFiles(@Param("comparisonId") Long comparisonId);
 }

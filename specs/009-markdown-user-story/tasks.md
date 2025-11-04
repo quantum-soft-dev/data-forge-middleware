@@ -238,28 +238,28 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T086** [P] [US4] Contract test: GET /api/v1/comparisons/{id}/download returns ZIP - `comparison/contract/ComparisonContractTest.shouldDownloadComparisonAsZip()`
-- [ ] **T087** [P] [US4] Integration test: Download ZIP with 10 files - `comparison/integration/ComparisonIntegrationTest.shouldDownloadZipWith10Files()`
+- [X] **T086** [P] [US4] Contract test: GET /api/v1/comparisons/{id}/download returns ZIP - `comparison/contract/ComparisonContractTest.shouldDownloadComparisonAsZip()`
+- [X] **T087** [P] [US4] Integration test: Download ZIP with 10 files - `comparison/integration/ComparisonIntegrationTest.shouldDownloadZipWith10Files()`
 
 ### Tests for User Story 4 (Frontend)
 
-- [ ] **T088** [P] [US4] Unit test for useDownloadComparison hook - `features/file-comparison/__tests__/hooks/useDownloadComparison.test.ts`
-- [ ] **T089** [P] [US4] Component test for DownloadButton - `features/file-comparison/__tests__/ui/DownloadButton.test.tsx` (progress indicator, error handling)
+- [X] **T088** [P] [US4] Unit test for useDownloadComparison hook - `features/file-comparison/__tests__/hooks/useDownloadComparison.test.ts`
+- [X] **T089** [P] [US4] Component test for DownloadButton - `features/file-comparison/__tests__/ui/DownloadButton.test.tsx` (progress indicator, error handling)
 
 ### Implementation for User Story 4 (Backend)
 
-- [ ] **T090** [P] [US4] Create ComparisonDownloadService in `comparison/application/ComparisonDownloadService.java` to generate ZIP with streaming (Apache Commons Compress)
-- [ ] **T091** [US4] Implement GET /api/v1/comparisons/{id}/download endpoint in ComparisonController streaming ZIP response
-- [ ] **T092** [US4] Generate unified diff text format from JSONB structure for ZIP files
-- [ ] **T093** [US4] Include summary report as summary.txt in ZIP archive
-- [ ] **T094** [US4] Add Micrometer counter for downloads.zip.files with file count tag
+- [X] **T090** [P] [US4] Create ComparisonDownloadService in `comparison/application/ComparisonDownloadService.java` to generate ZIP with streaming (Apache Commons Compress)
+- [X] **T091** [US4] Implement GET /api/v1/comparisons/{id}/download endpoint in ComparisonController streaming ZIP response
+- [X] **T092** [US4] Generate unified diff text format from JSONB structure for ZIP files
+- [X] **T093** [US4] Include summary report as summary.txt in ZIP archive
+- [X] **T094** [US4] Add Micrometer counter for downloads.zip.files with file count tag
 
 ### Implementation for User Story 4 (Frontend)
 
-- [ ] **T095** [P] [US4] Create useDownloadComparison hook in `frontend/src/features/file-comparison/hooks/useDownloadComparison.ts`
-- [ ] **T096** [P] [US4] Create DownloadButton component in `frontend/src/features/file-comparison/ui/DownloadButton.tsx` with progress indicator
-- [ ] **T097** [US4] Add download functionality to ComparisonDetailPage with progress tracking
-- [ ] **T098** [US4] Handle large download (>100MB) with streaming and progress events
+- [X] **T095** [P] [US4] Create useDownloadComparison hook in `frontend/src/features/file-comparison/hooks/useDownloadComparison.ts`
+- [X] **T096** [P] [US4] Create DownloadButton component in `frontend/src/features/file-comparison/ui/DownloadButton.tsx` with progress indicator
+- [X] **T097** [US4] Add download functionality to ComparisonDetailPage with progress tracking
+- [X] **T098** [US4] Handle large download (>100MB) with streaming and progress events
 
 **Checkpoint**: Users can download comparison results for offline review or sharing
 

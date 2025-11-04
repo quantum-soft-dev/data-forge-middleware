@@ -373,4 +373,65 @@ class ComparisonContractTest {
                 .andExpect(jsonPath("$.filesUnchanged").value(greaterThanOrEqualTo(0)))
                 .andExpect(jsonPath("$.totalChangeSize").value(greaterThanOrEqualTo(0)));
     }
+
+    /**
+     * T086 (TC08): GET /api/v1/comparisons/{id}/download returns ZIP archive
+     * <p>
+     * Given: Authenticated user owns a completed comparison with results
+     * When: GET /api/v1/comparisons/{id}/download
+     * Then: 200 OK with application/zip content type
+     * And: Content-Disposition header is attachment with filename
+     * And: ZIP contains diff files and summary.txt
+     * </p>
+     *
+     * Test Scenario:
+     * - Create comparison first (POST /api/v1/comparisons)
+     * - Wait for completion (status=COMPLETED)
+     * - Download ZIP (GET /api/v1/comparisons/{id}/download)
+     * - Verify response headers (content-type, content-disposition)
+     * - Verify response body is not empty (actual ZIP content)
+     *
+     * Note: This test should FAIL initially because endpoint doesn't exist yet (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC08: GET /api/v1/comparisons/{id}/download should return ZIP archive")
+    void shouldDownloadComparisonAsZip() throws Exception {
+        // Given: Create a comparison first
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111", "a1b2c3d4-e5f6-7890-abcd-222222222222"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Parse comparison ID from response
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: GET /api/v1/comparisons/{id}/download
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId + "/download")
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 200 OK with ZIP content
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "application/zip"))
+                .andExpect(header().string("Content-Disposition",
+                        containsString("attachment")))
+                .andExpect(header().string("Content-Disposition",
+                        containsString("comparison-" + comparisonId + ".zip")))
+
+                // Verify response body is not empty (actual ZIP data)
+                .andExpect(result -> {
+                    byte[] content = result.getResponse().getContentAsByteArray();
+                    assert content.length > 0 : "ZIP content should not be empty";
+                });
+    }
 }
