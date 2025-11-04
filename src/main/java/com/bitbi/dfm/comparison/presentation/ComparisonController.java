@@ -4,6 +4,7 @@ import com.bitbi.dfm.comparison.application.ComparisonQueryService;
 import com.bitbi.dfm.comparison.application.ComparisonService;
 import com.bitbi.dfm.comparison.domain.ChangeType;
 import com.bitbi.dfm.comparison.domain.ComparisonResult;
+import com.bitbi.dfm.comparison.domain.ComparisonStatus;
 import com.bitbi.dfm.comparison.domain.FileComparison;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonResponseDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonResultDto;
@@ -354,6 +355,15 @@ public class ComparisonController {
 
         // Get comparison (without results for better performance)
         FileComparison comparison = comparisonQueryService.findById(comparisonId, accountId);
+
+        // T082: Validate that summary is only available for COMPLETED comparisons
+        if (comparison.getStatus() != ComparisonStatus.COMPLETED) {
+            log.warn("Attempt to get summary for non-completed comparison {}: status={}",
+                comparisonId, comparison.getStatus());
+            throw new IllegalStateException(
+                String.format("Cannot retrieve summary for comparison in status %s. Summary is only available for COMPLETED comparisons.",
+                    comparison.getStatus()));
+        }
 
         // Generate summary from comparison aggregate
         ComparisonSummaryDto summary = ComparisonSummaryDto.fromValueObject(comparison.getSummary());

@@ -206,25 +206,25 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T078** [P] [US5] Contract test: GET /api/v1/comparisons/{id}/summary returns summary - `comparison/contract/ComparisonContractTest.shouldReturnComparisonSummary()`
-- [ ] **T079** [P] [US5] Unit test for ComparisonSummary.from(comparison) - `comparison/domain/ComparisonSummaryTest.shouldCreateFromFileComparison()`
+- [X] **T078** [P] [US5] Contract test: GET /api/v1/comparisons/{id}/summary returns summary - `comparison/contract/ComparisonContractTest.shouldReturnComparisonSummary()`
+- [X] **T079** [P] [US5] Unit test for ComparisonSummary.from(comparison) - `comparison/domain/ComparisonSummaryTest.shouldCreateFromFileComparison()`
 
 ### Tests for User Story 5 (Frontend)
 
-- [ ] **T080** [P] [US5] Component test for ComparisonSummaryWidget - `widgets/comparison/__tests__/ComparisonSummaryWidget.test.tsx`
+- [X] **T080** [P] [US5] Component test for ComparisonSummaryWidget - `widgets/comparison/__tests__/ComparisonSummaryWidget.test.tsx`
 
 ### Implementation for User Story 5 (Backend)
 
-- [ ] **T081** [US5] Implement GET /api/v1/comparisons/{id}/summary endpoint (already created in T060 but verify completeness)
-- [ ] **T082** [US5] Add validation that summary is only available for COMPLETED comparisons (return 400 for PENDING/IN_PROGRESS)
+- [X] **T081** [US5] Implement GET /api/v1/comparisons/{id}/summary endpoint (already created in T060 but verify completeness)
+- [X] **T082** [US5] Add validation that summary is only available for COMPLETED comparisons (return 400 for PENDING/IN_PROGRESS)
 
 ### Implementation for User Story 5 (Frontend)
 
-- [ ] **T083** [P] [US5] Create ComparisonSummaryWidget in `frontend/src/widgets/comparison/ComparisonSummaryWidget.tsx` with enhanced styling, icons for statistics
-- [ ] **T084** [US5] Add "View Details" link from summary to individual file results
-- [ ] **T085** [US5] Add timestamp formatting and session ID display with links to original upload sessions
+- [X] **T083** [P] [US5] Create ComparisonSummaryWidget in `frontend/src/widgets/comparison/ComparisonSummaryWidget.tsx` with enhanced styling, icons for statistics
+- [X] **T084** [US5] Add "View Details" link from summary to individual file results
+- [X] **T085** [US5] Add timestamp formatting and session ID display with links to original upload sessions
 
-**Checkpoint**: Summary report provides quick overview of changes at a glance
+**Checkpoint**: ✅ Summary report provides quick overview of changes at a glance
 
 ---
 

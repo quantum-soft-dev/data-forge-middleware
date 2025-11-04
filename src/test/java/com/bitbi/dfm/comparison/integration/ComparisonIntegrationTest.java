@@ -155,7 +155,7 @@ class ComparisonIntegrationTest extends BaseIntegrationTest {
                 .andDo(print())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content").isArray())
-                .andExpect(jsonPath("$.number").exists()) // page number (0-based)
+                .andExpect(jsonPath("$.page").exists()) // page number (0-indexed)
                 .andExpect(jsonPath("$.size").exists())
                 .andExpect(jsonPath("$.totalElements").exists())
                 .andExpect(jsonPath("$.totalPages").exists());

@@ -266,7 +266,8 @@ describe('BatchDetailView', () => {
       expect(screen.getByText(/filename/i)).toBeInTheDocument();
       // "Size" appears twice (table header + batch metadata), so use getAllByText
       expect(screen.getAllByText(/size/i).length).toBeGreaterThan(0);
-      expect(screen.getByText(/uploaded at/i)).toBeInTheDocument();
+      // Column header is just "Uploaded" (not "Uploaded At")
+      expect(screen.getByRole('columnheader', { name: /uploaded/i })).toBeInTheDocument();
 
       // Check that files are displayed
       mockBatch.files.forEach((file) => {

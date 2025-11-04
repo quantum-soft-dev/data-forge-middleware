@@ -55,7 +55,8 @@ describe('FileTable', () => {
 
       expect(screen.getByText(/filename/i)).toBeInTheDocument();
       expect(screen.getByText(/size/i)).toBeInTheDocument();
-      expect(screen.getByText(/uploaded at/i)).toBeInTheDocument();
+      // Column header is just "Uploaded" (not "Uploaded At")
+      expect(screen.getByRole('columnheader', { name: /uploaded/i })).toBeInTheDocument();
     });
 
     it('should display all files in the table', () => {
@@ -130,11 +131,12 @@ describe('FileTable', () => {
       render(<FileTable files={mockFiles} onSelectionChange={onSelectionChange} />);
 
       const checkboxes = screen.getAllByRole('checkbox');
-      const firstFileCheckbox = checkboxes[1];
+      const firstFileCheckbox = checkboxes[1]; // First file in alphabetical order is inventory (file-002)
 
       await user.click(firstFileCheckbox);
 
-      expect(onSelectionChange).toHaveBeenCalledWith(['file-001']);
+      // Files are sorted alphabetically by name: inventory, orders, sales
+      expect(onSelectionChange).toHaveBeenCalledWith(['file-002']);
     });
 
     it('should call onSelectionChange with multiple file IDs when multiple files selected', async () => {
@@ -145,17 +147,18 @@ describe('FileTable', () => {
 
       const checkboxes = screen.getAllByRole('checkbox');
 
-      // Select first file
+      // Files are sorted alphabetically: inventory (file-002), orders (file-003), sales (file-001)
+      // Select first file (inventory)
       await user.click(checkboxes[1]);
-      expect(onSelectionChange).toHaveBeenLastCalledWith(['file-001']);
+      expect(onSelectionChange).toHaveBeenLastCalledWith(['file-002']);
 
-      // Select second file
+      // Select second file (orders)
       await user.click(checkboxes[2]);
-      expect(onSelectionChange).toHaveBeenLastCalledWith(['file-001', 'file-002']);
+      expect(onSelectionChange).toHaveBeenLastCalledWith(['file-002', 'file-003']);
 
-      // Select third file
+      // Select third file (sales)
       await user.click(checkboxes[3]);
-      expect(onSelectionChange).toHaveBeenLastCalledWith(['file-001', 'file-002', 'file-003']);
+      expect(onSelectionChange).toHaveBeenLastCalledWith(['file-002', 'file-003', 'file-001']);
     });
 
     it('should highlight selected row with blue background', async () => {
@@ -167,8 +170,8 @@ describe('FileTable', () => {
 
       await user.click(firstFileCheckbox);
 
-      // Find the row containing the first file
-      const row = screen.getByText('sales-2024.csv.gz').closest('tr');
+      // Find the row containing the first file (alphabetically: inventory)
+      const row = screen.getByText('inventory-2024.csv.gz').closest('tr');
       expect(row).toHaveClass('bg-blue-50');
     });
   });
@@ -228,7 +231,8 @@ describe('FileTable', () => {
 
       await user.click(selectAllCheckbox);
 
-      expect(onSelectionChange).toHaveBeenCalledWith(['file-001', 'file-002', 'file-003']);
+      // Files are sorted alphabetically, so IDs should be in that order
+      expect(onSelectionChange).toHaveBeenCalledWith(['file-002', 'file-003', 'file-001']);
     });
 
     it('should call onSelectionChange with empty array when deselecting all', async () => {
@@ -335,9 +339,10 @@ describe('FileTable', () => {
       render(<FileTable files={mockFiles} />);
 
       const checkboxes = screen.getAllByRole('checkbox');
-      expect(checkboxes[1]).toHaveAttribute('aria-label', 'Select sales-2024.csv.gz');
-      expect(checkboxes[2]).toHaveAttribute('aria-label', 'Select inventory-2024.csv.gz');
-      expect(checkboxes[3]).toHaveAttribute('aria-label', 'Select orders-2024.csv.gz');
+      // Files are sorted alphabetically: inventory, orders, sales
+      expect(checkboxes[1]).toHaveAttribute('aria-label', 'Select inventory-2024.csv.gz');
+      expect(checkboxes[2]).toHaveAttribute('aria-label', 'Select orders-2024.csv.gz');
+      expect(checkboxes[3]).toHaveAttribute('aria-label', 'Select sales-2024.csv.gz');
     });
 
     it('should have table structure with proper roles', () => {

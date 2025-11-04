@@ -294,9 +294,9 @@ class ComparisonContractTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
 
-                // Verify pagination structure (Spring Page format)
+                // Verify pagination structure (PagedComparisonResultResponse format)
                 .andExpect(jsonPath("$.content").isArray())
-                .andExpect(jsonPath("$.number").exists()) // page number (0-based)
+                .andExpect(jsonPath("$.page").exists()) // page number (0-indexed)
                 .andExpect(jsonPath("$.size").exists())
                 .andExpect(jsonPath("$.totalElements").exists())
                 .andExpect(jsonPath("$.totalPages").exists());
@@ -305,5 +305,72 @@ class ComparisonContractTest {
         // may not include actual files with S3 content, so comparison may complete
         // with 0 results. The important part is that the endpoint returns valid
         // paginated response structure.
+    }
+
+    /**
+     * T078 (TC07): GET /api/v1/comparisons/{id}/summary returns comparison summary
+     * <p>
+     * Given: Authenticated user owns a completed comparison
+     * When: GET /api/v1/comparisons/{id}/summary
+     * Then: 200 OK with comparison summary statistics
+     * And: Summary includes totalFilesCompared, filesChanged, filesAdded, filesUnchanged,
+     *      totalChangeSize, comparisonTimestamp, currentBatchId, targetBatchId
+     * </p>
+     *
+     * Test Scenario:
+     * - Create comparison first (POST /api/v1/comparisons)
+     * - Wait for completion (status=COMPLETED)
+     * - Fetch summary (GET /api/v1/comparisons/{id}/summary)
+     * - Verify summary structure matches ComparisonSummaryDto
+     *
+     * Note: This test should FAIL initially because endpoint doesn't exist yet (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC07: GET /api/v1/comparisons/{id}/summary should return comparison summary")
+    void shouldReturnComparisonSummary() throws Exception {
+        // Given: Create a comparison first
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111", "a1b2c3d4-e5f6-7890-abcd-222222222222"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Parse comparison ID from response
+        String comparisonId = objectMapper.readTree(createResponse).get("id").asText();
+
+        // When: GET /api/v1/comparisons/{id}/summary
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId + "/summary")
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 200 OK with summary
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify summary structure (ComparisonSummaryDto fields)
+                .andExpect(jsonPath("$.totalFilesCompared").isNumber())
+                .andExpect(jsonPath("$.filesChanged").isNumber())
+                .andExpect(jsonPath("$.filesAdded").isNumber())
+                .andExpect(jsonPath("$.filesUnchanged").isNumber())
+                .andExpect(jsonPath("$.totalChangeSize").isNumber())
+                .andExpect(jsonPath("$.comparisonTimestamp").exists())
+                .andExpect(jsonPath("$.currentBatchId").exists())
+                .andExpect(jsonPath("$.targetBatchId").exists())
+
+                // Verify non-negative counts
+                .andExpect(jsonPath("$.totalFilesCompared").value(greaterThanOrEqualTo(0)))
+                .andExpect(jsonPath("$.filesChanged").value(greaterThanOrEqualTo(0)))
+                .andExpect(jsonPath("$.filesAdded").value(greaterThanOrEqualTo(0)))
+                .andExpect(jsonPath("$.filesUnchanged").value(greaterThanOrEqualTo(0)))
+                .andExpect(jsonPath("$.totalChangeSize").value(greaterThanOrEqualTo(0)));
     }
 }

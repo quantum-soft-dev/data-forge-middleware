@@ -210,7 +210,7 @@ export function BatchListView({
                 {/* Completed timestamp */}
                 {batch.completedAt && (
                   <div className="text-xs text-gray-500">
-                    {formatDateTime(batch.completedAt)}
+                    Completed: {formatDateTime(batch.completedAt)}
                   </div>
                 )}
 
