@@ -355,7 +355,7 @@
 
 - [X] **T123** [LIST] Implement GET /api/v1/comparisons endpoint in ComparisonController with pagination (page, size), status filter, ordered by created_at DESC
 - [X] **T124** [LIST] Implement findByAccountIdOrderByCreatedAtDesc in JpaComparisonRepository with JOIN FETCH optimization
-- [ ] **T125** [LIST] Add Micrometer timer for comparison.list.duration (Deferred - non-critical for MVP)
+- [X] **T125** [LIST] Add Micrometer timer for comparison.list.duration (Completed 2025-11-05)
 
 ### Implementation for List Comparisons (Frontend)
 
@@ -365,7 +365,7 @@
 - [X] **T129** [LIST] Create ComparisonListWidget in `frontend/src/widgets/comparison/ComparisonListWidget.tsx` integrating list with pagination
 - [X] **T130** [LIST] Create ComparisonListPage in `frontend/src/pages/comparison/ComparisonListPage.tsx`
 - [X] **T131** [LIST] Add TanStack Router route for `/account/comparisons` (list page)
-- [ ] **T132** [LIST] Add TanStack Table virtualization for lists >100 items (Deferred - P4 optimization)
+- [X] **T132** [LIST] Add TanStack Table virtualization for lists >100 items (Completed 2025-11-05 - VirtualizedComparisonList component with @tanstack/react-virtual)
 
 **Checkpoint**: Users can navigate to comparison history and access any previous comparison
 
@@ -381,14 +381,14 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T133** [P] [GET] Contract test: GET /api/v1/comparisons/{id} returns comparison - `comparison/contract/ComparisonContractTest.shouldGetComparison()`
-- [ ] **T134** [P] [GET] Contract test: GET /api/v1/comparisons/{id} returns 403 if user doesn't own - `comparison/contract/ComparisonContractTest.shouldReturn403WhenUserDoesNotOwnComparison()`
-- [ ] **T135** [P] [GET] Contract test: GET /api/v1/comparisons/{id} returns 404 if not found - `comparison/contract/ComparisonContractTest.shouldReturn404WhenComparisonNotFound()`
+- [X] **T133** [P] [GET] Contract test: GET /api/v1/comparisons/{id} returns comparison - `comparison/contract/ComparisonContractTest.shouldGetComparison()` (Completed 2025-11-05)
+- [X] **T134** [P] [GET] Contract test: GET /api/v1/comparisons/{id} returns 403 if user doesn't own - `comparison/contract/ComparisonContractTest.shouldReturn403WhenUserDoesNotOwnComparison()` (Completed 2025-11-05)
+- [X] **T135** [P] [GET] Contract test: GET /api/v1/comparisons/{id} returns 404 if not found - `comparison/contract/ComparisonContractTest.shouldReturn404WhenComparisonNotFound()` (Completed 2025-11-05)
 
 ### Implementation for Get Comparison (Backend)
 
-- [ ] **T136** [GET] Implement GET /api/v1/comparisons/{id} endpoint in ComparisonController with authorization check (verify accountId matches JWT)
-- [ ] **T137** [GET] Implement findById in ComparisonQueryService with authorization filtering
+- [X] **T136** [GET] Implement GET /api/v1/comparisons/{id} endpoint in ComparisonController with authorization check (verify accountId matches JWT) (Already implemented)
+- [X] **T137** [GET] Implement findById in ComparisonQueryService with authorization filtering (Already implemented)
 
 **Checkpoint**: Individual comparison retrieval works with proper authorization
 

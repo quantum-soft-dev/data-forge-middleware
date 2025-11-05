@@ -3,6 +3,7 @@ package com.bitbi.dfm.comparison.application;
 import com.bitbi.dfm.comparison.domain.ComparisonRepository;
 import com.bitbi.dfm.comparison.domain.ComparisonStatus;
 import com.bitbi.dfm.comparison.domain.FileComparison;
+import io.micrometer.core.annotation.Timed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -102,11 +103,13 @@ public class ComparisonQueryService {
      * Lists all comparisons for an account with pagination.
      *
      * <p>Phase 10 (List Comparisons): Fully implemented with pagination and ordering.
+     * <p>T125: Instrumented with Micrometer @Timed annotation for performance monitoring.
      *
      * @param accountId the account owner ID
      * @param pageable pagination information
      * @return page of comparisons ordered by created_at DESC
      */
+    @Timed(value = "comparison.list.duration", description = "Time taken to list comparisons with pagination")
     public Page<FileComparison> findByAccountId(UUID accountId, Pageable pageable) {
         log.debug("Listing comparisons for account: id={}, page={}", accountId, pageable.getPageNumber());
         return comparisonRepository.findByAccountIdOrderByCreatedAtDesc(accountId, pageable);

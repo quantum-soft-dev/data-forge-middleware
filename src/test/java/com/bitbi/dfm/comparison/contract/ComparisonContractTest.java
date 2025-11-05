@@ -719,4 +719,136 @@ class ComparisonContractTest {
                 .andExpect(jsonPath("$.content").isArray())
                 .andExpect(jsonPath("$.content[*].status").value(everyItem(equalTo(status))));
     }
+
+    // ================================================================================================
+    // Phase 11: Get Comparison Details (Supporting Feature)
+    // ================================================================================================
+
+    /**
+     * T133 (TC19): GET /api/v1/comparisons/{id} returns comparison
+     * <p>
+     * Given: User creates a comparison
+     * When: GET /api/v1/comparisons/{id}
+     * Then: 200 OK with comparison metadata
+     * </p>
+     *
+     * Phase 11: Get Comparison Details (Supporting Feature)
+     *
+     * Note: This test should FAIL initially if endpoint not implemented (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC19: GET /api/v1/comparisons/{id} should return comparison")
+    void shouldGetComparison() throws Exception {
+        // Given: Create a comparison
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Extract comparison ID
+        Long comparisonId = objectMapper.readTree(createResponse).get("id").asLong();
+
+        // When: GET /api/v1/comparisons/{id}
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId)
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 200 OK with comparison data
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(comparisonId))
+                .andExpect(jsonPath("$.currentBatchId").value("a1b2c3d4-e5f6-7890-abcd-ef1234567890"))
+                .andExpect(jsonPath("$.targetBatchId").value("c3d4e5f6-a7b8-9012-cdef-123456789012"))
+                .andExpect(jsonPath("$.status").exists())
+                .andExpect(jsonPath("$.totalFilesCompared").isNumber())
+                .andExpect(jsonPath("$.createdAt").exists());
+    }
+
+    /**
+     * T134 (TC20): GET /api/v1/comparisons/{id} returns 403 if user doesn't own
+     * <p>
+     * Given: User A creates comparison, User B tries to access it
+     * When: User B calls GET /api/v1/comparisons/{id}
+     * Then: 403 Forbidden
+     * </p>
+     *
+     * Phase 11: Get Comparison Details (Supporting Feature)
+     *
+     * Note: This test should FAIL initially if authorization not implemented (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC20: GET /api/v1/comparisons/{id} should return 403 when user doesn't own comparison")
+    void shouldReturn403WhenUserDoesNotOwnComparison() throws Exception {
+        // Given: User A (account 1) creates a comparison
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + MOCK_USER_TOKEN_ACCOUNT_1)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Extract comparison ID
+        Long comparisonId = objectMapper.readTree(createResponse).get("id").asLong();
+
+        // When: User B (account 2) tries to access User A's comparison
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + comparisonId)
+                        .header("Authorization", "Bearer " + MOCK_USER_TOKEN_ACCOUNT_2))
+                .andDo(print())
+
+                // Then: 403 Forbidden
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").exists())
+                .andExpect(jsonPath("$.message").exists());
+    }
+
+    /**
+     * T135 (TC21): GET /api/v1/comparisons/{id} returns 404 if not found
+     * <p>
+     * Given: Comparison ID does not exist
+     * When: GET /api/v1/comparisons/99999
+     * Then: 404 Not Found
+     * </p>
+     *
+     * Phase 11: Get Comparison Details (Supporting Feature)
+     *
+     * Note: This test should FAIL initially if 404 handling not implemented (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC21: GET /api/v1/comparisons/{id} should return 404 when comparison not found")
+    void shouldReturn404WhenComparisonNotFound() throws Exception {
+        // Given: Non-existent comparison ID
+        Long nonExistentId = 99999L;
+
+        // When: GET /api/v1/comparisons/{nonExistentId}
+        mockMvc.perform(get(COMPARISONS_ENDPOINT + "/" + nonExistentId)
+                        .header("Authorization", "Bearer " + jwtToken))
+                .andDo(print())
+
+                // Then: 404 Not Found
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").exists())
+                .andExpect(jsonPath("$.message").exists());
+    }
 }

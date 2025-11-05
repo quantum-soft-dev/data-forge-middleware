@@ -1,5 +1,6 @@
 /**
  * T129: ComparisonListWidget with pagination
+ * T132: Enhanced with conditional virtualization for large lists (>100 items)
  *
  * Widget that integrates ComparisonListView with TanStack Query for data fetching.
  * Handles:
@@ -8,6 +9,7 @@
  * - Data fetching with useComparisons hook
  * - Error handling
  * - Navigation to comparison details
+ * - Automatic virtualization for lists >100 items (T132)
  *
  * Phase 10: List Comparisons (Supporting Feature)
  * Priority: P3
@@ -19,9 +21,16 @@ import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useComparisons } from '@/features/file-comparison/hooks/useComparisons';
 import { ComparisonListView } from '@/features/file-comparison/ui/ComparisonListView';
+import { VirtualizedComparisonList } from '@/features/file-comparison/ui/VirtualizedComparisonList';
 import { Button } from '@/shared/ui/ui/button';
 import { Alert, AlertDescription } from '@/shared/ui/ui/alert';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+
+/**
+ * T132: Threshold for using virtualized list.
+ * Lists with more items than this will use VirtualizedComparisonList for better performance.
+ */
+const VIRTUALIZATION_THRESHOLD = 100;
 
 export interface ComparisonListWidgetProps {
   /** Initial page number (0-indexed) */
@@ -95,6 +104,9 @@ export function ComparisonListWidget({
     }
   };
 
+  // T132: Determine if virtualization should be used
+  const shouldUseVirtualization = data && data.content.length > VIRTUALIZATION_THRESHOLD;
+
   return (
     <div className="space-y-4">
       {/* Error State */}
@@ -109,20 +121,31 @@ export function ComparisonListWidget({
         </Alert>
       )}
 
-      {/* List View */}
-      <ComparisonListView
-        comparisons={data?.content || []}
-        isLoading={isLoading}
-        selectedStatus={status}
-        onStatusFilterChange={handleStatusFilterChange}
-        onViewDetails={handleViewDetails}
-      />
+      {/* T132: Conditional List View - Use virtualization for large lists */}
+      {shouldUseVirtualization ? (
+        <VirtualizedComparisonList
+          comparisons={data.content}
+          isLoading={isLoading}
+          selectedStatus={status}
+          onStatusFilterChange={handleStatusFilterChange}
+          onViewDetails={handleViewDetails}
+        />
+      ) : (
+        <ComparisonListView
+          comparisons={data?.content || []}
+          isLoading={isLoading}
+          selectedStatus={status}
+          onStatusFilterChange={handleStatusFilterChange}
+          onViewDetails={handleViewDetails}
+        />
+      )}
 
       {/* Pagination Controls */}
       {!isLoading && data && data.totalPages > 1 && (
         <div className="flex items-center justify-between border-t pt-4">
           <div className="text-sm text-muted-foreground">
             Page {page + 1} of {data.totalPages} ({data.totalElements} total)
+            {shouldUseVirtualization && ' (virtualized for performance)'}
           </div>
           <div className="flex gap-2">
             <Button
