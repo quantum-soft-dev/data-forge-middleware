@@ -161,7 +161,7 @@ export function useResetPasswordMutation() {
 
   return useMutation({
     mutationFn: resetPassword,
-    onSuccess: (data, accountId) => {
+    onSuccess: (_data, accountId) => {
       // Invalidate specific account detail to refetch
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
       // Show success toast

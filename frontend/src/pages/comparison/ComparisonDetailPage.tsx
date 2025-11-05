@@ -18,7 +18,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, RefreshCw, Download, Trash2, AlertCircle, ChevronLeft, ChevronRight, Eye, List } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Trash2, AlertCircle, ChevronLeft, ChevronRight, Eye, List } from 'lucide-react';
 
 import { useComparisonDetails } from '@/features/file-comparison/hooks/useComparisonDetails';
 import { ComparisonSummary } from '@/features/file-comparison/ui/ComparisonSummary';
@@ -46,21 +46,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 /**
  * Status badge colors mapping.
  */
-const statusColors = {
-  PENDING: 'secondary' as const,
-  IN_PROGRESS: 'default' as const,
-  COMPLETED: 'success' as const,
-  FAILED: 'destructive' as const,
+const statusColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
+  PENDING: 'secondary',
+  IN_PROGRESS: 'default',
+  COMPLETED: 'default', // Badge doesn't have 'success', use 'default' with green styling
+  FAILED: 'destructive',
 };
 
 /**
  * Change type badge colors mapping.
  */
-const changeTypeColors = {
-  ADDED: 'success' as const,
-  MODIFIED: 'default' as const,
-  UNCHANGED: 'secondary' as const,
-  REMOVED: 'destructive' as const,
+const changeTypeColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
+  ADDED: 'default', // No 'success' variant, use 'default' with green styling via CSS
+  MODIFIED: 'default',
+  UNCHANGED: 'secondary',
+  REMOVED: 'destructive',
 };
 
 /**
@@ -99,7 +99,6 @@ export function ComparisonDetailPage(): React.ReactElement {
     data: comparison,
     isLoading: isLoadingComparison,
     error: comparisonError,
-    refetch: refetchComparison,
   } = useComparisonDetails({
     comparisonId: parsedId ?? 0,
     enabled: parsedId !== null,

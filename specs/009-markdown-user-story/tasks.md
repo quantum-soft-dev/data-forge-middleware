@@ -400,9 +400,9 @@
 
 ### Backend Polish
 
-- [ ] **T138** [P] [POLISH] Add GlobalExceptionHandler handling for comparison-specific exceptions (ComparisonNotFoundException, ComparisonInProgressException, etc.)
-- [ ] **T139** [P] [POLISH] Add OpenAPI documentation annotations (@Operation, @ApiResponse) to all ComparisonController endpoints
-- [ ] **T140** [P] [POLISH] Add MDC context cleanup in ComparisonService (remove comparisonId, batchIds after operation completes)
+- [X] **T138** [P] [POLISH] Add GlobalExceptionHandler handling for comparison-specific exceptions (ComparisonNotFoundException, ComparisonInProgressException, etc.)
+- [X] **T139** [P] [POLISH] Add OpenAPI documentation annotations (@Operation, @ApiResponse) to all ComparisonController endpoints
+- [X] **T140** [P] [POLISH] Add MDC context cleanup in ComparisonService (remove comparisonId, batchIds after operation completes)
 - [ ] **T141** [P] [POLISH] Add health check indicator for diff service availability (optional)
 - [ ] **T142** [P] [POLISH] Add database index verification query to confirm all indexes from V009 migration exist
 - [ ] **T143** [P] [POLISH] Add Micrometer gauges for active IN_PROGRESS comparisons count
@@ -412,25 +412,25 @@
 - [ ] **T144** [P] [POLISH] Add error boundary for comparison pages in `frontend/src/pages/comparison/ComparisonErrorBoundary.tsx`
 - [ ] **T145** [P] [POLISH] Add loading skeletons for comparison list and detail pages
 - [ ] **T146** [P] [POLISH] Add empty state components (no comparisons yet, no results for filter)
-- [ ] **T147** [P] [POLISH] Verify bundle size impact <500KB: analyze diff viewer lazy loading effectiveness with `npm run build:analyze`
+- [X] **T147** [P] [POLISH] Verify bundle size impact <500KB: analyze diff viewer lazy loading effectiveness with `npm run build:analyze`
 - [ ] **T148** [P] [POLISH] Add accessibility audit (WCAG 2.1 AA) for all comparison components using axe-core
 - [ ] **T149** [P] [POLISH] Add keyboard shortcuts documentation (e.g., j/k to navigate files in diff viewer)
 - [ ] **T150** [P] [POLISH] Add responsive design verification for mobile viewport (diff viewer usability on small screens)
 
 ### Documentation
 
-- [ ] **T151** [P] [POLISH] Update CLAUDE.md with comparison feature implementation patterns (append to Upload History section)
+- [X] **T151** [P] [POLISH] Update CLAUDE.md with comparison feature implementation patterns (append to Upload History section)
 - [ ] **T152** [P] [POLISH] Add API examples to quickstart.md for all implemented endpoints
 - [ ] **T153** [P] [POLISH] Create comparison feature README in `specs/009-markdown-user-story/README.md` with architecture diagram
 
 ### Testing & Quality
 
-- [ ] **T154** [POLISH] Run all tests and verify ≥80% coverage: `./gradlew test jacocoTestReport` (backend), `npm run test:coverage` (frontend)
+- [X] **T154** [POLISH] Run all tests and verify ≥80% coverage: `./gradlew test jacocoTestReport` (backend), `npm run test:coverage` (frontend)
 - [ ] **T155** [POLISH] Run end-to-end workflow test: create comparison with 50 files, verify completion within 2 minutes (per SC-002)
 - [ ] **T156** [POLISH] Run large file test: compare two 100MB files, verify streaming works without OOM error
 - [ ] **T157** [POLISH] Run performance validation: verify p95 latency <1000ms for all comparison API endpoints under load (100 concurrent requests)
 - [ ] **T158** [P] [POLISH] Fix any ESLint errors in frontend: `npm run lint`
-- [ ] **T159** [P] [POLISH] Fix any TypeScript strict mode errors: `npm run type-check`
+- [X] **T159** [P] [POLISH] Fix any TypeScript strict mode errors: `npm run type-check`
 
 ### Security Audit
 

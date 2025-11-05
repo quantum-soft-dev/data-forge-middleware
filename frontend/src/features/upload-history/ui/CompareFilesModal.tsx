@@ -179,7 +179,7 @@ export function CompareFilesModal({
                                   <Badge
                                     variant={
                                       batch.status === 'COMPLETED'
-                                        ? 'success'
+                                        ? 'default'
                                         : batch.status === 'IN_PROGRESS'
                                         ? 'default'
                                         : 'secondary'
@@ -206,7 +206,7 @@ export function CompareFilesModal({
                   <div className="grid grid-cols-3 gap-2 text-sm">
                     <div>
                       <div className="text-xs text-muted-foreground">Files</div>
-                      <div className="font-medium">{selectedBatch.fileCount}</div>
+                      <div className="font-medium">{selectedBatch.uploadedFilesCount}</div>
                     </div>
                     <div>
                       <div className="text-xs text-muted-foreground">Size</div>
@@ -217,7 +217,7 @@ export function CompareFilesModal({
                       <Badge
                         variant={
                           selectedBatch.status === 'COMPLETED'
-                            ? 'success'
+                            ? 'default'
                             : selectedBatch.status === 'IN_PROGRESS'
                             ? 'default'
                             : 'secondary'

@@ -38,7 +38,7 @@ interface ErrorListViewProps {
  * T107: Error list view with pagination
  */
 export function ErrorListView({
-  batchId,
+  batchId: _batchId,
   errors,
   isLoading,
   error,

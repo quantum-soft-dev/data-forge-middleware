@@ -27,7 +27,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuTrigger,
 } from '@/shared/ui/ui/dropdown-menu';
-import { Settings, Split, Maximize2, Eye, EyeOff } from 'lucide-react';
+import { Settings, Split, Maximize2 } from 'lucide-react';
 import { formatDiffSummary, getDiffStats } from '@/features/file-comparison/model/parseDiff';
 
 /**

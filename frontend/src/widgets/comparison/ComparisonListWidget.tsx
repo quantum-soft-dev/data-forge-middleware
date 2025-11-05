@@ -19,7 +19,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useComparisons } from '@/features/file-comparison/hooks/useComparisons';
+import { useComparisons, type PagedComparisonResponse } from '@/features/file-comparison/hooks/useComparisons';
 import { ComparisonListView } from '@/features/file-comparison/ui/ComparisonListView';
 import { VirtualizedComparisonList } from '@/features/file-comparison/ui/VirtualizedComparisonList';
 import { Button } from '@/shared/ui/ui/button';
@@ -77,11 +77,14 @@ export function ComparisonListWidget({
   const navigate = useNavigate();
 
   // Fetch comparisons with TanStack Query
-  const { data, isLoading, error, refetch } = useComparisons({
+  const { data: rawData, isLoading, error, refetch } = useComparisons({
     page,
     size: pageSize,
     status,
   });
+
+  // Type assertion for proper TypeScript inference
+  const data = rawData as PagedComparisonResponse | undefined;
 
   const handleStatusFilterChange = (newStatus?: string) => {
     setStatus(newStatus);
@@ -89,7 +92,7 @@ export function ComparisonListWidget({
   };
 
   const handleViewDetails = (comparisonId: number) => {
-    navigate(`/comparisons/${comparisonId}`);
+    navigate({ to: `/comparisons/${comparisonId}` as any });
   };
 
   const handlePreviousPage = () => {
@@ -122,7 +125,7 @@ export function ComparisonListWidget({
       )}
 
       {/* T132: Conditional List View - Use virtualization for large lists */}
-      {shouldUseVirtualization ? (
+      {shouldUseVirtualization && data ? (
         <VirtualizedComparisonList
           comparisons={data.content}
           isLoading={isLoading}
