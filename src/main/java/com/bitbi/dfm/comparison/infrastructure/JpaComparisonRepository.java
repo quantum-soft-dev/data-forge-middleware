@@ -69,6 +69,16 @@ public class JpaComparisonRepository implements ComparisonRepository {
     }
 
     @Override
+    public Page<FileComparison> findByAccountIdAndStatusOrderByCreatedAtDesc(
+        UUID accountId,
+        ComparisonStatus status,
+        Pageable pageable
+    ) {
+        return springDataRepository.findByAccountIdAndStatusOrderByCreatedAtDesc(accountId, status, pageable)
+            .map(FileComparisonEntity::toDomain);
+    }
+
+    @Override
     public List<FileComparison> findByCurrentBatchId(UUID batchId) {
         return springDataRepository.findByCurrentBatchId(batchId).stream()
             .map(FileComparisonEntity::toDomain)

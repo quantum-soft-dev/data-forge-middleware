@@ -101,15 +101,31 @@ public class ComparisonQueryService {
     /**
      * Lists all comparisons for an account with pagination.
      *
-     * <p>This method will be fully implemented in Phase 10 (List Comparisons).
+     * <p>Phase 10 (List Comparisons): Fully implemented with pagination and ordering.
      *
      * @param accountId the account owner ID
      * @param pageable pagination information
-     * @return page of comparisons
+     * @return page of comparisons ordered by created_at DESC
      */
     public Page<FileComparison> findByAccountId(UUID accountId, Pageable pageable) {
         log.debug("Listing comparisons for account: id={}, page={}", accountId, pageable.getPageNumber());
         return comparisonRepository.findByAccountIdOrderByCreatedAtDesc(accountId, pageable);
+    }
+
+    /**
+     * T124: Lists comparisons for an account filtered by status with pagination.
+     *
+     * <p>Phase 10 (List Comparisons): Filter comparisons by status (COMPLETED, FAILED, IN_PROGRESS).
+     * Results ordered by created_at DESC.
+     *
+     * @param accountId the account owner ID
+     * @param status the status to filter by
+     * @param pageable pagination information
+     * @return page of comparisons matching the status
+     */
+    public Page<FileComparison> findByAccountIdAndStatus(UUID accountId, ComparisonStatus status, Pageable pageable) {
+        log.debug("Listing comparisons for account: id={}, status={}, page={}", accountId, status, pageable.getPageNumber());
+        return comparisonRepository.findByAccountIdAndStatusOrderByCreatedAtDesc(accountId, status, pageable);
     }
 
     /**

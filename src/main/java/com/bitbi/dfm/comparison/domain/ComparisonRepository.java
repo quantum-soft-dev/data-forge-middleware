@@ -61,6 +61,23 @@ public interface ComparisonRepository {
     Page<FileComparison> findByAccountIdOrderByCreatedAtDesc(UUID accountId, Pageable pageable);
 
     /**
+     * T124: Finds comparisons for a specific account filtered by status with pagination.
+     * Results ordered by created date descending (most recent first).
+     *
+     * Phase 10: List Comparisons (Supporting Feature)
+     *
+     * @param accountId the account ID
+     * @param status the status filter
+     * @param pageable pagination information
+     * @return page of comparisons matching the status
+     */
+    Page<FileComparison> findByAccountIdAndStatusOrderByCreatedAtDesc(
+        UUID accountId,
+        ComparisonStatus status,
+        Pageable pageable
+    );
+
+    /**
      * Finds all comparisons that reference a specific batch as the current batch.
      *
      * @param batchId the batch ID

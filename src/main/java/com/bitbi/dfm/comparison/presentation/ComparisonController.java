@@ -11,6 +11,7 @@ import com.bitbi.dfm.comparison.presentation.dto.ComparisonResponseDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonResultDto;
 import com.bitbi.dfm.comparison.presentation.dto.ComparisonSummaryDto;
 import com.bitbi.dfm.comparison.presentation.dto.CreateComparisonRequestDto;
+import com.bitbi.dfm.comparison.presentation.dto.PagedComparisonResponse;
 import com.bitbi.dfm.comparison.presentation.dto.PagedComparisonResultResponse;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.upload.domain.UploadedFile;
@@ -550,6 +551,84 @@ public class ComparisonController {
         log.info("Successfully generated ZIP for comparison {} ({} bytes)", id, zipBytes.length);
 
         return new ResponseEntity<>(zipBytes, headers, HttpStatus.OK);
+    }
+
+    /**
+     * T123: GET /api/v1/comparisons - List comparisons with pagination and filtering
+     * <p>
+     * Phase 10: List Comparisons (Supporting Feature)
+     * Priority: P3
+     * <p>
+     * Returns a paginated list of comparisons for the authenticated user.
+     * Results are ordered by created_at DESC (most recent first).
+     * Supports optional status filtering.
+     *
+     * @param page Page number (0-indexed), default 0
+     * @param size Page size, default 10
+     * @param status Optional status filter (COMPLETED, FAILED, IN_PROGRESS)
+     * @param authentication JWT authentication
+     * @return Paginated list of comparisons
+     */
+    @GetMapping
+    @Operation(
+        summary = "List comparisons",
+        description = "Lists all comparisons for the authenticated user with pagination and optional status filtering. Results ordered by created_at DESC."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Comparisons retrieved successfully",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = PagedComparisonResponse.class))
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Unauthorized - invalid or missing JWT token",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "500",
+            description = "Internal server error",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))
+        )
+    })
+    public ResponseEntity<PagedComparisonResponse> listComparisons(
+        @Parameter(description = "Page number (0-indexed)", example = "0")
+        @RequestParam(defaultValue = "0") int page,
+
+        @Parameter(description = "Page size", example = "10")
+        @RequestParam(defaultValue = "10") int size,
+
+        @Parameter(description = "Status filter (optional)", example = "COMPLETED")
+        @RequestParam(required = false) ComparisonStatus status,
+
+        Authentication authentication
+    ) {
+        log.info("List comparisons request: page={}, size={}, status={}", page, size, status);
+
+        // Extract account ID from JWT
+        UUID accountId = extractAccountIdFromJwt(authentication);
+
+        // Create pageable with sorting by created_at DESC
+        Pageable pageable = PageRequest.of(page, size);
+
+        // Query comparisons with optional status filter
+        Page<FileComparison> comparisonsPage;
+        if (status != null) {
+            comparisonsPage = comparisonQueryService.findByAccountIdAndStatus(accountId, status, pageable);
+        } else {
+            comparisonsPage = comparisonQueryService.findByAccountId(accountId, pageable);
+        }
+
+        // Convert to DTOs
+        Page<ComparisonResponseDto> dtoPage = comparisonsPage.map(ComparisonResponseDto::fromEntity);
+
+        // Wrap in paginated response
+        PagedComparisonResponse response = PagedComparisonResponse.fromPage(dtoPage);
+
+        log.info("Successfully listed {} comparisons for account {} (page {}/{}, status={})",
+                response.content().size(), accountId, page, response.totalPages(), status);
+
+        return ResponseEntity.ok(response);
     }
 
     /**

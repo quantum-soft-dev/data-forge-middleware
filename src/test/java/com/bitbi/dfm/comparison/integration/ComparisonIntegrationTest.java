@@ -363,4 +363,76 @@ class ComparisonIntegrationTest extends BaseIntegrationTest {
         // (ON DELETE CASCADE in V16 migration). The results endpoint will also return 404
         // because the parent comparison no longer exists.
     }
+
+    /**
+     * T120 (ITC05): List comparisons ordered by created_at DESC
+     * <p>
+     * Given: Multiple comparisons created at different times
+     * When: GET /api/v1/comparisons
+     * Then: Comparisons returned in reverse chronological order (most recent first)
+     * And: Pagination works correctly
+     * </p>
+     *
+     * Phase 10: List Comparisons (Supporting Feature)
+     *
+     * Note: This test verifies ordering and pagination with real database.
+     */
+    @Test
+    @DisplayName("ITC05: should list comparisons ordered by created_at DESC")
+    void shouldListComparisonsOrderedByDate() throws Exception {
+        // Given: Authenticated user token
+        String token = "Bearer mock-jwt-token-account-1";
+
+        // Create 3 comparisons with slight delay to ensure different timestamps
+        String[] comparisonIds = new String[3];
+        for (int i = 0; i < 3; i++) {
+            Map<String, Object> request = Map.of(
+                    "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                    "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111"}
+            );
+
+            String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                            .header("Authorization", token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isCreated())
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString();
+
+            comparisonIds[i] = objectMapper.readTree(createResponse).get("id").asText();
+
+            // Small delay to ensure different timestamps
+            Thread.sleep(10);
+        }
+
+        // When: GET /api/v1/comparisons
+        String listResponse = mockMvc.perform(get(COMPARISONS_ENDPOINT)
+                        .header("Authorization", token)
+                        .param("page", "0")
+                        .param("size", "10"))
+                .andDo(print())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content.length()").value(greaterThanOrEqualTo(3)))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Then: Verify ordering (most recent first = comparisonIds[2], [1], [0])
+        // Parse response to extract comparison IDs in order
+        var json = objectMapper.readTree(listResponse);
+        var content = json.get("content");
+
+        // Find the positions of our created comparisons
+        // They should appear in reverse order (most recent first)
+        String firstId = content.get(0).get("id").asText();
+        String secondId = content.get(1).get("id").asText();
+        String thirdId = content.get(2).get("id").asText();
+
+        // Most recent comparison (comparisonIds[2]) should be first
+        assert firstId.equals(comparisonIds[2]) :
+            "Expected most recent comparison first, got: " + firstId + ", expected: " + comparisonIds[2];
+    }
 }

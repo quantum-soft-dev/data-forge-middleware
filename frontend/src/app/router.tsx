@@ -14,6 +14,7 @@ const SiteManagementPage = lazy(() => import('@/pages/site-management').then(m =
 const UploadHistoryPage = lazy(() => import('@/pages/upload-history/UploadHistoryPage'))
 const BatchDetailPage = lazy(() => import('@/pages/upload-history/BatchDetailPage'))
 const ComparisonPage = lazy(() => import('@/pages/comparison/ComparisonPage').then(m => ({ default: m.ComparisonPage })))
+const ComparisonListPage = lazy(() => import('@/pages/comparison/ComparisonListPage').then(m => ({ default: m.ComparisonListPage })))
 const ComparisonDetailPage = lazy(() => import('@/pages/comparison/ComparisonDetailPage'))
 
 // Router context type
@@ -216,6 +217,27 @@ const batchDetailRoute = createRoute({
   component: BatchDetailPage,
 })
 
+// Comparison List route (Spec 009 - Phase 10: T131)
+const comparisonListRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/comparisons',
+  beforeLoad: ({ context }) => {
+    const { auth } = context as RouterContext
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      throw redirect({ to: '/' })
+    }
+
+    // Redirect admins to admin panel instead
+    // Admins don't have user accounts, so they can't view comparisons
+    const realmAccess = auth.user?.profile?.realm_access as { roles?: string[] } | undefined
+    const roles = realmAccess?.roles || []
+    if (roles.includes('ROLE_ADMIN')) {
+      throw redirect({ to: '/admin/users' })
+    }
+  },
+  component: ComparisonListPage,
+})
+
 // Comparison Creation route (Spec 009 - User Story 1)
 const comparisonCreateRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -271,6 +293,7 @@ const routeTree = rootRoute.addChildren([
   siteManagementRoute,
   uploadHistoryRoute,
   batchDetailRoute,
+  comparisonListRoute,
   comparisonCreateRoute,
   comparisonDetailRoute,
 ])

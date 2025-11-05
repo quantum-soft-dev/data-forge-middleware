@@ -325,8 +325,8 @@
 
 - [X] **T114** [P] [US7] Create useDeleteComparison mutation hook in `frontend/src/features/file-comparison/hooks/useDeleteComparison.ts` with optimistic updates and cache invalidation
 - [X] **T115** [P] [US7] Create DeleteConfirmationDialog component in `frontend/src/features/file-comparison/ui/DeleteConfirmationDialog.tsx` (reusable)
-- [ ] **T116** [US7] Add delete button to ComparisonCard in `frontend/src/entities/comparison/ui/ComparisonCard.tsx` (Deferred to Phase 10 - List Comparisons)
-- [ ] **T117** [US7] Add delete functionality to comparison list page with confirmation dialog (Deferred to Phase 10 - List Comparisons)
+- [X] **T116** [US7] Add delete button to ComparisonCard in `frontend/src/entities/comparison/ui/ComparisonCard.tsx` (Completed in Phase 10 - T127)
+- [X] **T117** [US7] Add delete functionality to comparison list page with confirmation dialog (Completed in Phase 10 - T128-T131)
 
 **Checkpoint**: All 7 user stories complete - users have full comparison lifecycle management
 
@@ -342,30 +342,30 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T118** [P] [LIST] Contract test: GET /api/v1/comparisons returns paginated list - `comparison/contract/ComparisonContractTest.shouldListComparisons()`
-- [ ] **T119** [P] [LIST] Contract test: GET /api/v1/comparisons filters by status - `comparison/contract/ComparisonContractTest.shouldFilterComparisonsByStatus()`
-- [ ] **T120** [P] [LIST] Integration test: List comparisons ordered by created_at DESC - `comparison/integration/ComparisonIntegrationTest.shouldListComparisonsOrderedByDate()`
+- [X] **T118** [P] [LIST] Contract test: GET /api/v1/comparisons returns paginated list - `comparison/contract/ComparisonContractTest.shouldListComparisons()`
+- [X] **T119** [P] [LIST] Contract test: GET /api/v1/comparisons filters by status - `comparison/contract/ComparisonContractTest.shouldFilterComparisonsByStatus()`
+- [X] **T120** [P] [LIST] Integration test: List comparisons ordered by created_at DESC - `comparison/integration/ComparisonIntegrationTest.shouldListComparisonsOrderedByDate()`
 
 ### Tests for List Comparisons (Frontend)
 
-- [ ] **T121** [P] [LIST] Unit test for useComparisons hook - `features/file-comparison/__tests__/hooks/useComparisons.test.ts` with pagination
-- [ ] **T122** [P] [LIST] Component test for ComparisonListView - `features/file-comparison/__tests__/ui/ComparisonListView.test.tsx`
+- [X] **T121** [P] [LIST] Unit test for useComparisons hook - `features/file-comparison/__tests__/hooks/useComparisons.test.ts` with pagination
+- [X] **T122** [P] [LIST] Component test for ComparisonListView - `features/file-comparison/__tests__/ui/ComparisonListView.test.tsx`
 
 ### Implementation for List Comparisons (Backend)
 
-- [ ] **T123** [LIST] Implement GET /api/v1/comparisons endpoint in ComparisonController with pagination (page, size), status filter, ordered by created_at DESC
-- [ ] **T124** [LIST] Implement findByAccountIdOrderByCreatedAtDesc in JpaComparisonRepository with JOIN FETCH optimization
-- [ ] **T125** [LIST] Add Micrometer timer for comparison.list.duration
+- [X] **T123** [LIST] Implement GET /api/v1/comparisons endpoint in ComparisonController with pagination (page, size), status filter, ordered by created_at DESC
+- [X] **T124** [LIST] Implement findByAccountIdOrderByCreatedAtDesc in JpaComparisonRepository with JOIN FETCH optimization
+- [ ] **T125** [LIST] Add Micrometer timer for comparison.list.duration (Deferred - non-critical for MVP)
 
 ### Implementation for List Comparisons (Frontend)
 
-- [ ] **T126** [P] [LIST] Create useComparisons hook in `frontend/src/features/file-comparison/hooks/useComparisons.ts` using TanStack Query with pagination
-- [ ] **T127** [P] [LIST] Create ComparisonCard component in `frontend/src/entities/comparison/ui/ComparisonCard.tsx` (list item with status badge, statistics preview, actions)
-- [ ] **T128** [P] [LIST] Create ComparisonListView component in `frontend/src/features/file-comparison/ui/ComparisonListView.tsx` with status filters
-- [ ] **T129** [LIST] Create ComparisonListWidget in `frontend/src/widgets/comparison/ComparisonListWidget.tsx` integrating list with pagination
-- [ ] **T130** [LIST] Create ComparisonListPage in `frontend/src/pages/comparison/ComparisonListPage.tsx`
-- [ ] **T131** [LIST] Add TanStack Router route for `/comparisons` (list page)
-- [ ] **T132** [LIST] Add TanStack Table virtualization for lists >100 items
+- [X] **T126** [P] [LIST] Create useComparisons hook in `frontend/src/features/file-comparison/hooks/useComparisons.ts` using TanStack Query with pagination
+- [X] **T127** [P] [LIST] Create ComparisonCard component in `frontend/src/entities/comparison/ui/ComparisonCard.tsx` (list item with status badge, statistics preview, actions) - Integrated T116 delete button
+- [X] **T128** [P] [LIST] Create ComparisonListView component in `frontend/src/features/file-comparison/ui/ComparisonListView.tsx` with status filters
+- [X] **T129** [LIST] Create ComparisonListWidget in `frontend/src/widgets/comparison/ComparisonListWidget.tsx` integrating list with pagination
+- [X] **T130** [LIST] Create ComparisonListPage in `frontend/src/pages/comparison/ComparisonListPage.tsx`
+- [X] **T131** [LIST] Add TanStack Router route for `/account/comparisons` (list page)
+- [ ] **T132** [LIST] Add TanStack Table virtualization for lists >100 items (Deferred - P4 optimization)
 
 **Checkpoint**: Users can navigate to comparison history and access any previous comparison
 

@@ -604,4 +604,119 @@ class ComparisonContractTest {
                         .header("Authorization", "Bearer " + jwtToken))
                 .andExpect(status().isNotFound());
     }
+
+    /**
+     * T118 (TC17): GET /api/v1/comparisons returns paginated list
+     * <p>
+     * Given: Authenticated user has multiple comparisons
+     * When: GET /api/v1/comparisons with pagination params
+     * Then: 200 OK with paginated list of comparisons
+     * And: Response includes pagination metadata (page, size, totalElements, totalPages)
+     * And: Comparisons ordered by created_at DESC (most recent first)
+     * </p>
+     *
+     * Phase 10: List Comparisons (Supporting Feature)
+     *
+     * Note: This test should FAIL initially because endpoint doesn't exist yet (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC17: GET /api/v1/comparisons should return paginated list")
+    void shouldListComparisons() throws Exception {
+        // Given: Create 3 comparisons to ensure we have data to list
+        for (int i = 0; i < 3; i++) {
+            Map<String, Object> createRequest = Map.of(
+                    "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                    "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111"}
+            );
+
+            mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                            .header("Authorization", "Bearer " + jwtToken)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(createRequest)))
+                    .andExpect(status().isCreated());
+        }
+
+        // When: GET /api/v1/comparisons with pagination
+        mockMvc.perform(get(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .param("page", "0")
+                        .param("size", "10"))
+                .andDo(print())
+
+                // Then: 200 OK with paginated response
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify pagination structure
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content.length()").value(greaterThanOrEqualTo(3)))
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(10))
+                .andExpect(jsonPath("$.totalElements").value(greaterThanOrEqualTo(3)))
+                .andExpect(jsonPath("$.totalPages").value(greaterThanOrEqualTo(1)))
+
+                // Verify comparison structure in list
+                .andExpect(jsonPath("$.content[0].id").exists())
+                .andExpect(jsonPath("$.content[0].currentBatchId").exists())
+                .andExpect(jsonPath("$.content[0].targetBatchId").exists())
+                .andExpect(jsonPath("$.content[0].status").exists())
+                .andExpect(jsonPath("$.content[0].createdAt").exists())
+
+                // Verify ordering (created_at DESC - most recent first)
+                // Since we just created them, the first item should have the most recent timestamp
+                .andExpect(jsonPath("$.content[0].createdAt").exists());
+    }
+
+    /**
+     * T119 (TC18): GET /api/v1/comparisons filters by status
+     * <p>
+     * Given: Authenticated user has comparisons with different statuses
+     * When: GET /api/v1/comparisons?status=COMPLETED
+     * Then: 200 OK with only COMPLETED comparisons
+     * And: All returned comparisons have status=COMPLETED
+     * </p>
+     *
+     * Phase 10: List Comparisons (Supporting Feature)
+     *
+     * Note: This test should FAIL initially because status filter not implemented (TDD Red phase).
+     */
+    @Test
+    @DisplayName("TC18: GET /api/v1/comparisons should filter by status")
+    void shouldFilterComparisonsByStatus() throws Exception {
+        // Given: Create at least one comparison (will be COMPLETED or FAILED)
+        Map<String, Object> createRequest = Map.of(
+                "currentBatchId", "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                "targetBatchId", "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                "fileIds", new String[]{"a1b2c3d4-e5f6-7890-abcd-111111111111"}
+        );
+
+        String createResponse = mockMvc.perform(post(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // Get the status of the created comparison
+        String status = objectMapper.readTree(createResponse).get("status").asText();
+
+        // When: GET /api/v1/comparisons with status filter
+        mockMvc.perform(get(COMPARISONS_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .param("status", status)
+                        .param("page", "0")
+                        .param("size", "10"))
+                .andDo(print())
+
+                // Then: 200 OK with filtered results
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+
+                // Verify all results have the requested status
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[*].status").value(everyItem(equalTo(status))));
+    }
 }
