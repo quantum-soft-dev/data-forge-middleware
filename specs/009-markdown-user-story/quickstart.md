@@ -256,6 +256,30 @@ Authorization: Bearer <JWT_TOKEN>
 }
 ```
 
+### Get Comparison by ID
+
+```bash
+GET /api/v1/comparisons/45
+Authorization: Bearer <JWT_TOKEN>
+
+# Response (200 OK)
+{
+  "id": 45,
+  "currentBatchId": 123,
+  "targetBatchId": 120,
+  "accountId": 10,
+  "status": "COMPLETED",
+  "createdAt": "2025-11-03T10:30:00Z",
+  "startedAt": "2025-11-03T10:30:01Z",
+  "completedAt": "2025-11-03T10:31:25Z",
+  "totalFilesCompared": 50,
+  "filesChanged": 12,
+  "filesAdded": 3,
+  "filesUnchanged": 35,
+  "totalChangeSize": 125000
+}
+```
+
 ### Get Summary Report
 
 ```bash
@@ -273,6 +297,48 @@ Authorization: Bearer <JWT_TOKEN>
   "currentBatchId": 123,
   "targetBatchId": 120
 }
+```
+
+### Download Comparison as ZIP
+
+```bash
+GET /api/v1/comparisons/45/download
+Authorization: Bearer <JWT_TOKEN>
+
+# Response (200 OK)
+Content-Type: application/zip
+Content-Disposition: attachment; filename="comparison-45.zip"
+
+# ZIP archive contains:
+# - data.csv.diff (unified diff format)
+# - config.json.diff
+# - summary.txt (human-readable report)
+```
+
+### Download Summary Report
+
+```bash
+GET /api/v1/comparisons/45/summary/download
+Authorization: Bearer <JWT_TOKEN>
+
+# Response (200 OK)
+Content-Type: text/plain
+Content-Disposition: attachment; filename="comparison-45-summary.txt"
+
+File Comparison Summary Report
+==============================
+Comparison ID: 45
+Current Batch: 123
+Target Batch: 120
+Timestamp: 2025-11-03T10:31:25Z
+
+Statistics:
+-----------
+Total Files Compared: 50
+Files Changed: 12
+Files Added: 3
+Files Unchanged: 35
+Total Change Size: 125000 bytes
 ```
 
 ### Delete Comparison

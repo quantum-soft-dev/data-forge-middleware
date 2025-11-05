@@ -136,6 +136,24 @@ public interface ComparisonRepository {
     long countByAccountId(UUID accountId);
 
     /**
+     * Counts the number of comparisons with a specific status.
+     * Useful for metrics and monitoring (e.g., active IN_PROGRESS comparisons).
+     *
+     * @param status the comparison status
+     * @return count of comparisons with the given status
+     */
+    long countByStatus(ComparisonStatus status);
+
+    /**
+     * Counts the number of FAILED comparisons since a specific timestamp.
+     * Useful for monitoring recent failure rates.
+     *
+     * @param since the timestamp to count from
+     * @return count of failed comparisons since the given time
+     */
+    long countFailedSince(java.time.Instant since);
+
+    /**
      * Deletes a FileComparison aggregate.
      * This will cascade delete all associated ComparisonResult entities.
      *

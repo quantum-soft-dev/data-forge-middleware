@@ -116,6 +116,16 @@ public class JpaComparisonRepository implements ComparisonRepository {
     }
 
     @Override
+    public long countByStatus(ComparisonStatus status) {
+        return springDataRepository.countByStatus(status);
+    }
+
+    @Override
+    public long countFailedSince(java.time.Instant since) {
+        return springDataRepository.countByStatusAndCompletedAtAfter(ComparisonStatus.FAILED, since);
+    }
+
+    @Override
     public void delete(FileComparison comparison) {
         if (comparison == null) {
             throw new IllegalArgumentException("FileComparison cannot be null");

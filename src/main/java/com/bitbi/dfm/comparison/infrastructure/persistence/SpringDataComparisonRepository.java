@@ -114,6 +114,25 @@ public interface SpringDataComparisonRepository extends JpaRepository<FileCompar
     long countByAccountId(UUID accountId);
 
     /**
+     * Counts the number of comparisons with a specific status.
+     * Used for Micrometer metrics and monitoring.
+     *
+     * @param status the comparison status
+     * @return count of comparisons with the given status
+     */
+    long countByStatus(ComparisonStatus status);
+
+    /**
+     * Counts the number of comparisons with a specific status completed after a given timestamp.
+     * Used for monitoring recent failure rates.
+     *
+     * @param status the comparison status
+     * @param completedAt the timestamp threshold
+     * @return count of comparisons matching criteria
+     */
+    long countByStatusAndCompletedAtAfter(ComparisonStatus status, java.time.Instant completedAt);
+
+    /**
      * Deletes all comparisons for a specific account.
      *
      * @param accountId the account ID

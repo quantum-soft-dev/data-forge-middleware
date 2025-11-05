@@ -404,8 +404,8 @@
 - [X] **T139** [P] [POLISH] Add OpenAPI documentation annotations (@Operation, @ApiResponse) to all ComparisonController endpoints
 - [X] **T140** [P] [POLISH] Add MDC context cleanup in ComparisonService (remove comparisonId, batchIds after operation completes)
 - [ ] **T141** [P] [POLISH] Add health check indicator for diff service availability (optional)
-- [ ] **T142** [P] [POLISH] Add database index verification query to confirm all indexes from V009 migration exist
-- [ ] **T143** [P] [POLISH] Add Micrometer gauges for active IN_PROGRESS comparisons count
+- [X] **T142** [P] [POLISH] Add database index verification query to confirm all indexes from V009 migration exist
+- [X] **T143** [P] [POLISH] Add Micrometer gauges for active IN_PROGRESS comparisons count
 
 ### Frontend Polish
 
@@ -420,8 +420,8 @@
 ### Documentation
 
 - [X] **T151** [P] [POLISH] Update CLAUDE.md with comparison feature implementation patterns (append to Upload History section)
-- [ ] **T152** [P] [POLISH] Add API examples to quickstart.md for all implemented endpoints
-- [ ] **T153** [P] [POLISH] Create comparison feature README in `specs/009-markdown-user-story/README.md` with architecture diagram
+- [X] **T152** [P] [POLISH] Add API examples to quickstart.md for all implemented endpoints
+- [X] **T153** [P] [POLISH] Create comparison feature README in `specs/009-markdown-user-story/README.md` with architecture diagram
 
 ### Testing & Quality
 
@@ -429,7 +429,7 @@
 - [ ] **T155** [POLISH] Run end-to-end workflow test: create comparison with 50 files, verify completion within 2 minutes (per SC-002)
 - [ ] **T156** [POLISH] Run large file test: compare two 100MB files, verify streaming works without OOM error
 - [ ] **T157** [POLISH] Run performance validation: verify p95 latency <1000ms for all comparison API endpoints under load (100 concurrent requests)
-- [ ] **T158** [P] [POLISH] Fix any ESLint errors in frontend: `npm run lint`
+- [X] **T158** [P] [POLISH] Fix any ESLint errors in frontend: `npm run lint`
 - [X] **T159** [P] [POLISH] Fix any TypeScript strict mode errors: `npm run type-check`
 
 ### Security Audit
