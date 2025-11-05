@@ -152,31 +152,6 @@ export const comparisonApi = {
   },
 
   /**
-   * Downloads comparison results as a ZIP archive.
-   *
-   * @param comparisonId - The comparison ID
-   * @returns Promise resolving to the ZIP file blob
-   * @throws {AxiosError} If the request fails
-   *
-   * @example
-   * ```typescript
-   * const blob = await comparisonApi.downloadComparisonZip(45);
-   * const url = URL.createObjectURL(blob);
-   * const link = document.createElement('a');
-   * link.href = url;
-   * link.download = `comparison-${comparisonId}.zip`;
-   * link.click();
-   * URL.revokeObjectURL(url);
-   * ```
-   */
-  downloadComparisonZip: async (comparisonId: number): Promise<Blob> => {
-    const response = await apiClient.get<Blob>(`${BASE_PATH}/${comparisonId}/download`, {
-      responseType: 'blob',
-    });
-    return response.data;
-  },
-
-  /**
    * Deletes a comparison and all its results.
    *
    * @param comparisonId - The comparison ID

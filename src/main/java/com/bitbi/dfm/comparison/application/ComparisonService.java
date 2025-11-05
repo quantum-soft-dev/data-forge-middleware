@@ -13,12 +13,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -170,61 +168,6 @@ public class ComparisonService {
     }
 
     /**
-     * T061: Creates a new file comparison asynchronously for large file sets.
-     *
-     * <p>This method is designed for large comparisons (>100 files) that may take
-     * longer than typical HTTP request timeouts. It uses Spring's @Async annotation
-     * to process the comparison in a background thread pool.
-     *
-     * <p>Workflow:
-     * <ol>
-     *   <li>Create FileComparison record with status=PENDING</li>
-     *   <li>Return immediately with comparison ID</li>
-     *   <li>Process comparison asynchronously in background thread</li>
-     *   <li>Client polls for completion via GET /api/v1/comparisons/{id}</li>
-     * </ol>
-     *
-     * <p>Benefits:
-     * <ul>
-     *   <li>Non-blocking: API responds immediately</li>
-     *   <li>Scalable: Uses bounded thread pool (max 5 concurrent)</li>
-     *   <li>Resilient: Failures logged, comparison marked as FAILED</li>
-     *   <li>Observable: Client can poll for status updates</li>
-     * </ul>
-     *
-     * @param currentBatchId the current batch ID (source)
-     * @param targetBatchId the target batch ID (comparison baseline)
-     * @param accountId the account owner ID (from JWT)
-     * @param selectedFileIds list of file IDs to compare (null = all files)
-     * @return CompletableFuture containing the comparison result
-     */
-    @Async("comparisonExecutor")
-    @Transactional
-    public CompletableFuture<FileComparison> createComparisonAsync(
-        UUID currentBatchId,
-        UUID targetBatchId,
-        UUID accountId,
-        List<UUID> selectedFileIds
-    ) {
-        log.info("[ASYNC] Creating comparison asynchronously: currentBatch={}, targetBatch={}, account={}",
-            currentBatchId, targetBatchId, accountId);
-
-        try {
-            // Perform all validation and comparison logic synchronously within the async thread
-            FileComparison result = createComparison(currentBatchId, targetBatchId, accountId, selectedFileIds);
-
-            log.info("[ASYNC] Comparison completed asynchronously: id={}, status={}",
-                result.getId(), result.getStatus());
-
-            return CompletableFuture.completedFuture(result);
-        } catch (Exception e) {
-            log.error("[ASYNC] Async comparison failed: currentBatch={}, targetBatch={}, error={}",
-                currentBatchId, targetBatchId, e.getMessage(), e);
-            return CompletableFuture.failedFuture(e);
-        }
-    }
-
-    /**
      * T056: Executes the comparison workflow for User Story 2.
      * T062: Instrumented with Micrometer @Timed annotation for performance monitoring.
      *
@@ -268,9 +211,12 @@ public class ComparisonService {
             log.info("Found {} files to compare", filesToCompare.size());
 
             // Step 3: Build target files lookup map (by filename)
-            Map<String, UploadedFile> targetFilesByName = uploadedFileRepository
-                .findByBatchId(targetBatch.getId())
-                .stream()
+            List<UploadedFile> targetFiles = uploadedFileRepository.findByBatchId(targetBatch.getId());
+            if (targetFiles.size() > 500) {
+                log.warn("Large batch detected: {} files in target batch. Memory usage may be high. Consider performance optimizations for batches >500 files.",
+                    targetFiles.size());
+            }
+            Map<String, UploadedFile> targetFilesByName = targetFiles.stream()
                 .collect(Collectors.toMap(UploadedFile::getOriginalFileName, f -> f));
 
             // Step 4: Compare each file

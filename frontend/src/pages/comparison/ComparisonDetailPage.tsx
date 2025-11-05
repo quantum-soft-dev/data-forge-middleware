@@ -223,10 +223,16 @@ export function ComparisonDetailPage(): React.ReactElement {
   const currentFile = results && results.content.length > 0 ? results.content[currentFileIndex] : null;
   const hasMultipleFiles = results && results.content.length > 1;
 
-  // Parse unifiedDiff from JSON string to object
-  const parsedDiff = currentFile?.unifiedDiff
-    ? JSON.parse(currentFile.unifiedDiff)
-    : null;
+  // Parse unifiedDiff from JSON string to object with error handling
+  const parsedDiff = React.useMemo(() => {
+    if (!currentFile?.unifiedDiff) return null;
+    try {
+      return JSON.parse(currentFile.unifiedDiff);
+    } catch (error) {
+      console.error('Failed to parse unified diff:', error);
+      return null;
+    }
+  }, [currentFile?.unifiedDiff]);
 
   return (
     <DiffViewerProvider>

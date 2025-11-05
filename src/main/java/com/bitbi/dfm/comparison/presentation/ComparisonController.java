@@ -96,14 +96,13 @@ public class ComparisonController {
      * @return 201 Created with ComparisonResponseDto
      * @throws IllegalArgumentException if validation fails (400 Bad Request)
      * @throws ComparisonService.BatchNotFoundException if batch not found (400 Bad Request)
-     * @throws ComparisonService.BatchNotCompletedException if batch not completed (400 Bad Request)
      * @throws ComparisonService.UnauthorizedAccessException if user doesn't own batch (403 Forbidden)
      */
     @PostMapping
     @Operation(
         summary = "Create a new file comparison",
         description = "Initiates a comparison between files in two upload sessions (batches). " +
-            "The user must own both batches. Both batches must be in COMPLETED status."
+            "The user must own both batches. Both batches must have files (any status allowed)."
     )
     @ApiResponses({
         @ApiResponse(
