@@ -157,7 +157,8 @@ export function useBatchDetails(batchId: string) {
 export function useBatchErrors(
   batchId: string,
   page: number = 0,
-  size: number = 20
+  size: number = 20,
+  options?: { enabled?: boolean }
 ) {
   return useQuery({
     queryKey: batchKeys.errors(batchId, page, size),
@@ -174,7 +175,7 @@ export function useBatchErrors(
     // Don't refetch on window focus (error list is static)
     refetchOnWindowFocus: false,
 
-    // Enable query only if batchId is provided
-    enabled: Boolean(batchId),
+    // Enable query only if batchId is provided and not explicitly disabled
+    enabled: options?.enabled !== undefined ? options.enabled : Boolean(batchId),
   });
 }

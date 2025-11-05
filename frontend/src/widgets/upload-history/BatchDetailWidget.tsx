@@ -7,7 +7,6 @@
  * Feature: 008-upload-history-user (User Story 2)
  */
 
-import { useState } from 'react';
 import { useBatchDetails } from '@/entities/batch/api/queries';
 import { BatchDetailView } from '@/features/upload-history/ui/BatchDetailView';
 
@@ -23,7 +22,6 @@ interface BatchDetailWidgetProps {
  */
 export function BatchDetailWidget({ batchId, onBack }: BatchDetailWidgetProps) {
   const { data: batch, isLoading, error } = useBatchDetails(batchId);
-  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
 
   return (
     <BatchDetailView
@@ -31,7 +29,6 @@ export function BatchDetailWidget({ batchId, onBack }: BatchDetailWidgetProps) {
       isLoading={isLoading}
       error={error?.message ?? null}
       onBack={onBack}
-      onFileSelectionChange={setSelectedFileIds}
     />
   );
 }

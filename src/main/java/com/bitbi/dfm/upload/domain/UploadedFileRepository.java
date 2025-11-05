@@ -14,6 +14,8 @@ public interface UploadedFileRepository {
 
     Optional<UploadedFile> findById(UUID id);
 
+    List<UploadedFile> findAllById(Iterable<UUID> ids);
+
     List<UploadedFile> findByBatchId(UUID batchId);
 
     boolean existsByBatchIdAndOriginalFileName(UUID batchId, String fileName);

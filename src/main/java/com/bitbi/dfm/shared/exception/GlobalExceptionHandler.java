@@ -605,6 +605,127 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle BatchNotFoundException (400 Bad Request).
+     * Thrown when a batch does not exist or is not in the expected state.
+     */
+    @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.BatchNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleBatchNotFound(
+            com.bitbi.dfm.comparison.application.ComparisonService.BatchNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Batch not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle BatchNotCompletedException (400 Bad Request).
+     *
+     * <p><strong>DEPRECATED (2025-11-03):</strong> This exception is no longer thrown after business rule change.
+     * Batches no longer need to be COMPLETED to be compared. This handler is kept for backward compatibility
+     * in case the exception class is still referenced elsewhere.
+     *
+     * <p>Previous behavior: Thrown when a batch exists but is not in COMPLETED status.
+     * <p>Current behavior: Batches with any status can be compared if they have files.
+     *
+     * @deprecated Since 2025-11-03. Will be removed in next major version.
+     */
+    @Deprecated
+    @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.BatchNotCompletedException.class)
+    public ResponseEntity<ErrorResponseDto> handleBatchNotCompleted(
+            com.bitbi.dfm.comparison.application.ComparisonService.BatchNotCompletedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("[DEPRECATED] Batch not completed exception thrown (this should not happen after business rule change): {}",
+            ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle ComparisonService.UnauthorizedAccessException (403 Forbidden).
+     * Thrown when user tries to access a resource they don't own.
+     */
+    @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.UnauthorizedAccessException.class)
+    public ResponseEntity<ErrorResponseDto> handleComparisonUnauthorized(
+            com.bitbi.dfm.comparison.application.ComparisonService.UnauthorizedAccessException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Unauthorized access attempt: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle ComparisonNotFoundException (404 Not Found).
+     * Thrown when a comparison does not exist.
+     */
+    @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.ComparisonNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleComparisonNotFound(
+            com.bitbi.dfm.comparison.application.ComparisonService.ComparisonNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Comparison not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle ComparisonInProgressException (400 Bad Request).
+     * Thrown when attempting to delete a comparison that is currently IN_PROGRESS.
+     * User Story: US7 - Delete Saved Comparisons (Phase 9)
+     */
+    @ExceptionHandler(com.bitbi.dfm.comparison.application.ComparisonService.ComparisonInProgressException.class)
+    public ResponseEntity<ErrorResponseDto> handleComparisonInProgress(
+            com.bitbi.dfm.comparison.application.ComparisonService.ComparisonInProgressException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Cannot delete comparison in progress: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle generic exceptions (500 Internal Server Error).
      */
     @ExceptionHandler(Exception.class)

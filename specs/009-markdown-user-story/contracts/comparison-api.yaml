@@ -1,0 +1,852 @@
+openapi: 3.0.3
+info:
+  title: File Comparison API
+  description: |
+    API for comparing files between different upload sessions (batches).
+    Enables users to track changes across uploads by generating detailed diff results.
+  version: 1.0.0
+  contact:
+    name: Data Forge Middleware Team
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Development server
+  - url: https://api.dataforge.example.com/api/v1
+    description: Production server
+
+tags:
+  - name: Comparisons
+    description: File comparison operations
+  - name: Comparison Results
+    description: Detailed comparison results and diffs
+
+security:
+  - bearerAuth: []
+
+paths:
+  /comparisons:
+    post:
+      tags:
+        - Comparisons
+      summary: Create a new file comparison
+      description: |
+        Initiates a comparison between files in two upload sessions (batches).
+        The system compares selected files from the current batch against the target batch,
+        generating diff results for modified files, marking new files, and skipping unchanged files.
+
+        **Authorization**: User must own both batches (via JWT accountId).
+        **Prerequisites**: Both batches must have files (uploadedFilesCount > 0). *(Updated 2025-11-03: Removed COMPLETED status requirement)*
+      operationId: createComparison
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateComparisonRequest'
+            examples:
+              compare-all-files:
+                summary: Compare all files between two batches
+                value:
+                  currentBatchId: 123
+                  targetBatchId: 120
+                  fileIds: null
+              compare-selected-files:
+                summary: Compare specific files
+                value:
+                  currentBatchId: 123
+                  targetBatchId: 120
+                  fileIds: [501, 502, 503]
+      responses:
+        '201':
+          description: Comparison created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComparisonResponse'
+              example:
+                id: 45
+                currentBatchId: 123
+                targetBatchId: 120
+                accountId: 10
+                status: "IN_PROGRESS"
+                createdAt: "2025-11-03T10:30:00Z"
+                startedAt: "2025-11-03T10:30:01Z"
+                completedAt: null
+                totalFilesCompared: 0
+                filesChanged: 0
+                filesAdded: 0
+                filesUnchanged: 0
+                totalChangeSize: 0
+        '400':
+          description: Bad request (invalid input, batches incomplete, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid-batch:
+                  summary: Batch not found or has no files
+                  value:
+                    timestamp: "2025-11-03T10:30:00Z"
+                    status: 400
+                    error: "Bad Request"
+                    message: "Current batch 123 has no files to compare (uploadedFilesCount=0)"
+                    path: "/api/v1/comparisons"
+                same-batch:
+                  summary: Attempting to compare batch with itself
+                  value:
+                    timestamp: "2025-11-03T10:30:00Z"
+                    status: 400
+                    error: "Bad Request"
+                    message: "Cannot compare a batch with itself (currentBatchId = targetBatchId)"
+                    path: "/api/v1/comparisons"
+        '403':
+          description: Forbidden (user does not own one or both batches)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-11-03T10:30:00Z"
+                status: 403
+                error: "Forbidden"
+                message: "Access denied: You do not have permission to access batch 120"
+                path: "/api/v1/comparisons"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Comparisons
+      summary: List comparisons for current user
+      description: |
+        Retrieves all file comparisons created by the authenticated user.
+        Results are paginated and ordered by creation date (most recent first).
+
+        **Authorization**: User can only see their own comparisons (filtered by JWT accountId).
+      operationId: listComparisons
+      parameters:
+        - name: page
+          in: query
+          description: Page number (zero-indexed)
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          description: Page size
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: status
+          in: query
+          description: Filter by comparison status
+          required: false
+          schema:
+            type: string
+            enum: [PENDING, IN_PROGRESS, COMPLETED, FAILED]
+      responses:
+        '200':
+          description: List of comparisons
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedComparisonResponse'
+              example:
+                content:
+                  - id: 45
+                    currentBatchId: 123
+                    targetBatchId: 120
+                    accountId: 10
+                    status: "COMPLETED"
+                    createdAt: "2025-11-03T10:30:00Z"
+                    startedAt: "2025-11-03T10:30:01Z"
+                    completedAt: "2025-11-03T10:31:25Z"
+                    totalFilesCompared: 50
+                    filesChanged: 12
+                    filesAdded: 3
+                    filesUnchanged: 35
+                    totalChangeSize: 125000
+                  - id: 44
+                    currentBatchId: 122
+                    targetBatchId: 119
+                    accountId: 10
+                    status: "COMPLETED"
+                    createdAt: "2025-11-02T15:20:00Z"
+                    startedAt: "2025-11-02T15:20:01Z"
+                    completedAt: "2025-11-02T15:21:30Z"
+                    totalFilesCompared: 30
+                    filesChanged: 8
+                    filesAdded: 2
+                    filesUnchanged: 20
+                    totalChangeSize: 98000
+                page: 0
+                size: 20
+                totalElements: 25
+                totalPages: 2
+        '401':
+          description: Unauthorized (invalid or missing JWT token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /comparisons/{comparisonId}:
+    get:
+      tags:
+        - Comparisons
+      summary: Get comparison details
+      description: |
+        Retrieves detailed information about a specific comparison, including summary statistics.
+        Does not include individual file results (use /comparisons/{comparisonId}/results for that).
+
+        **Authorization**: User must own the comparison (via JWT accountId).
+      operationId: getComparison
+      parameters:
+        - name: comparisonId
+          in: path
+          description: Comparison ID
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Comparison details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComparisonResponse'
+        '403':
+          description: Forbidden (user does not own this comparison)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Comparisons
+      summary: Delete a comparison
+      description: |
+        Deletes a comparison and all its results.
+        Cannot delete comparisons in IN_PROGRESS status.
+
+        **Authorization**: User must own the comparison (via JWT accountId).
+      operationId: deleteComparison
+      parameters:
+        - name: comparisonId
+          in: path
+          description: Comparison ID
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Comparison deleted successfully
+        '400':
+          description: Bad request (comparison is in progress)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-11-03T10:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Cannot delete comparison while it is in IN_PROGRESS status"
+                path: "/api/v1/comparisons/45"
+        '403':
+          description: Forbidden (user does not own this comparison)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /comparisons/{comparisonId}/results:
+    get:
+      tags:
+        - Comparison Results
+      summary: Get comparison results
+      description: |
+        Retrieves detailed results for a specific comparison, including diffs for each file.
+        Results can be filtered by change type (e.g., only show modified files).
+
+        **Authorization**: User must own the comparison (via JWT accountId).
+      operationId: getComparisonResults
+      parameters:
+        - name: comparisonId
+          in: path
+          description: Comparison ID
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: changeType
+          in: query
+          description: Filter results by change type
+          required: false
+          schema:
+            type: string
+            enum: [ADDED, MODIFIED, UNCHANGED]
+        - name: page
+          in: query
+          description: Page number (zero-indexed)
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          description: Page size
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Comparison results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedComparisonResultResponse'
+              example:
+                content:
+                  - id: 1001
+                    comparisonId: 45
+                    fileId: 501
+                    targetFileId: 450
+                    fileName: "data.csv"
+                    targetFileName: "data.csv"
+                    changeType: "MODIFIED"
+                    lineAdditions: 25
+                    lineDeletions: 10
+                    changeSize: 1500
+                    createdAt: "2025-11-03T10:30:15Z"
+                    unifiedDiff:
+                      hunks:
+                        - oldStart: 1
+                          oldLines: 10
+                          newStart: 1
+                          newLines: 12
+                          changes:
+                            - type: "UNCHANGED"
+                              lineNumber: 1
+                              content: "header1,header2,header3"
+                            - type: "REMOVED"
+                              lineNumber: 2
+                              content: "old_value1,old_value2,old_value3"
+                            - type: "ADDED"
+                              lineNumber: 2
+                              content: "new_value1,new_value2,new_value3"
+                      oldFileName: "data.csv"
+                      newFileName: "data.csv"
+                  - id: 1002
+                    comparisonId: 45
+                    fileId: 502
+                    targetFileId: null
+                    fileName: "new_file.json"
+                    targetFileName: null
+                    changeType: "ADDED"
+                    lineAdditions: 100
+                    lineDeletions: 0
+                    changeSize: 5000
+                    createdAt: "2025-11-03T10:30:18Z"
+                    unifiedDiff:
+                      hunks:
+                        - oldStart: 0
+                          oldLines: 0
+                          newStart: 1
+                          newLines: 100
+                          changes:
+                            - type: "ADDED"
+                              lineNumber: 1
+                              content: "{"
+                            - type: "ADDED"
+                              lineNumber: 2
+                              content: "  \"key\": \"value\""
+                      oldFileName: null
+                      newFileName: "new_file.json"
+                page: 0
+                size: 50
+                totalElements: 15
+                totalPages: 1
+        '403':
+          description: Forbidden (user does not own this comparison)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /comparisons/{comparisonId}/summary:
+    get:
+      tags:
+        - Comparisons
+      summary: Get comparison summary report
+      description: |
+        Retrieves a summary report for a specific comparison, including statistics and metadata.
+        This is a lightweight alternative to fetching full comparison details.
+
+        **Authorization**: User must own the comparison (via JWT accountId).
+      operationId: getComparisonSummary
+      parameters:
+        - name: comparisonId
+          in: path
+          description: Comparison ID
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Comparison summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComparisonSummary'
+              example:
+                totalFilesCompared: 50
+                filesChanged: 12
+                filesAdded: 3
+                filesUnchanged: 35
+                totalChangeSize: 125000
+                comparisonTimestamp: "2025-11-03T10:31:25Z"
+                currentBatchId: 123
+                targetBatchId: 120
+        '403':
+          description: Forbidden (user does not own this comparison)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Comparison not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from authentication endpoint
+
+  schemas:
+    CreateComparisonRequest:
+      type: object
+      required:
+        - currentBatchId
+        - targetBatchId
+      properties:
+        currentBatchId:
+          type: integer
+          format: int64
+          description: ID of the current upload session (source)
+          example: 123
+        targetBatchId:
+          type: integer
+          format: int64
+          description: ID of the target upload session (baseline for comparison)
+          example: 120
+        fileIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          nullable: true
+          description: |
+            Optional list of file IDs to compare. If null or empty, all files in current batch are compared.
+          example: [501, 502, 503]
+
+    ComparisonResponse:
+      type: object
+      required:
+        - id
+        - currentBatchId
+        - targetBatchId
+        - accountId
+        - status
+        - createdAt
+        - totalFilesCompared
+        - filesChanged
+        - filesAdded
+        - filesUnchanged
+        - totalChangeSize
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Unique comparison identifier
+          example: 45
+        currentBatchId:
+          type: integer
+          format: int64
+          description: Current batch ID
+          example: 123
+        targetBatchId:
+          type: integer
+          format: int64
+          description: Target batch ID
+          example: 120
+        accountId:
+          type: integer
+          format: int64
+          description: Account owner ID
+          example: 10
+        status:
+          type: string
+          enum: [PENDING, IN_PROGRESS, COMPLETED, FAILED]
+          description: Current comparison status
+          example: "COMPLETED"
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when comparison was created
+          example: "2025-11-03T10:30:00Z"
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when comparison processing started
+          example: "2025-11-03T10:30:01Z"
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when comparison completed (success or failure)
+          example: "2025-11-03T10:31:25Z"
+        totalFilesCompared:
+          type: integer
+          description: Total number of files processed
+          example: 50
+        filesChanged:
+          type: integer
+          description: Number of files with changes detected
+          example: 12
+        filesAdded:
+          type: integer
+          description: Number of new files (not in target batch)
+          example: 3
+        filesUnchanged:
+          type: integer
+          description: Number of files with no changes
+          example: 35
+        totalChangeSize:
+          type: integer
+          format: int64
+          description: Total size of changes in bytes
+          example: 125000
+        errorMessage:
+          type: string
+          nullable: true
+          description: Error details if status = FAILED
+          example: null
+
+    ComparisonResultResponse:
+      type: object
+      required:
+        - id
+        - comparisonId
+        - fileId
+        - fileName
+        - changeType
+        - lineAdditions
+        - lineDeletions
+        - changeSize
+        - createdAt
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Unique result identifier
+          example: 1001
+        comparisonId:
+          type: integer
+          format: int64
+          description: Parent comparison ID
+          example: 45
+        fileId:
+          type: integer
+          format: int64
+          description: Current file ID
+          example: 501
+        targetFileId:
+          type: integer
+          format: int64
+          nullable: true
+          description: Target file ID (null if file is new)
+          example: 450
+        fileName:
+          type: string
+          description: Current file name
+          example: "data.csv"
+        targetFileName:
+          type: string
+          nullable: true
+          description: Target file name (null if file is new)
+          example: "data.csv"
+        changeType:
+          type: string
+          enum: [ADDED, MODIFIED, UNCHANGED]
+          description: Type of change detected
+          example: "MODIFIED"
+        lineAdditions:
+          type: integer
+          description: Number of lines added
+          example: 25
+        lineDeletions:
+          type: integer
+          description: Number of lines deleted
+          example: 10
+        changeSize:
+          type: integer
+          format: int64
+          description: Size of changes in bytes
+          example: 1500
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when result was created
+          example: "2025-11-03T10:30:15Z"
+        unifiedDiff:
+          $ref: '#/components/schemas/UnifiedDiff'
+          nullable: true
+          description: Structured diff data (null if changeType = UNCHANGED)
+
+    UnifiedDiff:
+      type: object
+      properties:
+        hunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiffHunk'
+          description: List of diff hunks (sections with changes)
+        oldFileName:
+          type: string
+          nullable: true
+          description: Original file name
+          example: "data.csv"
+        newFileName:
+          type: string
+          description: New file name
+          example: "data.csv"
+
+    DiffHunk:
+      type: object
+      properties:
+        oldStart:
+          type: integer
+          description: Starting line number in old file
+          example: 1
+        oldLines:
+          type: integer
+          description: Number of lines in old file section
+          example: 10
+        newStart:
+          type: integer
+          description: Starting line number in new file
+          example: 1
+        newLines:
+          type: integer
+          description: Number of lines in new file section
+          example: 12
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiffChange'
+          description: List of changes in this hunk
+
+    DiffChange:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [ADDED, REMOVED, UNCHANGED]
+          description: Type of change for this line
+          example: "ADDED"
+        lineNumber:
+          type: integer
+          description: Line number in the respective file
+          example: 2
+        content:
+          type: string
+          description: Line content
+          example: "new_value1,new_value2,new_value3"
+
+    ComparisonSummary:
+      type: object
+      required:
+        - totalFilesCompared
+        - filesChanged
+        - filesAdded
+        - filesUnchanged
+        - totalChangeSize
+        - comparisonTimestamp
+        - currentBatchId
+        - targetBatchId
+      properties:
+        totalFilesCompared:
+          type: integer
+          description: Total number of files processed
+          example: 50
+        filesChanged:
+          type: integer
+          description: Number of files with changes
+          example: 12
+        filesAdded:
+          type: integer
+          description: Number of new files
+          example: 3
+        filesUnchanged:
+          type: integer
+          description: Number of unchanged files
+          example: 35
+        totalChangeSize:
+          type: integer
+          format: int64
+          description: Total size of changes in bytes
+          example: 125000
+        comparisonTimestamp:
+          type: string
+          format: date-time
+          description: Timestamp when comparison completed
+          example: "2025-11-03T10:31:25Z"
+        currentBatchId:
+          type: integer
+          format: int64
+          description: Current batch ID
+          example: 123
+        targetBatchId:
+          type: integer
+          format: int64
+          description: Target batch ID
+          example: 120
+
+    PagedComparisonResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComparisonResponse'
+          description: List of comparisons
+        page:
+          type: integer
+          description: Current page number (zero-indexed)
+          example: 0
+        size:
+          type: integer
+          description: Page size
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of comparisons
+          example: 25
+        totalPages:
+          type: integer
+          description: Total number of pages
+          example: 2
+
+    PagedComparisonResultResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComparisonResultResponse'
+          description: List of comparison results
+        page:
+          type: integer
+          description: Current page number (zero-indexed)
+          example: 0
+        size:
+          type: integer
+          description: Page size
+          example: 50
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of results
+          example: 15
+        totalPages:
+          type: integer
+          description: Total number of pages
+          example: 1
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when error occurred
+          example: "2025-11-03T10:30:00Z"
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        error:
+          type: string
+          description: HTTP status text
+          example: "Bad Request"
+        message:
+          type: string
+          description: Detailed error message
+          example: "Current batch 123 has no files to compare (uploadedFilesCount=0)"
+        path:
+          type: string
+          description: Request path that caused the error
+          example: "/api/v1/comparisons"

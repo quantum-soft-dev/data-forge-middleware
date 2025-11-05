@@ -59,6 +59,14 @@ export function DownloadButton({
     batchStatus !== 'COMPLETED' ||
     isPending;
 
+  console.log('[DownloadButton] Props:', {
+    batchId,
+    selectedFileIds,
+    batchStatus,
+    isPending,
+    isDisabled,
+  });
+
   // Handle download click
   const handleDownload = () => {
     download(
