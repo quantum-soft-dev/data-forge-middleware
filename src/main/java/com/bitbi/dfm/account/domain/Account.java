@@ -60,8 +60,8 @@ public class Account {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
-    @Column(name = "keycloak_user_id", length = 36, unique = true)
-    private String keycloakUserId;
+    @Column(name = "identity_provider_user_id", length = 64, unique = true)
+    private String identityProviderUserId;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -73,14 +73,14 @@ public class Account {
      * Private constructor for JPA.
      */
     protected Account(UUID id, String email, String name, Phone phone, Company company,
-                      Boolean isActive, String keycloakUserId, LocalDateTime createdAt, LocalDateTime updatedAt) {
+                      Boolean isActive, String identityProviderUserId, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.email = email;
         this.name = name;
         this.phone = phone;
         this.company = company;
         this.isActive = isActive;
-        this.keycloakUserId = keycloakUserId;
+        this.identityProviderUserId = identityProviderUserId;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -114,23 +114,27 @@ public class Account {
     }
 
     /**
-     * Create new account with Keycloak integration.
+     * Create new account with identity provider integration (Auth0, Keycloak, etc.).
      * This is the preferred factory method for new accounts going forward.
      *
-     * @param keycloakUserId Keycloak user UUID
+     * @param identityProviderUserId Identity provider user ID (Auth0 user ID or Keycloak UUID)
      * @param email   user's email address
      * @param name    user's display name
      * @param phone   user's phone number (optional)
      * @param company user's company name (optional)
-     * @return new Account instance with Keycloak linkage
-     * @throws IllegalArgumentException if keycloakUserId is invalid or other params fail validation
+     * @return new Account instance with identity provider linkage
+     * @throws IllegalArgumentException if identityProviderUserId is invalid or other params fail validation
      */
-    public static Account createWithKeycloak(String keycloakUserId, String email,
+    public static Account createWithIdentityProvider(String identityProviderUserId, String email,
                                               String name, String phone, String company) {
-        Objects.requireNonNull(keycloakUserId, "Keycloak user ID cannot be null for new accounts");
+        Objects.requireNonNull(identityProviderUserId, "Identity provider user ID cannot be null for new accounts");
 
-        if (!keycloakUserId.matches("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) {
-            throw new IllegalArgumentException("Invalid Keycloak user ID format (must be UUID): " + keycloakUserId);
+        if (identityProviderUserId.isBlank()) {
+            throw new IllegalArgumentException("Identity provider user ID cannot be blank");
+        }
+
+        if (identityProviderUserId.length() > 64) {
+            throw new IllegalArgumentException("Identity provider user ID cannot exceed 64 characters");
         }
 
         Objects.requireNonNull(email, "Email cannot be null");
@@ -147,7 +151,17 @@ public class Account {
         Company companyVO = Company.of(company);
 
         return new Account(id, email.toLowerCase().trim(), name.trim(),
-                          phoneVO, companyVO, true, keycloakUserId, now, now);
+                          phoneVO, companyVO, true, identityProviderUserId, now, now);
+    }
+
+    /**
+     * @deprecated Use {@link #createWithIdentityProvider(String, String, String, String, String)} instead.
+     * Kept for backwards compatibility during migration.
+     */
+    @Deprecated(since = "1.0.0", forRemoval = true)
+    public static Account createWithKeycloak(String keycloakUserId, String email,
+                                              String name, String phone, String company) {
+        return createWithIdentityProvider(keycloakUserId, email, name, phone, company);
     }
 
     /**
@@ -210,34 +224,56 @@ public class Account {
     }
 
     /**
-     * Associate existing account with Keycloak user (for gradual migration).
+     * Associate existing account with identity provider user (for gradual migration).
      *
-     * @param keycloakUserId Keycloak user UUID
-     * @throws IllegalArgumentException if keycloakUserId format is invalid
-     * @throws IllegalStateException if account is already linked to Keycloak
+     * @param identityProviderUserId Identity provider user ID (Auth0 or Keycloak)
+     * @throws IllegalArgumentException if identityProviderUserId is invalid
+     * @throws IllegalStateException if account is already linked to an identity provider
      */
-    public void linkToKeycloak(String keycloakUserId) {
-        Objects.requireNonNull(keycloakUserId, "Keycloak user ID cannot be null");
+    public void linkIdentityProvider(String identityProviderUserId) {
+        Objects.requireNonNull(identityProviderUserId, "Identity provider user ID cannot be null");
 
-        if (this.keycloakUserId != null) {
-            throw new IllegalStateException("Account is already linked to Keycloak user: " + this.keycloakUserId);
+        if (this.identityProviderUserId != null) {
+            throw new IllegalStateException("Account is already linked to identity provider user: " + this.identityProviderUserId);
         }
 
-        if (!keycloakUserId.matches("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) {
-            throw new IllegalArgumentException("Invalid Keycloak user ID format (must be UUID): " + keycloakUserId);
+        if (identityProviderUserId.isBlank()) {
+            throw new IllegalArgumentException("Identity provider user ID cannot be blank");
         }
 
-        this.keycloakUserId = keycloakUserId;
+        if (identityProviderUserId.length() > 64) {
+            throw new IllegalArgumentException("Identity provider user ID cannot exceed 64 characters");
+        }
+
+        this.identityProviderUserId = identityProviderUserId;
         this.updatedAt = LocalDateTime.now();
     }
 
     /**
-     * Check if account is integrated with Keycloak.
-     *
-     * @return true if account has Keycloak user ID
+     * @deprecated Use {@link #linkIdentityProvider(String)} instead.
+     * Kept for backwards compatibility during migration.
      */
+    @Deprecated(since = "1.0.0", forRemoval = true)
+    public void linkToKeycloak(String keycloakUserId) {
+        linkIdentityProvider(keycloakUserId);
+    }
+
+    /**
+     * Check if account is integrated with an identity provider (Auth0, Keycloak, etc.).
+     *
+     * @return true if account has identity provider user ID
+     */
+    public boolean hasIdentityProviderIntegration() {
+        return identityProviderUserId != null;
+    }
+
+    /**
+     * @deprecated Use {@link #hasIdentityProviderIntegration()} instead.
+     * Kept for backwards compatibility during migration.
+     */
+    @Deprecated(since = "1.0.0", forRemoval = true)
     public boolean hasKeycloakIntegration() {
-        return keycloakUserId != null;
+        return hasIdentityProviderIntegration();
     }
 
     /**

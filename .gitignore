@@ -42,6 +42,8 @@ target/
 # Environment files
 .env
 *.env
+application-auth0.yml
+auth0.properties
 
 # Logs
 logs/
