@@ -1,6 +1,7 @@
 package com.bitbi.dfm.integration;
 
 import com.auth0.client.mgmt.ManagementAPI;
+import com.auth0.client.mgmt.UsersEntity;
 import com.auth0.exception.Auth0Exception;
 import com.auth0.exception.APIException;
 import com.auth0.json.mgmt.users.User;
@@ -71,7 +72,7 @@ class Auth0UserCreationIntegrationTest {
 
     private static final String MOCK_AUTH0_USER_ID = "auth0|60f7b8a8b4a0f10074c5d0e1";
 
-    private ManagementAPI.UsersEntity mockUsersEntity;
+    private UsersEntity mockUsersEntity;
     private Request<User> mockCreateUserRequest;
     private Request<User> mockUpdateUserRequest;
     private Request<Void> mockDeleteUserRequest;
@@ -80,7 +81,7 @@ class Auth0UserCreationIntegrationTest {
     @SuppressWarnings("unchecked")
     void setUp() throws Exception {
         // Create mock entities for ManagementAPI
-        mockUsersEntity = mock(ManagementAPI.UsersEntity.class);
+        mockUsersEntity = mock(UsersEntity.class);
         mockCreateUserRequest = mock(Request.class);
         mockUpdateUserRequest = mock(Request.class);
         mockDeleteUserRequest = mock(Request.class);
@@ -153,7 +154,7 @@ class Auth0UserCreationIntegrationTest {
         assertThat(account.getName()).isEqualTo(name);
         assertThat(account.getPhone()).isEqualTo(phone);
         assertThat(account.getCompany()).isEqualTo(company);
-        assertThat(account.isActive()).isTrue();
+        assertThat(account.getIsActive()).isTrue();
         assertThat(account.getIdentityProviderUserId()).isEqualTo(MOCK_AUTH0_USER_ID);
 
         // Verify: PostgreSQL persistence

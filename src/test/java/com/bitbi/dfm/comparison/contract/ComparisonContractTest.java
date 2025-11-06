@@ -38,7 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
+@Import({TestSecurityConfig.class, TestS3Config.class})
 @Sql("/test-data.sql")
 @DisplayName("File Comparison API Contract Tests (User Story 1)")
 class ComparisonContractTest {

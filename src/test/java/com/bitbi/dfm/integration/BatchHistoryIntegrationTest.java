@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
     "keycloak.enabled=false"  // Disable Keycloak for integration tests
 })
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
+@Import({TestSecurityConfig.class})
 @Testcontainers
 @Sql("/test-data.sql")
 @DisplayName("Upload History Integration Tests (Testcontainers)")

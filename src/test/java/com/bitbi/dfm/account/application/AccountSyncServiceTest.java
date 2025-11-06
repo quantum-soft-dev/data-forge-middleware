@@ -188,7 +188,7 @@ class AccountSyncServiceTest {
     void shouldThrowExceptionWhenAccountExists() {
         // Given
         String email = "existing@example.com";
-        Account existingAccount = new Account(email, "Existing User");
+        Account existingAccount = Account.create(email, "Existing User", null, null);
 
         when(accountRepository.findByEmail(email)).thenReturn(Optional.of(existingAccount));
 
@@ -294,7 +294,7 @@ class AccountSyncServiceTest {
         }
 
         @Override
-        public java.util.Map<String, java.util.List<String>> getHeaders() {
+        public java.util.Map<String, String> getHeaders() {
             return java.util.Collections.emptyMap();
         }
     }

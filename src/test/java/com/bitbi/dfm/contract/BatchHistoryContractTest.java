@@ -37,7 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
+@Import({TestSecurityConfig.class, TestS3Config.class})
 @Sql("/test-data.sql")
 @DisplayName("Upload History API Contract Tests (User Story 1)")
 class BatchHistoryContractTest {

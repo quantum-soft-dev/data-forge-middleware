@@ -44,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
+@Import({TestSecurityConfig.class})
 @Sql("/test-data.sql")
 @DisplayName("Security Filter Chain Contract Tests")
 class SecurityFilterChainTest {

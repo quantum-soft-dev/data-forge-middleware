@@ -1,6 +1,7 @@
 package com.bitbi.dfm.contract;
 
 import com.auth0.client.mgmt.ManagementAPI;
+import com.auth0.client.mgmt.UsersEntity;
 import com.auth0.exception.Auth0Exception;
 import com.auth0.json.mgmt.users.User;
 import com.auth0.net.Request;
@@ -67,7 +68,7 @@ class Auth0AdminContractTest {
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
     private static final String MOCK_AUTH0_USER_ID = "auth0|60f7b8a8b4a0f10074c5d0e1";
 
-    private ManagementAPI.UsersEntity mockUsersEntity;
+    private UsersEntity mockUsersEntity;
     private Request<User> mockCreateUserRequest;
     private Request<User> mockUpdateUserRequest;
     private Request<Void> mockDeleteUserRequest;
@@ -76,7 +77,7 @@ class Auth0AdminContractTest {
     @SuppressWarnings("unchecked")
     void setUp() throws Exception {
         // Create mock entities for ManagementAPI
-        mockUsersEntity = mock(ManagementAPI.UsersEntity.class);
+        mockUsersEntity = mock(UsersEntity.class);
         mockCreateUserRequest = mock(Request.class);
         mockUpdateUserRequest = mock(Request.class);
         mockDeleteUserRequest = mock(Request.class);

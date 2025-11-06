@@ -29,7 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
+@Import({TestSecurityConfig.class})
 @Sql("/test-data.sql")
 public abstract class BaseIntegrationTest {
 
