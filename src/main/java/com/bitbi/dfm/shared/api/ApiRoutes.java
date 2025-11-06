@@ -261,12 +261,21 @@ public final class ApiRoutes {
 
     // Sites
     /**
-     * Base path for site management endpoints.
+     * Base path for site management endpoints (Admin).
      * <p>
      * Requires: ROLE_ADMIN (Keycloak)
      * </p>
      */
     public static final String SITES = ADMIN_API_BASE + "/sites";
+
+    /**
+     * Base path for user site management endpoints.
+     * <p>
+     * Requires: Authenticated user with Keycloak JWT containing accountId claim<br>
+     * Users can only manage their own sites
+     * </p>
+     */
+    public static final String SITES_USER = ADMIN_API_BASE + "/account/sites";
 
     /**
      * Site by ID endpoint.

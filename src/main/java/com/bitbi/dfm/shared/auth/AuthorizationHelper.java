@@ -1,5 +1,7 @@
 package com.bitbi.dfm.shared.auth;
 
+import com.bitbi.dfm.account.domain.Account;
+import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter.JwtAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -21,6 +23,12 @@ import java.util.UUID;
  */
 @Component
 public class AuthorizationHelper {
+
+    private final AccountRepository accountRepository;
+
+    public AuthorizationHelper(AccountRepository accountRepository) {
+        this.accountRepository = accountRepository;
+    }
 
     /**
      * Get the authenticated site ID from security context.
@@ -106,14 +114,34 @@ public class AuthorizationHelper {
                     return UUID.fromString(subject);
                 } catch (IllegalArgumentException e) {
                     // Subject is not a UUID (probably Keycloak user ID)
-                    // This is expected - need to configure Keycloak mapper
+                    // Continue to Strategy 4 (database lookup)
                 }
             }
 
-            // If we reach here, accountId is not configured in Keycloak JWT
+            // Strategy 4: Look up account by email in database
+            // This is the fallback strategy when accountId is not in JWT claims
+            String email = jwt.getClaimAsString("email");
+            if (email == null || email.isEmpty()) {
+                email = jwt.getClaimAsString("preferred_username");
+            }
+
+            if (email != null && !email.isEmpty()) {
+                Account account = accountRepository.findByEmail(email).orElse(null);
+                if (account != null) {
+                    return account.getId();
+                } else {
+                    throw new UnauthorizedException(
+                        "Account not found for email: " + email + ". " +
+                        "User must have a registered account to access this resource."
+                    );
+                }
+            }
+
+            // If we reach here, accountId is not configured in Keycloak JWT and no email found
             // Log available claims for debugging
             throw new UnauthorizedException(
-                "Account ID not found in JWT token. Please configure Keycloak user mapper to include 'accountId' attribute. " +
+                "Account ID not found in JWT token. Please configure Keycloak user mapper to include 'accountId' attribute " +
+                "or ensure 'email' claim is present for database lookup. " +
                 "Available claims: " + jwt.getClaims().keySet()
             );
         }

@@ -9,8 +9,10 @@
 
 import { apiClient } from '@/shared/api/client';
 import {
-  SITES,
-  SITES_ID,
+  SITES_USER,
+  SITES_USER_ID,
+  SITES_USER_ACTIVATE,
+  SITES_USER_DEACTIVATE,
   SITES_BY_ACCOUNT,
   SITES_CREATE,
   SITES_ACTIVATE,
@@ -26,65 +28,63 @@ import type { Site, CreateSiteRequest, CreateSiteResponse } from '../model/types
 /**
  * List all sites (both active and inactive) for the authenticated user.
  *
- * GET /api/v1/sites
+ * GET /api/v1/account/sites
  *
  * @returns List of all sites sorted by creation date (newest first)
  */
 export async function listUserSites(): Promise<Site[]> {
-  const response = await apiClient.get<Site[]>(SITES);
+  const response = await apiClient.get<Site[]>(SITES_USER);
   return response.data;
 }
 
 /**
  * Create a new site for the authenticated user.
  *
- * POST /api/v1/sites
+ * POST /api/v1/account/sites
  *
  * @param request - Site creation request (domain + password)
  * @returns Created site with plaintext password (only returned once)
  */
 export async function createUserSite(request: CreateSiteRequest): Promise<CreateSiteResponse> {
-  const response = await apiClient.post<CreateSiteResponse>(SITES, request);
+  const response = await apiClient.post<CreateSiteResponse>(SITES_USER, request);
   return response.data;
 }
 
 /**
  * Deactivate a site (user operation).
  *
- * POST /api/v1/sites/{siteId}/deactivate
+ * POST /api/v1/account/sites/{siteId}/deactivate
  *
  * @param siteId - Site identifier
  * @returns Updated site entity
  */
 export async function deactivateUserSite(siteId: string): Promise<Site> {
-  // Note: User operations use /sites/{id}/deactivate, not account-scoped path
-  const response = await apiClient.post<Site>(`${SITES}/${siteId}/deactivate`);
+  const response = await apiClient.post<Site>(SITES_USER_DEACTIVATE(siteId));
   return response.data;
 }
 
 /**
  * Activate a site (user operation).
  *
- * POST /api/v1/sites/{siteId}/activate
+ * POST /api/v1/account/sites/{siteId}/activate
  *
  * @param siteId - Site identifier
  * @returns Updated site entity
  */
 export async function activateUserSite(siteId: string): Promise<Site> {
-  // Note: User operations use /sites/{id}/activate, not account-scoped path
-  const response = await apiClient.post<Site>(`${SITES}/${siteId}/activate`);
+  const response = await apiClient.post<Site>(SITES_USER_ACTIVATE(siteId));
   return response.data;
 }
 
 /**
  * Delete a site (soft delete, user operation).
  *
- * DELETE /api/v1/sites/{siteId}
+ * DELETE /api/v1/account/sites/{siteId}
  *
  * @param siteId - Site identifier
  */
 export async function deleteUserSite(siteId: string): Promise<void> {
-  await apiClient.delete(SITES_ID(siteId));
+  await apiClient.delete(SITES_USER_ID(siteId));
 }
 
 /**

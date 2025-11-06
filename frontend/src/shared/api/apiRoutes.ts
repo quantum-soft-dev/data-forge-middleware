@@ -64,7 +64,13 @@ export const ACCOUNTS_RESET_PASSWORD = (id: string) => `${ACCOUNTS}/${id}/reset-
 export const ACCOUNTS_AUDIT_LOGS = (id: string) => `${ACCOUNTS}/${id}/audit-logs`;
 export const ACCOUNTS_WITH_KEYCLOAK_ID = (id: string) => `${ACCOUNTS}/${id}/with-keycloak`;
 
-// Sites
+// Sites (User-facing)
+export const SITES_USER = `${ADMIN_API_BASE}/account/sites`;
+export const SITES_USER_ID = (id: string) => `${SITES_USER}/${id}`;
+export const SITES_USER_ACTIVATE = (id: string) => `${SITES_USER}/${id}/activate`;
+export const SITES_USER_DEACTIVATE = (id: string) => `${SITES_USER}/${id}/deactivate`;
+
+// Sites (Admin)
 export const SITES = `${ADMIN_API_BASE}/sites`;
 export const SITES_ID = (id: string) => `${SITES}/${id}`;
 export const SITES_STATISTICS = (id: string) => `${SITES}/${id}/statistics`;
