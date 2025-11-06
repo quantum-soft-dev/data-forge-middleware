@@ -52,13 +52,13 @@ public record AccountResponseDto(
             account.getId(),
             account.getEmail(),
             account.getName(),
-            account.getPhone(),
-            account.getCompany(),
-            account.isActive(),
+            account.getPhone() != null ? account.getPhone().getValue() : null,
+            account.getCompany() != null ? account.getCompany().getValue() : null,
+            account.getIsActive(),
             account.getIdentityProviderUserId(),
             null, // No temporary password for list operations
             null, // No password reset URL for list operations
-            account.getCreatedAt()
+            Instant.ofEpochSecond(account.getCreatedAt().toEpochSecond(java.time.ZoneOffset.UTC))
         );
     }
 
@@ -78,13 +78,13 @@ public record AccountResponseDto(
             account.getId(),
             account.getEmail(),
             account.getName(),
-            account.getPhone(),
-            account.getCompany(),
-            account.isActive(),
+            account.getPhone() != null ? account.getPhone().getValue() : null,
+            account.getCompany() != null ? account.getCompany().getValue() : null,
+            account.getIsActive(),
             account.getIdentityProviderUserId(),
             temporaryPassword,
             null, // No URL when returning temporary password
-            account.getCreatedAt()
+            Instant.ofEpochSecond(account.getCreatedAt().toEpochSecond(java.time.ZoneOffset.UTC))
         );
     }
 
@@ -104,13 +104,13 @@ public record AccountResponseDto(
             account.getId(),
             account.getEmail(),
             account.getName(),
-            account.getPhone(),
-            account.getCompany(),
-            account.isActive(),
+            account.getPhone() != null ? account.getPhone().getValue() : null,
+            account.getCompany() != null ? account.getCompany().getValue() : null,
+            account.getIsActive(),
             account.getIdentityProviderUserId(),
             null, // No temporary password when returning URL
             passwordResetUrl,
-            account.getCreatedAt()
+            Instant.ofEpochSecond(account.getCreatedAt().toEpochSecond(java.time.ZoneOffset.UTC))
         );
     }
 }

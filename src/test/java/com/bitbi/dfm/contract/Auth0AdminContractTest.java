@@ -6,6 +6,7 @@ import com.auth0.json.mgmt.users.User;
 import com.auth0.net.Request;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -131,7 +132,7 @@ class Auth0AdminContractTest {
             "company", "Acme Corp"
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -170,7 +171,7 @@ class Auth0AdminContractTest {
             "name", "John Doe"
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -201,7 +202,7 @@ class Auth0AdminContractTest {
             "name", "Duplicate User"
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -230,7 +231,7 @@ class Auth0AdminContractTest {
             // Missing 'name' field
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -259,7 +260,7 @@ class Auth0AdminContractTest {
             "name", "Test User"
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
             .andExpect(status().isUnauthorized());
@@ -284,7 +285,7 @@ class Auth0AdminContractTest {
             "name", "Test User"
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -311,7 +312,7 @@ class Auth0AdminContractTest {
             "phone", "invalid-phone"
         );
 
-        mockMvc.perform(post("/api/v1/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))

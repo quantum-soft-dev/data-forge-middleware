@@ -133,7 +133,7 @@ public class Auth0TokenProvider {
             this.cachedToken = tokenHolder.getAccessToken();
 
             // Calculate expiry: current time + expires_in - buffer
-            long expiresIn = tokenHolder.getExpiresIn() != null
+            long expiresIn = tokenHolder.getExpiresIn() > 0
                     ? tokenHolder.getExpiresIn()
                     : 86400; // Default 24 hours
 

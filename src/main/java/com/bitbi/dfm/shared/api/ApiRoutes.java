@@ -12,7 +12,7 @@ package com.bitbi.dfm.shared.api;
  * </p>
  * <ul>
  *   <li><b>Device API</b> ({@code /api/v1/device/*}): For client devices using Custom JWT authentication</li>
- *   <li><b>UI/Admin API</b> ({@code /api/v1/*}): For web interface using Keycloak OAuth2 authentication</li>
+ *   <li><b>UI/Admin API</b> ({@code /api/v1/*}): For web interface using Auth0 OAuth2 authentication</li>
  * </ul>
  *
  * @since 1.0.0
@@ -180,7 +180,7 @@ public final class ApiRoutes {
      * Base path for UI/Admin API endpoints.
      * <p>
      * All admin and user-facing endpoints (for web interface, admin dashboard)
-     * are under this base path and use Keycloak OAuth2 authentication.
+     * are under this base path and use Auth0 OAuth2 authentication.
      * </p>
      */
     public static final String ADMIN_API_BASE = "/api/v1";
@@ -189,28 +189,28 @@ public final class ApiRoutes {
     /**
      * Base path for account management endpoints.
      * <p>
-     * Requires: ROLE_ADMIN (Keycloak)
+     * Requires: ROLE_ADMIN (Auth0)
      * </p>
      */
     public static final String ACCOUNTS = ADMIN_API_BASE + "/accounts";
 
     /**
-     * List accounts with Keycloak integration endpoint.
+     * Create account endpoint.
      * <p>
-     * Method: GET<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
-     * Query Params: search (optional)<br>
-     * Returns: PageResponseDto&lt;AccountResponseDto&gt;
+     * Method: POST<br>
+     * Authentication: OAuth2 (ROLE_ADMIN)<br>
+     * Request Body: CreateAccountRequestDto<br>
+     * Returns: AccountResponseDto with temporary password
      * </p>
      */
-    public static final String ACCOUNTS_WITH_KEYCLOAK = ACCOUNTS + "/with-keycloak";
+    public static final String ACCOUNTS_CREATE = ACCOUNTS;
 
     /**
      * Account by ID endpoint.
      * <p>
      * Methods: GET, PUT, DELETE<br>
      * Path Variable: {id} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
      * </p>
      */
     public static final String ACCOUNTS_ID = ACCOUNTS + "/{id}";
@@ -220,7 +220,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variable: {id} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: AccountResponseDto
      * </p>
      */
@@ -231,7 +231,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variable: {id} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: AccountResponseDto
      * </p>
      */
@@ -242,7 +242,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variable: {id} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: Temporary password
      * </p>
      */
@@ -253,7 +253,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {id} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: List&lt;AdminActionLog&gt;
      * </p>
      */
@@ -263,7 +263,7 @@ public final class ApiRoutes {
     /**
      * Base path for site management endpoints (Admin).
      * <p>
-     * Requires: ROLE_ADMIN (Keycloak)
+     * Requires: ROLE_ADMIN (Auth0)
      * </p>
      */
     public static final String SITES = ADMIN_API_BASE + "/sites";
@@ -271,7 +271,7 @@ public final class ApiRoutes {
     /**
      * Base path for user site management endpoints.
      * <p>
-     * Requires: Authenticated user with Keycloak JWT containing accountId claim<br>
+     * Requires: Authenticated user with Auth0 JWT containing accountId claim<br>
      * Users can only manage their own sites
      * </p>
      */
@@ -282,7 +282,7 @@ public final class ApiRoutes {
      * <p>
      * Methods: GET, PUT, DELETE<br>
      * Path Variable: {id} - Site ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
      * </p>
      */
     public static final String SITES_ID = SITES + "/{id}";
@@ -292,7 +292,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {id} - Site ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: Site statistics
      * </p>
      */
@@ -303,7 +303,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {accountId} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: List&lt;SiteResponseDto&gt;
      * </p>
      */
@@ -314,7 +314,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variable: {accountId} - Account ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: SiteResponseDto
      * </p>
      */
@@ -325,7 +325,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variables: {accountId} - Account ID, {siteId} - Site ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: SiteResponseDto
      * </p>
      */
@@ -336,7 +336,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variables: {accountId} - Account ID, {siteId} - Site ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: SiteResponseDto
      * </p>
      */
@@ -347,7 +347,7 @@ public final class ApiRoutes {
      * <p>
      * Method: DELETE<br>
      * Path Variables: {accountId} - Account ID, {siteId} - Site ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
      * </p>
      */
     public static final String SITES_DELETE_BY_ACCOUNT = ACCOUNTS + "/{accountId}/sites/{siteId}";
@@ -356,7 +356,7 @@ public final class ApiRoutes {
     /**
      * Base path for batch administration endpoints.
      * <p>
-     * Requires: ROLE_ADMIN (Keycloak)
+     * Requires: ROLE_ADMIN (Auth0)
      * </p>
      */
     public static final String BATCHES_ADMIN = ADMIN_API_BASE + "/batches";
@@ -366,7 +366,7 @@ public final class ApiRoutes {
      * <p>
      * Methods: GET, DELETE<br>
      * Path Variable: {id} - Batch ID<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
      * </p>
      */
     public static final String BATCHES_ADMIN_ID = BATCHES_ADMIN + "/{id}";
@@ -375,7 +375,7 @@ public final class ApiRoutes {
     /**
      * Base path for upload history endpoints.
      * <p>
-     * Requires: Authenticated user (Keycloak OAuth2)
+     * Requires: Authenticated user (Auth0 OAuth2)
      * </p>
      */
     public static final String HISTORY = ADMIN_API_BASE + "/history";
@@ -390,7 +390,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {batchId} - Batch ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: BatchDetailDto
      * </p>
      */
@@ -401,7 +401,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variables: {batchId} - Batch ID, {fileId} - File ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: Presigned S3 URL
      * </p>
      */
@@ -412,7 +412,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variable: {batchId} - Batch ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: ZIP archive (streamed)
      * </p>
      */
@@ -423,7 +423,7 @@ public final class ApiRoutes {
      * <p>
      * Method: POST<br>
      * Path Variable: {batchId} - Batch ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: Excel file (.xlsx)
      * </p>
      */
@@ -434,7 +434,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {batchId} - Batch ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: PageResponseDto&lt;ErrorSummaryDto&gt;
      * </p>
      */
@@ -444,7 +444,7 @@ public final class ApiRoutes {
     /**
      * Base path for error administration endpoints.
      * <p>
-     * Requires: ROLE_ADMIN (Keycloak)
+     * Requires: ROLE_ADMIN (Auth0)
      * </p>
      */
     public static final String ERRORS_ADMIN = ADMIN_API_BASE + "/errors";
@@ -453,7 +453,7 @@ public final class ApiRoutes {
      * Export errors endpoint.
      * <p>
      * Method: GET<br>
-     * Authentication: Keycloak OAuth2 (ROLE_ADMIN)<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
      * Returns: CSV file
      * </p>
      */
@@ -463,7 +463,7 @@ public final class ApiRoutes {
     /**
      * Base path for file comparison endpoints.
      * <p>
-     * Requires: Authenticated user (Keycloak OAuth2)
+     * Requires: Authenticated user (Auth0 OAuth2)
      * </p>
      */
     public static final String COMPARISONS = ADMIN_API_BASE + "/comparisons";
@@ -473,7 +473,7 @@ public final class ApiRoutes {
      * <p>
      * Methods: GET, DELETE<br>
      * Path Variable: {id} - Comparison ID<br>
-     * Authentication: Keycloak OAuth2
+     * Authentication: Auth0 OAuth2
      * </p>
      */
     public static final String COMPARISONS_ID = COMPARISONS + "/{id}";
@@ -483,7 +483,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {id} - Comparison ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Query Params: changeType (optional)<br>
      * Returns: PageResponseDto&lt;ComparisonResultDto&gt;
      * </p>
@@ -495,7 +495,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {id} - Comparison ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: ComparisonSummaryDto
      * </p>
      */
@@ -506,7 +506,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {batchId} - Batch ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: List&lt;ComparisonResponseDto&gt;
      * </p>
      */
@@ -517,7 +517,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {id} - Comparison ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: ZIP archive with diffs
      * </p>
      */
@@ -528,7 +528,7 @@ public final class ApiRoutes {
      * <p>
      * Method: GET<br>
      * Path Variable: {id} - Comparison ID<br>
-     * Authentication: Keycloak OAuth2<br>
+     * Authentication: Auth0 OAuth2<br>
      * Returns: Text file
      * </p>
      */

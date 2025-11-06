@@ -123,16 +123,7 @@ public class AccountSyncService {
 
             // PHASE 2: Create account in PostgreSQL
             logger.info("Creating PostgreSQL account for Auth0 user: {}", auth0UserId);
-            Account account = new Account(email, name);
-
-            if (phone != null && !phone.isBlank()) {
-                account.setPhone(phone);
-            }
-            if (company != null && !company.isBlank()) {
-                account.setCompany(company);
-            }
-
-            account.setIdentityProviderUserId(auth0UserId);
+            Account account = Account.createWithIdentityProvider(auth0UserId, email, name, phone, company);
             account = accountRepository.save(account);
 
             UUID accountId = account.getId();
@@ -281,19 +272,23 @@ public class AccountSyncService {
      */
     private RuntimeException convertAuth0Exception(Auth0Exception ex, String operation) {
         String message = ex.getMessage();
-        int statusCode = ex.getStatusCode();
 
-        // Rate limit (429)
-        if (statusCode == 429) {
-            return Auth0RateLimitException.forOperation(operation, 60);
+        // Check if it's an APIException with status code
+        if (ex instanceof com.auth0.exception.APIException apiException) {
+            int statusCode = apiException.getStatusCode();
+
+            // Rate limit (429)
+            if (statusCode == 429) {
+                return Auth0RateLimitException.forOperation(operation, 60);
+            }
+
+            // Service unavailable (5xx)
+            if (statusCode >= 500) {
+                return Auth0ServiceUnavailableException.forOperation(operation, ex);
+            }
         }
 
-        // Service unavailable (5xx)
-        if (statusCode >= 500) {
-            return Auth0ServiceUnavailableException.forOperation(operation, ex);
-        }
-
-        // Client errors (4xx) - wrap in RuntimeException
+        // Client errors or generic Auth0Exception - wrap in RuntimeException
         return new RuntimeException("Auth0 API error during " + operation + ": " + message, ex);
     }
 

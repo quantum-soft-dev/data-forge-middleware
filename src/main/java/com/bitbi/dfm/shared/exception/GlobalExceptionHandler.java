@@ -1,7 +1,7 @@
 package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
-import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
+// import com.bitbi.dfm.account.application.KeycloakAccountSyncService; // DEPRECATED: Removed for Auth0 migration
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -391,23 +391,23 @@ public class GlobalExceptionHandler {
      * Prevents administrators from accidentally locking themselves out.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.CannotLockOwnAccountException.class)
-    public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
-            KeycloakAccountSyncService.CannotLockOwnAccountException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Admin attempted to lock own account: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.FORBIDDEN.value(),
-                "Forbidden",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.CannotLockOwnAccountException.class)
+//     public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
+//             KeycloakAccountSyncService.CannotLockOwnAccountException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Admin attempted to lock own account: {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.FORBIDDEN.value(),
+//                 "Forbidden",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+//     }
 
     /**
      * Handle AccountNotFoundException from KeycloakAccountSyncService (404 Not Found).
@@ -415,23 +415,23 @@ public class GlobalExceptionHandler {
      * Thrown when account is not found during Keycloak sync operations.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.AccountNotFoundException.class)
-    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountNotFound(
-            KeycloakAccountSyncService.AccountNotFoundException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Account not found (Keycloak sync): {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.NOT_FOUND.value(),
-                "Not Found",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.AccountNotFoundException.class)
+//     public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountNotFound(
+//             KeycloakAccountSyncService.AccountNotFoundException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Account not found (Keycloak sync): {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.NOT_FOUND.value(),
+//                 "Not Found",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+//     }
 
     /**
      * Handle AccountNotFoundException from domain package (404 Not Found).
@@ -487,23 +487,23 @@ public class GlobalExceptionHandler {
      * Thrown when attempting to lock an account that is already locked in Keycloak.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyLockedException.class)
-    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountAlreadyLocked(
-            KeycloakAccountSyncService.AccountAlreadyLockedException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Account already locked (Keycloak sync): {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Bad Request",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyLockedException.class)
+//     public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountAlreadyLocked(
+//             KeycloakAccountSyncService.AccountAlreadyLockedException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Account already locked (Keycloak sync): {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.BAD_REQUEST.value(),
+//                 "Bad Request",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+//     }
 
     /**
      * Handle KeycloakSyncException (503 Service Unavailable).
@@ -536,23 +536,23 @@ public class GlobalExceptionHandler {
      * Thrown when attempting to unlock an account that is already unlocked.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyUnlockedException.class)
-    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyUnlocked(
-            KeycloakAccountSyncService.AccountAlreadyUnlockedException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Account already unlocked: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Bad Request",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyUnlockedException.class)
+//     public ResponseEntity<ErrorResponseDto> handleAccountAlreadyUnlocked(
+//             KeycloakAccountSyncService.AccountAlreadyUnlockedException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Account already unlocked: {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.BAD_REQUEST.value(),
+//                 "Bad Request",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+//     }
 
     /**
      * Handle NoKeycloakIntegrationException (400 Bad Request).
@@ -561,23 +561,23 @@ public class GlobalExceptionHandler {
      * that doesn't have Keycloak integration.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.NoKeycloakIntegrationException.class)
-    public ResponseEntity<ErrorResponseDto> handleNoKeycloakIntegration(
-            KeycloakAccountSyncService.NoKeycloakIntegrationException ex,
-            HttpServletRequest request) {
-
-        logger.warn("No Keycloak integration: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Bad Request",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.NoKeycloakIntegrationException.class)
+//     public ResponseEntity<ErrorResponseDto> handleNoKeycloakIntegration(
+//             KeycloakAccountSyncService.NoKeycloakIntegrationException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("No Keycloak integration: {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.BAD_REQUEST.value(),
+//                 "Bad Request",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+//     }
 
     /**
      * Handle IllegalStateException (500 Internal Server Error).
