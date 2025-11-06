@@ -54,6 +54,9 @@ dependencies {
     implementation("com.auth0:auth0:2.26.0")
     implementation("com.auth0:java-jwt:4.4.0")
 
+    // Spring Retry (for Auth0 API resilience)
+    implementation("org.springframework.retry:spring-retry")
+
     // JWT
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
