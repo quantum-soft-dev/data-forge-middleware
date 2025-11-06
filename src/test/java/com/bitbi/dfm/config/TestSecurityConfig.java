@@ -28,11 +28,11 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Test security configuration that mocks OAuth2/Keycloak authentication.
+ * Test security configuration that mocks OAuth2/Auth0 authentication.
  *
  * <p>This configuration mirrors the production SecurityConfiguration architecture with
  * unified API structure, but uses mocked authentication for testing without requiring
- * a running Keycloak instance.</p>
+ * a running Auth0 instance.</p>
  *
  * <p><b>Unified Filter Chain Architecture:</b></p>
  * <ul>
@@ -120,7 +120,7 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Custom JWT authorities converter for Keycloak realm roles.
+     * Custom JWT authorities converter for Auth0 realm roles.
      * <p>
      * Extracts roles from nested "realm_access.roles" claim and converts them
      * to Spring Security authorities with "ROLE_" prefix.
@@ -232,7 +232,7 @@ public class TestSecurityConfig {
      * UI/Admin API filter chain (NEW unified structure).
      * <p>
      * Order 3: Third priority - matches /api/v1/** (excluding /api/v1/device/**).
-     * Keycloak OAuth2 Resource Server only.
+     * Auth0 OAuth2 Resource Server only.
      * </p>
      */
     @Bean
@@ -262,15 +262,15 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Legacy Keycloak filter chain for old admin endpoints.
+     * Legacy Auth0 filter chain for old admin endpoints.
      * <p>
      * Order 4: Fourth priority - matches /api/admin/** (deprecated).
-     * Keycloak OAuth2 Resource Server only - ROLE_ADMIN required.
+     * Auth0 OAuth2 Resource Server only - ROLE_ADMIN required.
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(4)
-    public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain legacyAuth0FilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/admin/**")
             .csrf(csrf -> csrf.disable())

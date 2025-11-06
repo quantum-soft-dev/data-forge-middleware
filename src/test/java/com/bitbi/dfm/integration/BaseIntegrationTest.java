@@ -25,7 +25,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * @version 1.0.0
  */
 @SpringBootTest(properties = {
-    "keycloak.enabled=false"  // Disable Keycloak for integration tests
+    "auth0.enabled=false"  // Disable Auth0 for integration tests
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")

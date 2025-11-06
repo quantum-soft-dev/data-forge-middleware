@@ -11,20 +11,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * T038: E2E Integration Test - Scenario 3: JWT-Only on Write Operations.
  * <p>
- * Implements quickstart Scenario 3: Verify POST/PUT/DELETE reject Keycloak tokens with 403.
+ * Implements quickstart Scenario 3: Verify POST/PUT/DELETE reject Auth0 tokens with 403.
  * </p>
  * <p>
  * <strong>Production Behavior (FR-006, FR-007)</strong>: Write operations (POST/PUT/DELETE/PATCH)
  * on client endpoints (batch, error-log, file-upload) accept ONLY JWT tokens.
- * Keycloak tokens are rejected with 403 Forbidden + ErrorResponseDto.
+ * Auth0 tokens are rejected with 403 Forbidden + ErrorResponseDto.
  * </p>
  * <p>
  * <strong>Test Environment Behavior</strong>: TestSecurityConfig uses separate filter chains:
  * <ul>
  *   <li>Client API (/api/v1/**) → JwtAuthenticationFilter → accepts JWT only</li>
- *   <li>Admin API (/admin/**) → OAuth2 Resource Server → accepts Keycloak only</li>
+ *   <li>Admin API (/admin/**) → OAuth2 Resource Server → accepts Auth0 only</li>
  * </ul>
- * Result: Keycloak tokens return 403 on client endpoints (matches production behavior).
+ * Result: Auth0 tokens return 403 on client endpoints (matches production behavior).
  * </p>
  *
  * @see com.bitbi.dfm.shared.config.SecurityConfiguration Production dual auth configuration
@@ -66,28 +66,28 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Scenario 3b: POST with Keycloak token should return 401 Unauthorized.
+     * Scenario 3b: POST with Auth0 token should return 401 Unauthorized.
      * <p>
-     * <strong>Production Behavior (FR-006, FR-007)</strong>: Write operations reject Keycloak tokens.
-     * SecurityConfiguration's AuthenticationManagerResolver returns 403 when Keycloak token
+     * <strong>Production Behavior (FR-006, FR-007)</strong>: Write operations reject Auth0 tokens.
+     * SecurityConfiguration's AuthenticationManagerResolver returns 403 when Auth0 token
      * is used on POST/PUT/DELETE endpoints.
      * </p>
      * <p>
      * <strong>Test Environment Behavior</strong>: TestSecurityConfig's separate filter chains
-     * reject Keycloak tokens on client API with 401 (cannot validate Keycloak token with Custom JWT filter).
+     * reject Auth0 tokens on client API with 401 (cannot validate Auth0 token with Custom JWT filter).
      * </p>
      */
     @Test
-    @DisplayName("startBatch_withKeycloak_shouldReturn401")
-    void startBatch_withKeycloak_shouldReturn401() throws Exception {
-        // Given: Valid Keycloak OAuth2 token (mocked in TestSecurityConfig)
-        String keycloakToken = "Bearer mock.admin.jwt.token";
+    @DisplayName("startBatch_withAuth0_shouldReturn401")
+    void startBatch_withAuth0_shouldReturn401() throws Exception {
+        // Given: Valid Auth0 OAuth2 token (mocked in TestSecurityConfig)
+        String auth0Token = "Bearer mock.admin.jwt.token";
 
-        // When: POST batch start with Keycloak token
+        // When: POST batch start with Auth0 token
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", keycloakToken))
+                        .header("Authorization", auth0Token))
 
-                // Then: 401 Unauthorized (Keycloak token cannot be validated by Custom JWT filter)
+                // Then: 401 Unauthorized (Auth0 token cannot be validated by Custom JWT filter)
                 .andExpect(status().isUnauthorized());
     }
 
@@ -114,20 +114,20 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Additional verification: Keycloak rejected on batch completion (PUT operation).
+     * Additional verification: Auth0 rejected on batch completion (PUT operation).
      */
     @Test
-    @DisplayName("completeBatch_withKeycloak_shouldReturn401")
-    void completeBatch_withKeycloak_shouldReturn401() throws Exception {
-        // Given: Valid Keycloak token and existing IN_PROGRESS batch
-        String keycloakToken = "Bearer mock.admin.jwt.token";
+    @DisplayName("completeBatch_withAuth0_shouldReturn401")
+    void completeBatch_withAuth0_shouldReturn401() throws Exception {
+        // Given: Valid Auth0 token and existing IN_PROGRESS batch
+        String auth0Token = "Bearer mock.admin.jwt.token";
         String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test-data.sql
 
-        // When: PUT batch complete with Keycloak token
+        // When: PUT batch complete with Auth0 token
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, batchId)
-                        .header("Authorization", keycloakToken))
+                        .header("Authorization", auth0Token))
 
-                // Then: 401 Unauthorized (Keycloak token cannot be validated by Custom JWT filter)
+                // Then: 401 Unauthorized (Auth0 token cannot be validated by Custom JWT filter)
                 .andExpect(status().isUnauthorized());
     }
 }

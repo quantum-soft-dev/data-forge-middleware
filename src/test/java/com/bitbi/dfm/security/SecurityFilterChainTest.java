@@ -28,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </p>
  * <ul>
  *   <li>Device API (/api/v1/device/**) → Custom JWT authentication only</li>
- *   <li>UI/Admin API (/api/v1/**) → Keycloak OAuth2 authentication only</li>
+ *   <li>UI/Admin API (/api/v1/**) → Auth0 OAuth2 authentication only</li>
  * </ul>
  * <p>
  * <b>Critical Behavior</b>: Mismatched token types must be rejected with 403 Forbidden.
@@ -62,8 +62,8 @@ class SecurityFilterChainTest {
         return token.token();
     }
 
-    private static final String KEYCLOAK_ADMIN_TOKEN = "mock.admin.jwt.token"; // Mock Keycloak token with ROLE_ADMIN
-    private static final String KEYCLOAK_USER_TOKEN = "mock.user.jwt.token"; // Mock Keycloak token with ROLE_USER
+    private static final String KEYCLOAK_ADMIN_TOKEN = "mock.admin.jwt.token"; // Mock Auth0 token with ROLE_ADMIN
+    private static final String KEYCLOAK_USER_TOKEN = "mock.user.jwt.token"; // Mock Auth0 token with ROLE_USER
 
     /**
      * TC01: Device API with Custom JWT → 200 OK (authorized)
@@ -88,25 +88,25 @@ class SecurityFilterChainTest {
     }
 
     /**
-     * TC02: Device API with Keycloak token → 401 Unauthorized
+     * TC02: Device API with Auth0 token → 401 Unauthorized
      * <p>
-     * <b>Given</b>: A valid Keycloak OAuth2 token (intended for UI/Admin API)<br>
+     * <b>Given</b>: A valid Auth0 OAuth2 token (intended for UI/Admin API)<br>
      * <b>When</b>: Requesting Device API endpoint (/api/v1/device/batches/start)<br>
      * <b>Then</b>: Request is rejected with 401 Unauthorized (invalid token for Custom JWT filter)
      * </p>
      * <p>
-     * <b>Expected Behavior</b>: Device API filter chain should reject Keycloak tokens
+     * <b>Expected Behavior</b>: Device API filter chain should reject Auth0 tokens
      * because they don't pass through JwtAuthenticationFilter validation (returns 401, not 403).
      * </p>
      */
     @Test
-    @DisplayName("TC02: Device API with Keycloak token should return 401 Unauthorized")
-    void deviceApiWithKeycloakTokenShouldBeUnauthorized() throws Exception {
+    @DisplayName("TC02: Device API with Auth0 token should return 401 Unauthorized")
+    void deviceApiWithAuth0TokenShouldBeUnauthorized() throws Exception {
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
-                .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (Keycloak token invalid for Custom JWT filter)
+                .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (Auth0 token invalid for Custom JWT filter)
                 .andExpect(jsonPath("$.status").doesNotExist()); // 401 doesn't return JSON body
     }
 
@@ -129,9 +129,9 @@ class SecurityFilterChainTest {
     }
 
     /**
-     * TC04: Admin API with Keycloak token → 200 OK (authorized)
+     * TC04: Admin API with Auth0 token → 200 OK (authorized)
      * <p>
-     * <b>Given</b>: A valid Keycloak OAuth2 token with ROLE_ADMIN<br>
+     * <b>Given</b>: A valid Auth0 OAuth2 token with ROLE_ADMIN<br>
      * <b>When</b>: Requesting Admin API endpoint (/api/v1/accounts)<br>
      * <b>Then</b>: Request is accepted (200 OK)
      * </p>
@@ -140,8 +140,8 @@ class SecurityFilterChainTest {
      * </p>
      */
     @Test
-    @DisplayName("TC04: Admin API with Keycloak token should return 200 OK (authorized)")
-    void adminApiWithKeycloakTokenShouldBeAuthorized() throws Exception {
+    @DisplayName("TC04: Admin API with Auth0 token should return 200 OK (authorized)")
+    void adminApiWithAuth0TokenShouldBeAuthorized() throws Exception {
         mockMvc.perform(get(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
@@ -216,9 +216,9 @@ class SecurityFilterChainTest {
     }
 
     /**
-     * TC08: User History API with Keycloak user token → 200 OK (authorized)
+     * TC08: User History API with Auth0 user token → 200 OK (authorized)
      * <p>
-     * <b>Given</b>: A valid Keycloak OAuth2 token (any authenticated user, not just admin)<br>
+     * <b>Given</b>: A valid Auth0 OAuth2 token (any authenticated user, not just admin)<br>
      * <b>When</b>: Requesting User History API endpoint (/api/v1/history/batches)<br>
      * <b>Then</b>: Request is accepted (200 OK)
      * </p>
@@ -227,8 +227,8 @@ class SecurityFilterChainTest {
      * </p>
      */
     @Test
-    @DisplayName("TC08: User History API with Keycloak user token should return 200 OK (authorized)")
-    void userHistoryApiWithKeycloakUserTokenShouldBeAuthorized() throws Exception {
+    @DisplayName("TC08: User History API with Auth0 user token should return 200 OK (authorized)")
+    void userHistoryApiWithAuth0UserTokenShouldBeAuthorized() throws Exception {
         mockMvc.perform(get(ApiRoutes.HISTORY_BATCHES)
                         .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))

@@ -50,7 +50,7 @@ class BatchHistoryContractTest {
 
     private static final String BATCH_HISTORY_ENDPOINT = ApiRoutes.HISTORY_BATCHES;
 
-    // Use mock Keycloak token for /api/user/** endpoints
+    // Use mock Auth0 token for /api/user/** endpoints
     private static final String MOCK_USER_TOKEN = "mock.user.jwt.token";
     // Use mock tokens for different accounts
     private static final String MOCK_USER_TOKEN_ACCOUNT_1 = "mock-jwt-token-account-1";
@@ -60,7 +60,7 @@ class BatchHistoryContractTest {
 
     @BeforeEach
     void setUp() {
-        // Use mock Keycloak token for /api/user/** endpoints (OAuth2 authentication)
+        // Use mock Auth0 token for /api/user/** endpoints (OAuth2 authentication)
         jwtToken = MOCK_USER_TOKEN;
     }
 

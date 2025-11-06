@@ -456,22 +456,22 @@ class BatchContractTest {
     }
 
     /**
-     * T010 Requirement 4: Verify Keycloak token behavior on GET endpoint.
+     * T010 Requirement 4: Verify Auth0 token behavior on GET endpoint.
      * <p>
-     * Production (FR-005): GET endpoints should accept both JWT and Keycloak tokens.
-     * Test Environment: TestSecurityConfig uses separate filter chains, so Keycloak
+     * Production (FR-005): GET endpoints should accept both JWT and Auth0 tokens.
+     * Test Environment: TestSecurityConfig uses separate filter chains, so Auth0
      * returns 403 on client API endpoints. This test documents expected production behavior.
      * </p>
      */
     @Test
-    @DisplayName("T010: GET Device batch with Keycloak token returns 401 (test env limitation)")
-    void getBatch_withKeycloakToken_shouldReturn401InTestEnv() throws Exception {
-        // Given: Mock Keycloak OAuth2 token
-        String keycloakToken = "Bearer mock.admin.jwt.token";
+    @DisplayName("T010: GET Device batch with Auth0 token returns 401 (test env limitation)")
+    void getBatch_withAuth0Token_shouldReturn401InTestEnv() throws Exception {
+        // Given: Mock Auth0 OAuth2 token
+        String auth0Token = "Bearer mock.admin.jwt.token";
 
-        // When: GET Device batch with Keycloak token
+        // When: GET Device batch with Auth0 token
         mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES_GET, IN_PROGRESS_BATCH_ID)
-                        .header("Authorization", keycloakToken))
+                        .header("Authorization", auth0Token))
 
                 // Then: 401 Unauthorized (invalid JWT format triggers AuthenticationEntryPoint)
                 // Production would return 200 OK with BatchResponseDto per FR-005

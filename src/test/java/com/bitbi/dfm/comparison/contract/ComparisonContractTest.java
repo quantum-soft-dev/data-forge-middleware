@@ -51,7 +51,7 @@ class ComparisonContractTest {
 
     private static final String COMPARISONS_ENDPOINT = "/api/v1/comparisons";
 
-    // Use mock Keycloak token for /api/v1/** endpoints (OAuth2 authentication)
+    // Use mock Auth0 token for /api/v1/** endpoints (OAuth2 authentication)
     private static final String MOCK_USER_TOKEN_ACCOUNT_1 = "mock-jwt-token-account-1";
     private static final String MOCK_USER_TOKEN_ACCOUNT_2 = "mock-jwt-token-account-2";
 
@@ -59,7 +59,7 @@ class ComparisonContractTest {
 
     @BeforeEach
     void setUp() {
-        // Use mock Keycloak token for authenticated user
+        // Use mock Auth0 token for authenticated user
         jwtToken = MOCK_USER_TOKEN_ACCOUNT_1;
     }
 
