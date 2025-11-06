@@ -24,8 +24,8 @@
 
 - [x] **T001** [P] Add Auth0 dependencies to `build.gradle.kts`: `com.auth0:auth0:2.26.0`, `com.auth0:java-jwt:4.4.0`
 - [x] **T002** [P] Add Auth0 React SDK to `frontend/package.json`: `@auth0/auth0-react:^2.8.0`
-- [ ] **T003** [P] Remove Keycloak dependencies from `build.gradle.kts`: `org.keycloak:keycloak-admin-client`
-- [ ] **T004** [P] Remove Keycloak OIDC client from `frontend/package.json`: `oidc-client-ts`
+- [x] **T003** [P] Remove Keycloak dependencies from `build.gradle.kts`: `org.keycloak:keycloak-admin-client`
+- [x] **T004** [P] Remove Keycloak OIDC client from `frontend/package.json`: `oidc-client-ts`
 - [x] **T005** Update `.gitignore` to exclude Auth0 credentials (`.env.local`, `application-dev.yml` with secrets)
 
 ---
@@ -61,7 +61,7 @@
   - Pattern validation: `^[a-zA-Z0-9-]+\\|[a-zA-Z0-9]+$`
   - Static factory method `of(String)`
 
-- [ ] **T011** [P] Create `AccountAuth0LinkedEvent.java` domain event in `src/main/java/com/bitbi/dfm/account/domain/AccountAuth0LinkedEvent.java`:
+- [x] **T011** [P] Create `AccountAuth0LinkedEvent.java` domain event in `src/main/java/com/bitbi/dfm/account/domain/AccountAuth0LinkedEvent.java`:
   - Record with accountId, email, auth0UserId, linkedAt
   - Static factory method `of(Account)`
 
@@ -72,12 +72,12 @@
   - Nested records: Management (clientId, clientSecret, audience), Api (audience, issuer)
   - Utility methods: getManagementApiBaseUrl(), getIssuerUrl(), getTokenEndpoint()
 
-- [ ] **T013** Update `application.yml` in `src/main/resources/application.yml`:
+- [x] **T013** Update `application.yml` in `src/main/resources/application.yml`:
   - Add `auth0:` section with domain, management-client-id, management-client-secret, api-audience, database-connection, password-reset-ttl-seconds, roles-namespace
   - Update `spring.security.oauth2.resourceserver.jwt` with `issuer-uri` and `audiences`
-  - Remove `keycloak:` section
+  - Remove `keycloak:` section (kept JWT section for backward compatibility)
 
-- [ ] **T014** Update `application-dev.yml` with Auth0 dev tenant configuration and `logging.level.com.auth0: DEBUG`
+- [x] **T014** Update `application-dev.yml` with Auth0 dev tenant configuration and `logging.level.com.auth0: DEBUG`
 
 - [x] **T015** Create `Auth0TokenProvider.java` in `src/main/java/com/bitbi/dfm/auth/application/Auth0TokenProvider.java`:
   - Service with `String getAccessToken()` method
@@ -102,45 +102,45 @@
 
 ### Repository Updates
 
-- [ ] **T019** Update `JpaAccountRepository.java` in `src/main/java/com/bitbi/dfm/account/infrastructure/JpaAccountRepository.java`:
+- [x] **T019** Update `JpaAccountRepository.java` in `src/main/java/com/bitbi/dfm/account/infrastructure/JpaAccountRepository.java`:
   - Rename query method `findByKeycloakUserId` → `findByIdentityProviderUserId`
   - Add `@Query` for `findAccountsWithAuth0Integration()` (WHERE identity_provider_user_id LIKE 'auth0|%')
   - Add `@Query` for `findAccountsWithAuth0BySearch()` with pageable (search by email/name, filter Auth0 only)
 
 ### Exception Handling
 
-- [ ] **T020** [P] Create `Auth0ServiceUnavailableException.java` in `src/main/java/com/bitbi/dfm/shared/exception/Auth0ServiceUnavailableException.java` (extends RuntimeException)
+- [x] **T020** [P] Create `Auth0ServiceUnavailableException.java` in `src/main/java/com/bitbi/dfm/shared/exception/Auth0ServiceUnavailableException.java` (extends RuntimeException)
 
-- [ ] **T021** [P] Create `Auth0RateLimitException.java` in `src/main/java/com/bitbi/dfm/shared/exception/Auth0RateLimitException.java` (extends RuntimeException)
+- [x] **T021** [P] Create `Auth0RateLimitException.java` in `src/main/java/com/bitbi/dfm/shared/exception/Auth0RateLimitException.java` (extends RuntimeException)
 
-- [ ] **T022** Update `GlobalExceptionHandler.java` in `src/main/java/com/bitbi/dfm/shared/config/GlobalExceptionHandler.java`:
+- [x] **T022** Update `GlobalExceptionHandler.java` in `src/main/java/com/bitbi/dfm/shared/config/GlobalExceptionHandler.java`:
   - Add handler for `Auth0ServiceUnavailableException` → 503 Service Unavailable
-  - Add handler for `Auth0RateLimitException` → 503 Service Unavailable
+  - Add handler for `Auth0RateLimitException` → 503 Service Unavailable with Retry-After header
   - Add handler for Auth0 `APIException` with duplicate email → 409 Conflict
 
 ### Frontend Auth0 Provider Setup
 
-- [ ] **T023** Create `Auth0Provider.tsx` wrapper in `frontend/src/app/providers/Auth0Provider.tsx`:
+- [x] **T023** Create `Auth0Provider.tsx` wrapper in `frontend/src/app/providers/Auth0Provider.tsx`:
   - Import `Auth0Provider` from `@auth0/auth0-react`
   - Configure with domain, clientId, authorizationParams (redirect_uri, audience, scope)
   - Enable `useRefreshTokens={true}`, `cacheLocation="memory"`
   - Add `onRedirectCallback` to handle navigation
 
-- [ ] **T024** Update `frontend/src/main.tsx` to wrap app in Auth0Provider
+- [x] **T024** Update `frontend/src/app/main.tsx` to wrap app in Auth0Provider
 
-- [ ] **T025** [P] Create `AuthenticationGuard.tsx` HOC in `frontend/src/shared/lib/auth/AuthenticationGuard.tsx`:
+- [x] **T025** [P] Create `AuthenticationGuard.tsx` HOC in `frontend/src/shared/lib/auth/AuthenticationGuard.tsx`:
   - Uses `withAuthenticationRequired` from Auth0 SDK
   - Shows `LoadingSpinner` during redirect
   - Passes `returnTo` for post-login navigation
 
-- [ ] **T026** [P] Create `RoleGuard.tsx` HOC in `frontend/src/shared/lib/auth/RoleGuard.tsx`:
+- [x] **T026** [P] Create `RoleGuard.tsx` HOC in `frontend/src/shared/lib/auth/RoleGuard.tsx`:
   - Uses `useAuth0()` hook
   - Extracts roles from `user['https://api.dataforge.com/roles']`
   - Returns 403 if role not present
 
-- [ ] **T027** [P] Create `useAuth0Roles.ts` hook in `frontend/src/shared/lib/auth/useAuth0Roles.ts`:
+- [x] **T027** [P] Create `useAuth0Roles.ts` hook in `frontend/src/shared/lib/auth/useAuth0Roles.ts`:
   - Custom hook to extract roles from Auth0 user
-  - Returns `hasRole(role: string)` helper
+  - Returns `hasRole(role: string)`, `hasAnyRole()`, `hasAllRoles()` helpers
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -156,11 +156,10 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T028** [P] [US1] Contract test for `POST /api/v1/admin/accounts/with-auth0` in `src/test/java/com/bitbi/dfm/contract/Auth0AdminContractTest.java`:
-  - Test valid request returns 201 with passwordResetLink
+- [ ] **T028** [P] [US1] Contract test for `POST /api/v1/accounts/with-auth0` in `src/test/java/com/bitbi/dfm/contract/Auth0AdminContractTest.java`:
+  - Test valid request returns 201 with temporaryPassword
   - Test invalid email returns 400
   - Test duplicate email returns 409
-  - Test missing role returns 400
   - Mock Auth0 Management API calls
 
 - [ ] **T029** [P] [US1] Integration test for user creation in `src/test/java/com/bitbi/dfm/integration/Auth0UserCreationIntegrationTest.java`:
@@ -177,50 +176,47 @@
 
 ### DTOs for User Story 1
 
-- [ ] **T031** [P] [US1] Update `CreateAccountRequestDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/CreateAccountRequestDto.java`:
-  - Add `@NotNull String role` field
-  - Add `@Pattern(regexp="^(USER|ADMIN)$")` validation
+- [x] **T031** [P] [US1] Create `CreateAccountWithAuth0RequestDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/`:
+  - Fields: email, name, phone, company (all with validation)
+  - Jakarta Bean Validation annotations
 
-- [ ] **T032** [P] [US1] Update `CreateAccountResponseDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/CreateAccountResponseDto.java`:
-  - Replace `String temporaryPassword` with `String passwordResetLink`
-  - Update `fromEntity()` method signature to accept resetLink parameter
+- [x] **T032** [P] [US1] Create `AccountWithAuth0ResponseDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/`:
+  - Fields: id, email, name, phone, company, isActive, auth0UserId, temporaryPassword, passwordResetUrl, createdAt
+  - Factory methods: fromEntity(), fromEntityWithPassword(), fromEntityWithResetUrl()
 
 ### Implementation for User Story 1
 
-- [ ] **T033** [US1] Create `Auth0UserManagementService.java` in `src/main/java/com/bitbi/dfm/auth/application/Auth0UserManagementService.java`:
-  - Method `createUserWithRole(String email, String name, String role, UUID accountId)`:
-    - Create user in Auth0 via Management API
-    - Set `app_metadata.accountId`
-    - Assign role (USER or ADMIN) via Roles API
-    - Return Auth0 user ID
-  - Method `generatePasswordResetLink(String auth0UserId)`:
-    - Create password change ticket via Management API
-    - Return ticket URL
-  - Implements retry logic with `@Retryable` (maxAttempts=3, backoff exponential)
-  - Catch `APIException` with status 429 → throw `Auth0RateLimitException`
-  - Catch generic failures → throw `Auth0ServiceUnavailableException`
+- [x] **T033** [US1] Create `Auth0AccountSyncService.java` in `src/main/java/com/bitbi/dfm/account/application/`:
+  - Method `createAccountWithAuth0(email, name, phone, company)` with two-phase commit:
+    - Phase 1: Create user in Auth0 via Management API with temporary password
+    - Phase 2: Create Account entity in PostgreSQL with auth0UserId
+    - Phase 3: Update Auth0 user_metadata with accountId (bidirectional mapping)
+    - Compensating transaction: Delete Auth0 user if PostgreSQL fails
+  - Implements retry logic with `@Retryable` (maxAttempts=3, exponential backoff)
+  - Publishes `AccountAuth0LinkedEvent` on success
+  - Converts Auth0Exception → Auth0RateLimitException (429) or Auth0ServiceUnavailableException (5xx)
 
-- [ ] **T034** [US1] Update `AccountService.java` in `src/main/java/com/bitbi/dfm/account/application/AccountService.java`:
-  - Add method `createAccountWithAuth0(CreateAccountRequestDto)`:
-    - Create Account entity in PostgreSQL
-    - Call `Auth0UserManagementService.createUserWithRole()`
-    - Update Account with `linkIdentityProvider(auth0UserId)`
-    - Generate password reset link
-    - Publish `AccountAuth0LinkedEvent`
-    - Return `CreateAccountResponseDto` with passwordResetLink
-  - Add compensating transaction: if Auth0 succeeds but PostgreSQL fails, delete Auth0 user
-
-- [ ] **T035** [US1] Update `AccountAdminController.java` in `src/main/java/com/bitbi/dfm/account/presentation/AccountAdminController.java`:
-  - Add endpoint `POST /api/v1/admin/accounts/with-auth0`
+- [x] **T034** [US1] Update `AccountAdminController.java`:
+  - Add endpoint `POST /api/v1/accounts/with-auth0`
   - `@PreAuthorize("hasRole('ADMIN')")`
-  - Validate `@Valid CreateAccountRequestDto`
-  - Call `AccountService.createAccountWithAuth0()`
-  - Return `ResponseEntity.status(201).body(response)`
+  - Validate `@Valid CreateAccountWithAuth0RequestDto`
+  - Call `Auth0AccountSyncService.createAccountWithAuth0()`
+  - Return `ResponseEntity.status(201).body(AccountWithAuth0ResponseDto)`
+  - OpenAPI annotations for Swagger documentation
 
-- [ ] **T036** [US1] Add Micrometer metrics in `Auth0UserManagementService`:
-  - Counter `auth0.users.created`
-  - Timer `auth0.management.api.duration` (tagged by operation: create_user, assign_role, create_ticket)
-  - Counter `auth0.errors` (tagged by error_type: rate_limit, service_unavailable, duplicate_email)
+- [x] **T035** [US1] Create `Auth0Configuration.java` in `src/main/java/com/bitbi/dfm/auth/config/`:
+  - `@Bean ManagementAPI` with CachedAuth0TokenProvider
+  - Token caching (24h with 5min buffer)
+  - Automatic token refresh using AuthAPI
+
+- [x] **T036** [US1] Create unit tests `Auth0AccountSyncServiceTest.java`:
+  - TC01: Successful account creation
+  - TC02: Rollback Auth0 user on PostgreSQL failure
+  - TC03: Account already exists (409)
+  - TC04: Auth0 rate limit (503)
+  - TC05: Auth0 service unavailable (503)
+  - TC06: Metadata update failure handled gracefully
+  - Mockito mocks for ManagementAPI, AccountRepository, EventPublisher
 
 - [ ] **T037** [US1] Add structured logging with MDC in `AccountService.createAccountWithAuth0`:
   - MDC.put("accountId", account.getId())

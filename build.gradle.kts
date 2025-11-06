@@ -47,11 +47,8 @@ dependencies {
     implementation("software.amazon.awssdk:s3")
     implementation("software.amazon.awssdk:s3-transfer-manager")
 
-    // OAuth2 Resource Server (for Keycloak integration)
+    // OAuth2 Resource Server (for Auth0 integration)
     implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
-
-    // Keycloak Admin Client
-    implementation("org.keycloak:keycloak-admin-client:26.0.7")
 
     // Auth0 Integration
     implementation("com.auth0:auth0:2.26.0")

@@ -10,8 +10,10 @@ import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import com.bitbi.dfm.account.presentation.dto.AccountStatisticsDto;
 import com.bitbi.dfm.account.presentation.dto.AccountWithStatsResponseDto;
+import com.bitbi.dfm.account.presentation.dto.AccountWithAuth0ResponseDto;
 import com.bitbi.dfm.account.presentation.dto.AdminActionLogResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
+import com.bitbi.dfm.account.presentation.dto.CreateAccountWithAuth0RequestDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountResponse;
 import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse;
 import com.bitbi.dfm.account.presentation.dto.UpdateAccountRequestDto;
@@ -75,6 +77,7 @@ public class AccountAdminController {
     private final AdminActionLogRepository auditLogRepository;
     private final com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient;
     private final com.bitbi.dfm.account.domain.AccountRepository accountRepository;
+    private final com.bitbi.dfm.account.application.Auth0AccountSyncService auth0SyncService;
 
     public AccountAdminController(
             AccountService accountService,
@@ -83,7 +86,8 @@ public class AccountAdminController {
             @Autowired(required = false) KeycloakAccountSyncService keycloakSyncService,
             AdminActionLogRepository auditLogRepository,
             @Autowired(required = false) com.bitbi.dfm.account.infrastructure.KeycloakAdminClient keycloakAdminClient,
-            com.bitbi.dfm.account.domain.AccountRepository accountRepository) {
+            com.bitbi.dfm.account.domain.AccountRepository accountRepository,
+            com.bitbi.dfm.account.application.Auth0AccountSyncService auth0SyncService) {
         this.accountService = accountService;
         this.accountStatisticsService = accountStatisticsService;
         this.accountProperties = accountProperties;
@@ -91,6 +95,7 @@ public class AccountAdminController {
         this.auditLogRepository = auditLogRepository;
         this.keycloakAdminClient = keycloakAdminClient;
         this.accountRepository = accountRepository;
+        this.auth0SyncService = auth0SyncService;
     }
 
     /**
@@ -817,5 +822,86 @@ public class AccountAdminController {
         );
 
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Create account with Auth0 integration (US1).
+     * <p>
+     * POST /api/v1/accounts/with-auth0
+     * </p>
+     * <p>
+     * Creates a new account and automatically links it to Auth0 for authentication.
+     * Uses two-phase commit pattern:
+     * 1. Create user in Auth0 (authentication layer)
+     * 2. Create account in PostgreSQL (business layer)
+     * 3. Update Auth0 with PostgreSQL accountId (bidirectional mapping)
+     * </p>
+     *
+     * @param request Account creation request with email, name, phone, company
+     * @return Created account with Auth0 user ID and temporary password
+     * @see com.bitbi.dfm.account.application.Auth0AccountSyncService
+     */
+    @PostMapping("/with-auth0")
+    @Operation(
+            summary = "Create account with Auth0 integration",
+            description = "Creates a new account and links it to Auth0 for authentication. Returns temporary password for first login."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(
+                    responseCode = "201",
+                    description = "Account created successfully with Auth0 integration",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = AccountWithAuth0ResponseDto.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "Invalid request data",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "409",
+                    description = "Account with this email already exists",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "503",
+                    description = "Auth0 service unavailable",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class)
+                    )
+            )
+    })
+    public ResponseEntity<AccountWithAuth0ResponseDto> createAccountWithAuth0(
+            @Valid @RequestBody CreateAccountWithAuth0RequestDto request) {
+
+        logger.info("Creating account with Auth0 integration for email: {}", request.email());
+
+        // Create account with Auth0 integration (two-phase commit)
+        var result = auth0SyncService.createAccountWithAuth0(
+                request.email(),
+                request.name(),
+                request.phone(),
+                request.company()
+        );
+
+        // Convert to response DTO with temporary password
+        AccountWithAuth0ResponseDto response = AccountWithAuth0ResponseDto.fromEntityWithPassword(
+                result.account(),
+                result.temporaryPassword()
+        );
+
+        logger.info("Account created successfully with Auth0: accountId={}, auth0UserId={}",
+                result.account().getId(), result.account().getIdentityProviderUserId());
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 }

@@ -6,6 +6,13 @@ spring:
     virtual:
       enabled: true
 
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://${auth0.domain}/
+          audiences: ${auth0.api-audience}
+
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/dfm}
     username: ${DB_USERNAME:postgres}
@@ -73,20 +80,20 @@ upload:
     attempts: 3
     delay-ms: 1000
 
-# JWT Configuration
+# JWT Configuration (for client API backward compatibility)
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-to-a-secure-random-value-at-least-256-bits}
   expiration-seconds: 86400
 
-# Keycloak Configuration
-keycloak:
-  realm: ${KEYCLOAK_REALM:dfm}
-  auth-server-url: ${KEYCLOAK_AUTH_SERVER_URL:http://localhost:8081}
-  resource: ${KEYCLOAK_RESOURCE:dfm-backend}
-  credentials:
-    secret: ${KEYCLOAK_CLIENT_SECRET:}
-  use-resource-role-mappings: false
-  bearer-only: true
+# Auth0 Configuration
+auth0:
+  domain: ${AUTH0_DOMAIN:dev-example.us.auth0.com}
+  management-client-id: ${AUTH0_MGMT_CLIENT_ID}
+  management-client-secret: ${AUTH0_MGMT_CLIENT_SECRET}
+  api-audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
+  database-connection: Username-Password-Authentication
+  password-reset-ttl-seconds: 86400
+  roles-namespace: https://api.dataforge.com/roles
 
 # Actuator Configuration
 management:

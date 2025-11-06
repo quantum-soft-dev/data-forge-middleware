@@ -726,6 +726,109 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle Auth0ServiceUnavailableException (503 Service Unavailable).
+     * <p>
+     * Thrown when Auth0 Management API is unavailable or returns 5xx errors.
+     * This indicates temporary Auth0 service issues or network problems.
+     * </p>
+     * User Story: Auth0 Migration (Phase 2 - Foundational)
+     */
+    @ExceptionHandler(Auth0ServiceUnavailableException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0ServiceUnavailable(
+            Auth0ServiceUnavailableException ex,
+            HttpServletRequest request) {
+
+        logger.error("Auth0 service unavailable: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Auth0 authentication service is temporarily unavailable. Please try again later.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
+     * Handle Auth0RateLimitException (503 Service Unavailable).
+     * <p>
+     * Thrown when Auth0 Management API rate limit is exceeded (HTTP 429).
+     * This indicates the application is making too many requests to Auth0.
+     * Returns Retry-After header if available from Auth0.
+     * </p>
+     * User Story: Auth0 Migration (Phase 2 - Foundational)
+     */
+    @ExceptionHandler(Auth0RateLimitException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0RateLimit(
+            Auth0RateLimitException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Auth0 rate limit exceeded: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Too many authentication requests. Please try again in a few moments.",
+                request.getRequestURI()
+        );
+
+        // Add Retry-After header if available
+        var response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+        if (ex.getRetryAfterSeconds() != null) {
+            response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", ex.getRetryAfterSeconds().toString())
+                    .body(error);
+        }
+
+        return response;
+    }
+
+    /**
+     * Handle Auth0 APIException with duplicate email (409 Conflict).
+     * <p>
+     * Thrown when attempting to create a user with an email that already exists in Auth0.
+     * This is a specific case of Auth0 APIException that should return 409 instead of 500.
+     * </p>
+     * User Story: US1 - Admin Creates User Account via Auth0
+     */
+    @ExceptionHandler(com.auth0.exception.APIException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0APIException(
+            com.auth0.exception.APIException ex,
+            HttpServletRequest request) {
+
+        // Check if it's a duplicate email error
+        if (ex.getMessage() != null && ex.getMessage().toLowerCase().contains("user already exists")) {
+            logger.warn("Auth0 duplicate user: {}", ex.getMessage());
+
+            ErrorResponseDto error = new ErrorResponseDto(
+                    Instant.now(),
+                    HttpStatus.CONFLICT.value(),
+                    "Conflict",
+                    "A user with this email already exists",
+                    request.getRequestURI()
+            );
+
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+        }
+
+        // For other API exceptions, log and return 500
+        logger.error("Auth0 API error: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "Internal Server Error",
+                "An error occurred while communicating with the authentication service",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+
+    /**
      * Handle generic exceptions (500 Internal Server Error).
      */
     @ExceptionHandler(Exception.class)

@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Auth0Provider } from './providers/Auth0Provider'
 import App from './App'
 import '@/shared/styles/index.css'
 
@@ -7,6 +8,7 @@ import '@/shared/styles/index.css'
  * React application entry point
  *
  * - StrictMode enabled for development checks
+ * - Auth0Provider wraps application for authentication
  * - Global styles imported
  * - Root element must exist in index.html
  */
@@ -20,6 +22,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <Auth0Provider>
+      <App />
+    </Auth0Provider>
   </StrictMode>
 )

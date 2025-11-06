@@ -42,7 +42,9 @@ target/
 # Environment files
 .env
 *.env
+.env.local
 application-auth0.yml
+application-dev.yml
 auth0.properties
 
 # Logs
