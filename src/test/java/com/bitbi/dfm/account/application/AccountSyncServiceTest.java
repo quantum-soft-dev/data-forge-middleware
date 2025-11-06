@@ -30,7 +30,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for Auth0AccountSyncService.
+ * Unit tests for AccountSyncService.
  * <p>
  * Tests the two-phase commit pattern for creating accounts with Auth0 integration.
  * </p>
@@ -48,8 +48,8 @@ import static org.mockito.Mockito.*;
  * @version 1.0.0
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Auth0AccountSyncService Unit Tests")
-class Auth0AccountSyncServiceTest {
+@DisplayName("AccountSyncService Unit Tests")
+class AccountSyncServiceTest {
 
     @Mock
     private ManagementAPI managementAPI;
@@ -78,11 +78,11 @@ class Auth0AccountSyncServiceTest {
     @Captor
     private ArgumentCaptor<AccountAuth0LinkedEvent> eventCaptor;
 
-    private Auth0AccountSyncService service;
+    private AccountSyncService service;
 
     @BeforeEach
     void setUp() {
-        service = new Auth0AccountSyncService(managementAPI, accountRepository, eventPublisher);
+        service = new AccountSyncService(managementAPI, accountRepository, eventPublisher);
         ReflectionTestUtils.setField(service, "databaseConnection", "Username-Password-Authentication");
 
         // Setup mock chain for ManagementAPI
@@ -119,7 +119,7 @@ class Auth0AccountSyncServiceTest {
         });
 
         // When
-        var result = service.createAccountWithAuth0(email, name, phone, company);
+        var result = service.createAccount(email, name, phone, company);
 
         // Then
         assertThat(result).isNotNull();
@@ -172,7 +172,7 @@ class Auth0AccountSyncServiceTest {
         when(deleteUserRequest.execute()).thenReturn(new MockResponse<>(null));
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccountWithAuth0(email, name, null, null))
+        assertThatThrownBy(() -> service.createAccount(email, name, null, null))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Database connection failed");
 
@@ -193,7 +193,7 @@ class Auth0AccountSyncServiceTest {
         when(accountRepository.findByEmail(email)).thenReturn(Optional.of(existingAccount));
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccountWithAuth0(email, "John Doe", null, null))
+        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null))
                 .isInstanceOf(AccountService.AccountAlreadyExistsException.class)
                 .hasMessageContaining("Account with email " + email + " already exists");
 
@@ -215,7 +215,7 @@ class Auth0AccountSyncServiceTest {
         when(createUserRequest.execute()).thenThrow(rateLimitException);
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccountWithAuth0(email, "John Doe", null, null))
+        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null))
                 .isInstanceOf(Auth0RateLimitException.class)
                 .hasMessageContaining("Auth0 Management API rate limit exceeded");
     }
@@ -234,7 +234,7 @@ class Auth0AccountSyncServiceTest {
         when(createUserRequest.execute()).thenThrow(serviceException);
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccountWithAuth0(email, "John Doe", null, null))
+        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null))
                 .isInstanceOf(Auth0ServiceUnavailableException.class)
                 .hasMessageContaining("Auth0 Management API unavailable");
     }
@@ -263,7 +263,7 @@ class Auth0AccountSyncServiceTest {
         when(updateUserRequest.execute()).thenThrow(new APIException("Metadata update failed", 500, null));
 
         // When
-        var result = service.createAccountWithAuth0(email, "John Doe", null, null);
+        var result = service.createAccount(email, "John Doe", null, null);
 
         // Then - should succeed despite metadata update failure
         assertThat(result).isNotNull();

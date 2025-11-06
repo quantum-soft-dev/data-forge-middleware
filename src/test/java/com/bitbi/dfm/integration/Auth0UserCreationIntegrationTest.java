@@ -5,7 +5,7 @@ import com.auth0.exception.Auth0Exception;
 import com.auth0.exception.APIException;
 import com.auth0.json.mgmt.users.User;
 import com.auth0.net.Request;
-import com.bitbi.dfm.account.application.Auth0AccountSyncService;
+import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.config.TestSecurityConfig;
@@ -61,7 +61,7 @@ import static org.mockito.Mockito.*;
 class Auth0UserCreationIntegrationTest {
 
     @Autowired
-    private Auth0AccountSyncService auth0AccountSyncService;
+    private AccountSyncService auth0AccountSyncService;
 
     @Autowired
     private AccountRepository accountRepository;
@@ -130,7 +130,7 @@ class Auth0UserCreationIntegrationTest {
      */
     @Test
     @DisplayName("TC01: Successful account creation with bidirectional linkage")
-    void createAccountWithAuth0_success_bidirectionalLinkage() throws Exception {
+    void createAccount_success_bidirectionalLinkage() throws Exception {
         // Given
         String email = "john.doe@example.com";
         String name = "John Doe";
@@ -138,8 +138,8 @@ class Auth0UserCreationIntegrationTest {
         String company = "Acme Corp";
 
         // When
-        Auth0AccountSyncService.AccountCreationResult result =
-            auth0AccountSyncService.createAccountWithAuth0(email, name, phone, company);
+        AccountSyncService.AccountCreationResult result =
+            auth0AccountSyncService.createAccount(email, name, phone, company);
 
         // Then: Account created successfully
         assertThat(result).isNotNull();
@@ -189,7 +189,7 @@ class Auth0UserCreationIntegrationTest {
      */
     @Test
     @DisplayName("TC02: Rollback Auth0 user on PostgreSQL failure")
-    void createAccountWithAuth0_postgresqlFailure_rollbackAuth0User() throws Exception {
+    void createAccount_postgresqlFailure_rollbackAuth0User() throws Exception {
         // Given: Force PostgreSQL failure by exceeding max length
         String email = "test@example.com";
         String name = "Test User";
@@ -198,7 +198,7 @@ class Auth0UserCreationIntegrationTest {
 
         // When/Then: Exception thrown
         assertThatThrownBy(() ->
-            auth0AccountSyncService.createAccountWithAuth0(email, name, phone, company)
+            auth0AccountSyncService.createAccount(email, name, phone, company)
         ).isInstanceOf(Exception.class);
 
         // Verify: Auth0 user created
@@ -223,10 +223,10 @@ class Auth0UserCreationIntegrationTest {
      */
     @Test
     @DisplayName("TC03: Account already exists - no Auth0 user created")
-    void createAccountWithAuth0_accountExists_noAuth0UserCreated() throws Exception {
+    void createAccount_accountExists_noAuth0UserCreated() throws Exception {
         // Given: Create first account
         String email = "duplicate@example.com";
-        auth0AccountSyncService.createAccountWithAuth0(email, "First User", null, null);
+        auth0AccountSyncService.createAccount(email, "First User", null, null);
 
         // Reset mock to verify second attempt
         reset(managementAPI.users());
@@ -234,7 +234,7 @@ class Auth0UserCreationIntegrationTest {
 
         // When/Then: Attempt to create duplicate
         assertThatThrownBy(() ->
-            auth0AccountSyncService.createAccountWithAuth0(email, "Second User", null, null)
+            auth0AccountSyncService.createAccount(email, "Second User", null, null)
         ).isInstanceOf(Exception.class)
          .hasMessageContaining("already exists");
 
@@ -253,7 +253,7 @@ class Auth0UserCreationIntegrationTest {
     @Test
     @DisplayName("TC04: Auth0 rate limit - exception thrown")
     @SuppressWarnings("unchecked")
-    void createAccountWithAuth0_auth0RateLimit_exceptionThrown() throws Exception {
+    void createAccount_auth0RateLimit_exceptionThrown() throws Exception {
         // Given: Mock Auth0 rate limit error
         Request<User> failingRequest = mock(Request.class);
         when(mockUsersEntity.create(any(User.class))).thenReturn(failingRequest);
@@ -261,7 +261,7 @@ class Auth0UserCreationIntegrationTest {
 
         // When/Then: Exception thrown
         assertThatThrownBy(() ->
-            auth0AccountSyncService.createAccountWithAuth0(
+            auth0AccountSyncService.createAccount(
                 "ratelimit@example.com",
                 "Rate Limit Test",
                 null,
@@ -285,7 +285,7 @@ class Auth0UserCreationIntegrationTest {
     @Test
     @DisplayName("TC05: Auth0 service unavailable - exception thrown")
     @SuppressWarnings("unchecked")
-    void createAccountWithAuth0_auth0ServiceUnavailable_exceptionThrown() throws Exception {
+    void createAccount_auth0ServiceUnavailable_exceptionThrown() throws Exception {
         // Given: Mock Auth0 service unavailable error
         Request<User> failingRequest = mock(Request.class);
         when(mockUsersEntity.create(any(User.class))).thenReturn(failingRequest);
@@ -293,7 +293,7 @@ class Auth0UserCreationIntegrationTest {
 
         // When/Then: Exception thrown
         assertThatThrownBy(() ->
-            auth0AccountSyncService.createAccountWithAuth0(
+            auth0AccountSyncService.createAccount(
                 "unavailable@example.com",
                 "Service Unavailable Test",
                 null,
@@ -319,7 +319,7 @@ class Auth0UserCreationIntegrationTest {
     @Test
     @DisplayName("TC06: Metadata update failure handled gracefully")
     @SuppressWarnings("unchecked")
-    void createAccountWithAuth0_metadataUpdateFailure_accountCreated() throws Exception {
+    void createAccount_metadataUpdateFailure_accountCreated() throws Exception {
         // Given: Mock metadata update failure
         Request<User> failingUpdateRequest = mock(Request.class);
         when(mockUsersEntity.update(anyString(), any(User.class))).thenReturn(failingUpdateRequest);
@@ -327,8 +327,8 @@ class Auth0UserCreationIntegrationTest {
 
         // When: Create account (should succeed despite metadata failure)
         String email = "metadata-failure@example.com";
-        Auth0AccountSyncService.AccountCreationResult result =
-            auth0AccountSyncService.createAccountWithAuth0(email, "Metadata Test", null, null);
+        AccountSyncService.AccountCreationResult result =
+            auth0AccountSyncService.createAccount(email, "Metadata Test", null, null);
 
         // Then: Account created successfully
         assertThat(result).isNotNull();
@@ -359,14 +359,14 @@ class Auth0UserCreationIntegrationTest {
      */
     @Test
     @DisplayName("TC07: Optional fields handled correctly")
-    void createAccountWithAuth0_optionalFields_handledCorrectly() throws Exception {
+    void createAccount_optionalFields_handledCorrectly() throws Exception {
         // Given
         String email = "optional-fields@example.com";
         String name = "Optional Fields Test";
 
         // When
-        Auth0AccountSyncService.AccountCreationResult result =
-            auth0AccountSyncService.createAccountWithAuth0(email, name, null, null);
+        AccountSyncService.AccountCreationResult result =
+            auth0AccountSyncService.createAccount(email, name, null, null);
 
         // Then
         assertThat(result).isNotNull();

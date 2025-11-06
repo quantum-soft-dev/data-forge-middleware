@@ -27,13 +27,13 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Service for synchronizing accounts between PostgreSQL and Auth0.
+ * Service for synchronizing accounts between PostgreSQL and identity provider.
  * <p>
- * Implements Keycloak-First Creation Pattern (Two-Phase Commit):
- * 1. Create user in Auth0 (authentication layer)
- * 2. Create account in PostgreSQL (business layer) with auth0UserId
- * 3. Update Auth0 user with PostgreSQL accountId (bidirectional mapping)
- * 4. If PostgreSQL fails, delete Auth0 user (rollback compensation)
+ * Implements Two-Phase Commit Pattern:
+ * 1. Create user in identity provider (authentication layer)
+ * 2. Create account in PostgreSQL (business layer) with identity provider user ID
+ * 3. Update identity provider user with PostgreSQL accountId (bidirectional mapping)
+ * 4. If PostgreSQL fails, delete identity provider user (rollback compensation)
  * </p>
  * <p>
  * Features:
@@ -44,15 +44,15 @@ import java.util.UUID;
  * - MDC logging context for traceability
  * </p>
  *
- * User Story: US1 - Admin Creates User Account via Auth0
+ * User Story: US1 - Admin Creates User Account
  *
  * @author Data Forge Team
  * @version 1.0.0
  */
 @Service
-public class Auth0AccountSyncService {
+public class AccountSyncService {
 
-    private static final Logger logger = LoggerFactory.getLogger(Auth0AccountSyncService.class);
+    private static final Logger logger = LoggerFactory.getLogger(AccountSyncService.class);
 
     private final ManagementAPI managementAPI;
     private final AccountRepository accountRepository;
@@ -61,7 +61,7 @@ public class Auth0AccountSyncService {
     @Value("${auth0.database-connection}")
     private String databaseConnection;
 
-    public Auth0AccountSyncService(
+    public AccountSyncService(
         ManagementAPI managementAPI,
         AccountRepository accountRepository,
         ApplicationEventPublisher eventPublisher
@@ -72,20 +72,20 @@ public class Auth0AccountSyncService {
     }
 
     /**
-     * Create account with Auth0 integration (two-phase commit).
+     * Create account with identity provider integration (two-phase commit).
      * <p>
-     * Phase 1: Create user in Auth0
+     * Phase 1: Create user in identity provider
      * Phase 2: Create account in PostgreSQL
-     * Phase 3: Update Auth0 with accountId (bidirectional mapping)
-     * If Phase 2 or 3 fails: Delete Auth0 user (compensating transaction)
+     * Phase 3: Update identity provider with accountId (bidirectional mapping)
+     * If Phase 2 or 3 fails: Delete identity provider user (compensating transaction)
      * </p>
      *
      * @param email User's email address
      * @param name User's full name
      * @param phone User's phone number (optional)
      * @param company User's company name (optional)
-     * @return Created account with Auth0 user ID
-     * @throws Auth0ServiceUnavailableException if Auth0 is unavailable
+     * @return Created account with identity provider user ID
+     * @throws Auth0ServiceUnavailableException if identity provider is unavailable
      * @throws Auth0RateLimitException if rate limit exceeded
      * @throws AccountService.AccountAlreadyExistsException if account exists
      */
@@ -95,7 +95,7 @@ public class Auth0AccountSyncService {
         maxAttempts = 3,
         backoff = @Backoff(delay = 1000, multiplier = 2.0)
     )
-    public AccountCreationResult createAccountWithAuth0(
+    public AccountCreationResult createAccount(
         String email,
         String name,
         String phone,

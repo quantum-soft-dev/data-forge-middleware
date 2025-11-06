@@ -4,7 +4,7 @@ import com.auth0.client.mgmt.ManagementAPI;
 import com.auth0.exception.Auth0Exception;
 import com.auth0.json.mgmt.users.User;
 import com.auth0.net.Request;
-import com.bitbi.dfm.account.application.Auth0AccountSyncService;
+import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -116,14 +116,14 @@ class Auth0AdminContractTest {
      * TC01: Valid request returns 201 with temporary password
      * <p>
      * Given: Admin authenticated with valid JWT
-     * When: POST /api/v1/accounts/with-auth0 with valid request body
+     * When: POST /api/v1/accounts with valid request body
      * Then: Returns 201 Created with account details and temporary password
      * And: Auth0 user ID is populated
      * </p>
      */
     @Test
     @DisplayName("TC01: Create account with Auth0 - valid request returns 201 with temporaryPassword")
-    void createAccountWithAuth0_validRequest_returns201WithTemporaryPassword() throws Exception {
+    void createAccount_validRequest_returns201WithTemporaryPassword() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "john.doe@example.com",
             "name", "John Doe",
@@ -131,7 +131,7 @@ class Auth0AdminContractTest {
             "company", "Acme Corp"
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -158,19 +158,19 @@ class Auth0AdminContractTest {
      * TC02: Invalid email returns 400
      * <p>
      * Given: Admin authenticated with valid JWT
-     * When: POST /api/v1/accounts/with-auth0 with invalid email format
+     * When: POST /api/v1/accounts with invalid email format
      * Then: Returns 400 Bad Request with validation error
      * </p>
      */
     @Test
     @DisplayName("TC02: Create account with Auth0 - invalid email returns 400")
-    void createAccountWithAuth0_invalidEmail_returns400() throws Exception {
+    void createAccount_invalidEmail_returns400() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "not-an-email",
             "name", "John Doe"
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -188,20 +188,20 @@ class Auth0AdminContractTest {
      * <p>
      * Given: Admin authenticated with valid JWT
      * And: Account with email already exists in PostgreSQL
-     * When: POST /api/v1/accounts/with-auth0 with duplicate email
+     * When: POST /api/v1/accounts with duplicate email
      * Then: Returns 409 Conflict
      * </p>
      */
     @Test
     @DisplayName("TC03: Create account with Auth0 - duplicate email returns 409")
     @Sql("/test-data.sql") // Ensure test account exists
-    void createAccountWithAuth0_duplicateEmail_returns409() throws Exception {
+    void createAccount_duplicateEmail_returns409() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "admin@dataforge.com", // Exists in test-data.sql
             "name", "Duplicate User"
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -218,19 +218,19 @@ class Auth0AdminContractTest {
      * TC04: Missing required fields returns 400
      * <p>
      * Given: Admin authenticated with valid JWT
-     * When: POST /api/v1/accounts/with-auth0 with missing required fields
+     * When: POST /api/v1/accounts with missing required fields
      * Then: Returns 400 Bad Request with validation errors
      * </p>
      */
     @Test
     @DisplayName("TC04: Create account with Auth0 - missing required fields returns 400")
-    void createAccountWithAuth0_missingRequiredFields_returns400() throws Exception {
+    void createAccount_missingRequiredFields_returns400() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com"
             // Missing 'name' field
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -247,19 +247,19 @@ class Auth0AdminContractTest {
      * TC05: Unauthenticated request returns 401
      * <p>
      * Given: No authentication header
-     * When: POST /api/v1/accounts/with-auth0
+     * When: POST /api/v1/accounts
      * Then: Returns 401 Unauthorized
      * </p>
      */
     @Test
     @DisplayName("TC05: Create account with Auth0 - unauthenticated returns 401")
-    void createAccountWithAuth0_unauthenticated_returns401() throws Exception {
+    void createAccount_unauthenticated_returns401() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com",
             "name", "Test User"
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
             .andExpect(status().isUnauthorized());
@@ -272,19 +272,19 @@ class Auth0AdminContractTest {
      * TC06: Non-admin user returns 403
      * <p>
      * Given: User authenticated with USER role (not ADMIN)
-     * When: POST /api/v1/accounts/with-auth0
+     * When: POST /api/v1/accounts
      * Then: Returns 403 Forbidden
      * </p>
      */
     @Test
     @DisplayName("TC06: Create account with Auth0 - non-admin returns 403")
-    void createAccountWithAuth0_nonAdmin_returns403() throws Exception {
+    void createAccount_nonAdmin_returns403() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com",
             "name", "Test User"
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
@@ -298,20 +298,20 @@ class Auth0AdminContractTest {
      * TC07: Invalid phone format returns 400
      * <p>
      * Given: Admin authenticated with valid JWT
-     * When: POST /api/v1/accounts/with-auth0 with invalid phone format
+     * When: POST /api/v1/accounts with invalid phone format
      * Then: Returns 400 Bad Request with validation error
      * </p>
      */
     @Test
     @DisplayName("TC07: Create account with Auth0 - invalid phone format returns 400")
-    void createAccountWithAuth0_invalidPhoneFormat_returns400() throws Exception {
+    void createAccount_invalidPhoneFormat_returns400() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com",
             "name", "Test User",
             "phone", "invalid-phone"
         );
 
-        mockMvc.perform(post("/api/v1/accounts/with-auth0")
+        mockMvc.perform(post("/api/v1/accounts")
                 .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestBody)))
