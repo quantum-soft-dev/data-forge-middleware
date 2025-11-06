@@ -33,7 +33,7 @@ VALUES ('0199baac-f852-753f-6fc3-7c994fc38654', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 -- Plaintext: valid-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at)
-VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-02.example.com', '$2a$10$R2zm98c/.YXxfrR3dDvj6uYfGv7ITs7cyqpWwpImC1n/tTq20bQqG', 'Store 02 (Inactive)', false, '2025-09-26 00:00:00', CURRENT_TIMESTAMP);
+VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-02.example.com', '$2a$10$R2zm98c/.YXxfrR3dDvj6uYfGv7ITs7cyqpWwpImC1n/tTq20bQqG', 'Store 02', true, '2025-09-26 00:00:00', CURRENT_TIMESTAMP);
 -- Plaintext: inactive-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at)
@@ -62,9 +62,14 @@ VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('c3d4e5f6-a7b8-9012-cdef-123456789012', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'b2c3d4e5-f6a7-8901-bcde-f12345678901', 'COMPLETED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/', 2, 3072, false, '2025-10-05 14:30:00', '2025-10-05 14:30:00', '2025-10-05 15:30:00');
 
--- IN_PROGRESS_BATCH_ID - Used by completion tests (can be completed by test #7, then rejected in test #8)
+-- IN_PROGRESS_BATCH_ID for Device Batch Controller tests (TC15-TC20)
+-- Used for complete/fail/cancel/get operations
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
-VALUES ('0199bab2-8d63-8563-8340-edbf1c11c778', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/', 1, 1024, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL);
+VALUES ('b1c2d3e4-f5a6-7890-bcde-f12345678903', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/', 1, 1024, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL);
+
+-- IN_PROGRESS batch for store-02 (same account, different site) - used for TC17 cross-site authorization test
+INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
+VALUES ('b1c2d3e4-f5a6-7890-bcde-f12345678905', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'IN_PROGRESS', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-02.example.com/2025-10-06/13-00/', 1, 1024, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL);
 
 INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, created_at, completed_at)
 VALUES ('0199bab2-ca1c-3d0e-441d-adb776a62579', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', '0199baac-f852-753f-6fc3-7c994fc38654', 'FAILED', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-04/10-00/', 3, 3072, true, '2025-10-04 10:00:00', '2025-10-04 10:00:00', '2025-10-04 10:30:00');
@@ -88,8 +93,13 @@ VALUES ('a1b2c3d4-e5f6-7890-abcd-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef12345
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
 VALUES ('a1b2c3d4-e5f6-7890-abcd-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'mock-file2.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/mock-file2.csv', 1024, 'text/csv', 'mock-checksum2', '2025-10-05 10:06:00');
 
+-- File for IN_PROGRESS batch (TC15-TC20)
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
-VALUES ('0199bab3-a134-e3e5-e76e-7ba0a7c44fa5', '0199bab2-8d63-8563-8340-edbf1c11c778', 'existing-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/existing-file.csv', 1024, 'text/csv', 'abc123def456', CURRENT_TIMESTAMP);
+VALUES ('0199bab3-a134-e3e5-e76e-7ba0a7c44fa5', 'b1c2d3e4-f5a6-7890-bcde-f12345678903', 'existing-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/12-00/existing-file.csv', 1024, 'text/csv', 'abc123def456', CURRENT_TIMESTAMP);
+
+-- File for store-02 IN_PROGRESS batch (TC17)
+INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)
+VALUES ('b1c2d3e4-aaaa-bbbb-cccc-dddddddddddd', 'b1c2d3e4-f5a6-7890-bcde-f12345678905', 'store-02-file.csv', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-02.example.com/2025-10-06/13-00/store-02-file.csv', 1024, 'text/csv', 'store02checksum', CURRENT_TIMESTAMP);
 
 -- File for store-03 batch (used for cross-tenant authorization tests)
 INSERT INTO uploaded_files (id, batch_id, original_file_name, s3_key, file_size, content_type, checksum, uploaded_at)

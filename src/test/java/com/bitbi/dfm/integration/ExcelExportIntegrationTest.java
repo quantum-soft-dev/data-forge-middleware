@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -44,7 +45,6 @@ class ExcelExportIntegrationTest extends BaseIntegrationTest {
 
     private static final String TEST_BUCKET = "data-forge-test-bucket";
     private static final String BATCH_ID = "c3d4e5f6-a7b8-9012-cdef-123456789012"; // COMPLETED batch from test-data.sql
-    private static final String ENDPOINT_TEMPLATE = "/api/user/batches/{batchId}/export-excel";
 
     private String jwtToken;
 
@@ -92,8 +92,8 @@ class ExcelExportIntegrationTest extends BaseIntegrationTest {
                 }
                 """.formatted(fileId);
 
-        // When: POST /api/user/batches/{batchId}/export-excel
-        MvcResult result = mockMvc.perform(post(ENDPOINT_TEMPLATE, BATCH_ID)
+        // When: POST /api/v1/history/batches/{batchId}/export-excel
+        MvcResult result = mockMvc.perform(post(ApiRoutes.HISTORY_EXCEL_EXPORT, BATCH_ID)
                         .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
@@ -175,8 +175,8 @@ class ExcelExportIntegrationTest extends BaseIntegrationTest {
                 }
                 """.formatted(fileId);
 
-        // When: POST /api/user/batches/{batchId}/export-excel
-        MvcResult result = mockMvc.perform(post(ENDPOINT_TEMPLATE, BATCH_ID)
+        // When: POST /api/v1/history/batches/{batchId}/export-excel
+        MvcResult result = mockMvc.perform(post(ApiRoutes.HISTORY_EXCEL_EXPORT, BATCH_ID)
                         .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))
@@ -253,8 +253,8 @@ class ExcelExportIntegrationTest extends BaseIntegrationTest {
                 }
                 """.formatted(fileId1, fileId2);
 
-        // When: POST /api/user/batches/{batchId}/export-excel
-        MvcResult result = mockMvc.perform(post(ENDPOINT_TEMPLATE, BATCH_ID)
+        // When: POST /api/v1/history/batches/{batchId}/export-excel
+        MvcResult result = mockMvc.perform(post(ApiRoutes.HISTORY_EXCEL_EXPORT, BATCH_ID)
                         .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestJson))

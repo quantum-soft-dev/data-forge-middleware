@@ -6,6 +6,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.site.domain.Site;
@@ -17,6 +18,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,16 +41,17 @@ import java.util.UUID;
  * Requires Keycloak authentication with ROLE_ADMIN.
  * </p>
  * <p>
- * URL change from v2.x: /admin/batches → /api/admin/batches (breaking change)
+ * URL change from v2.x: /admin/batches → /api/v1/batches (breaking change)
  * </p>
  *
  * @author Data Forge Team
  * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/admin/batches")
+@RequestMapping(ApiRoutes.BATCHES_ADMIN)
 @PreAuthorize("hasRole('ADMIN')")
-@Tag(name = "Admin - Batches", description = "Batch administration endpoints")
+@Tag(name = "UI/Admin API - Batches", description = "Batch administration endpoints for web interface")
+@SecurityRequirement(name = "oauth2")
 public class BatchAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchAdminController.class);
@@ -71,7 +74,7 @@ public class BatchAdminController {
     /**
      * List batches with filtering and pagination.
      * <p>
-     * GET /admin/batches?siteId={siteId}&status={status}&page=0&size=20
+     * GET /api/v1/batches?siteId={siteId}&status={status}&page=0&size=20
      * </p>
      *
      * @param siteId optional site filter
@@ -116,7 +119,7 @@ public class BatchAdminController {
     /**
      * Get batch details with files list.
      * <p>
-     * GET /admin/batches/{id}
+     * GET /api/v1/batches/{id}
      * </p>
      *
      * @param batchId batch identifier
@@ -149,7 +152,7 @@ public class BatchAdminController {
     /**
      * Delete batch metadata.
      * <p>
-     * DELETE /admin/batches/{id}
+     * DELETE /api/v1/batches/{id}
      * </p>
      *
      * @param batchId batch identifier

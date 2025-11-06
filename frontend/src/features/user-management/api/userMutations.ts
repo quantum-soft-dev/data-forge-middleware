@@ -7,6 +7,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from '@/shared/api/client'
+import { ACCOUNTS_WITH_KEYCLOAK, ACCOUNTS_LOCK, ACCOUNTS_UNLOCK, ACCOUNTS_RESET_PASSWORD } from '@/shared/api/apiRoutes'
 import type {
   CreateAccountRequest,
   CreateAccountResponse,
@@ -20,7 +21,7 @@ import { accountKeys } from './userQueries'
 async function createAccount(request: CreateAccountRequest): Promise<CreateAccountResponse> {
   try {
     const response = await apiClient.post<CreateAccountResponse>(
-      '/admin/accounts/with-keycloak',
+      ACCOUNTS_WITH_KEYCLOAK,
       request
     )
     return response.data
@@ -62,7 +63,7 @@ export function useCreateAccountMutation() {
  */
 async function lockAccount(accountId: string): Promise<void> {
   try {
-    await apiClient.post(`/admin/accounts/${accountId}/lock`)
+    await apiClient.post(ACCOUNTS_LOCK(accountId))
   } catch (error: any) {
     const errorMessage = error.response?.data?.message || 'Failed to lock account'
     const statusCode = error.response?.status || 'unknown'
@@ -101,7 +102,7 @@ export function useLockAccountMutation() {
  */
 async function unlockAccount(accountId: string): Promise<void> {
   try {
-    await apiClient.post(`/admin/accounts/${accountId}/unlock`)
+    await apiClient.post(ACCOUNTS_UNLOCK(accountId))
   } catch (error: any) {
     const errorMessage = error.response?.data?.message || 'Failed to unlock account'
     const statusCode = error.response?.status || 'unknown'
@@ -141,7 +142,7 @@ export function useUnlockAccountMutation() {
 async function resetPassword(accountId: string): Promise<ResetPasswordResponse> {
   try {
     const response = await apiClient.post<ResetPasswordResponse>(
-      `/admin/accounts/${accountId}/reset-password`
+      ACCOUNTS_RESET_PASSWORD(accountId)
     )
     return response.data
   } catch (error: any) {

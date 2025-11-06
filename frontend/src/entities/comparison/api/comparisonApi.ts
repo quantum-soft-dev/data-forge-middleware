@@ -6,6 +6,13 @@
  */
 
 import { apiClient } from '@/shared/api/client';
+import {
+  COMPARISONS,
+  COMPARISONS_ID,
+  COMPARISONS_RESULTS,
+  COMPARISONS_SUMMARY,
+  COMPARISONS_BY_BATCH
+} from '@/shared/api/apiRoutes';
 import type {
   CreateComparisonRequest,
   ComparisonResponse,
@@ -26,7 +33,7 @@ export async function createComparison(
   request: CreateComparisonRequest
 ): Promise<ComparisonResponse> {
   const response = await apiClient.post<ComparisonResponse>(
-    '/v1/comparisons',
+    COMPARISONS,
     request
   );
   return response.data;
@@ -55,7 +62,7 @@ export async function listComparisons(
   }
 
   const response = await apiClient.get<PagedComparisonResponse>(
-    `/v1/comparisons?${params.toString()}`
+    `${COMPARISONS}?${params.toString()}`
   );
   return response.data;
 }
@@ -70,7 +77,7 @@ export async function getComparison(
   comparisonId: number
 ): Promise<ComparisonResponse> {
   const response = await apiClient.get<ComparisonResponse>(
-    `/v1/comparisons/${comparisonId}`
+    COMPARISONS_ID(comparisonId)
   );
   return response.data;
 }
@@ -89,7 +96,7 @@ export async function getComparisonsForBatch(
   batchId: string
 ): Promise<ComparisonResponse[]> {
   const response = await apiClient.get<ComparisonResponse[]>(
-    `/v1/comparisons/by-batch/${batchId}`
+    COMPARISONS_BY_BATCH(batchId)
   );
   return response.data;
 }
@@ -103,7 +110,7 @@ export async function getComparisonsForBatch(
 export async function deleteComparison(
   comparisonId: number
 ): Promise<void> {
-  await apiClient.delete(`/v1/comparisons/${comparisonId}`);
+  await apiClient.delete(COMPARISONS_ID(comparisonId));
 }
 
 /**
@@ -135,7 +142,7 @@ export async function getComparisonResults(
   }
 
   const response = await apiClient.get<PagedComparisonResultResponse>(
-    `/v1/comparisons/${comparisonId}/results?${params.toString()}`
+    `${COMPARISONS_RESULTS(comparisonId)}?${params.toString()}`
   );
   return response.data;
 }
@@ -150,7 +157,7 @@ export async function getComparisonSummary(
   comparisonId: number
 ): Promise<ComparisonSummary> {
   const response = await apiClient.get<ComparisonSummary>(
-    `/v1/comparisons/${comparisonId}/summary`
+    COMPARISONS_SUMMARY(comparisonId)
   );
   return response.data;
 }

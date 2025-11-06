@@ -15,6 +15,7 @@ import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountResponse;
 import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponse;
 import com.bitbi.dfm.account.presentation.dto.UpdateAccountRequestDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
@@ -22,6 +23,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
@@ -43,23 +45,25 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST controller for account administration (Admin UI API).
+ * REST controller for account administration (UI/Admin API).
  * <p>
  * Provides admin endpoints for account CRUD operations.
- * Requires Keycloak authentication with ROLE_ADMIN.
+ * Requires Keycloak OAuth2 authentication with ROLE_ADMIN.
  * </p>
  * <p>
- * URL change from v2.x: /admin/accounts → /api/admin/accounts (breaking change)
+ * API Path: /api/v1/accounts (per API Unification Spec 010)
  * </p>
  *
  * @author Data Forge Team
  * @version 3.0.0
+ * @see <a href="specs/010-api-unification-goal/spec.md">API Unification Specification</a>
  */
 @RestController
-@RequestMapping("/api/admin/accounts")
+@RequestMapping(ApiRoutes.ACCOUNTS)
 @PreAuthorize("hasRole('ADMIN')")
 @Validated
-@Tag(name = "Admin - Accounts", description = "Account administration endpoints")
+@Tag(name = "UI/Admin API - Accounts", description = "Account administration endpoints for web interface")
+@SecurityRequirement(name = "oauth2")
 public class AccountAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(AccountAdminController.class);

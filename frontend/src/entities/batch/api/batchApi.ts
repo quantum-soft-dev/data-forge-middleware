@@ -8,6 +8,14 @@
  */
 
 import { apiClient } from '@/shared/api/client';
+import {
+  HISTORY_BATCHES,
+  HISTORY_BATCH_ID,
+  HISTORY_FILE_DOWNLOAD,
+  HISTORY_ZIP_DOWNLOAD,
+  HISTORY_EXCEL_EXPORT,
+  HISTORY_ERRORS
+} from '@/shared/api/apiRoutes';
 import type {
   BatchSummary,
   BatchDetail,
@@ -19,7 +27,7 @@ import type {
 /**
  * T035: List batch history for current user with cursor-based pagination.
  *
- * GET /api/user/batches?cursor={cursor}&limit={limit}
+ * GET /api/v1/history/batches?cursor={cursor}&limit={limit}
  *
  * Uses Keycloak OAuth2 authentication. Returns batches filtered by user's account.
  *
@@ -42,7 +50,7 @@ export async function listBatches(
   }
 
   const response = await apiClient.get<CursorPageResponse<BatchSummary>>(
-    `/user/batches?${params.toString()}`
+    `${HISTORY_BATCHES}?${params.toString()}`
   );
 
   return response.data;
@@ -51,7 +59,7 @@ export async function listBatches(
 /**
  * T052: Get batch details with file list.
  *
- * GET /api/user/batches/{batchId}
+ * GET /api/v1/history/batches/{batchId}
  *
  * Returns detailed batch information including all uploaded files.
  * Throws 403 if batch doesn't belong to user, 404 if batch doesn't exist.
@@ -60,14 +68,14 @@ export async function listBatches(
  * @returns Batch details with file list
  */
 export async function getBatchDetails(batchId: string): Promise<BatchDetail> {
-  const response = await apiClient.get<BatchDetail>(`/user/batches/${batchId}`);
+  const response = await apiClient.get<BatchDetail>(HISTORY_BATCH_ID(batchId));
   return response.data;
 }
 
 /**
  * T073: Download a single file from a batch.
  *
- * GET /api/user/batches/{batchId}/files/{fileId}/download
+ * GET /api/v1/history/batches/{batchId}/files/{fileId}/download
  *
  * Returns file download metadata with presigned S3 URL (15-minute expiry).
  * The frontend uses this URL to trigger browser download directly from S3.
@@ -85,14 +93,14 @@ export async function downloadFile(
     fileName: string;
     fileSize: number;
     expiresAt: string;
-  }>(`/user/batches/${batchId}/files/${fileId}/download`);
+  }>(HISTORY_FILE_DOWNLOAD(batchId, fileId));
   return response.data;
 }
 
 /**
  * T074: Download multiple files as a ZIP archive.
  *
- * POST /api/user/batches/{batchId}/download-zip
+ * POST /api/v1/history/batches/{batchId}/download-zip
  *
  * Streams multiple files as a ZIP archive. For single file, use downloadFile() instead.
  * The ZIP is generated server-side using Apache Commons Compress with streaming.
@@ -106,7 +114,7 @@ export async function downloadFilesAsZip(
   fileIds: string[]
 ): Promise<Blob> {
   const response = await apiClient.post(
-    `/user/batches/${batchId}/download-zip`,
+    HISTORY_ZIP_DOWNLOAD(batchId),
     { fileIds },
     {
       responseType: 'blob',
@@ -121,7 +129,7 @@ export async function downloadFilesAsZip(
 /**
  * T096: Export selected CSV files to Excel workbook (.xlsx).
  *
- * POST /api/user/batches/{batchId}/export-excel
+ * POST /api/v1/history/batches/{batchId}/export-excel
  *
  * Generates Excel workbook with each CSV file as a separate sheet.
  * Uses Apache POI SXSSF for memory-efficient streaming (100-row window).
@@ -136,7 +144,7 @@ export async function exportToExcel(
   fileIds: string[]
 ): Promise<Blob> {
   const response = await apiClient.post(
-    `/user/batches/${batchId}/export-excel`,
+    HISTORY_EXCEL_EXPORT(batchId),
     { fileIds },
     {
       responseType: 'blob',
@@ -151,7 +159,7 @@ export async function exportToExcel(
 /**
  * T105: Get errors for batch with offset-based pagination (Phase 7).
  *
- * GET /api/user/batches/{batchId}/errors?page={page}&size={size}
+ * GET /api/v1/history/batches/{batchId}/errors?page={page}&size={size}
  *
  * Returns paginated list of errors for a specific batch.
  * Authorization: Verifies batch belongs to user's account (throws 403 if unauthorized).
@@ -174,7 +182,7 @@ export async function getBatchErrors(
   params.append('size', size.toString());
 
   const response = await apiClient.get<PageResponse<ErrorSummary>>(
-    `/user/batches/${batchId}/errors?${params.toString()}`
+    `${HISTORY_ERRORS(batchId)}?${params.toString()}`
   );
 
   return response.data;

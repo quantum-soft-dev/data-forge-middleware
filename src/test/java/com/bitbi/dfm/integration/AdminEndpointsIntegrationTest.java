@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -46,7 +47,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: GET admin accounts list with Keycloak token
-        mockMvc.perform(get("/api/admin/accounts")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS)
                         .header("Authorization", keycloakToken))
 
                 // Then: 200 OK with PageResponseDto<AccountResponseDto>
@@ -82,7 +83,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateTestToken();
 
         // When: GET admin accounts list with JWT token
-        mockMvc.perform(get("/api/admin/accounts")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS)
                         .header("Authorization", jwtToken))
 
                 // Then: 401 Unauthorized (test environment limitation - real JWT not recognized by mock decoder)
@@ -102,7 +103,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateTestToken();
 
         // When: GET admin sites list with JWT token
-        mockMvc.perform(get("/api/admin/sites")
+        mockMvc.perform(get(ApiRoutes.SITES)
                         .header("Authorization", jwtToken))
 
                 // Then: 401 Unauthorized (test environment limitation - real JWT not recognized by mock decoder)
@@ -120,7 +121,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: GET admin sites list with Keycloak token
-        mockMvc.perform(get("/api/admin/sites")
+        mockMvc.perform(get(ApiRoutes.SITES)
                         .header("Authorization", keycloakToken))
 
                 // Then: 200 OK with PageResponseDto<SiteResponseDto>

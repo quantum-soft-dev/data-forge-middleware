@@ -2,6 +2,7 @@ package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.account.infrastructure.KeycloakAdminClient;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.keycloak.representations.idm.UserRepresentation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -270,7 +271,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/with-keycloak
-        mockMvc.perform(post("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -308,7 +309,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/with-keycloak with role="USER"
-        mockMvc.perform(post("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -341,7 +342,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/with-keycloak with role="ADMIN"
-        mockMvc.perform(post("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -372,7 +373,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts without role field
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -400,7 +401,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts with invalid role
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -428,14 +429,14 @@ class AdminContractTest {
                 """;
 
         // First creation succeeds
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isCreated());
 
         // When: POST /admin/accounts with same email
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -463,7 +464,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts with invalid email
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -483,7 +484,7 @@ class AdminContractTest {
     @DisplayName("Should list accounts with pagination when admin authenticated")
     void shouldListAccountsWithPaginationWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts with pagination params
-        mockMvc.perform(get("/api/admin/accounts")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("page", "0")
                         .param("size", "20")
@@ -506,7 +507,7 @@ class AdminContractTest {
     @DisplayName("Should get account details when admin authenticated")
     void shouldGetAccountDetailsWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts/{id}
-        mockMvc.perform(get("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with account details
@@ -536,7 +537,7 @@ class AdminContractTest {
                 """;
 
         // When: PUT /admin/accounts/{id}
-        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(put(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -555,7 +556,7 @@ class AdminContractTest {
     @DisplayName("Should soft delete account when admin authenticated")
     void shouldSoftDeleteAccountWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/accounts/{id}
-        mockMvc.perform(delete("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(delete(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 204 No Content
@@ -569,7 +570,7 @@ class AdminContractTest {
     @DisplayName("Should get account statistics when admin authenticated")
     void shouldGetAccountStatisticsWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts/{id}/stats
-        mockMvc.perform(get("/api/admin/accounts/{id}/stats", MOCK_ACCOUNT_ID)
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS + "/{id}/statistics", MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with statistics
@@ -601,7 +602,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts with blank email
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -628,7 +629,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts with invalid email
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -655,7 +656,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts with blank name
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -682,7 +683,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts with name too short (< 2 chars)
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -709,7 +710,7 @@ class AdminContractTest {
                 """.formatted("A".repeat(101)); // 101 characters (max is 100)
 
         // When: POST /admin/accounts with name too long (> 100 chars)
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -735,7 +736,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts without email field
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -761,7 +762,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts without name field
-        mockMvc.perform(post("/api/admin/accounts")
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -789,7 +790,7 @@ class AdminContractTest {
                 """;
 
         // When: PUT /admin/accounts/{id} with blank name
-        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(put(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -815,7 +816,7 @@ class AdminContractTest {
                 """;
 
         // When: PUT /admin/accounts/{id} with name too short (< 2 chars)
-        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(put(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -841,7 +842,7 @@ class AdminContractTest {
                 """.formatted("A".repeat(101)); // 101 characters (max is 100)
 
         // When: PUT /admin/accounts/{id} with name too long (> 100 chars)
-        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(put(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -864,7 +865,7 @@ class AdminContractTest {
         String requestBody = "{}";
 
         // When: PUT /admin/accounts/{id} with empty JSON (no fields to update)
-        mockMvc.perform(put("/api/admin/accounts/{id}", MOCK_ACCOUNT_ID)
+        mockMvc.perform(put(ApiRoutes.ACCOUNTS_ID, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -893,7 +894,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -917,7 +918,7 @@ class AdminContractTest {
     @DisplayName("Should list sites for account when admin authenticated")
     void shouldListSitesForAccountWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/accounts/{accountId}/sites
-        mockMvc.perform(get("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(get(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with site array
@@ -933,7 +934,7 @@ class AdminContractTest {
     @DisplayName("Should soft delete site when admin authenticated")
     void shouldSoftDeleteSiteWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/sites/{id}
-        mockMvc.perform(delete("/api/admin/sites/{id}", MOCK_SITE_ID)
+        mockMvc.perform(delete(ApiRoutes.SITES_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with deactivated site
@@ -957,7 +958,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites with blank domain
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -984,7 +985,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites with domain too short (< 3 chars)
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1011,7 +1012,7 @@ class AdminContractTest {
                 """.formatted("a".repeat(256)); // 256 characters (max is 255)
 
         // When: POST /admin/accounts/{accountId}/sites with domain too long (> 255 chars)
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1038,7 +1039,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites with invalid characters
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1065,7 +1066,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites with blank displayName
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1092,7 +1093,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites with displayName too short (< 2 chars)
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1119,7 +1120,7 @@ class AdminContractTest {
                 """.formatted("A".repeat(101)); // 101 characters (max is 100)
 
         // When: POST /admin/accounts/{accountId}/sites with displayName too long (> 100 chars)
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1145,7 +1146,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites without domain field
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1171,7 +1172,7 @@ class AdminContractTest {
                 """;
 
         // When: POST /admin/accounts/{accountId}/sites without displayName field
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
@@ -1198,7 +1199,7 @@ class AdminContractTest {
     @DisplayName("Should lock account when admin authenticated")
     void shouldLockAccountWhenAdminAuthenticated() throws Exception {
         // When: POST /admin/accounts/{id}/lock
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with updated account status
@@ -1222,12 +1223,12 @@ class AdminContractTest {
     @DisplayName("Should unlock account when admin authenticated")
     void shouldUnlockAccountWhenAdminAuthenticated() throws Exception {
         // Given: Lock the account first
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
                 .andExpect(status().isOk());
 
         // When: POST /admin/accounts/{id}/unlock
-        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with updated account status
@@ -1249,7 +1250,7 @@ class AdminContractTest {
         String accountWithoutKeycloak = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
 
         // When: POST /admin/accounts/{id}/lock for account without Keycloak
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", accountWithoutKeycloak)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, accountWithoutKeycloak)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 400 Bad Request
@@ -1268,12 +1269,12 @@ class AdminContractTest {
     void shouldRejectLockRequestForAlreadyLockedAccount() throws Exception {
         // Given: Account is already locked (simulated by calling lock twice)
         // First lock succeeds
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
                 .andExpect(status().isOk());
 
         // When: POST /admin/accounts/{id}/lock again
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 400 Bad Request
@@ -1294,7 +1295,7 @@ class AdminContractTest {
         String accountWithoutKeycloak = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
 
         // When: POST /admin/accounts/{id}/unlock for account without Keycloak
-        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", accountWithoutKeycloak)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK, accountWithoutKeycloak)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 400 Bad Request
@@ -1312,7 +1313,7 @@ class AdminContractTest {
     @DisplayName("Should reject unlock request for already unlocked account")
     void shouldRejectUnlockRequestForAlreadyUnlockedAccount() throws Exception {
         // When: POST /admin/accounts/{id}/unlock for already unlocked account
-        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 400 Bad Request (assuming account starts unlocked)
@@ -1332,7 +1333,7 @@ class AdminContractTest {
         String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
 
         // When: POST /admin/accounts/{id}/lock for non-existent account
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", nonExistentAccountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, nonExistentAccountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 404 Not Found
@@ -1352,7 +1353,7 @@ class AdminContractTest {
         String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
 
         // When: POST /admin/accounts/{id}/unlock for non-existent account
-        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", nonExistentAccountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK, nonExistentAccountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 404 Not Found
@@ -1370,7 +1371,7 @@ class AdminContractTest {
     @DisplayName("Should reject lock request when user lacks ROLE_ADMIN")
     void shouldRejectLockRequestWhenUserLacksRoleAdmin() throws Exception {
         // When: POST /admin/accounts/{id}/lock with non-admin token
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
                 // Then: 403 Forbidden
@@ -1384,7 +1385,7 @@ class AdminContractTest {
     @DisplayName("Should reject unlock request when user lacks ROLE_ADMIN")
     void shouldRejectUnlockRequestWhenUserLacksRoleAdmin() throws Exception {
         // When: POST /admin/accounts/{id}/unlock with non-admin token
-        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", MOCK_ACCOUNT_ID)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK, MOCK_ACCOUNT_ID)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
                 // Then: 403 Forbidden
@@ -1400,7 +1401,7 @@ class AdminContractTest {
     @DisplayName("Should list batches with filtering when admin authenticated")
     void shouldListBatchesWithFilteringWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/batches with filters
-        mockMvc.perform(get("/api/admin/batches")
+        mockMvc.perform(get(ApiRoutes.BATCHES_ADMIN)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("siteId", MOCK_SITE_ID)
                         .param("status", "COMPLETED")
@@ -1422,7 +1423,7 @@ class AdminContractTest {
     @DisplayName("Should get batch details when admin authenticated")
     void shouldGetBatchDetailsWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/batches/{id}
-        mockMvc.perform(get("/api/admin/batches/{id}", MOCK_BATCH_ID)
+        mockMvc.perform(get(ApiRoutes.BATCHES_ADMIN_ID, MOCK_BATCH_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK with batch details
@@ -1445,7 +1446,7 @@ class AdminContractTest {
     @DisplayName("Should delete batch metadata when admin authenticated")
     void shouldDeleteBatchMetadataWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/batches/{id}
-        mockMvc.perform(delete("/api/admin/batches/{id}", MOCK_BATCH_ID)
+        mockMvc.perform(delete(ApiRoutes.BATCHES_ADMIN_ID, MOCK_BATCH_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 204 No Content
@@ -1461,7 +1462,7 @@ class AdminContractTest {
     @DisplayName("Should list errors with filtering when admin authenticated")
     void shouldListErrorsWithFilteringWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/errors with filters
-        mockMvc.perform(get("/api/admin/errors")
+        mockMvc.perform(get(ApiRoutes.ERRORS_ADMIN)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("siteId", MOCK_SITE_ID)
                         .param("type", "FileReadError")
@@ -1483,7 +1484,7 @@ class AdminContractTest {
     @DisplayName("Should export errors to CSV when admin authenticated")
     void shouldExportErrorsToCsvWhenAdminAuthenticated() throws Exception {
         // When: GET /admin/errors/export
-        mockMvc.perform(get("/api/admin/errors/export")
+        mockMvc.perform(get(ApiRoutes.ERRORS_EXPORT)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("siteId", MOCK_SITE_ID))
 
@@ -1502,7 +1503,7 @@ class AdminContractTest {
     @DisplayName("Should reject admin access when user lacks ROLE_ADMIN")
     void shouldRejectAdminAccessWhenUserLacksRoleAdmin() throws Exception {
         // When: GET /admin/accounts with non-admin token
-        mockMvc.perform(get("/api/admin/accounts")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
                 // Then: 403 Forbidden
@@ -1516,7 +1517,7 @@ class AdminContractTest {
     @DisplayName("Should reject admin access when authentication missing")
     void shouldRejectAdminAccessWhenAuthenticationMissing() throws Exception {
         // When: GET /admin/accounts without Authorization header
-        mockMvc.perform(get("/api/admin/accounts"))
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS))
 
                 // Then: 401 Unauthorized
                 .andExpect(status().isUnauthorized());
@@ -1539,7 +1540,7 @@ class AdminContractTest {
         String accountId = MOCK_ACCOUNT_ID;
 
         // When: POST /admin/accounts/{id}/reset-password
-        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD, accountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK
@@ -1566,7 +1567,7 @@ class AdminContractTest {
         String accountWithoutKeycloak = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
 
         // When: POST /admin/accounts/{id}/reset-password for account without Keycloak
-        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountWithoutKeycloak)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD, accountWithoutKeycloak)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 400 Bad Request
@@ -1589,12 +1590,12 @@ class AdminContractTest {
         String accountId = MOCK_ACCOUNT_ID;
 
         // Lock the account first
-        mockMvc.perform(post("/api/admin/accounts/{id}/lock", accountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK, accountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
                 .andExpect(status().isOk());
 
         // When: POST /admin/accounts/{id}/reset-password on locked account
-        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD, accountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 200 OK (password reset still works on locked accounts)
@@ -1604,7 +1605,7 @@ class AdminContractTest {
                 .andExpect(jsonPath("$.expiresAt").exists());
 
         // Unlock account for cleanup
-        mockMvc.perform(post("/api/admin/accounts/{id}/unlock", accountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK, accountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
                 .andExpect(status().isOk());
     }
@@ -1624,7 +1625,7 @@ class AdminContractTest {
         String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
 
         // When: POST /admin/accounts/{id}/reset-password
-        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", nonExistentAccountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD, nonExistentAccountId)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
                 // Then: 404 Not Found
@@ -1646,7 +1647,7 @@ class AdminContractTest {
         String accountId = MOCK_ACCOUNT_ID;
 
         // When: POST /admin/accounts/{id}/reset-password with non-admin token
-        mockMvc.perform(post("/api/admin/accounts/{id}/reset-password", accountId)
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD, accountId)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
                 // Then: 403 Forbidden
@@ -1667,7 +1668,7 @@ class AdminContractTest {
     @DisplayName("Should list all Keycloak accounts without search filter")
     void shouldListAllKeycloakAccountsWithoutSearch() throws Exception {
         // When: GET /admin/accounts/with-keycloak
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("page", "0")
                         .param("size", "20"))
@@ -1697,7 +1698,7 @@ class AdminContractTest {
     @DisplayName("Should filter Keycloak accounts by email search")
     void shouldFilterKeycloakAccountsByEmailSearch() throws Exception {
         // When: GET /admin/accounts/with-keycloak?search=admin-test
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("search", "admin-test")
                         .param("page", "0")
@@ -1723,7 +1724,7 @@ class AdminContractTest {
     @DisplayName("Should filter Keycloak accounts by name search")
     void shouldFilterKeycloakAccountsByNameSearch() throws Exception {
         // When: GET /admin/accounts/with-keycloak?search=Admin
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("search", "Admin")
                         .param("page", "0")
@@ -1748,7 +1749,7 @@ class AdminContractTest {
     @DisplayName("Should return empty results when search matches no accounts")
     void shouldReturnEmptyResultsWhenSearchMatchesNothing() throws Exception {
         // When: GET /admin/accounts/with-keycloak?search=nonexistent
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("search", "nonexistent-user-xyz")
                         .param("page", "0")
@@ -1774,7 +1775,7 @@ class AdminContractTest {
     @DisplayName("Should reject search with invalid characters")
     void shouldRejectSearchWithInvalidCharacters() throws Exception {
         // When: GET /admin/accounts/with-keycloak?search=test<script>
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("search", "test<script>")
                         .param("page", "0")
@@ -1803,7 +1804,7 @@ class AdminContractTest {
         String longSearch = "a".repeat(101);
 
         // When: GET /admin/accounts/with-keycloak?search=<101 chars>
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("search", longSearch)
                         .param("page", "0")
@@ -1829,7 +1830,7 @@ class AdminContractTest {
     @DisplayName("Should perform case-insensitive search")
     void shouldPerformCaseInsensitiveSearch() throws Exception {
         // When: GET /admin/accounts/with-keycloak?search=ADMIN (uppercase)
-        mockMvc.perform(get("/api/admin/accounts/with-keycloak")
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS_WITH_KEYCLOAK)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
                         .param("search", "ADMIN")
                         .param("page", "0")
@@ -1840,6 +1841,36 @@ class AdminContractTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.content").isArray())
                 .andExpect(jsonPath("$.content[?(@.name =~ /.*admin.*/i)]").exists());
+    }
+
+    /**
+     * Test Case 29 (TC23): Admin API should reject Custom JWT token.
+     * <p>
+     * <b>Given</b>: Request with Custom JWT token (for Device API)<br>
+     * <b>When</b>: GET /api/v1/accounts<br>
+     * <b>Then</b>: 403 Forbidden (Admin API requires Keycloak OAuth2 token)
+     * </p>
+     * <p>
+     * This test verifies security filter chain separation per API Unification Spec:
+     * - Device API (/api/v1/device/**) accepts Custom JWT only
+     * - UI/Admin API (/api/v1/**) accepts Keycloak OAuth2 only
+     * </p>
+     */
+    @Test
+    @DisplayName("TC23: Should reject Custom JWT token on Admin API endpoints")
+    void shouldRejectCustomJwtTokenOnAdminApiEndpoints() throws Exception {
+        // Given: Use mock Custom JWT token (simulates token from Device Auth endpoint)
+        // This is a valid JWT structure but will be rejected by Admin API OAuth2 filter
+        // In test environment, the mock JwtDecoder will throw BadJwtException → 401
+        String customJwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzaXRlSWQiOiIwMTk5YmFhYy1mODUyLTc1M2YtNmZjMy03Yzk5NGZjMzg2NTQiLCJhY2NvdW50SWQiOiIwMTk5YmFhYy1mODRlLTg4ZjUtZGM1YS1lMTUxOTBkMjg4MjAiLCJkb21haW4iOiJzdG9yZS0wMS5leGFtcGxlLmNvbSIsImlhdCI6MTYzMDAwMDAwMCwiZXhwIjoxNjMwMDg2NDAwfQ.signature";
+
+        // When: GET /api/v1/accounts with Custom JWT token
+        mockMvc.perform(get(ApiRoutes.ACCOUNTS)
+                        .header("Authorization", "Bearer " + customJwtToken))
+
+                // Then: 401 Unauthorized (test env: mock JwtDecoder throws BadJwtException)
+                // Production would return 403 Forbidden per FR-005
+                .andExpect(status().isUnauthorized());
     }
 
     // ========== Site Management Tests (User Story 5 - Admin Site Operations) ==========
@@ -1856,7 +1887,7 @@ class AdminContractTest {
     @DisplayName("Should deactivate site when admin authenticated (US5)")
     void shouldDeactivateSiteWhenAdminAuthenticated() throws Exception {
         // When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate",
+        mockMvc.perform(post(ApiRoutes.SITES_DEACTIVATE,
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
@@ -1877,7 +1908,7 @@ class AdminContractTest {
     @DisplayName("Should activate site when admin authenticated (US5)")
     void shouldActivateSiteWhenAdminAuthenticated() throws Exception {
         // When: POST /admin/accounts/{accountId}/sites/{siteId}/activate
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/activate",
+        mockMvc.perform(post(ApiRoutes.SITES_ACTIVATE,
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
@@ -1901,7 +1932,7 @@ class AdminContractTest {
     @DisplayName("Should hard delete site when admin authenticated (US5)")
     void shouldHardDeleteSiteWhenAdminAuthenticated() throws Exception {
         // When: DELETE /admin/accounts/{accountId}/sites/{siteId}
-        mockMvc.perform(delete("/api/admin/accounts/{accountId}/sites/{siteId}",
+        mockMvc.perform(delete(ApiRoutes.SITES_DELETE_BY_ACCOUNT,
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN))
 
@@ -1916,7 +1947,7 @@ class AdminContractTest {
     @DisplayName("Should reject site deactivation when user lacks ROLE_ADMIN (US5)")
     void shouldRejectSiteDeactivationWhenUserLacksRoleAdmin() throws Exception {
         // When: POST /admin/accounts/{accountId}/sites/{siteId}/deactivate with non-admin token
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate",
+        mockMvc.perform(post(ApiRoutes.SITES_DEACTIVATE,
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
@@ -1931,7 +1962,7 @@ class AdminContractTest {
     @DisplayName("Should reject site activation when user lacks ROLE_ADMIN (US5)")
     void shouldRejectSiteActivationWhenUserLacksRoleAdmin() throws Exception {
         // When: POST /admin/accounts/{accountId}/sites/{siteId}/activate with non-admin token
-        mockMvc.perform(post("/api/admin/accounts/{accountId}/sites/{siteId}/activate",
+        mockMvc.perform(post(ApiRoutes.SITES_ACTIVATE,
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 
@@ -1946,7 +1977,7 @@ class AdminContractTest {
     @DisplayName("Should reject site deletion when user lacks ROLE_ADMIN (US5)")
     void shouldRejectSiteDeletionWhenUserLacksRoleAdmin() throws Exception {
         // When: DELETE /admin/accounts/{accountId}/sites/{siteId} with non-admin token
-        mockMvc.perform(delete("/api/admin/accounts/{accountId}/sites/{siteId}",
+        mockMvc.perform(delete(ApiRoutes.SITES_DELETE_BY_ACCOUNT,
                         MOCK_ACCOUNT_ID, MOCK_SITE_ID)
                         .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN))
 

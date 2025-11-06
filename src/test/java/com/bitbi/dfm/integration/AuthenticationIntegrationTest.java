@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +39,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: POST /api/v1/auth/token with Basic Auth
-        mockMvc.perform(post("/api/v1/auth/token")
+        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
 
                 // Then: 200 OK with valid JWT token
@@ -65,7 +66,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: Authenticate and receive token
-        String response = mockMvc.perform(post("/api/v1/auth/token")
+        String response = mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
                 .andExpect(status().isOk())
                 .andReturn()
@@ -89,7 +90,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: Attempt authentication
-        mockMvc.perform(post("/api/v1/auth/token")
+        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
 
                 // Then: 401 Unauthorized
@@ -110,7 +111,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: Attempt authentication
-        mockMvc.perform(post("/api/v1/auth/token")
+        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
 
                 // Then: 401 Unauthorized

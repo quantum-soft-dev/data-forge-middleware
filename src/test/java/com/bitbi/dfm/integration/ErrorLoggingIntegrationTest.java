@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -16,7 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Scenario 5: Error Logging Integration Test")
 class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
 
-    private static final String MOCK_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
+    private static final String MOCK_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test-data.sql
 
     @Test
     @DisplayName("Should record error with batch association and JSONB metadata")
@@ -39,7 +40,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 """;
 
         // When: POST /api/dfc/error/{batchId}
-        mockMvc.perform(post("/api/dfc/error/{batchId}", MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
@@ -65,7 +66,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 """;
 
         // When: Log error
-        mockMvc.perform(post("/api/dfc/error/{batchId}", MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
@@ -88,13 +89,16 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 """;
 
         // When: POST /api/dfc/error (no batchId)
-        mockMvc.perform(post("/api/dfc/error")
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
 
-                // Then: 204 No Content (error logged without batch)
-                .andExpect(status().isNoContent());
+                // Then: 201 Created (error logged without batch)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.type").value("ConfigurationError"))
+                .andExpect(jsonPath("$.batchId").isEmpty());
     }
 
     @Test
@@ -110,7 +114,7 @@ class ErrorLoggingIntegrationTest extends BaseIntegrationTest {
                 """;
 
         // When: Log error
-        mockMvc.perform(post("/api/dfc/error/{batchId}", MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))

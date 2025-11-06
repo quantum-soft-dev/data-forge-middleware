@@ -13,6 +13,7 @@ import com.bitbi.dfm.comparison.presentation.dto.ComparisonSummaryDto;
 import com.bitbi.dfm.comparison.presentation.dto.CreateComparisonRequestDto;
 import com.bitbi.dfm.comparison.presentation.dto.PagedComparisonResponse;
 import com.bitbi.dfm.comparison.presentation.dto.PagedComparisonResultResponse;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -56,9 +57,9 @@ import java.util.stream.Collectors;
  * @see ComparisonResponseDto
  */
 @RestController
-@RequestMapping("/api/v1/comparisons")
-@Tag(name = "Comparisons", description = "File comparison operations")
-@SecurityRequirement(name = "bearerAuth")
+@RequestMapping(ApiRoutes.COMPARISONS)
+@Tag(name = "UI/Admin API - Comparisons", description = "File comparison operations for authenticated users")
+@SecurityRequirement(name = "oauth2")
 public class ComparisonController {
 
     private static final Logger log = LoggerFactory.getLogger(ComparisonController.class);

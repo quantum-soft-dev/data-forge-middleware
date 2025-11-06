@@ -4,6 +4,7 @@ import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import com.bitbi.dfm.config.TestS3Config;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Contract tests for Batch & Upload API (/api/dfc/batch/*).
+ * Contract tests for Batch & Upload API (Device API /api/v1/device/batches/*).
  * <p>
  * CRITICAL: These tests MUST FAIL before implementation.
  * Purpose: Validate batch lifecycle endpoints before building actual services.
@@ -43,14 +44,14 @@ class BatchContractTest {
     @Autowired
     private TokenService tokenService;
 
-    private static final String BATCH_START_ENDPOINT = "/api/dfc/batch/start";
-    private static final String BATCH_UPLOAD_ENDPOINT = "/api/dfc/batch/{batchId}/upload";
-    private static final String BATCH_COMPLETE_ENDPOINT = "/api/dfc/batch/{batchId}/complete";
-    private static final String BATCH_FAIL_ENDPOINT = "/api/dfc/batch/{batchId}/fail";
-    private static final String BATCH_CANCEL_ENDPOINT = "/api/dfc/batch/{batchId}/cancel";
+    private static final String BATCH_START_ENDPOINT = ApiRoutes.DEVICE_BATCHES_START;
+    private static final String BATCH_UPLOAD_ENDPOINT = ApiRoutes.DEVICE_FILES_UPLOAD;
+    private static final String BATCH_COMPLETE_ENDPOINT = ApiRoutes.DEVICE_BATCHES_COMPLETE;
+    private static final String BATCH_FAIL_ENDPOINT = ApiRoutes.DEVICE_BATCHES_FAIL;
+    private static final String BATCH_CANCEL_ENDPOINT = ApiRoutes.DEVICE_BATCHES_CANCEL;
 
     private static final String MOCK_BATCH_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
-    private static final String IN_PROGRESS_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
+    private static final String IN_PROGRESS_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678903";
 
     private String jwtToken;
 
@@ -100,8 +101,8 @@ class BatchContractTest {
         mockMvc.perform(post(BATCH_START_ENDPOINT)
                         .contentType(MediaType.APPLICATION_JSON))
 
-                // Then: 403 Forbidden (Spring Security returns 403 for missing authentication)
-                .andExpect(status().isForbidden());
+                // Then: 401 Unauthorized (AuthenticationEntryPoint returns 401 for unauthenticated requests)
+                .andExpect(status().isUnauthorized());
     }
 
     /**
@@ -154,21 +155,21 @@ class BatchContractTest {
                 "mock file content 2".getBytes()
         );
 
-        // When: POST /api/dfc/batch/{batchId}/upload
+        // When: POST /api/v1/device/files/batches/{batchId}/upload
         mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, IN_PROGRESS_BATCH_ID)
                         .file(file1)
                         .file(file2)
                         .header("Authorization", "Bearer " + jwtToken))
 
-                // Then: 200 OK with upload summary
-                .andExpect(status().isOk())
+                // Then: 201 Created with FileUploadResponseDto (first file only - legacy behavior)
+                .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status").value("OK"))
-                .andExpect(jsonPath("$.uploadedFiles").isNumber())
-                .andExpect(jsonPath("$.files").isArray())
-                .andExpect(jsonPath("$.files[0].fileName").exists())
-                .andExpect(jsonPath("$.files[0].fileSize").exists())
-                .andExpect(jsonPath("$.files[0].uploadedAt").exists());
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_BATCH_ID))
+                .andExpect(jsonPath("$.filename").exists())
+                .andExpect(jsonPath("$.s3Key").exists())
+                .andExpect(jsonPath("$.fileSize").exists())
+                .andExpect(jsonPath("$.uploadedAt").exists());
     }
 
     /**
@@ -185,16 +186,16 @@ class BatchContractTest {
                 "duplicate content".getBytes()
         );
 
-        // When: POST /api/dfc/batch/{batchId}/upload
+        // When: POST /api/v1/device/files/batches/{batchId}/upload
         mockMvc.perform(multipart(BATCH_UPLOAD_ENDPOINT, MOCK_BATCH_ID)
                         .file(duplicateFile)
                         .header("Authorization", "Bearer " + jwtToken))
 
-                // Then: 400 Bad Request
-                .andExpect(status().isBadRequest())
+                // Then: 409 Conflict (duplicate file detected by service layer)
+                .andExpect(status().isConflict())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").exists())
                 .andExpect(jsonPath("$.message").exists());
     }
 
@@ -398,7 +399,7 @@ class BatchContractTest {
     @DisplayName("T010: GET /api/dfc/batch/{id} should return BatchResponseDto with all 10 fields")
     void getBatch_shouldReturnBatchResponseDtoWithAllFields() throws Exception {
         // When: GET /api/dfc/batch/{id} with JWT token
-        mockMvc.perform(get("/api/dfc/batch/{id}", IN_PROGRESS_BATCH_ID)
+        mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES_GET, IN_PROGRESS_BATCH_ID)
                         .header("Authorization", "Bearer " + jwtToken))
 
                 // Then: 200 OK with BatchResponseDto structure
@@ -463,17 +464,17 @@ class BatchContractTest {
      * </p>
      */
     @Test
-    @DisplayName("T010: GET /api/dfc/batch/{id} with Keycloak token returns 403 (test env limitation)")
-    void getBatch_withKeycloakToken_shouldReturn403InTestEnv() throws Exception {
+    @DisplayName("T010: GET Device batch with Keycloak token returns 401 (test env limitation)")
+    void getBatch_withKeycloakToken_shouldReturn401InTestEnv() throws Exception {
         // Given: Mock Keycloak OAuth2 token
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
-        // When: GET /api/dfc/batch/{id} with Keycloak token
-        mockMvc.perform(get("/api/dfc/batch/{id}", IN_PROGRESS_BATCH_ID)
+        // When: GET Device batch with Keycloak token
+        mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES_GET, IN_PROGRESS_BATCH_ID)
                         .header("Authorization", keycloakToken))
 
-                // Then: 403 Forbidden in test environment
+                // Then: 401 Unauthorized (invalid JWT format triggers AuthenticationEntryPoint)
                 // Production would return 200 OK with BatchResponseDto per FR-005
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 }

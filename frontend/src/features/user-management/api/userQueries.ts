@@ -6,6 +6,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '@/shared/api/client'
+import { ACCOUNTS_WITH_KEYCLOAK, ACCOUNTS_WITH_KEYCLOAK_ID, ACCOUNTS_AUDIT_LOGS } from '@/shared/api/apiRoutes'
 import type {
   AccountWithKeycloakStatus,
   AdminActionLogListResponse,
@@ -57,7 +58,7 @@ async function fetchAccounts(filters: AccountFilters): Promise<{
     size: number
     totalElements: number
     totalPages: number
-  }>(`/admin/accounts/with-keycloak?${params.toString()}`)
+  }>(`${ACCOUNTS_WITH_KEYCLOAK}?${params.toString()}`)
 
   return response.data
 }
@@ -87,7 +88,7 @@ export function useAccountsQuery(
  */
 async function fetchAccount(accountId: string): Promise<AccountWithKeycloakStatus> {
   const response = await apiClient.get<AccountWithKeycloakStatus>(
-    `/admin/accounts/${accountId}/with-keycloak`
+    ACCOUNTS_WITH_KEYCLOAK_ID(accountId)
   )
 
   return response.data
@@ -122,7 +123,7 @@ async function fetchAccountAuditLogs(
   params.append('sort', sort)
 
   const response = await apiClient.get<AdminActionLogListResponse>(
-    `/admin/accounts/${accountId}/audit-logs?${params.toString()}`
+    `${ACCOUNTS_AUDIT_LOGS(accountId)}?${params.toString()}`
   )
 
   return response.data

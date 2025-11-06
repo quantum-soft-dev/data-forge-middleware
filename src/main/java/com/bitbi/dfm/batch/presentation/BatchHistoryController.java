@@ -6,6 +6,7 @@ import com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException;
 import com.bitbi.dfm.batch.presentation.dto.*;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.upload.application.ExcelExportService;
@@ -46,9 +47,9 @@ import java.util.UUID;
  * @since User Story 1 (Phase 3)
  */
 @RestController
-@RequestMapping("/api/user/batches")
-@Tag(name = "Upload History", description = "View upload history and download files")
-@SecurityRequirement(name = "bearerAuth")
+@RequestMapping(ApiRoutes.HISTORY_BATCHES)
+@Tag(name = "UI/Admin API - Upload History", description = "View upload history and download files for authenticated users")
+@SecurityRequirement(name = "oauth2")
 public class BatchHistoryController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchHistoryController.class);
@@ -76,7 +77,7 @@ public class BatchHistoryController {
     /**
      * List upload history with cursor-based pagination.
      * <p>
-     * GET /api/user/batches?cursor={cursor}&limit={limit}
+     * GET /api/v1/history/batches?cursor={cursor}&limit={limit}
      * </p>
      *
      * @param cursor Pagination cursor (optional, null for first page)
@@ -127,7 +128,7 @@ public class BatchHistoryController {
     /**
      * Get batch details with file list.
      * <p>
-     * GET /api/user/batches/{batchId}
+     * GET /api/v1/history/batches/{batchId}
      * </p>
      *
      * @param batchId Batch ID
@@ -181,7 +182,7 @@ public class BatchHistoryController {
     /**
      * Get presigned URL for single file download.
      * <p>
-     * GET /api/user/batches/{batchId}/files/{fileId}/download
+     * GET /api/v1/history/batches/{batchId}/files/{fileId}/download
      * </p>
      * <p>
      * T068: Returns FileDownloadResponseDto with S3 presigned URL (15-minute expiry).
@@ -261,7 +262,7 @@ public class BatchHistoryController {
     /**
      * Download multiple files as ZIP archive.
      * <p>
-     * POST /api/user/batches/{batchId}/download-zip
+     * POST /api/v1/history/batches/{batchId}/download-zip
      * </p>
      * <p>
      * T069: Streams files directly from S3 as ZIP archive.
@@ -338,7 +339,7 @@ public class BatchHistoryController {
     /**
      * Export selected CSV files to Excel workbook (.xlsx).
      * <p>
-     * POST /api/user/batches/{batchId}/export-excel
+     * POST /api/v1/history/batches/{batchId}/export-excel
      * </p>
      * <p>
      * T092: Generates Excel workbook where each CSV becomes a separate sheet.
@@ -446,7 +447,7 @@ public class BatchHistoryController {
     /**
      * Get errors for batch with pagination (Phase 7 - T104).
      * <p>
-     * GET /api/user/batches/{batchId}/errors?page={page}&size={size}
+     * GET /api/v1/history/batches/{batchId}/errors?page={page}&size={size}
      * </p>
      *
      * @param batchId Batch identifier

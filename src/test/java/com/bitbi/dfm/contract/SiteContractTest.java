@@ -1,6 +1,7 @@
 package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.config.TestSecurityConfig;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,17 +20,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Contract tests for Site Management User API.
  * <p>
- * Tests the /api/sites endpoints for user site management (US1).
+ * DEPRECATED: These tests are for the old /api/sites endpoint which has been migrated to /api/v1/sites (Admin API).
+ * Site management is now part of the Admin API and requires ROLE_ADMIN.
+ * See AdminContractTest for current site management tests.
  * </p>
  *
- * Feature: 007-adding-a-site (T025-T026, US1)
+ * Feature: 007-adding-a-site (T025-T026, US1) - DEPRECATED
+ * Replacement: /api/v1/sites (Admin API) tested in AdminContractTest
  */
+@Disabled("Deprecated: /api/sites migrated to /api/v1/sites (Admin API). See AdminContractTest.")
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(TestSecurityConfig.class)
 @Sql("/test-data.sql")
-@DisplayName("Site Management User API Contract Tests")
+@DisplayName("Site Management User API Contract Tests (DEPRECATED)")
 class SiteContractTest {
 
     @Autowired

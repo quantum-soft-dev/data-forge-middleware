@@ -31,15 +31,17 @@ import java.util.stream.Collectors;
  * Test security configuration that mocks OAuth2/Keycloak authentication.
  *
  * <p>This configuration mirrors the production SecurityConfiguration architecture with
- * three separate SecurityFilterChain beans, but uses mocked authentication for testing
- * without requiring a running Keycloak instance.</p>
+ * unified API structure, but uses mocked authentication for testing without requiring
+ * a running Keycloak instance.</p>
  *
- * <p><b>Filter Chain Architecture:</b></p>
+ * <p><b>Unified Filter Chain Architecture:</b></p>
  * <ul>
- *   <li><b>Order 1:</b> /api/dfc/** → Custom JWT authentication via JwtAuthenticationFilter</li>
- *   <li><b>Order 2:</b> /api/admin/** → Mocked OAuth2 Resource Server (mock.admin.jwt.token grants ROLE_ADMIN)</li>
- *   <li><b>Order 3:</b> /api/sites**, /api/account/** → Mocked OAuth2 for user endpoints (any authenticated user)</li>
- *   <li><b>Order 4:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
+ *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication (Device API)</li>
+ *   <li><b>Order 2:</b> /api/dfc/** → Custom JWT (legacy, deprecated)</li>
+ *   <li><b>Order 3:</b> /api/v1/** → Mocked OAuth2 Resource Server (UI/Admin API)</li>
+ *   <li><b>Order 4:</b> /api/admin/** → Mocked OAuth2 (legacy, deprecated)</li>
+ *   <li><b>Order 5:</b> /api/sites**, /api/account/**, /api/user/** → Mocked OAuth2 (legacy, deprecated)</li>
+ *   <li><b>Order 6:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
  * </ul>
  *
  * <p><b>Mock Token Behavior:</b></p>
@@ -50,7 +52,7 @@ import java.util.stream.Collectors;
  * </ul>
  *
  * @author Data Forge Team
- * @version 1.1.0
+ * @version 2.0.0
  * @see com.bitbi.dfm.shared.config.SecurityConfiguration Production security configuration
  */
 @TestConfiguration
@@ -172,15 +174,43 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for JWT-authenticated Data Forge Client endpoints.
+     * Device API filter chain (NEW unified structure).
      * <p>
-     * Order 1: Highest priority to match /api/dfc/** first.
-     * JWT tokens only - custom JwtAuthenticationFilter.
+     * Order 1: Highest priority - matches /api/v1/device/** first.
+     * Custom JWT tokens only via JwtAuthenticationFilter.
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(1)
-    public SecurityFilterChain jwtFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain deviceApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/device/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.sendError(401, "Unauthorized - Custom JWT authentication required for Device API");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Legacy JWT filter chain for old Data Forge Client endpoints.
+     * <p>
+     * Order 2: Second priority - matches /api/dfc/** (deprecated).
+     * Custom JWT tokens only via JwtAuthenticationFilter.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(2)
+    public SecurityFilterChain legacyJwtFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/dfc/**")
             .csrf(csrf -> csrf.disable())
@@ -188,21 +218,59 @@ public class TestSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .anyRequest().authenticated()
             )
-            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.sendError(401, "Unauthorized - Custom JWT authentication required");
+                })
+            );
 
         return http.build();
     }
 
     /**
-     * Security filter chain for Keycloak-authenticated admin endpoints.
+     * UI/Admin API filter chain (NEW unified structure).
      * <p>
-     * Order 2: Second priority to match /api/admin/** (changed from /admin/**).
+     * Order 3: Third priority - matches /api/v1/** (excluding /api/v1/device/**).
+     * Keycloak OAuth2 Resource Server only.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(3)
+    public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (handled by Order 1)
+                .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/errors/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/history/**").authenticated() // Any authenticated user
+                .requestMatchers("/api/v1/comparisons/**").authenticated() // Any authenticated user
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt
+                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
+                )
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Legacy Keycloak filter chain for old admin endpoints.
+     * <p>
+     * Order 4: Fourth priority - matches /api/admin/** (deprecated).
      * Keycloak OAuth2 Resource Server only - ROLE_ADMIN required.
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(2)
-    public SecurityFilterChain keycloakFilterChain(HttpSecurity http) throws Exception {
+    @org.springframework.core.annotation.Order(4)
+    public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/admin/**")
             .csrf(csrf -> csrf.disable())
@@ -220,21 +288,20 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Security filter chain for user-facing authenticated endpoints.
+     * Legacy user filter chain for authenticated user endpoints.
      * <p>
-     * Order 3: Third priority to match /api/sites**, /api/account/**, /api/user/**, /api/v1/** (except /api/v1/auth/token).
+     * Order 5: Fifth priority - matches /api/sites**, /api/account/**, /api/user/** (deprecated).
      * OAuth2 Resource Server - any authenticated user allowed.
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(3)
-    public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
+    @org.springframework.core.annotation.Order(5)
+    public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**", "/api/v1/**")
+            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/auth/token").permitAll() // Public token endpoint
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
@@ -249,12 +316,12 @@ public class TestSecurityConfig {
     /**
      * Default security filter chain for remaining endpoints.
      * <p>
-     * Order 4: Lowest priority - catches all remaining requests.
-     * Allows public access to actuator, swagger, and auth token endpoint.
+     * Order 6: Lowest priority - catches all remaining requests.
+     * Allows public access to actuator, swagger, and auth token endpoints.
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(4)
+    @org.springframework.core.annotation.Order(6)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
@@ -262,7 +329,8 @@ public class TestSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/device/auth/token").permitAll() // NEW Device API token endpoint
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint
                 .anyRequest().denyAll()
             );
 
