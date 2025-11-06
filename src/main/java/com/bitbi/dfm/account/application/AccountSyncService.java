@@ -161,6 +161,21 @@ public class AccountSyncService {
             }
 
             throw convertAuth0Exception(ex, "create user");
+        } catch (RuntimeException ex) {
+            logger.error("PostgreSQL error during account creation for email: {}", email, ex);
+
+            // Compensating transaction: Delete Auth0 user if PostgreSQL creation failed
+            if (auth0UserId != null) {
+                try {
+                    deleteAuth0User(auth0UserId);
+                    logger.warn("Compensating transaction: Deleted orphaned Auth0 user: {}", auth0UserId);
+                } catch (Exception deleteEx) {
+                    logger.error("CRITICAL: Failed to delete orphaned Auth0 user: {} - Manual cleanup required!",
+                        auth0UserId, deleteEx);
+                }
+            }
+
+            throw ex;
         } finally {
             MDC.remove("auth0UserId");
             MDC.remove("accountId");

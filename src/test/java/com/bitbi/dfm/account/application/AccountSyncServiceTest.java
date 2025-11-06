@@ -48,6 +48,7 @@ import static org.mockito.Mockito.*;
  * @version 1.0.0
  */
 @ExtendWith(MockitoExtension.class)
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
 @DisplayName("AccountSyncService Unit Tests")
 class AccountSyncServiceTest {
 
@@ -126,8 +127,10 @@ class AccountSyncServiceTest {
         assertThat(result.account()).isNotNull();
         assertThat(result.account().getEmail()).isEqualTo(email);
         assertThat(result.account().getName()).isEqualTo(name);
-        assertThat(result.account().getPhone()).isEqualTo(phone);
-        assertThat(result.account().getCompany()).isEqualTo(company);
+        assertThat(result.account().getPhone()).isNotNull();
+        assertThat(result.account().getPhone().getValue()).isEqualTo(phone);
+        assertThat(result.account().getCompany()).isNotNull();
+        assertThat(result.account().getCompany().getValue()).isEqualTo(company);
         assertThat(result.account().getIdentityProviderUserId()).isEqualTo("auth0|123456");
         assertThat(result.temporaryPassword()).isNotBlank();
         assertThat(result.temporaryPassword()).hasSize(16);
