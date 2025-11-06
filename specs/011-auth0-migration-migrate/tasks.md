@@ -156,19 +156,19 @@
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] **T028** [P] [US1] Contract test for `POST /api/v1/accounts/with-auth0` in `src/test/java/com/bitbi/dfm/contract/Auth0AdminContractTest.java`:
+- [x] **T028** [P] [US1] Contract test for `POST /api/v1/accounts/with-auth0` in `src/test/java/com/bitbi/dfm/contract/Auth0AdminContractTest.java`:
   - Test valid request returns 201 with temporaryPassword
   - Test invalid email returns 400
   - Test duplicate email returns 409
   - Mock Auth0 Management API calls
 
-- [ ] **T029** [P] [US1] Integration test for user creation in `src/test/java/com/bitbi/dfm/integration/Auth0UserCreationIntegrationTest.java`:
+- [x] **T029** [P] [US1] Integration test for user creation in `src/test/java/com/bitbi/dfm/integration/Auth0UserCreationIntegrationTest.java`:
   - Use Testcontainers PostgreSQL
   - Mock Auth0 Management API
   - Verify bidirectional linkage (PostgreSQL ← Auth0 user ID, Auth0 user_metadata → accountId)
   - Verify rollback on Auth0 failure (no orphaned PostgreSQL record)
 
-- [ ] **T030** [P] [US1] Unit test for `Auth0UserId` value object in `src/test/java/com/bitbi/dfm/unit/Auth0UserIdTest.java`:
+- [x] **T030** [P] [US1] Unit test for `Auth0UserId` value object in `src/test/java/com/bitbi/dfm/auth/Auth0UserIdTest.java`:
   - Test valid format accepted
   - Test invalid format throws exception
   - Test null/blank throws exception
@@ -218,7 +218,7 @@
   - TC06: Metadata update failure handled gracefully
   - Mockito mocks for ManagementAPI, AccountRepository, EventPublisher
 
-- [ ] **T037** [US1] Add structured logging with MDC in `AccountService.createAccountWithAuth0`:
+- [x] **T037** [US1] Add structured logging with MDC in `Auth0AccountSyncService.createAccountWithAuth0`:
   - MDC.put("accountId", account.getId())
   - MDC.put("auth0UserId", auth0UserId)
   - Log creation success/failure at INFO/ERROR level
