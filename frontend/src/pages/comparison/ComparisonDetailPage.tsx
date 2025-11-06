@@ -104,6 +104,9 @@ export function ComparisonDetailPage(): React.ReactElement {
     enabled: parsedId !== null,
   });
 
+  // Check completion status (must be before conditional queries for hooks order)
+  const isCompleted = comparison?.status === 'COMPLETED';
+
   // Fetch summary if comparison is completed
   const {
     data: summary,
@@ -111,7 +114,7 @@ export function ComparisonDetailPage(): React.ReactElement {
   } = useQuery({
     queryKey: ['comparison', parsedId, 'summary'],
     queryFn: () => comparisonApi.getComparisonSummary(parsedId!),
-    enabled: parsedId !== null && comparison?.status === 'COMPLETED',
+    enabled: parsedId !== null && isCompleted,
   });
 
   // Fetch results if comparison is completed
@@ -127,8 +130,24 @@ export function ComparisonDetailPage(): React.ReactElement {
         size: 20,
         changeType: changeTypeFilter,
       }),
-    enabled: parsedId !== null && comparison?.status === 'COMPLETED',
+    enabled: parsedId !== null && isCompleted,
   });
+
+  // Get current file for diff viewer (before early returns to maintain hooks order)
+  const currentFile = results && results.content.length > 0 ? results.content[currentFileIndex] : null;
+  const hasMultipleFiles = results && results.content.length > 1;
+
+  // Parse unifiedDiff from JSON string to object with error handling
+  // IMPORTANT: useMemo must be called unconditionally (React Hooks rules)
+  const parsedDiff = React.useMemo(() => {
+    if (!isCompleted || !currentFile?.unifiedDiff) return null;
+    try {
+      return JSON.parse(currentFile.unifiedDiff);
+    } catch (error) {
+      console.error('Failed to parse unified diff:', error);
+      return null;
+    }
+  }, [isCompleted, currentFile?.unifiedDiff]);
 
   // Debug logging
   console.log('[ComparisonDetailPage] Results data:', results);
@@ -216,23 +235,8 @@ export function ComparisonDetailPage(): React.ReactElement {
   }
 
   const isInProgress = comparison.status === 'IN_PROGRESS';
-  const isCompleted = comparison.status === 'COMPLETED';
+  // isCompleted is already defined above (before conditional queries)
   const isFailed = comparison.status === 'FAILED';
-
-  // Get current file for diff viewer
-  const currentFile = results && results.content.length > 0 ? results.content[currentFileIndex] : null;
-  const hasMultipleFiles = results && results.content.length > 1;
-
-  // Parse unifiedDiff from JSON string to object with error handling
-  const parsedDiff = React.useMemo(() => {
-    if (!currentFile?.unifiedDiff) return null;
-    try {
-      return JSON.parse(currentFile.unifiedDiff);
-    } catch (error) {
-      console.error('Failed to parse unified diff:', error);
-      return null;
-    }
-  }, [currentFile?.unifiedDiff]);
 
   return (
     <DiffViewerProvider>

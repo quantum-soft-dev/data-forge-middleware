@@ -4,6 +4,7 @@ import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import com.bitbi.dfm.config.TestS3Config;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,7 +48,7 @@ class BatchHistoryContractTest {
     @Autowired(required = false)
     private TokenService tokenService;
 
-    private static final String BATCH_HISTORY_ENDPOINT = "/api/user/batches";
+    private static final String BATCH_HISTORY_ENDPOINT = ApiRoutes.HISTORY_BATCHES;
 
     // Use mock Keycloak token for /api/user/** endpoints
     private static final String MOCK_USER_TOKEN = "mock.user.jwt.token";
@@ -403,12 +404,12 @@ class BatchHistoryContractTest {
     @DisplayName("TC09: GET /api/user/batches/{batchId}/files/{fileId}/download should return 403 when batch status is IN_PROGRESS")
     void tc09_downloadFile_shouldReturn403WhenBatchInProgress() throws Exception {
         // Given: Use IN_PROGRESS batch from test-data.sql
-        // Batch 0199bab2-8d63-8563-8340-edbf1c11c778 (IN_PROGRESS) has file 0199bab3-a134-e3e5-e76e-7ba0a7c44fa5
-        String inProgressBatchId = "0199bab2-8d63-8563-8340-edbf1c11c778";
+        // Batch b1c2d3e4-f5a6-7890-bcde-f12345678903 (IN_PROGRESS) has file 0199bab3-a134-e3e5-e76e-7ba0a7c44fa5
+        String inProgressBatchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903";
         String fileId = "0199bab3-a134-e3e5-e76e-7ba0a7c44fa5";
 
-        // When: GET /api/user/batches/{batchId}/files/{fileId}/download
-        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/files/{fileId}/download", inProgressBatchId, fileId)
+        // When: GET /api/v1/history/batches/{batchId}/files/{fileId}/download
+        mockMvc.perform(get(ApiRoutes.HISTORY_FILE_DOWNLOAD, inProgressBatchId, fileId)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
 
@@ -547,11 +548,11 @@ class BatchHistoryContractTest {
     @DisplayName("TC13: GET /api/user/batches/{batchId}/errors should return PageResponseDto<ErrorSummaryDto>")
     void tc13_getBatchErrors_shouldReturnErrorList() throws Exception {
         // Given: Use batch with errors from test-data.sql
-        // Batch 0199bab2-8d63-8563-8340-edbf1c11c778 has hasErrors=true
-        String batchIdWithErrors = "0199bab2-8d63-8563-8340-edbf1c11c778";
+        // Batch 0199bab2-ca1c-3d0e-441d-adb776a62579 (FAILED) has has_errors=true with 2 error_logs
+        String batchIdWithErrors = "0199bab2-ca1c-3d0e-441d-adb776a62579";
 
         // When: GET /api/user/batches/{batchId}/errors
-        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/errors", batchIdWithErrors)
+        mockMvc.perform(get(ApiRoutes.HISTORY_ERRORS, batchIdWithErrors)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andDo(print())
@@ -584,11 +585,11 @@ class BatchHistoryContractTest {
     @Test
     @DisplayName("TC13b: GET /api/user/batches/{batchId}/errors should support pagination parameters")
     void tc13b_getBatchErrors_shouldSupportPagination() throws Exception {
-        // Given: Use batch with errors
-        String batchIdWithErrors = "0199bab2-8d63-8563-8340-edbf1c11c778";
+        // Given: Use batch with errors (FAILED batch with 2 error logs)
+        String batchIdWithErrors = "0199bab2-ca1c-3d0e-441d-adb776a62579";
 
-        // When: GET /api/user/batches/{batchId}/errors with pagination params
-        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}/errors", batchIdWithErrors)
+        // When: GET /api/v1/history/batches/{batchId}/errors with pagination params
+        mockMvc.perform(get(ApiRoutes.HISTORY_ERRORS, batchIdWithErrors)
                         .param("page", "0")
                         .param("size", "10")
                         .header("Authorization", "Bearer " + jwtToken)

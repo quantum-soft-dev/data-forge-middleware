@@ -27,14 +27,20 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Security configuration with path-based separated authentication systems (FR-005).
+ * Security configuration with unified API structure (API Unification - Spec 010).
  *
- * <p>Implements four separate SecurityFilterChain beans with @Order precedence:</p>
+ * <p><b>Unified API Structure (Post-Migration):</b></p>
  * <ul>
- *   <li><b>Order 1:</b> /api/dfc/** → JWT authentication only (Data Forge Client endpoints)</li>
- *   <li><b>Order 2:</b> /api/admin/** → Keycloak OAuth2 authentication only (Admin UI endpoints, ROLE_ADMIN)</li>
- *   <li><b>Order 3:</b> /api/sites/**, /api/account/** → Keycloak OAuth2 (User endpoints, authenticated)</li>
- *   <li><b>Order 4:</b> Default → Public endpoints + deny all others</li>
+ *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication only (Device API)</li>
+ *   <li><b>Order 2:</b> /api/v1/** → Keycloak OAuth2 authentication only (UI/Admin API)</li>
+ *   <li><b>Order 3:</b> Default → Public endpoints + deny all others</li>
+ * </ul>
+ *
+ * <p><b>Legacy API Support (Pre-Migration):</b></p>
+ * <ul>
+ *   <li>/api/dfc/** → Custom JWT (legacy Device API paths)</li>
+ *   <li>/api/admin/** → Keycloak OAuth2 with ROLE_ADMIN (legacy Admin paths)</li>
+ *   <li>/api/user/**, /api/sites/**, /api/account/** → Keycloak OAuth2 (legacy User paths)</li>
  * </ul>
  *
  * <p><b>Architecture:</b> Each filter chain operates independently. Requests are routed to the first
@@ -45,9 +51,10 @@ import java.util.stream.Collectors;
  * information (IP, endpoint, method, status, tokenType) for security monitoring.</p>
  *
  * @author Data Forge Team
- * @version 3.1.0
+ * @version 4.0.0
  * @see com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter Custom JWT authentication
  * @see com.bitbi.dfm.shared.auth.AuthenticationAuditLogger Authentication failure logging
+ * @see <a href="specs/010-api-unification-goal/spec.md">API Unification Specification</a>
  */
 @Configuration
 @EnableWebSecurity
@@ -66,16 +73,59 @@ public class SecurityConfiguration {
     }
 
     /**
-     * JWT filter chain for Data Forge Client endpoints.
+     * Device API filter chain (NEW unified structure).
      * <p>
-     * Order 1: Highest priority.
-     * Matches: /api/dfc/**
-     * Authentication: JWT Bearer tokens only (custom JwtAuthenticationFilter).
+     * <b>Order 1</b>: Highest priority - evaluated FIRST<br>
+     * <b>Matches</b>: /api/v1/device/**<br>
+     * <b>Authentication</b>: Custom JWT Bearer tokens only (JwtAuthenticationFilter)
      * </p>
+     * <p>
+     * This filter chain routes all Device API requests (IoT devices, mobile apps, data
+     * collection clients) to Custom JWT authentication. Keycloak tokens will be rejected.
+     * </p>
+     *
+     * @since 4.0.0 (API Unification)
      */
     @Bean
     @Order(1)
-    public SecurityFilterChain jwtFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain deviceApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/device/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint with Basic Auth
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
+                    response.sendError(401, "Unauthorized - Custom JWT authentication required for Device API");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Legacy JWT filter chain for old Data Forge Client endpoints.
+     * <p>
+     * <b>Order 2</b>: Second priority<br>
+     * <b>Matches</b>: /api/dfc/**<br>
+     * <b>Authentication</b>: JWT Bearer tokens only (custom JwtAuthenticationFilter)
+     * </p>
+     * <p>
+     * <b>DEPRECATED</b>: This filter chain supports legacy /api/dfc/** paths during
+     * migration period. Will return 410 Gone after migration via DeprecatedEndpointFilter.
+     * </p>
+     *
+     * @deprecated Use {@link #deviceApiFilterChain(HttpSecurity)} instead (Order 1)
+     */
+    @Bean
+    @Order(2)
+    @Deprecated(since = "4.0.0", forRemoval = true)
+    public SecurityFilterChain legacyJwtFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/dfc/**")
             .csrf(csrf -> csrf.disable())
@@ -95,16 +145,78 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Keycloak filter chain for Admin UI endpoints.
+     * UI/Admin API filter chain (NEW unified structure).
      * <p>
-     * Order 2: Second priority.
-     * Matches: /api/admin/**
-     * Authentication: Keycloak OAuth2 Resource Server (requires ROLE_ADMIN).
+     * <b>Order 3</b>: Third priority - evaluated AFTER Device API filter chain<br>
+     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/**)<br>
+     * <b>Authentication</b>: Keycloak OAuth2 Resource Server only
      * </p>
+     * <p>
+     * This filter chain routes all UI/Admin API requests (web dashboard, user portal,
+     * admin operations) to Keycloak OAuth2 authentication. Custom JWT tokens will be rejected.
+     * </p>
+     * <p>
+     * <b>Authorization</b>:
+     * </p>
+     * <ul>
+     *   <li>/api/v1/accounts/** → Requires ROLE_ADMIN</li>
+     *   <li>/api/v1/sites/** → Requires ROLE_ADMIN</li>
+     *   <li>/api/v1/batches/** → Requires ROLE_ADMIN</li>
+     *   <li>/api/v1/errors/** → Requires ROLE_ADMIN</li>
+     *   <li>/api/v1/history/** → Requires authenticated user (any role)</li>
+     *   <li>/api/v1/comparisons/** → Requires authenticated user (any role)</li>
+     * </ul>
+     *
+     * @since 4.0.0 (API Unification)
      */
     @Bean
-    @Order(2)
-    public SecurityFilterChain keycloakFilterChain(HttpSecurity http) throws Exception {
+    @Order(3)
+    public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
+                .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/errors/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/history/**").authenticated() // Any authenticated user
+                .requestMatchers("/api/v1/comparisons/**").authenticated() // Any authenticated user
+                .anyRequest().authenticated() // Default: require authentication
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
+                    response.sendError(401, "Unauthorized - Keycloak OAuth2 authentication required for UI/Admin API");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
+     * Legacy Keycloak filter chain for old Admin UI endpoints.
+     * <p>
+     * <b>Order 4</b>: Fourth priority<br>
+     * <b>Matches</b>: /api/admin/**<br>
+     * <b>Authentication</b>: Keycloak OAuth2 Resource Server (requires ROLE_ADMIN)
+     * </p>
+     * <p>
+     * <b>DEPRECATED</b>: This filter chain supports legacy /api/admin/** paths during
+     * migration period. Will return 410 Gone after migration via DeprecatedEndpointFilter.
+     * </p>
+     *
+     * @deprecated Use {@link #adminApiFilterChain(HttpSecurity)} instead (Order 3)
+     */
+    @Bean
+    @Order(4)
+    @Deprecated(since = "4.0.0", forRemoval = true)
+    public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/admin/**")
             .csrf(csrf -> csrf.disable())
@@ -126,22 +238,29 @@ public class SecurityConfiguration {
     }
 
     /**
-     * User filter chain for authenticated user endpoints.
+     * Legacy user filter chain for authenticated user endpoints.
      * <p>
-     * Order 3: Third priority.
-     * Matches: /api/sites/**, /api/account/**, /api/user/**, /api/v1/** (except /api/v1/auth/token)
-     * Authentication: Keycloak OAuth2 Resource Server (any authenticated user).
+     * <b>Order 5</b>: Fifth priority<br>
+     * <b>Matches</b>: /api/sites/**, /api/account/**, /api/user/**<br>
+     * <b>Authentication</b>: Keycloak OAuth2 Resource Server (any authenticated user)
      * </p>
+     * <p>
+     * <b>DEPRECATED</b>: This filter chain supports legacy /api/user/**, /api/sites/**,
+     * /api/account/** paths during migration period. Will return 410 Gone after migration
+     * via DeprecatedEndpointFilter.
+     * </p>
+     *
+     * @deprecated Legacy paths - user endpoints migrated to /api/v1/history/**
      */
     @Bean
-    @Order(3)
-    public SecurityFilterChain userFilterChain(HttpSecurity http) throws Exception {
+    @Order(5)
+    @Deprecated(since = "4.0.0", forRemoval = true)
+    public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**", "/api/v1/**")
+            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/auth/token").permitAll() // Public token endpoint
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
@@ -160,19 +279,28 @@ public class SecurityConfiguration {
     /**
      * Default filter chain for public and remaining endpoints.
      * <p>
-     * Order 4: Lowest priority (catches all remaining requests).
-     * Public access: /api/v1/auth/token, /actuator/health, /actuator/info, /swagger-ui/**, /v3/api-docs/**
-     * All other requests: Denied (403).
+     * <b>Order 6</b>: Lowest priority (catches all remaining requests)<br>
+     * <b>Public access</b>:
+     * </p>
+     * <ul>
+     *   <li>/api/v1/device/auth/token (POST) - NEW Device API token endpoint</li>
+     *   <li>/api/v1/auth/token (POST) - Legacy token endpoint (deprecated)</li>
+     *   <li>/actuator/health, /actuator/info - Health checks</li>
+     *   <li>/swagger-ui/**, /v3/api-docs/** - API documentation</li>
+     * </ul>
+     * <p>
+     * All other requests: Denied (403 Forbidden)
      * </p>
      */
     @Bean
-    @Order(4)
+    @Order(6)
     public SecurityFilterChain defaultFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/device/auth/token").permitAll() // NEW Device API token endpoint
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()

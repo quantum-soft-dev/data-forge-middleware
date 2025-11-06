@@ -1,6 +1,7 @@
 package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,7 +38,7 @@ class AuthContractTest {
     @Autowired
     private MockMvc mockMvc;
 
-    private static final String AUTH_TOKEN_ENDPOINT = "/api/v1/auth/token";
+    private static final String AUTH_TOKEN_ENDPOINT = ApiRoutes.DEVICE_AUTH_TOKEN;
 
     /**
      * Test Case 1: Valid credentials should issue JWT token.

@@ -7,6 +7,8 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - PostgreSQL 16 (sites table already exists, extend with admin_action_logs table via Flyway migration) (007-adding-a-site)
 - Backend: Java 21 (LTS), Frontend: TypeScript 5.6 with React 19.2 (009-markdown-user-story)
 - PostgreSQL 16 (new tables: file_comparisons, comparison_results), AWS S3 (file content retrieval) (009-markdown-user-story)
+- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6, SpringDoc OpenAPI 3 (010-api-unification-goal)
+- N/A (refactoring only - no schema changes) (010-api-unification-goal)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features

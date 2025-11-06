@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
@@ -17,18 +18,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Scenario 4: Batch Completion Integration Test")
 class BatchCompletionIntegrationTest extends BaseIntegrationTest {
 
-    private static final String IN_PROGRESS_MOCK_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778";
+    private static final String IN_PROGRESS_MOCK_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test-data.sql
 
     @Test
     @DisplayName("Should complete batch and transition to COMPLETED status")
     void shouldCompleteBatchAndTransitionToCompletedStatus() throws Exception {
         // Given: Batch with uploaded files
-        // When: POST /api/dfc/batch/{batchId}/complete
-        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        // When: POST /api/v1/device/batches/{id}/complete
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
 
-                // Then: Batch completed
+                // Then: Batch completed (200 OK with BatchResponseDto)
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_MOCK_BATCH_ID))
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.completedAt").exists())
@@ -43,7 +45,7 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should prevent file upload after batch completion")
     void shouldPreventFileUploadAfterBatchCompletion() throws Exception {
         // Given: Completed batch
-        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
@@ -53,29 +55,33 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
                 "late content".getBytes()
         );
 
-        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(multipart(ApiRoutes.DEVICE_FILES_UPLOAD, IN_PROGRESS_MOCK_BATCH_ID)
                         .file(file)
                         .header("Authorization", generateTestToken()))
 
-                // Then: 400 Bad Request
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Cannot upload files to completed batch"));
+                // Then: 409 Conflict (batch is already completed)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("Conflict"))
+                .andExpect(jsonPath("$.message").value("Cannot upload files to batch with status: COMPLETED"));
     }
 
     @Test
     @DisplayName("Should prevent double completion")
     void shouldPreventDoubleCompletion() throws Exception {
         // Given: Already completed batch
-        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Attempt to complete again
-        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
 
-                // Then: 400 Bad Request
+                // Then: 400 Bad Request with ErrorResponseDto
                 .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").exists())
                 .andExpect(jsonPath("$.message").value("Cannot complete batch in status COMPLETED (expected IN_PROGRESS): batchId=" + IN_PROGRESS_MOCK_BATCH_ID));
     }
 
@@ -83,16 +89,17 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should allow new batch after completion")
     void shouldAllowNewBatchAfterCompletion() throws Exception {
         // Given: Previous batch completed
-        mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", IN_PROGRESS_MOCK_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, IN_PROGRESS_MOCK_BATCH_ID)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isOk());
 
         // When: Start new batch
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateTestToken()))
 
-                // Then: Success (no more IN_PROGRESS conflict)
+                // Then: Success (201 Created with BatchResponseDto)
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.batchId").exists());
     }
 }

@@ -51,11 +51,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain) throws ServletException, IOException {
 
-        // Only process /api/dfc/** endpoints (Data Forge Client endpoints)
-        // Filter is already registered only for /api/dfc/** in SecurityConfiguration
+        // Process Device API endpoints: /api/v1/device/** (new) and /api/dfc/** (legacy)
+        // Filter is already registered only for these paths in SecurityConfiguration
         // This check is redundant but kept for safety
         String path = request.getRequestURI();
-        if (!path.startsWith("/api/dfc/")) {
+        if (!path.startsWith("/api/dfc/") && !path.startsWith("/api/v1/device/")) {
             filterChain.doFilter(request, response);
             return;
         }

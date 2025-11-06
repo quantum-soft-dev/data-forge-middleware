@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -47,7 +48,7 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
         String jwtToken = generateToken("admin-site.example.com", "admin-site-secret");
 
         // When: POST batch start with JWT token
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", jwtToken))
 
                 // Then: 201 Created with BatchResponseDto
@@ -65,7 +66,7 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Scenario 3b: POST with Keycloak token should return 403 Forbidden.
+     * Scenario 3b: POST with Keycloak token should return 401 Unauthorized.
      * <p>
      * <strong>Production Behavior (FR-006, FR-007)</strong>: Write operations reject Keycloak tokens.
      * SecurityConfiguration's AuthenticationManagerResolver returns 403 when Keycloak token
@@ -73,24 +74,21 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
      * </p>
      * <p>
      * <strong>Test Environment Behavior</strong>: TestSecurityConfig's separate filter chains
-     * also reject Keycloak tokens on client API (matches production behavior).
+     * reject Keycloak tokens on client API with 401 (cannot validate Keycloak token with Custom JWT filter).
      * </p>
      */
     @Test
-    @DisplayName("startBatch_withKeycloak_shouldReturn403")
-    void startBatch_withKeycloak_shouldReturn403() throws Exception {
+    @DisplayName("startBatch_withKeycloak_shouldReturn401")
+    void startBatch_withKeycloak_shouldReturn401() throws Exception {
         // Given: Valid Keycloak OAuth2 token (mocked in TestSecurityConfig)
         String keycloakToken = "Bearer mock.admin.jwt.token";
 
         // When: POST batch start with Keycloak token
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", keycloakToken))
 
-                // Then: 403 Forbidden (test environment matches production behavior for write operations)
-                .andExpect(status().isForbidden());
-
-        // Note: In production, this would also return ErrorResponseDto with generic auth failure message (FR-014)
-        // Test environment may not include ErrorResponseDto in 403 response due to TestSecurityConfig simplification
+                // Then: 401 Unauthorized (Keycloak token cannot be validated by Custom JWT filter)
+                .andExpect(status().isUnauthorized());
     }
 
     /**
@@ -101,15 +99,16 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
     void completeBatch_withJwt_shouldReturn200() throws Exception {
         // Given: Valid JWT token and existing IN_PROGRESS batch
         String jwtToken = generateTestToken();
-        String batchId = "0199bab2-8d63-8563-8340-edbf1c11c778"; // IN_PROGRESS batch from test-data.sql
+        String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test-data.sql
 
         // When: PUT batch complete with JWT token
-        mockMvc.perform(post("/api/dfc/batch/" + batchId + "/complete")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, batchId)
                         .header("Authorization", jwtToken))
 
                 // Then: 200 OK with BatchResponseDto including completedAt
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(batchId))
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.batchId").value(batchId))
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.completedAt").exists()); // Completed batch has completedAt timestamp
     }
@@ -118,17 +117,17 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
      * Additional verification: Keycloak rejected on batch completion (PUT operation).
      */
     @Test
-    @DisplayName("completeBatch_withKeycloak_shouldReturn403")
-    void completeBatch_withKeycloak_shouldReturn403() throws Exception {
+    @DisplayName("completeBatch_withKeycloak_shouldReturn401")
+    void completeBatch_withKeycloak_shouldReturn401() throws Exception {
         // Given: Valid Keycloak token and existing IN_PROGRESS batch
         String keycloakToken = "Bearer mock.admin.jwt.token";
-        String batchId = "0199bab2-8d63-8563-8340-edbf1c11c778";
+        String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test-data.sql
 
         // When: PUT batch complete with Keycloak token
-        mockMvc.perform(post("/api/dfc/batch/" + batchId + "/complete")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, batchId)
                         .header("Authorization", keycloakToken))
 
-                // Then: 403 Forbidden (production + test behavior match)
-                .andExpect(status().isForbidden());
+                // Then: 401 Unauthorized (Keycloak token cannot be validated by Custom JWT filter)
+                .andExpect(status().isUnauthorized());
     }
 }

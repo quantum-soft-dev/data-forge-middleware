@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
@@ -21,14 +22,13 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
 
     // test-data.sql contains:
     // - store-01.example.com (siteId: 0199baac-f852-753f-6fc3-7c994fc38654, account: a1b2c3d4)
-    //   - IN_PROGRESS batch: 0199bab2-8d63-8563-8340-edbf1c11c778
-    //   - File: 0199bab3-a134-e3e5-e76e-7ba0a7c44fa5
-    // - store-03.example.com (siteId: 0199bab0-ca3b-e41c-5521-2f4b33fda8b6, account: 0199bab1, DIFFERENT ACCOUNT)
-    //   - IN_PROGRESS batch: 0199bab2-dddd-dddd-dddd-dddddddddddd
-    //   - File: 0199bab3-eeee-eeee-eeee-eeeeeeeeeeee
+    //   - IN_PROGRESS batch: b1c2d3e4-f5a6-7890-bcde-f12345678903
+    // - store-02.example.com (siteId: 0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7, account: a1b2c3d4, SAME ACCOUNT but different site)
+    //   - IN_PROGRESS batch: b1c2d3e4-f5a6-7890-bcde-f12345678905
+    // Security test: site-01 cannot access site-02's batch even though they share the same account
 
-    private static final String STORE_01_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778"; // Owned by store-01
-    private static final String STORE_03_BATCH_ID = "0199bab2-dddd-dddd-dddd-dddddddddddd"; // Owned by store-03 (different account)
+    private static final String STORE_01_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // Owned by store-01
+    private static final String STORE_02_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678905"; // Owned by store-02 (same account, different site)
 
     /**
      * Test Case 1: Site should NOT be able to upload files to another site's batch.
@@ -39,8 +39,8 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("Should reject file upload to batch owned by another site (403 Forbidden)")
     void shouldReject_uploadToOtherSiteBatch() throws Exception {
-        // Given: Token for store-03.example.com (different account)
-        String token03 = generateToken("store-03.example.com", "batch-test-secret");
+        // Given: Token for store-02.example.com (same account, different site)
+        String token02 = generateToken("store-02.example.com", "inactive-secret-uuid");
 
         MockMultipartFile file = new MockMultipartFile(
                 "files",
@@ -49,16 +49,16 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
                 "malicious content".getBytes()
         );
 
-        // When: Attempt to upload to store-01's batch
-        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", STORE_01_BATCH_ID)
+        // When: Attempt to upload to store-01's batch (using store-02's token)
+        mockMvc.perform(multipart(ApiRoutes.DEVICE_FILES_UPLOAD, STORE_01_BATCH_ID)
                         .file(file)
-                        .header("Authorization", token03))
+                        .header("Authorization", token02))
 
-                // Then: 403 Forbidden (tenant isolation enforced)
+                // Then: 403 Forbidden (tenant isolation enforced - different site)
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
                 .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Cannot upload files to batch owned by another site"));
+                .andExpect(jsonPath("$.message").value("Access denied: site ownership mismatch"));
     }
 
     /**
@@ -78,14 +78,15 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
         );
 
         // When: Upload to own batch
-        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", STORE_01_BATCH_ID)
+        mockMvc.perform(multipart(ApiRoutes.DEVICE_FILES_UPLOAD, STORE_01_BATCH_ID)
                         .file(file)
                         .header("Authorization", token01))
 
-                // Then: 200 OK (authorized)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("OK"))
-                .andExpect(jsonPath("$.uploadedFiles").value(1));
+                // Then: 201 Created (file uploaded successfully)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.batchId").value(STORE_01_BATCH_ID))
+                .andExpect(jsonPath("$.filename").value("legitimate-upload.csv.gz"));
     }
 
     /**
@@ -97,22 +98,22 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("Should reject file retrieval from batch owned by another site (403 Forbidden)")
     void shouldReject_getFileFromOtherSiteBatch() throws Exception {
-        // Given: Token for store-03.example.com (different account)
-        String token03 = generateToken("store-03.example.com", "batch-test-secret");
+        // Given: Token for store-02.example.com (same account, different site)
+        String token02 = generateToken("store-02.example.com", "inactive-secret-uuid");
 
         // Note: test-data.sql contains uploaded file with known ID in store-01's batch
         String fileId = "0199bab3-a134-e3e5-e76e-7ba0a7c44fa5"; // File in store-01's batch
 
-        // When: Attempt to retrieve file from store-01's batch
-        mockMvc.perform(get("/api/dfc/batch/{batchId}/files/{fileId}",
+        // When: Attempt to retrieve file from store-01's batch (using store-02's token)
+        mockMvc.perform(get(ApiRoutes.DEVICE_FILES_GET,
                         STORE_01_BATCH_ID, fileId)
-                        .header("Authorization", token03))
+                        .header("Authorization", token02))
 
-                // Then: 403 Forbidden (tenant isolation enforced)
+                // Then: 403 Forbidden (tenant isolation enforced - different site)
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
                 .andExpect(jsonPath("$.error").value("Forbidden"))
-                .andExpect(jsonPath("$.message").value("Cannot access files in batch owned by another site"));
+                .andExpect(jsonPath("$.message").value("Access denied: site ownership mismatch"));
     }
 
     /**
@@ -128,7 +129,7 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
         String fileId = "0199bab3-a134-e3e5-e76e-7ba0a7c44fa5"; // File in store-01's batch
 
         // When: Retrieve own file
-        mockMvc.perform(get("/api/dfc/batch/{batchId}/files/{fileId}",
+        mockMvc.perform(get(ApiRoutes.DEVICE_FILES_GET,
                         STORE_01_BATCH_ID, fileId)
                         .header("Authorization", token01))
 
@@ -160,7 +161,7 @@ class FileUploadAuthorizationTest extends BaseIntegrationTest {
         String nonExistentBatchId = "00000000-0000-0000-0000-000000000000";
 
         // When: Upload to non-existent batch
-        mockMvc.perform(multipart("/api/dfc/batch/{batchId}/upload", nonExistentBatchId)
+        mockMvc.perform(multipart(ApiRoutes.DEVICE_FILES_UPLOAD, nonExistentBatchId)
                         .file(file)
                         .header("Authorization", token))
 

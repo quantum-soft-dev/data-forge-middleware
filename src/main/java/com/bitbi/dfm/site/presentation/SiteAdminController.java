@@ -11,6 +11,7 @@ import com.bitbi.dfm.site.presentation.dto.SiteCreationResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteStatisticsDto;
 import com.bitbi.dfm.site.presentation.dto.UpdateSiteRequestDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
@@ -18,6 +19,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -40,22 +42,23 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * REST controller for site administration (Admin UI API).
+ * REST controller for site administration (UI/Admin API).
  * <p>
  * Provides admin endpoints for site CRUD operations.
- * Requires Keycloak authentication with ROLE_ADMIN.
+ * Requires Keycloak OAuth2 authentication with ROLE_ADMIN.
  * </p>
  * <p>
- * URL change from v2.x: /admin/sites → /api/admin/sites (breaking change)
- * URL change from v2.x: /admin/accounts/{accountId}/sites → /api/admin/accounts/{accountId}/sites (breaking change)
+ * API Path: /api/v1/sites and /api/v1/accounts/{accountId}/sites (per API Unification Spec 010)
  * </p>
  *
  * @author Data Forge Team
  * @version 3.0.0
+ * @see <a href="specs/010-api-unification-goal/spec.md">API Unification Specification</a>
  */
 @RestController
 @PreAuthorize("hasRole('ADMIN')")
-@Tag(name = "Admin - Sites", description = "Site administration endpoints")
+@Tag(name = "UI/Admin API - Sites", description = "Site administration endpoints for web interface")
+@SecurityRequirement(name = "oauth2")
 public class SiteAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(SiteAdminController.class);
@@ -95,7 +98,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "409", description = "Site already exists",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @PostMapping("/api/admin/accounts/{accountId}/sites")
+    @PostMapping(ApiRoutes.SITES_CREATE)
     public ResponseEntity<SiteCreationResponseDto> createSite(
             @PathVariable("accountId") UUID accountId,
             @Valid @RequestBody CreateSiteRequestDto request,
@@ -153,7 +156,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @GetMapping("/api/admin/sites/{id}")
+    @GetMapping(ApiRoutes.SITES_ID)
     public ResponseEntity<SiteResponseDto> getSite(@PathVariable("id") UUID siteId) {
         Site site = siteService.getSite(siteId);
         SiteResponseDto response = SiteResponseDto.fromEntity(site);
@@ -179,7 +182,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "200", description = "Sites retrieved successfully",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponseDto.class)))
     })
-    @GetMapping("/api/admin/sites")
+    @GetMapping(ApiRoutes.SITES)
     public ResponseEntity<PageResponseDto<SiteResponseDto>> listAllSites(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -223,7 +226,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Account not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @GetMapping("/api/admin/accounts/{accountId}/sites")
+    @GetMapping(ApiRoutes.SITES_BY_ACCOUNT)
     public ResponseEntity<List<SiteResponseDto>> listSitesByAccount(@PathVariable("accountId") UUID accountId) {
         List<Site> sites = siteService.listSitesByAccount(accountId);
 
@@ -256,7 +259,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @PutMapping("/api/admin/sites/{id}")
+    @PutMapping(ApiRoutes.SITES_ID)
     public ResponseEntity<SiteResponseDto> updateSite(
             @PathVariable("id") UUID siteId,
             @Valid @RequestBody UpdateSiteRequestDto request) {
@@ -289,7 +292,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/activate")
+    @PostMapping(ApiRoutes.SITES_ACTIVATE)
     public ResponseEntity<SiteResponseDto> activateSite(
             @PathVariable("accountId") UUID accountId,
             @PathVariable("siteId") UUID siteId,
@@ -348,7 +351,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @PostMapping("/api/admin/accounts/{accountId}/sites/{siteId}/deactivate")
+    @PostMapping(ApiRoutes.SITES_DEACTIVATE)
     public ResponseEntity<SiteResponseDto> deactivateSiteForAccount(
             @PathVariable("accountId") UUID accountId,
             @PathVariable("siteId") UUID siteId,
@@ -411,7 +414,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @DeleteMapping("/api/admin/accounts/{accountId}/sites/{siteId}")
+    @DeleteMapping(ApiRoutes.SITES_DELETE_BY_ACCOUNT)
     public ResponseEntity<Void> deleteSiteForAccount(
             @PathVariable("accountId") UUID accountId,
             @PathVariable("siteId") UUID siteId,
@@ -468,7 +471,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @DeleteMapping("/api/admin/sites/{id}")
+    @DeleteMapping(ApiRoutes.SITES_ID)
     public ResponseEntity<SiteResponseDto> deactivateSite(@PathVariable("id") UUID siteId) {
         logger.info("Deactivating site: siteId={}", siteId);
 
@@ -500,7 +503,7 @@ public class SiteAdminController {
             @ApiResponse(responseCode = "404", description = "Site not found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
-    @GetMapping("/api/admin/sites/{id}/statistics")
+    @GetMapping(ApiRoutes.SITES_STATISTICS)
     public ResponseEntity<SiteStatisticsDto> getSiteStatistics(@PathVariable("id") UUID siteId) {
         Map<String, Object> statistics = accountStatisticsService.getSiteStatistics(siteId);
         SiteStatisticsDto response = SiteStatisticsDto.fromMap(statistics);

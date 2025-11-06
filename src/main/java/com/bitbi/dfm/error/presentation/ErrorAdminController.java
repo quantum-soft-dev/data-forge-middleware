@@ -3,6 +3,7 @@ package com.bitbi.dfm.error.presentation;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,6 +12,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,16 +40,17 @@ import java.util.UUID;
  * Requires Keycloak authentication with ROLE_ADMIN.
  * </p>
  * <p>
- * URL change from v2.x: /admin/errors → /api/admin/errors (breaking change)
+ * URL change from v2.x: /admin/errors → /api/v1/errors (breaking change)
  * </p>
  *
  * @author Data Forge Team
  * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/admin/errors")
+@RequestMapping(ApiRoutes.ERRORS_ADMIN)
 @PreAuthorize("hasRole('ADMIN')")
-@Tag(name = "Admin - Error Logs", description = "Error log administration endpoints")
+@Tag(name = "UI/Admin API - Error Logs", description = "Error log administration endpoints for web interface")
+@SecurityRequirement(name = "oauth2")
 public class ErrorAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(ErrorAdminController.class);

@@ -44,7 +44,11 @@
       "mcp__chrome-devtools__click",
       "mcp__chrome-devtools__evaluate_script",
       "mcp__chrome-devtools__list_network_requests",
-      "mcp__chrome-devtools__navigate_page_history"
+      "mcp__chrome-devtools__navigate_page_history",
+      "Bash(node -e \"const api = require(''./src/features/file-comparison/api/comparisonApi.ts'')\")",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(if [ -d \"/Users/boris/projects/bit-bi/data-forge-middleware/specs/010-api-unification-goal/checklists\" ])",
+      "Bash(then find \"/Users/boris/projects/bit-bi/data-forge-middleware/specs/010-api-unification-goal/checklists\" -name \"*.md\" -type f)"
     ],
     "deny": [],
     "ask": []

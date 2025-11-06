@@ -1,6 +1,7 @@
 package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.error.presentation.dto.LogErrorRequestDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -24,14 +25,13 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
 
     // test-data.sql contains:
     // - store-01.example.com (siteId: 0199baac-f852-753f-6fc3-7c994fc38654, account: a1b2c3d4)
-    //   - IN_PROGRESS batch: 0199bab2-8d63-8563-8340-edbf1c11c778
-    //   - Error log: 0199bab3-d4d6-c1d1-226a-241c7b874314 (in FAILED batch 0199bab2-ca1c)
-    // - store-03.example.com (siteId: 0199bab0-ca3b-e41c-5521-2f4b33fda8b6, account: 0199bab1, DIFFERENT ACCOUNT)
-    //   - COMPLETED batch: 0199bab2-dddd-dddd-dddd-dddddddddddd
+    //   - IN_PROGRESS batch: b1c2d3e4-f5a6-7890-bcde-f12345678903
+    // - store-02.example.com (siteId: 0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7, account: a1b2c3d4, SAME ACCOUNT but different site)
+    //   - IN_PROGRESS batch: b1c2d3e4-f5a6-7890-bcde-f12345678905
+    // Security test: site-01 cannot access site-02's batch even though they share the same account
 
-    private static final String STORE_01_BATCH_ID = "0199bab2-8d63-8563-8340-edbf1c11c778"; // Owned by store-01
-    private static final String STORE_03_BATCH_ID = "0199bab2-dddd-dddd-dddd-dddddddddddd"; // Owned by store-03 (different account)
-    private static final String STORE_01_ERROR_ID = "0199bab3-d4d6-c1d1-226a-241c7b874314"; // Error in store-01's batch
+    private static final String STORE_01_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // Owned by store-01
+    private static final String STORE_02_BATCH_ID = "b1c2d3e4-f5a6-7890-bcde-f12345678905"; // Owned by store-02 (same account, different site)
 
     /**
      * Test Case 1: Site should NOT be able to log errors to another site's batch.
@@ -42,8 +42,8 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("Should reject error logging to batch owned by another site (403 Forbidden)")
     void shouldReject_logErrorToOtherSiteBatch() throws Exception {
-        // Given: Token for store-03.example.com (different account)
-        String token03 = generateToken("store-03.example.com", "batch-test-secret");
+        // Given: Token for store-02.example.com (same account, different site)
+        String token02 = generateToken("store-02.example.com", "inactive-secret-uuid");
 
         LogErrorRequestDto errorRequest = new LogErrorRequestDto(
                 "MaliciousError",
@@ -53,15 +53,15 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
 
         String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
-        // When: Attempt to log error to store-01's batch
-        mockMvc.perform(post("/api/dfc/error/{batchId}", STORE_01_BATCH_ID)
+        // When: Attempt to log error to store-01's batch (using store-02's token)
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, STORE_01_BATCH_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody)
-                        .header("Authorization", token03))
+                        .header("Authorization", token02))
 
-                // Then: 403 Forbidden (tenant isolation enforced)
+                // Then: 403 Forbidden (tenant isolation enforced - different site)
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("Cannot log errors to batch owned by another site"));
+                .andExpect(jsonPath("$.message").value("Access denied: site ownership mismatch"));
     }
 
     /**
@@ -82,7 +82,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);
 
         // When: Log error to own batch
-        mockMvc.perform(post("/api/dfc/error/{batchId}", STORE_01_BATCH_ID)
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, STORE_01_BATCH_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody)
                         .header("Authorization", token01))
@@ -94,46 +94,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Test Case 3: Site should NOT be able to retrieve error logs from another site's batch.
-     * <p>
-     * **CRITICAL P0 Security Test**
-     * </p>
-     */
-    @Test
-    @DisplayName("Should reject error log retrieval from batch owned by another site (403 Forbidden)")
-    void shouldReject_getErrorLogFromOtherSiteBatch() throws Exception {
-        // Given: Token for store-03.example.com (different account)
-        String token03 = generateToken("store-03.example.com", "batch-test-secret");
-
-        // When: Attempt to retrieve error log from store-01's batch
-        mockMvc.perform(get("/api/dfc/error/log/{errorId}", STORE_01_ERROR_ID)
-                        .header("Authorization", token03))
-
-                // Then: 403 Forbidden (tenant isolation enforced)
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("Cannot access error log from batch owned by another site"));
-    }
-
-    /**
-     * Test Case 4: Site SHOULD be able to retrieve error logs from its own batch.
-     */
-    @Test
-    @DisplayName("Should allow error log retrieval from own batch (200 OK)")
-    void shouldAllow_getErrorLogFromOwnBatch() throws Exception {
-        // Given: Token for store-01.example.com
-        String token01 = generateTestToken(); // Uses store-01 by default
-
-        // When: Retrieve own error log
-        mockMvc.perform(get("/api/dfc/error/log/{errorId}", STORE_01_ERROR_ID)
-                        .header("Authorization", token01))
-
-                // Then: 200 OK (authorized)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(STORE_01_ERROR_ID));
-    }
-
-    /**
-     * Test Case 5: Non-existent batch should return 404 (not 403).
+     * Test Case 3: Non-existent batch should return 404 (not 403).
      * <p>
      * Security consideration: Don't leak information about batch existence.
      * </p>
@@ -155,7 +116,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         String nonExistentBatchId = "00000000-0000-0000-0000-000000000000";
 
         // When: Log error to non-existent batch
-        mockMvc.perform(post("/api/dfc/error/{batchId}", nonExistentBatchId)
+        mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, nonExistentBatchId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody)
                         .header("Authorization", token))

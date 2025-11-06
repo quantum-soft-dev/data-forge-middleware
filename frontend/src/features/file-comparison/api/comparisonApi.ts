@@ -8,6 +8,14 @@
  */
 
 import { apiClient } from '@/shared/api/client';
+import {
+  COMPARISONS,
+  COMPARISONS_ID,
+  COMPARISONS_RESULTS,
+  COMPARISONS_SUMMARY,
+  COMPARISONS_DOWNLOAD,
+  COMPARISONS_SUMMARY_DOWNLOAD
+} from '@/shared/api/apiRoutes';
 import type {
   Comparison,
   ComparisonResult,
@@ -22,11 +30,6 @@ import {
   pagedComparisonResponseSchema,
   pagedComparisonResultResponseSchema,
 } from '../model/schemas';
-
-/**
- * Base path for comparison API endpoints.
- */
-const BASE_PATH = '/v1/comparisons';
 
 /**
  * API client for file comparison operations.
@@ -50,7 +53,7 @@ export const comparisonApi = {
    * ```
    */
   createComparison: async (request: CreateComparisonRequest): Promise<Comparison> => {
-    const response = await apiClient.post<Comparison>(BASE_PATH, request);
+    const response = await apiClient.post<Comparison>(COMPARISONS, request);
     return comparisonSchema.parse(response.data);
   },
 
@@ -68,7 +71,7 @@ export const comparisonApi = {
    * ```
    */
   getComparison: async (comparisonId: number): Promise<Comparison> => {
-    const response = await apiClient.get<Comparison>(`${BASE_PATH}/${comparisonId}`);
+    const response = await apiClient.get<Comparison>(COMPARISONS_ID(comparisonId));
     return comparisonSchema.parse(response.data);
   },
 
@@ -94,7 +97,7 @@ export const comparisonApi = {
     size?: number;
     status?: string;
   }): Promise<PagedComparisonResponse> => {
-    const response = await apiClient.get<PagedComparisonResponse>(BASE_PATH, { params });
+    const response = await apiClient.get<PagedComparisonResponse>(COMPARISONS, { params });
     return pagedComparisonResponseSchema.parse(response.data);
   },
 
@@ -125,7 +128,7 @@ export const comparisonApi = {
     }
   ): Promise<PagedComparisonResultResponse> => {
     const response = await apiClient.get<PagedComparisonResultResponse>(
-      `${BASE_PATH}/${comparisonId}/results`,
+      COMPARISONS_RESULTS(comparisonId),
       { params }
     );
     return pagedComparisonResultResponseSchema.parse(response.data);
@@ -146,7 +149,7 @@ export const comparisonApi = {
    */
   getComparisonSummary: async (comparisonId: number): Promise<ComparisonSummary> => {
     const response = await apiClient.get<ComparisonSummary>(
-      `${BASE_PATH}/${comparisonId}/summary`
+      COMPARISONS_SUMMARY(comparisonId)
     );
     return comparisonSummarySchema.parse(response.data);
   },
@@ -165,7 +168,7 @@ export const comparisonApi = {
    * ```
    */
   deleteComparison: async (comparisonId: number): Promise<void> => {
-    await apiClient.delete(`${BASE_PATH}/${comparisonId}`);
+    await apiClient.delete(COMPARISONS_ID(comparisonId));
   },
 
   /**
@@ -194,7 +197,7 @@ export const comparisonApi = {
    * Phase 7 (User Story 4) - Task T095
    */
   downloadComparison: async (comparisonId: string) => {
-    const response = await apiClient.get(`${BASE_PATH}/${comparisonId}/download`, {
+    const response = await apiClient.get(COMPARISONS_DOWNLOAD(Number(comparisonId)), {
       responseType: 'blob', // Important: Request binary data
     });
     return response;
@@ -233,7 +236,7 @@ export const comparisonApi = {
    * Phase 8 (User Story 6) - Task T103
    */
   downloadSummaryReport: async (comparisonId: string) => {
-    const response = await apiClient.get(`${BASE_PATH}/${comparisonId}/summary/download`, {
+    const response = await apiClient.get(COMPARISONS_SUMMARY_DOWNLOAD(Number(comparisonId)), {
       responseType: 'blob', // Important: Request binary data (text file)
     });
     return response;

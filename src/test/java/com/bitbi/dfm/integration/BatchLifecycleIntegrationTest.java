@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -34,7 +35,7 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should create batch with IN_PROGRESS status and valid S3 path")
     void shouldCreateBatchWithInProgressStatusAndValidS3Path() throws Exception {
         // When: POST /api/dfc/batch/start
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateStore03Token()))
 
                 // Then: Batch created with batchId
@@ -51,12 +52,12 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
         String token = generateStore03Token();
 
         // Given: Active batch exists for site
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                 .header("Authorization", token))
                 .andExpect(status().isCreated());
 
         // When: Attempt to create another batch
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", token))
 
                 // Then: 409 Conflict
@@ -70,7 +71,7 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
         // Given: store-03.example.com has no active batches in test data
 
         // When: Start new batch
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateStore03Token()))
 
                 // Then: Success

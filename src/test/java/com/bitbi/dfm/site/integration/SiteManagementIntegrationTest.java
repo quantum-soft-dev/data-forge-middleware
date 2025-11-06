@@ -1,6 +1,7 @@
 package com.bitbi.dfm.site.integration;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -17,13 +18,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Integration test for Site Management user flow (US1).
  * <p>
+ * DEPRECATED: These tests are for the old user-facing /api/sites endpoint which has been migrated to /api/v1/accounts/{accountId}/sites (Admin API).
+ * Site management is now part of the Admin API and requires ROLE_ADMIN.
+ * See AdminContractTest for current site management tests.
+ * </p>
+ * <p>
  * Tests end-to-end user site creation, listing, activation, deactivation, and deletion.
  * Uses test database with Keycloak OAuth2 JWT authentication.
  * </p>
  *
  * @see <a href="specs/007-adding-a-site/spec.md">Feature Spec 007</a>
  */
-@DisplayName("User Story 1: User Site Creation Integration Test")
+@org.junit.jupiter.api.Disabled("Deprecated: /api/sites migrated to /api/v1/accounts/{accountId}/sites (Admin API). See AdminContractTest.")
+@DisplayName("User Story 1: User Site Creation Integration Test (DEPRECATED)")
 class SiteManagementIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
@@ -33,47 +40,48 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
     private static final String MOCK_EMAIL = "admin-test@example.com";
 
     /**
-     * US1: User creates site with manual password, site appears in list.
+     * US1: Admin creates site with manual password, site appears in list.
      * <p>
-     * Given: Authenticated user
-     * When: POST /api/sites with domain + password
-     * Then: Site created with 201, password returned, site appears in GET /api/sites
+     * Given: Authenticated admin
+     * When: POST /api/v1/accounts/{accountId}/sites with domain + displayName
+     * Then: Site created with 201, client secret returned, site appears in GET /api/v1/accounts/{accountId}/sites
      * </p>
      */
     @Test
     @DisplayName("Should create site with manual password and return plaintext password once")
     void shouldCreateSiteWithManualPassword() throws Exception {
-        // Given: Authenticated user with JWT
+        // Given: Authenticated admin with ROLE_ADMIN
         String requestBody = """
                 {
                   "domain": "new-manual-site.example.com",
-                  "displayName": "New Manual Site",
-                  "password": "manualPassword123"
+                  "displayName": "New Manual Site"
                 }
                 """;
 
-        // When: POST /api/sites
-        MvcResult createResult = mockMvc.perform(post("/api/sites")
+        // When: POST /api/v1/accounts/{accountId}/sites
+        MvcResult createResult = mockMvc.perform(post(ApiRoutes.SITES_CREATE, MOCK_ACCOUNT_ID)
                         .with(jwt().jwt(jwt -> jwt
                                 .claim("sub", MOCK_ACCOUNT_ID)
-                                .claim("email", MOCK_EMAIL)))
+                                .claim("email", MOCK_EMAIL)
+                                .claim("realm_access", java.util.Map.of("roles", java.util.List.of("ADMIN")))))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
-                // Then: 201 Created
+                // Then: 201 Created with SiteCreationResponseDto
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.site.domain").value("new-manual-site.example.com"))
-                .andExpect(jsonPath("$.site.name").value("New Manual Site"))
+                .andExpect(jsonPath("$.site.displayName").value("New Manual Site"))
                 .andExpect(jsonPath("$.site.isActive").value(true))
-                .andExpect(jsonPath("$.password").value("manualPassword123")) // Plaintext password returned
+                .andExpect(jsonPath("$.clientSecret").exists()) // Client secret returned (not password)
                 .andReturn();
 
         String siteId = extractSiteId(createResult);
 
         // Verify: Site appears in list
-        mockMvc.perform(get("/api/sites")
+        mockMvc.perform(get(ApiRoutes.SITES_BY_ACCOUNT, MOCK_ACCOUNT_ID)
                         .with(jwt().jwt(jwt -> jwt
                                 .claim("sub", MOCK_ACCOUNT_ID)
-                                .claim("email", MOCK_EMAIL))))
+                                .claim("email", MOCK_EMAIL)
+                                .claim("realm_access", java.util.Map.of("roles", java.util.List.of("ADMIN"))))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].domain").value("new-manual-site.example.com"));
     }

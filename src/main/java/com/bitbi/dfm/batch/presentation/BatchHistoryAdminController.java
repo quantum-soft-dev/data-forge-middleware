@@ -5,6 +5,7 @@ import com.bitbi.dfm.account.infrastructure.JpaAccountRepository;
 import com.bitbi.dfm.batch.application.BatchHistoryService;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.swagger.v3.oas.annotations.Operation;
@@ -38,21 +39,23 @@ import java.util.UUID;
  *
  * <p><strong>Endpoints:</strong></p>
  * <ul>
- *   <li>GET /api/admin/accounts/{accountId}/batches - List batch history for specific account</li>
+ *   <li>GET /api/v1/history/batches - List batch history for current user</li>
+ *   <li>GET /api/v1/history/batches/{batchId} - Get batch details</li>
  * </ul>
  *
  * <p><strong>Security:</strong></p>
  * <ul>
- *   <li>Requires Keycloak OAuth2 Bearer token with ROLE_ADMIN</li>
- *   <li>Admins can view batches for any account</li>
+ *   <li>Requires Keycloak OAuth2 Bearer token</li>
+ *   <li>Users can only view their own batches</li>
  * </ul>
  *
  * @author Data Forge Team (Feature: 008-upload-history-user)
  * @version 1.0.0
  */
 @RestController
-@RequestMapping("/api/user/batches")
-@Tag(name = "User - Upload History", description = "User endpoints for viewing own upload history (Keycloak auth)")
+@RequestMapping(ApiRoutes.HISTORY_BATCHES)
+@Tag(name = "UI/Admin API - User History", description = "User endpoints for viewing own upload history (Keycloak auth)")
+@SecurityRequirement(name = "oauth2")
 public class BatchHistoryAdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchHistoryAdminController.class);

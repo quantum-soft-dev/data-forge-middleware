@@ -184,7 +184,7 @@ class BatchHistoryIntegrationTest {
     @DisplayName("T102: Error pagination should correctly handle 100+ errors")
     void t102_getBatchErrors_shouldHandlePaginationWith100PlusErrors() {
         // Given: Create a test batch with 100+ error logs
-        UUID testBatchId = UUID.fromString("0199bab2-8d63-8563-8340-edbf1c11c778");
+        UUID testBatchId = UUID.fromString("b1c2d3e4-f5a6-7890-bcde-f12345678903"); // IN_PROGRESS batch from test-data.sql
         UUID testAccountId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890"); // Correct account ID from test-data.sql
 
         // Find the batch (cast to avoid ambiguity between BatchRepository.findById and CrudRepository.findById)
@@ -263,7 +263,7 @@ class BatchHistoryIntegrationTest {
     @DisplayName("T102b: Error list should be sorted by occurredAt DESC")
     void t102b_getBatchErrors_shouldBeSortedByOccurredAtDesc() {
         // Given: Batch with errors from test-data.sql
-        UUID testBatchId = UUID.fromString("0199bab2-8d63-8563-8340-edbf1c11c778");
+        UUID testBatchId = UUID.fromString("b1c2d3e4-f5a6-7890-bcde-f12345678903"); // IN_PROGRESS batch from test-data.sql
         UUID testAccountId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890"); // Correct account ID from test-data.sql
 
         // Create test errors with different timestamps

@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should mark expired batch as NOT_COMPLETED")
     void shouldMarkExpiredBatchAsNotCompleted() throws Exception {
         // Given: Batch created and left in IN_PROGRESS
-        String batchResponse = mockMvc.perform(post("/api/dfc/batch/start")
+        String batchResponse = mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isCreated())
                 .andReturn()
@@ -49,7 +50,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should allow new batch after timeout")
     void shouldAllowNewBatchAfterTimeout() throws Exception {
         // Given: Previous batch timed out and marked NOT_COMPLETED
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isCreated());
 
@@ -57,7 +58,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
         // (Batch status changed from IN_PROGRESS to NOT_COMPLETED)
 
         // When: Start new batch
-        mockMvc.perform(post("/api/dfc/batch/start")
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateTestToken()))
 
                 // Then: Success (no IN_PROGRESS conflict)
@@ -69,7 +70,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should not timeout completed batch")
     void shouldNotTimeoutCompletedBatch() throws Exception {
         // Given: Batch completed before timeout
-        String batchResponse = mockMvc.perform(post("/api/dfc/batch/start")
+        String batchResponse = mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", generateTestToken()))
                 .andExpect(status().isCreated())
                 .andReturn()
@@ -77,7 +78,7 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
                 .getContentAsString();
 
         // Complete batch
-        // mockMvc.perform(post("/api/dfc/batch/{batchId}/complete", batchId)
+        // mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, batchId)
         //         .header("Authorization", MOCK_JWT))
         //     .andExpect(status().isOk());
 
