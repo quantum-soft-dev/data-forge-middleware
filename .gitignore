@@ -50,3 +50,7 @@ logs/
 # Test results
 test-output/
 jacoco/
+
+
+# Claude
+.claude/settings.local.json
