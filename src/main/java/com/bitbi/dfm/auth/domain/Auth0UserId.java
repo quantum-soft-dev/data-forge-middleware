@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>Cannot be null or blank</li>
  *   <li>Cannot exceed 64 characters (database constraint)</li>
- *   <li>Must match pattern: {provider}|{alphanumeric} where provider is alphanumeric with hyphens</li>
+ *   <li>Must match pattern: {provider}|{user-id} where both parts are alphanumeric with hyphens allowed</li>
  * </ul>
  *
  * @param value the Auth0 user ID string
@@ -30,10 +30,11 @@ public record Auth0UserId(String value) {
 
     /**
      * Auth0 user ID pattern: {provider}|{alphanumeric}
-     * Examples: auth0|abc123, google-oauth2|123, windowslive|xyz
+     * Examples: auth0|abc123, google-oauth2|123, windowslive|xyz, auth0|test-user-3-abcde
+     * Note: Both provider and user ID parts can contain hyphens
      */
     private static final Pattern AUTH0_USER_ID_PATTERN =
-            Pattern.compile("^[a-zA-Z0-9-]+\\|[a-zA-Z0-9]+$");
+            Pattern.compile("^[a-zA-Z0-9-]+\\|[a-zA-Z0-9-]+$");
 
     /**
      * Maximum length for Auth0 user IDs (matches database column constraint).

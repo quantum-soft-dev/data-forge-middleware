@@ -195,6 +195,17 @@ public final class ApiRoutes {
     public static final String ACCOUNTS = ADMIN_API_BASE + "/accounts";
 
     /**
+     * List accounts endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: OAuth2 (ROLE_ADMIN)<br>
+     * Query Params: search (optional), page (default=0), size (default=20)<br>
+     * Returns: AccountPageDto (paginated list of AccountDetailDto with Auth0 fields)
+     * </p>
+     */
+    public static final String ACCOUNTS_LIST = ACCOUNTS;
+
+    /**
      * Create account endpoint.
      * <p>
      * Method: POST<br>

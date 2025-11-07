@@ -1,10 +1,13 @@
 package com.bitbi.dfm.account.presentation;
 
+import com.bitbi.dfm.account.application.AccountQueryService;
 import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountSyncService;
+import com.bitbi.dfm.account.presentation.dto.AccountDetailDto;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponseDto;
+import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
@@ -24,6 +27,9 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+import org.springframework.validation.annotation.Validated;
 import java.util.UUID;
 
 /**
@@ -45,6 +51,7 @@ import java.util.UUID;
  */
 @RestController
 @PreAuthorize("hasRole('ADMIN')")
+@Validated
 @Tag(name = "UI/Admin API - Accounts", description = "Account administration endpoints for web interface")
 @SecurityRequirement(name = "oauth2")
 public class AccountAdminController {
@@ -53,10 +60,15 @@ public class AccountAdminController {
 
     private final AccountService accountService;
     private final AccountSyncService accountSyncService;
+    private final AccountQueryService accountQueryService;
 
-    public AccountAdminController(AccountService accountService, AccountSyncService accountSyncService) {
+    public AccountAdminController(
+            AccountService accountService,
+            AccountSyncService accountSyncService,
+            AccountQueryService accountQueryService) {
         this.accountService = accountService;
         this.accountSyncService = accountSyncService;
+        this.accountQueryService = accountQueryService;
     }
 
     /**
@@ -217,6 +229,91 @@ public class AccountAdminController {
         ResetPasswordResponseDto response = accountService.resetPassword(id);
 
         logger.info("Password reset link generated: accountId={}, email={}", id, response.email());
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * List accounts with Auth0 integration.
+     * <p>
+     * GET /api/v1/accounts (mapped from ApiRoutes.ACCOUNTS_LIST)
+     * </p>
+     * <p>
+     * Returns a paginated list of accounts with Auth0-specific fields (isBlocked, lastLogin).
+     * Supports optional search parameter to filter by email or name (case-insensitive).
+     * Only returns accounts with Auth0 integration (identity_provider_user_id NOT NULL).
+     * </p>
+     *
+     * User Story: US6 - Admin Views List of Users with Auth0 Integration
+     * Functional Requirement: FR-019 - List accounts with Auth0 fields
+     * Task: T068 - Update AccountAdminController with GET endpoint
+     *
+     * @param search   optional search term to filter by email or name (nullable)
+     * @param page     page number (0-based, default=0)
+     * @param size     page size (default=20)
+     * @return 200 OK with paginated list of accounts with Auth0 fields
+     */
+    @GetMapping(ApiRoutes.ACCOUNTS_LIST)
+    @Operation(
+        summary = "List accounts with Auth0 integration",
+        description = "Returns paginated list of accounts with Auth0 fields (isBlocked, lastLogin). Supports search by email/name."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Accounts listed successfully",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = PageResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Invalid search pattern or pagination parameters",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Unauthorized - missing or invalid authentication token",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden - user does not have ROLE_ADMIN",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        )
+    })
+    public ResponseEntity<PageResponseDto<AccountDetailDto>> listAccounts(
+            @RequestParam(required = false)
+            @Size(max = 100, message = "search term must not exceed 100 characters")
+            @Pattern(
+                regexp = "^[a-zA-Z0-9@.\\s\\-]*$",
+                message = "search term contains invalid characters"
+            )
+            String search,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+
+        logger.info("Admin list accounts request: search={}, page={}, size={}",
+            search != null ? "[filtered]" : "null",
+            page,
+            size);
+
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size);
+        PageResponseDto<AccountDetailDto> response = accountQueryService.listAccounts(search, pageable);
+
+        logger.info("Accounts listed successfully: count={}, totalElements={}",
+            response.content().size(),
+            response.totalElements());
 
         return ResponseEntity.ok(response);
     }

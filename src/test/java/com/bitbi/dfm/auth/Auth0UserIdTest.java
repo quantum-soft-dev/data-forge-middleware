@@ -84,6 +84,31 @@ class Auth0UserIdTest {
     }
 
     /**
+     * TC02b: Valid user ID with hyphens in identifier accepted
+     * <p>
+     * Given: Valid Auth0 user ID with hyphens in identifier (auth0|test-user-3-abcde)
+     * When: Create Auth0UserId
+     * Then: Creation succeeds
+     * And: Provider and identifier extracted correctly
+     * </p>
+     */
+    @Test
+    @DisplayName("TC02b: Valid user ID with hyphens in identifier accepted")
+    void auth0UserId_validUserIdWithHyphens_accepted() {
+        // Given
+        String validUserId = "auth0|test-user-3-abcde";
+
+        // When
+        Auth0UserId userId = Auth0UserId.of(validUserId);
+
+        // Then
+        assertThat(userId).isNotNull();
+        assertThat(userId.provider()).isEqualTo("auth0");
+        assertThat(userId.identifier()).isEqualTo("test-user-3-abcde");
+        assertThat(userId.isDatabaseConnection()).isTrue();
+    }
+
+    /**
      * TC03: Valid Microsoft Account user ID accepted
      * <p>
      * Given: Valid Windows Live user ID (windowslive|4d35b10d6f5b07e8)
@@ -289,8 +314,7 @@ class Auth0UserIdTest {
     @ValueSource(strings = {
         "auth0|abc@123",
         "auth0|abc 123",
-        "auth0|abc.123",
-        "auth0|abc-123"
+        "auth0|abc.123"
     })
     @DisplayName("TC12: Invalid format - special characters in identifier throws exception")
     void auth0UserId_invalidIdentifierCharacters_throwsException(String invalidUserId) {
