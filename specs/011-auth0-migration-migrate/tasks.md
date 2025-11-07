@@ -537,41 +537,52 @@ When the system goes live, it will use Auth0 from the start.
 
 ### Implementation for User Story 8
 
-- [ ] **T077** [P] [US8] Create `TestAuth0Config.java` in `src/test/java/com/bitbi/dfm/config/TestAuth0Config.java`:
-  - `@TestConfiguration` class
-  - `@Bean @Primary ManagementAPI mockManagementAPI()`:
-    - Returns Mockito mock of `ManagementAPI`
-    - Stub `users().create()` to return mock User with auth0|test123
-    - Stub `users().update()` to return updated User
-    - Stub `tickets().createPasswordChange()` to return mock Ticket with URL
-    - Stub `roles().assignUsers()` to succeed
+- [x] **T077** [P] [US8] ~~Create `TestAuth0Config.java`~~ **NOT NEEDED** - Existing `TestSecurityConfig.java` already provides comprehensive mock ManagementAPI
+  - Existing `TestSecurityConfig` provides mock ManagementAPI bean
+  - Mock stubs configured per-test using Mockito
+  - All integration tests already use `@Import(TestSecurityConfig.class)` or `@Import(Auth0TestConfig.class)`
 
-- [ ] **T078** [P] [US8] Create `MockAuth0JwtDecoder.java` in `src/test/java/com/bitbi/dfm/config/MockAuth0JwtDecoder.java`:
-  - `@Bean @Primary JwtDecoder` for test profile
-  - Returns JWT with claims: sub, iss, aud, exp, iat, custom roles claim
-  - Used in integration tests without real Auth0 connection
+- [x] **T078** [P] [US8] ~~Create `MockAuth0JwtDecoder.java`~~ **NOT NEEDED** - Existing `TestSecurityConfig.java` already provides mock JWT decoder
+  - Existing `TestSecurityConfig.jwtDecoder()` provides comprehensive JWT mocking
+  - Supports multiple token types: `mock.admin.jwt.token`, `mock.user.jwt.token`
+  - Returns JWT with all required claims (sub, iss, aud, exp, iat, custom roles)
 
-- [ ] **T079** [US8] Update `application-test.yml`:
-  - Set `auth0.enabled=false` flag
-  - Use `TestAuth0Config` when flag is false
+- [x] **T079** [US8] Update `application-test.yml`:
+  - Added `auth0.enabled=false` flag to disable Auth0 in tests
+  - Added `password-reset-ttl-seconds` and `roles-namespace` properties
+  - TestSecurityConfig automatically provides mocks when flag is false
 
-- [ ] **T080** [US8] Verify all existing integration tests use `@Import(TestAuth0Config.class)`
+- [x] **T080** [US8] Verify all existing integration tests use `@Import(TestAuth0Config.class)`
+  - Verified all Auth0 integration tests properly import TestSecurityConfig or Auth0TestConfig
+  - TestSecurityConfig provides base mocks, Auth0TestConfig provides real service with mocked API
 
-- [ ] **T081** [US8] Run full backend test suite: `./gradlew test` (verify 0 failures)
+- [x] **T081** [US8] Run full backend test suite: `./gradlew test` ✅ **634 tests passed, 0 failures**
+  - All integration tests pass with mocked Auth0
+  - Contract tests pass with mocked Auth0 Management API
+  - Unit tests pass independently
 
-- [ ] **T082** [US8] Create frontend mock for `useAuth0()` in `frontend/tests/mocks/mockAuth0.ts`:
-  - Mock implementation returning:
-    - `isAuthenticated: true`
-    - `user: { email, name, roles }`
-    - `getAccessTokenSilently: () => Promise.resolve('mock-token')`
-    - `loginWithRedirect: jest.fn()`
-    - `logout: jest.fn()`
+- [x] **T082** [US8] Create frontend mock for `useAuth0()` in `frontend/tests/mocks/mockAuth0.ts`:
+  - Created comprehensive mock module with:
+    - `mockUseAuth0()` - Returns authenticated state with ROLE_ADMIN
+    - `MockAuth0Provider` - Pass-through component for tests
+    - `mockWithAuthenticationRequired` - HOC bypass for tests
+    - Helper functions: `createMockAuth0User()`, `createMockUseAuth0()`
+    - State variants: unauthenticated, loading, error states
 
-- [ ] **T083** [US8] Update frontend test setup to use mock Auth0: `frontend/tests/setup.ts`
+- [x] **T083** [US8] Update frontend test setup to use mock Auth0: `frontend/tests/setup.ts`
+  - Added global vi.mock('@auth0/auth0-react') in setup.ts
+  - Mock automatically applied to all frontend tests
+  - Tests can override with custom mock behavior as needed
 
-- [ ] **T084** [US8] Run full frontend test suite: `npm test` (verify 0 failures)
+- [x] **T084** [US8] Run full frontend test suite: `npm test` ✅ **519 tests passed (45 test files), 0 failures**
+  - All frontend tests pass with mocked Auth0 React SDK
+  - Authentication flows tested without Auth0 connection
+  - Protected routes tested with mock authentication state
 
-**Checkpoint**: User Story 8 complete - tests run offline with mocked Auth0
+**Checkpoint**: ✅ **Phase 10 (User Story 8) COMPLETE** - All 634 backend tests and 519 frontend tests pass offline with mocked Auth0
+- Backend: Existing TestSecurityConfig provides comprehensive Auth0 mocking (no new files needed)
+- Frontend: Created mockAuth0.ts module and integrated into test setup
+- Zero failures in full test suite (1153 total tests)
 
 ---
 
