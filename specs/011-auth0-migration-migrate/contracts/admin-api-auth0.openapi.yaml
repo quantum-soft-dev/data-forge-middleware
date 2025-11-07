@@ -30,7 +30,7 @@ security:
   - Auth0Bearer: []
 
 paths:
-  /admin/accounts/with-auth0:
+  /admin/accounts:
     post:
       tags:
         - Admin - Accounts (Auth0)
@@ -46,7 +46,7 @@ paths:
         4. Return password reset link to admin
 
         **Breaking Change**: Returns `passwordResetLink` instead of `temporaryPassword`
-      operationId: createAccountWithAuth0
+      operationId: createAccount
       security:
         - Auth0Bearer: []
       requestBody:
@@ -103,7 +103,7 @@ paths:
                 status: 409
                 error: "Conflict"
                 message: "Account with email user@example.com already exists"
-                path: "/api/v1/admin/accounts/with-auth0"
+                path: "/api/v1/admin/accounts"
         '503':
           description: Auth0 service unavailable
           content:
@@ -115,7 +115,7 @@ paths:
                 status: 503
                 error: "Service Unavailable"
                 message: "Auth0 service is temporarily unavailable. Please try again later."
-                path: "/api/v1/admin/accounts/with-auth0"
+                path: "/api/v1/admin/accounts"
 
     get:
       tags:
@@ -129,7 +129,7 @@ paths:
         - `auth0UserId`: Auth0 user ID (format: auth0|xxx)
         - `isBlocked`: User blocked status from Auth0
         - `lastLogin`: Last successful login timestamp from Auth0
-      operationId: listAccountsWithAuth0
+      operationId: listAccounts
       security:
         - Auth0Bearer: []
       parameters:
@@ -589,7 +589,7 @@ components:
         path:
           type: string
           description: Request path that triggered the error
-          example: "/api/v1/admin/accounts/with-auth0"
+          example: "/api/v1/admin/accounts"
 
   responses:
     BadRequest:
@@ -606,7 +606,7 @@ components:
                 status: 400
                 error: "Bad Request"
                 message: "Email is required"
-                path: "/api/v1/admin/accounts/with-auth0"
+                path: "/api/v1/admin/accounts"
             invalidRole:
               summary: Invalid role
               value:
@@ -614,7 +614,7 @@ components:
                 status: 400
                 error: "Bad Request"
                 message: "Role must be either USER or ADMIN"
-                path: "/api/v1/admin/accounts/with-auth0"
+                path: "/api/v1/admin/accounts"
 
     Unauthorized:
       description: Missing or invalid authentication token
@@ -627,7 +627,7 @@ components:
             status: 401
             error: "Unauthorized"
             message: "Full authentication is required to access this resource"
-            path: "/api/v1/admin/accounts/with-auth0"
+            path: "/api/v1/admin/accounts"
 
     Forbidden:
       description: Insufficient permissions (ROLE_ADMIN required)
@@ -640,7 +640,7 @@ components:
             status: 403
             error: "Forbidden"
             message: "Insufficient permissions"
-            path: "/api/v1/admin/accounts/with-auth0"
+            path: "/api/v1/admin/accounts"
 
     NotFound:
       description: Resource not found

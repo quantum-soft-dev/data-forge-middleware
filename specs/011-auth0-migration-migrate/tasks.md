@@ -150,13 +150,13 @@
 
 **Goal**: Enable admins to create new user accounts in Auth0 with automatic role assignment and password reset link generation
 
-**Independent Test**: Create user via POST `/api/v1/admin/accounts/with-auth0`, verify user exists in Auth0 with correct role, verify password reset link returned
+**Independent Test**: Create user via POST `/api/v1/admin/accounts`, verify user exists in Auth0 with correct role, verify password reset link returned
 
 ### Tests for User Story 1
 
 **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [x] **T028** [P] [US1] Contract test for `POST /api/v1/accounts/with-auth0` in `src/test/java/com/bitbi/dfm/contract/Auth0AdminContractTest.java`:
+- [x] **T028** [P] [US1] Contract test for `POST /api/v1/admin/accounts` in `src/test/java/com/bitbi/dfm/contract/Auth0AdminContractTest.java`:
   - Test valid request returns 201 with temporaryPassword
   - Test invalid email returns 400
   - Test duplicate email returns 409
@@ -197,7 +197,7 @@
   - Converts Auth0Exception → Auth0RateLimitException (429) or Auth0ServiceUnavailableException (5xx)
 
 - [x] **T034** [US1] Update `AccountAdminController.java`:
-  - Add endpoint `POST /api/v1/accounts/with-auth0`
+  - Add endpoint `POST /api/v1/admin/accounts`
   - `@PreAuthorize("hasRole('ADMIN')")`
   - Validate `@Valid CreateAccountWithAuth0RequestDto`
   - Call `Auth0AccountSyncService.createAccountWithAuth0()`
@@ -235,17 +235,17 @@
 
 ### Tests for User Story 2
 
-- [ ] **T038** [P] [US2] Contract test for `POST /api/v1/admin/accounts/{id}/lock` in `Auth0AdminContractTest.java`:
+- [x] **T038** [P] [US2] Contract test for `POST /api/v1/admin/accounts/{id}/lock` in `Auth0AdminContractTest.java`:
   - Test successful lock returns 204
   - Test locking own account returns 403
   - Test non-existent account returns 404
   - Mock Auth0 Management API
 
-- [ ] **T039** [P] [US2] Contract test for `POST /api/v1/admin/accounts/{id}/unlock` in `Auth0AdminContractTest.java`:
+- [x] **T039** [P] [US2] Contract test for `POST /api/v1/admin/accounts/{id}/unlock` in `Auth0AdminContractTest.java`:
   - Test successful unlock returns 204
   - Test non-existent account returns 404
 
-- [ ] **T040** [P] [US2] Integration test for lock/unlock in `Auth0LockUnlockIntegrationTest.java`:
+- [x] **T040** [P] [US2] Integration test for lock/unlock in `Auth0LockUnlockIntegrationTest.java`:
   - Create user with Auth0
   - Lock user
   - Verify Auth0 user.blocked = true
@@ -254,12 +254,12 @@
 
 ### Implementation for User Story 2
 
-- [ ] **T041** [US2] Add methods to `Auth0UserManagementService.java`:
+- [x] **T041** [US2] Add methods to `Auth0UserManagementService.java`:
   - `blockUser(String auth0UserId)`: Update user with blocked=true
   - `unblockUser(String auth0UserId)`: Update user with blocked=false
   - Both use `mgmt.users().update(auth0UserId, userUpdate).execute()`
 
-- [ ] **T042** [US2] Update `AccountService.java`:
+- [x] **T042** [US2] Update `AccountService.java`:
   - Add `lockAccount(UUID accountId, UUID adminAccountId)`:
     - Verify account exists
     - Verify admin is not locking themselves (accountId != adminAccountId)
@@ -270,14 +270,14 @@
     - Get Auth0 user ID
     - Call `Auth0UserManagementService.unblockUser()`
 
-- [ ] **T043** [US2] Update `AccountAdminController.java`:
+- [x] **T043** [US2] Update `AccountAdminController.java`:
   - Add endpoint `POST /api/v1/admin/accounts/{id}/lock`
   - Add endpoint `POST /api/v1/admin/accounts/{id}/unlock`
   - Both require `@PreAuthorize("hasRole('ADMIN')")`
   - Extract admin account ID from JWT (`@AuthenticationPrincipal Jwt jwt`) for self-lock prevention
   - Return `ResponseEntity.noContent()`
 
-- [ ] **T044** [US2] Add MDC logging for lock/unlock operations (accountId, auth0UserId, adminAccountId)
+- [x] **T044** [US2] Add MDC logging for lock/unlock operations (accountId, auth0UserId, adminAccountId)
 
 **Checkpoint**: User Story 2 complete - admins can lock/unlock accounts
 
@@ -386,7 +386,7 @@
 - [ ] **T059** [P] [US5] Integration test for JWT validation in `Auth0JwtValidationIntegrationTest.java`:
   - Generate mock Auth0 JWT with RS256 signature
   - Include custom claim `https://api.dataforge.com/roles: ["ROLE_ADMIN"]`
-  - Make request to `/api/v1/admin/accounts/with-auth0`
+  - Make request to `/api/v1/admin/accounts`
   - Verify 200 response (token accepted)
 
 - [ ] **T060** [P] [US5] Integration test for invalid JWT in `Auth0JwtValidationIntegrationTest.java`:
@@ -414,11 +414,11 @@
 
 **Goal**: Display paginated list of Auth0-integrated users with Auth0-specific fields (blocked status, last login)
 
-**Independent Test**: Create multiple users with Auth0, call GET `/api/v1/admin/accounts/with-auth0`, verify list includes Auth0 fields
+**Independent Test**: Create multiple users with Auth0, call GET `/api/v1/admin/accounts`, verify list includes Auth0 fields
 
 ### Tests for User Story 6
 
-- [ ] **T063** [P] [US6] Contract test for `GET /api/v1/admin/accounts/with-auth0` in `Auth0AdminContractTest.java`:
+- [ ] **T063** [P] [US6] Contract test for `GET /api/v1/admin/accounts` in `Auth0AdminContractTest.java`:
   - Test pagination (page, size parameters)
   - Test search by email/name
   - Test invalid search pattern returns 400
@@ -450,7 +450,7 @@
     - Return `PageResponseDto<AccountWithAuth0Dto>`
 
 - [ ] **T068** [US6] Update `AccountAdminController.java`:
-  - Add endpoint `GET /api/v1/admin/accounts/with-auth0`
+  - Add endpoint `GET /api/v1/admin/accounts`
   - Query params: `@RequestParam(required=false) String search`, `@RequestParam(defaultValue="0") int page`, `@RequestParam(defaultValue="20") int size`
   - Validate search with `@Size(max=100) @Pattern(regexp="^[a-zA-Z0-9@.\\s\\-]+$")`
   - Call `AccountQueryService.listAccountsWithAuth0()`
@@ -683,7 +683,7 @@
 
 ```bash
 # Launch all tests for User Story 1 together:
-Task: "Contract test for POST /api/v1/admin/accounts/with-auth0"
+Task: "Contract test for POST /api/v1/admin/accounts"
 Task: "Integration test for user creation with Auth0"
 Task: "Unit test for Auth0UserId value object"
 

@@ -146,6 +146,34 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle CannotLockOwnAccountException (403 Forbidden).
+     * <p>
+     * This exception is thrown when an admin attempts to lock their own account,
+     * which is prevented as a security measure.
+     * </p>
+     *
+     * User Story: US2 - Admin Locks/Unlocks User Accounts
+     * Functional Requirement: FR-007 - Prevent self-lock
+     */
+    @ExceptionHandler(CannotLockOwnAccountException.class)
+    public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
+            CannotLockOwnAccountException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Cannot lock own account: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
      * Handle NoHandlerFoundException (404 Not Found).
      */
     @ExceptionHandler(NoHandlerFoundException.class)
@@ -580,10 +608,10 @@ public class GlobalExceptionHandler {
 //     }
 
     /**
-     * Handle IllegalStateException (500 Internal Server Error).
+     * Handle IllegalStateException (400 Bad Request OR 500 Internal Server Error).
      * <p>
-     * Returns generic error message to client to prevent information disclosure.
-     * Full technical details are logged server-side for debugging.
+     * For Auth0 integration issues (account validation errors), return 400 Bad Request.
+     * For other illegal states, return 500 Internal Server Error with generic message.
      * </p>
      */
     @ExceptionHandler(IllegalStateException.class)
@@ -591,7 +619,24 @@ public class GlobalExceptionHandler {
             IllegalStateException ex,
             HttpServletRequest request) {
 
-        logger.error("Illegal state: {}", ex.getMessage(), ex);
+        // Check if it's an Auth0 integration validation error
+        String message = ex.getMessage();
+        if (message != null && message.contains("Auth0 integration")) {
+            logger.warn("Auth0 integration validation failed: {}", message);
+
+            ErrorResponseDto error = new ErrorResponseDto(
+                    Instant.now(),
+                    HttpStatus.BAD_REQUEST.value(),
+                    "Bad Request",
+                    message,
+                    request.getRequestURI()
+            );
+
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        }
+
+        // For other illegal states, return 500 with generic message
+        logger.error("Illegal state: {}", message, ex);
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),

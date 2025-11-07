@@ -502,7 +502,7 @@ curl -X POST "https://${AUTH0_DOMAIN}/oauth/token" \
   }' | jq -r '.access_token'
 
 # Test JWT validation endpoint
-curl -X GET "http://localhost:8080/api/admin/accounts/with-auth0" \
+curl -X GET "http://localhost:8080/api/admin/accounts" \
   -H "Authorization: Bearer ${YOUR_AUTH0_JWT}"
 ```
 

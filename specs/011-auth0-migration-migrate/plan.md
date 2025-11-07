@@ -63,7 +63,7 @@ Migrate Data Forge Middleware from Keycloak to Auth0 for user authentication and
 ✅ **IV. API-First Design**: PASS
 - OpenAPI 3.0 specification in contracts/admin-api-auth0.openapi.yaml
 - JSON request/response with standardized ErrorResponse
-- Versioned endpoint (/api/v1/admin/accounts/with-auth0)
+- Versioned endpoint (/api/v1/admin/accounts)
 
 ✅ **V. Security by Default**: PASS
 - Auth0 OAuth2 JWT validation with Spring Security 6

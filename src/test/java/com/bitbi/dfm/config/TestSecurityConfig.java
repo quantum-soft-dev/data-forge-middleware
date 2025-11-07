@@ -1,9 +1,11 @@
 package com.bitbi.dfm.config;
 
+import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.convert.converter.Converter;
@@ -64,6 +66,18 @@ public class TestSecurityConfig {
     private TokenService tokenService;
 
     /**
+     * Mock AccountSyncService bean for tests.
+     * <p>
+     * AccountSyncService is excluded from test profile (@Profile("!test")) because it requires
+     * Auth0 Management API credentials. We provide a mock bean here so that controllers
+     * depending on it (like AccountAdminController) can be loaded in test context.
+     * Individual tests should configure mock behavior as needed.
+     * </p>
+     */
+    @MockBean
+    private AccountSyncService accountSyncService;
+
+    /**
      * Mock JWT decoder for testing.
      * <p>
      * Accepts any JWT token string and creates a mock Jwt object:
@@ -112,6 +126,7 @@ public class TestSecurityConfig {
                     .claim("email", email)
                     .claim("preferred_username", username)
                     .claim("accountId", accountId)
+                    .claim("https://api.dataforge.com/accountId", accountId) // Namespaced claim for Auth0
                     .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
                     .expiresAt(Instant.now().plusSeconds(3600))
