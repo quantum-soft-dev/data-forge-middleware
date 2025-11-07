@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 
@@ -53,7 +53,7 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(properties = {
     "auth0.database-connection=Username-Password-Authentication",
     "auth0.domain=test.auth0.com",
-    "auth0.api-audience=https://test-api.example.com"
+    "auth0.api.audience=https://test-api.example.com"
 })
 @ActiveProfiles("test")
 @Import(TestSecurityConfig.class)
@@ -67,7 +67,7 @@ class Auth0UserCreationIntegrationTest {
     @Autowired
     private AccountRepository accountRepository;
 
-    @MockBean
+    @MockitoBean
     private ManagementAPI managementAPI;
 
     private static final String MOCK_AUTH0_USER_ID = "auth0|60f7b8a8b4a0f10074c5d0e1";

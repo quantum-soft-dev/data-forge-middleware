@@ -114,15 +114,15 @@ public class Account {
     }
 
     /**
-     * Create new account with identity provider integration (Auth0, Keycloak, etc.).
-     * This is the preferred factory method for new accounts going forward.
+     * Create new account with Auth0 identity provider integration.
+     * This is the preferred factory method for new accounts.
      *
-     * @param identityProviderUserId Identity provider user ID (Auth0 user ID or Keycloak UUID)
+     * @param identityProviderUserId Auth0 user ID (format: auth0|{alphanumeric})
      * @param email   user's email address
      * @param name    user's display name
      * @param phone   user's phone number (optional)
      * @param company user's company name (optional)
-     * @return new Account instance with identity provider linkage
+     * @return new Account instance with Auth0 linkage
      * @throws IllegalArgumentException if identityProviderUserId is invalid or other params fail validation
      */
     public static Account createWithIdentityProvider(String identityProviderUserId, String email,
@@ -152,16 +152,6 @@ public class Account {
 
         return new Account(id, email.toLowerCase().trim(), name.trim(),
                           phoneVO, companyVO, true, identityProviderUserId, now, now);
-    }
-
-    /**
-     * @deprecated Use {@link #createWithIdentityProvider(String, String, String, String, String)} instead.
-     * Kept for backwards compatibility during migration.
-     */
-    @Deprecated(since = "1.0.0", forRemoval = true)
-    public static Account createWithKeycloak(String keycloakUserId, String email,
-                                              String name, String phone, String company) {
-        return createWithIdentityProvider(keycloakUserId, email, name, phone, company);
     }
 
     /**
@@ -224,9 +214,9 @@ public class Account {
     }
 
     /**
-     * Associate existing account with identity provider user (for gradual migration).
+     * Associate existing account with Auth0 identity provider user.
      *
-     * @param identityProviderUserId Identity provider user ID (Auth0 or Keycloak)
+     * @param identityProviderUserId Auth0 user ID (format: auth0|{alphanumeric})
      * @throws IllegalArgumentException if identityProviderUserId is invalid
      * @throws IllegalStateException if account is already linked to an identity provider
      */
@@ -250,30 +240,12 @@ public class Account {
     }
 
     /**
-     * @deprecated Use {@link #linkIdentityProvider(String)} instead.
-     * Kept for backwards compatibility during migration.
-     */
-    @Deprecated(since = "1.0.0", forRemoval = true)
-    public void linkToKeycloak(String keycloakUserId) {
-        linkIdentityProvider(keycloakUserId);
-    }
-
-    /**
-     * Check if account is integrated with an identity provider (Auth0, Keycloak, etc.).
+     * Check if account is integrated with an identity provider (Auth0).
      *
      * @return true if account has identity provider user ID
      */
     public boolean hasIdentityProviderIntegration() {
         return identityProviderUserId != null;
-    }
-
-    /**
-     * @deprecated Use {@link #hasIdentityProviderIntegration()} instead.
-     * Kept for backwards compatibility during migration.
-     */
-    @Deprecated(since = "1.0.0", forRemoval = true)
-    public boolean hasKeycloakIntegration() {
-        return hasIdentityProviderIntegration();
     }
 
     /**

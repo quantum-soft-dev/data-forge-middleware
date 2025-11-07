@@ -27,12 +27,14 @@ spring:
 # Auth0 Development Configuration
 auth0:
   domain: ${AUTH0_DOMAIN:dev-example.us.auth0.com}
-  management-client-id: ${AUTH0_MGMT_CLIENT_ID}
-  management-client-secret: ${AUTH0_MGMT_CLIENT_SECRET}
-  api-audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
+  management:
+    client-id: ${AUTH0_MGMT_CLIENT_ID:}
+    client-secret: ${AUTH0_MGMT_CLIENT_SECRET:}
+    audience: ${AUTH0_MGMT_AUDIENCE:https://dev-example.us.auth0.com/api/v2/}
+  api:
+    audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
+    issuer: ${AUTH0_ISSUER:https://dev-example.us.auth0.com/}
   database-connection: Username-Password-Authentication
-  password-reset-ttl-seconds: 86400
-  roles-namespace: https://api.dataforge.com/roles
 
 s3:
   endpoint: ${AWS_S3_ENDPOINT:http://localhost:4566}

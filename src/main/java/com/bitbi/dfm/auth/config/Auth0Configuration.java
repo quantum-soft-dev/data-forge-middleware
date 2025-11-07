@@ -8,8 +8,10 @@ import com.auth0.net.Request;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.retry.annotation.EnableRetry;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -41,13 +43,13 @@ public class Auth0Configuration {
 
     private static final Logger logger = LoggerFactory.getLogger(Auth0Configuration.class);
 
-    @Value("${auth0.domain}")
+    @Value("${auth0.domain:}")
     private String domain;
 
-    @Value("${auth0.management-client-id}")
+    @Value("${auth0.management.client-id:}")
     private String managementClientId;
 
-    @Value("${auth0.management-client-secret}")
+    @Value("${auth0.management.client-secret:}")
     private String managementClientSecret;
 
     private ManagementAPI managementAPI;
@@ -65,10 +67,15 @@ public class Auth0Configuration {
      * - Generating password reset tickets (resetPassword)
      * - Updating user metadata (linking accountId)
      * </p>
+     * <p>
+     * This bean is conditional - only created when auth0.management.client-id is set.
+     * In test environments without real Auth0 credentials, this bean will not be created.
+     * </p>
      *
      * @return Configured ManagementAPI instance
      */
     @Bean
+    @Profile("!test")
     public ManagementAPI managementAPI() {
         logger.info("Initializing Auth0 ManagementAPI for domain: {}", domain);
 

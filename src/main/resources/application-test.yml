@@ -29,6 +29,17 @@ spring:
           issuer-uri: http://localhost:8081/realms/dfm-test
           jwk-set-uri: http://localhost:8081/realms/dfm-test/protocol/openid-connect/certs
 
+# Auth0 Configuration for tests (mocked by TestSecurityConfig)
+# Management API bean disabled in tests (no client-id/secret - omitted to disable Auth0Configuration)
+auth0:
+  domain: test.auth0.com
+  management:
+    audience: https://test.auth0.com/api/v2/
+  api:
+    audience: https://api.test.com
+    issuer: https://test.auth0.com/
+  database-connection: Username-Password-Authentication
+
 s3:
   endpoint: http://localhost:4566
   region: us-east-1

@@ -181,8 +181,8 @@ class Auth0UserIdTest {
     @Test
     @DisplayName("TC07: User ID with exactly 64 characters accepted (boundary)")
     void auth0UserId_exactly64Characters_accepted() {
-        // Given: Exactly 64 characters (6 + 57 + 1 separator = 64)
-        String maxLengthUserId = "auth0|" + "a".repeat(57);
+        // Given: Exactly 64 characters (5 + 1 + 58 = 64: "auth0" + "|" + 58 chars)
+        String maxLengthUserId = "auth0|" + "a".repeat(58);
         assertThat(maxLengthUserId.length()).isEqualTo(64);
 
         // When
