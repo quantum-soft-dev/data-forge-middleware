@@ -89,7 +89,7 @@ describe('Create Account Flow - Integration Test', () => {
       temporaryPassword: 'TempPass123!@#USER',
     }
 
-    mockAxios.onPost('/admin/accounts/with-keycloak').reply(200, mockResponse)
+    mockAxios.onPost('/v1/accounts/with-keycloak').reply(200, mockResponse)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -117,7 +117,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Step 4: Verify API call with correct data
     await waitFor(() => {
       expect(mockAxios.history.post.length).toBe(1)
-      expect(mockAxios.history.post[0].url).toBe('/admin/accounts/with-keycloak')
+      expect(mockAxios.history.post[0].url).toBe('/v1/accounts/with-keycloak')
       const requestData = JSON.parse(mockAxios.history.post[0].data)
       expect(requestData).toMatchObject({
         email: 'john.doe@example.com',
@@ -175,7 +175,7 @@ describe('Create Account Flow - Integration Test', () => {
       temporaryPassword: 'AdminTemp456!@#',
     }
 
-    mockAxios.onPost('/admin/accounts/with-keycloak').reply(200, mockResponse)
+    mockAxios.onPost('/v1/accounts/with-keycloak').reply(200, mockResponse)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -224,7 +224,7 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnCancel = vi.fn()
 
     // Mock API error (e.g., duplicate email)
-    mockAxios.onPost('/admin/accounts/with-keycloak').reply(409, {
+    mockAxios.onPost('/v1/accounts/with-keycloak').reply(409, {
       message: 'Account with this email already exists',
     })
 
@@ -360,7 +360,7 @@ describe('Create Account Flow - Integration Test', () => {
       temporaryPassword: 'TempPass123!',
     }
 
-    mockAxios.onPost('/admin/accounts/with-keycloak').reply(() => {
+    mockAxios.onPost('/v1/accounts/with-keycloak').reply(() => {
       return new Promise((resolve) => {
         setTimeout(() => {
           resolve([200, mockResponse])
@@ -420,7 +420,7 @@ describe('Create Account Flow - Integration Test', () => {
       temporaryPassword: 'TempPass123!',
     }
 
-    mockAxios.onPost('/admin/accounts/with-keycloak').reply(200, mockResponse)
+    mockAxios.onPost('/v1/accounts/with-keycloak').reply(200, mockResponse)
 
     renderWithProviders(
       <CreateAccountForm onSuccess={mockOnSuccess} onCancel={mockOnCancel} />
@@ -449,7 +449,7 @@ describe('Create Account Flow - Integration Test', () => {
     // Verify API call includes optional fields
     await waitFor(() => {
       expect(mockAxios.history.post.length).toBe(1)
-      expect(mockAxios.history.post[0].url).toBe('/admin/accounts/with-keycloak')
+      expect(mockAxios.history.post[0].url).toBe('/v1/accounts/with-keycloak')
       const requestData = JSON.parse(mockAxios.history.post[0].data)
       expect(requestData).toMatchObject({
         email: 'test@example.com',

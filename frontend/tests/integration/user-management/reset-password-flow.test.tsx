@@ -128,7 +128,7 @@ describe('Reset Password Flow - Integration Test', () => {
     // Step 3: Verify API call with correct account ID
     await waitFor(() => {
       expect(apiClientModule.apiClient.post).toHaveBeenCalledWith(
-        `/admin/accounts/${mockAccount.id}/reset-password`
+        `/v1/accounts/${mockAccount.id}/reset-password`
       )
     })
 
