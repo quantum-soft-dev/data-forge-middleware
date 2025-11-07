@@ -562,24 +562,24 @@ public class GlobalExceptionHandler {
 //     }
 
     /**
-     * Handle KeycloakSyncException (503 Service Unavailable).
+     * Handle Auth0SyncException (503 Service Unavailable).
      * <p>
-     * Thrown when synchronization with Keycloak fails.
+     * Thrown when synchronization with Auth0 fails.
      * Returns 503 to indicate temporary service unavailability.
      * </p>
      */
-    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.KeycloakSyncException.class)
-    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncException(
-            com.bitbi.dfm.account.domain.exception.KeycloakSyncException ex,
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.Auth0SyncException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0SyncException(
+            com.bitbi.dfm.account.domain.exception.Auth0SyncException ex,
             HttpServletRequest request) {
 
-        logger.error("Keycloak sync failed: {}", ex.getMessage(), ex);
+        logger.error("Auth0 sync failed: {}", ex.getMessage(), ex);
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),
                 HttpStatus.SERVICE_UNAVAILABLE.value(),
                 "Service Unavailable",
-                "Failed to synchronize with Keycloak: " + ex.getMessage(),
+                "Failed to synchronize with Auth0: " + ex.getMessage(),
                 request.getRequestURI()
         );
 

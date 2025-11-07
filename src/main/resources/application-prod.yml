@@ -11,12 +11,14 @@ spring:
         show_sql: false
         format_sql: false
 
-keycloak:
-  auth-server-url: ${KEYCLOAK_SERVER_URL}
-  realm: ${KEYCLOAK_REALM:dfm}
-  admin:
-    client-id: ${KEYCLOAK_ADMIN_CLIENT_ID}
-    client-secret: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
+auth0:
+  domain: ${AUTH0_DOMAIN}
+  management-client-id: ${AUTH0_MGMT_CLIENT_ID}
+  management-client-secret: ${AUTH0_MGMT_CLIENT_SECRET}
+  api-audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
+  database-connection: Username-Password-Authentication
+  password-reset-ttl-seconds: 86400
+  roles-namespace: https://api.dataforge.com/roles
 
 logging:
   level:

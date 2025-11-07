@@ -3,57 +3,57 @@ package com.bitbi.dfm.account.domain.exception;
 import java.util.UUID;
 
 /**
- * Exception thrown when synchronization with Keycloak fails.
+ * Exception thrown when synchronization with Auth0 fails.
  * <p>
  * This is a domain exception indicating that an operation to sync account data
- * with Keycloak has failed due to communication errors, authentication issues,
- * or other Keycloak-related problems.
+ * with Auth0 has failed due to communication errors, authentication issues,
+ * or other Auth0-related problems.
  * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 2.0.0
  */
-public class KeycloakSyncException extends RuntimeException {
+public class Auth0SyncException extends RuntimeException {
 
     private final UUID accountId;
     private final String operation;
 
     /**
-     * Constructs a new KeycloakSyncException with the specified account ID and operation.
+     * Constructs a new Auth0SyncException with the specified account ID and operation.
      *
      * @param accountId the ID of the account being synced
      * @param operation the operation that failed (e.g., "lock", "unlock", "resetPassword")
      * @param message   the detailed error message
      */
-    public KeycloakSyncException(UUID accountId, String operation, String message) {
-        super(String.format("Keycloak sync failed for account %s during operation '%s': %s",
+    public Auth0SyncException(UUID accountId, String operation, String message) {
+        super(String.format("Auth0 sync failed for account %s during operation '%s': %s",
                 accountId, operation, message));
         this.accountId = accountId;
         this.operation = operation;
     }
 
     /**
-     * Constructs a new KeycloakSyncException with the specified account ID, operation, and cause.
+     * Constructs a new Auth0SyncException with the specified account ID, operation, and cause.
      *
      * @param accountId the ID of the account being synced
      * @param operation the operation that failed
      * @param message   the detailed error message
      * @param cause     the underlying cause of the exception
      */
-    public KeycloakSyncException(UUID accountId, String operation, String message, Throwable cause) {
-        super(String.format("Keycloak sync failed for account %s during operation '%s': %s",
+    public Auth0SyncException(UUID accountId, String operation, String message, Throwable cause) {
+        super(String.format("Auth0 sync failed for account %s during operation '%s': %s",
                 accountId, operation, message), cause);
         this.accountId = accountId;
         this.operation = operation;
     }
 
     /**
-     * Constructs a new KeycloakSyncException with a simple message and cause.
+     * Constructs a new Auth0SyncException with a simple message and cause.
      *
      * @param message the detailed error message
      * @param cause   the underlying cause of the exception
      */
-    public KeycloakSyncException(String message, Throwable cause) {
+    public Auth0SyncException(String message, Throwable cause) {
         super(message, cause);
         this.accountId = null;
         this.operation = null;

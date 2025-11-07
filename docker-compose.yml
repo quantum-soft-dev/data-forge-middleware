@@ -7,15 +7,15 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      # Multiple databases will be created via init script
-      POSTGRES_MULTIPLE_DATABASES: dfm,keycloak
+      # Only dfm database needed (Keycloak removed after Auth0 migration)
+      POSTGRES_MULTIPLE_DATABASES: dfm
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d dfm && pg_isready -U postgres -d keycloak"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dfm"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -59,42 +59,6 @@ services:
     networks:
       - dfm-network
 
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0.0
-    container_name: dfm-keycloak
-    environment:
-      # Admin credentials
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
-      # Database configuration
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-      KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: keycloak_password
-      KC_DB_SCHEMA: public
-      # HTTP configuration
-      KC_HTTP_PORT: 8080
-      KC_HTTP_ENABLED: true
-      KC_HOSTNAME_STRICT: false
-      KC_HOSTNAME_STRICT_HTTPS: false
-      KC_PROXY: edge
-      # Health checks
-      KC_HEALTH_ENABLED: true
-      KC_METRICS_ENABLED: true
-    command:
-      - start-dev
-      - --import-realm
-    ports:
-      - "8081:8080"
-    volumes:
-      - keycloak_data:/opt/keycloak/data
-      - ./docker/keycloak/dfm-realm.json:/opt/keycloak/data/import/dfm-realm.json:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - dfm-network
-
   dfm-backend:
     build:
       context: .
@@ -114,14 +78,16 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_S3_BUCKET_NAME: dfm-uploads
-      # Keycloak
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/dfm
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/dfm/protocol/openid-connect/certs
+      # Auth0 (replaces Keycloak)
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_MGMT_CLIENT_ID: ${AUTH0_MGMT_CLIENT_ID}
+      AUTH0_MGMT_CLIENT_SECRET: ${AUTH0_MGMT_CLIENT_SECRET}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://api.dataforge.com}
       # Redis
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_PASSWORD: redis_password
-      # JWT
+      # JWT (for backward compatibility with client API)
       JWT_SECRET: change-this-secret-in-production-minimum-256-bits-required-for-hmac-sha256-algorithm
       JWT_EXPIRATION: 86400
       # Logging
@@ -136,8 +102,6 @@ services:
         condition: service_healthy
       localstack:
         condition: service_healthy
-      keycloak:
-        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
       interval: 30s
@@ -151,7 +115,6 @@ volumes:
   postgres_data:
   redis_data:
   localstack_data:
-  keycloak_data:
 
 networks:
   dfm-network:
