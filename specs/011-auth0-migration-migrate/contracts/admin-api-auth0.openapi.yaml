@@ -163,11 +163,11 @@ paths:
           example: 20
       responses:
         '200':
-          description: List of accounts with Auth0 integration
+          description: List of accounts with identity provider integration
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AccountsWithAuth0Page'
+                $ref: '#/components/schemas/AccountPageDto'
               examples:
                 success:
                   value:
@@ -467,14 +467,14 @@ components:
           description: Auth0 password change ticket URL (expires in 24 hours)
           example: "https://dev-example.us.auth0.com/lo/reset?ticket=xyz789abc"
 
-    AccountWithAuth0Dto:
+    AccountDetailDto:
       type: object
       required:
         - id
         - email
         - name
         - isActive
-        - auth0UserId
+        - identityProviderUserId
         - isBlocked
         - createdAt
       properties:
@@ -506,19 +506,19 @@ components:
           type: boolean
           description: Account active status (PostgreSQL)
           example: true
-        auth0UserId:
+        identityProviderUserId:
           type: string
-          description: Auth0 user ID (format auth0|xxx)
+          description: Identity provider user ID (format auth0|xxx)
           example: "auth0|60f7b8a8b4a0f10074c5d0e1"
         isBlocked:
           type: boolean
-          description: User blocked status from Auth0
+          description: User blocked status from identity provider
           example: false
         lastLogin:
           type: string
           format: date-time
           nullable: true
-          description: Last successful login timestamp from Auth0
+          description: Last successful login timestamp from identity provider
           example: "2025-11-05T15:30:00Z"
         createdAt:
           type: string
@@ -526,7 +526,7 @@ components:
           description: Account creation timestamp
           example: "2025-11-01T10:00:00Z"
 
-    AccountsWithAuth0Page:
+    AccountPageDto:
       type: object
       required:
         - content
@@ -538,7 +538,7 @@ components:
         content:
           type: array
           items:
-            $ref: '#/components/schemas/AccountWithAuth0Dto'
+            $ref: '#/components/schemas/AccountDetailDto'
         page:
           type: integer
           minimum: 0

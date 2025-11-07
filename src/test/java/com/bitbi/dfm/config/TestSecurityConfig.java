@@ -1,5 +1,6 @@
 package com.bitbi.dfm.config;
 
+import com.auth0.client.mgmt.ManagementAPI;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
@@ -74,6 +75,18 @@ public class TestSecurityConfig {
     private TokenService tokenService;
 
     /**
+     * Mock Auth0 ManagementAPI bean for tests.
+     * <p>
+     * Required by Auth0TestConfig to create AccountSyncService.
+     * Individual tests should configure mock behavior as needed.
+     * </p>
+     */
+    @Bean
+    public ManagementAPI managementAPI() {
+        return org.mockito.Mockito.mock(ManagementAPI.class);
+    }
+
+    /**
      * Mock AccountSyncService bean for tests.
      * <p>
      * AccountSyncService is excluded from test profile (@Profile("!test")) because it requires
@@ -82,8 +95,10 @@ public class TestSecurityConfig {
      * Integration tests that need real AccountSyncService should import Auth0TestConfig.
      * </p>
      */
-    @MockitoBean
-    private AccountSyncService accountSyncService;
+    @Bean
+    public AccountSyncService accountSyncService() {
+        return org.mockito.Mockito.mock(AccountSyncService.class);
+    }
 
     /**
      * Mock JWT decoder for testing.

@@ -181,7 +181,7 @@ src/main/java/com/bitbi/dfm/
 │   │       ├── CreateAccountRequestDto.java  # UPDATED: Add role field
 │   │       ├── CreateAccountResponseDto.java # UPDATED: passwordResetLink
 │   │       ├── ResetPasswordResponseDto.java # UPDATED: passwordResetLink
-│   │       └── AccountWithAuth0Dto.java      # NEW: Auth0-specific fields
+│   │       └── AccountDetailDto.java         # NEW: Auth0-specific fields (isBlocked, lastLogin)
 │   └── infrastructure/
 │       └── JpaAccountRepository.java        # UPDATED: identityProviderUserId queries
 │

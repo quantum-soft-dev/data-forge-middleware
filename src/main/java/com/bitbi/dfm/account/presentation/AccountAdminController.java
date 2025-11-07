@@ -60,12 +60,12 @@ public class AccountAdminController {
     }
 
     /**
-     * Lock account (block Auth0 user).
+     * Lock account (block identity provider user).
      * <p>
      * POST /api/v1/accounts/{id}/lock
      * </p>
      * <p>
-     * Prevents user from logging in via Auth0. Existing sessions remain valid until token expiry.
+     * Prevents user from logging in via identity provider. Existing sessions remain valid until token expiry.
      * Admin cannot lock their own account (403 Forbidden).
      * </p>
      *
@@ -77,7 +77,7 @@ public class AccountAdminController {
      * @return 204 No Content if successful
      * @throws com.bitbi.dfm.account.application.AccountService.AccountNotFoundException if account not found (404)
      * @throws com.bitbi.dfm.shared.exception.CannotLockOwnAccountException             if admin attempts to lock their own account (403)
-     * @throws IllegalStateException                                                    if account does not have Auth0 integration (400)
+     * @throws IllegalStateException                                                    if account does not have identity provider integration (400)
      */
     @PostMapping(ApiRoutes.ACCOUNTS_LOCK)
     @Operation(
@@ -122,12 +122,12 @@ public class AccountAdminController {
     }
 
     /**
-     * Unlock account (unblock Auth0 user).
+     * Unlock account (unblock identity provider user).
      * <p>
      * POST /api/v1/accounts/{id}/unlock
      * </p>
      * <p>
-     * Allows previously blocked user to log in again via Auth0.
+     * Allows previously blocked user to log in again via identity provider.
      * </p>
      *
      * User Story: US2 - Admin Locks/Unlocks User Accounts
@@ -136,7 +136,7 @@ public class AccountAdminController {
      * @param id account identifier (UUID path parameter)
      * @return 204 No Content if successful
      * @throws com.bitbi.dfm.account.application.AccountService.AccountNotFoundException if account not found (404)
-     * @throws IllegalStateException                                                    if account does not have Auth0 integration (400)
+     * @throws IllegalStateException                                                    if account does not have identity provider integration (400)
      */
     @PostMapping(ApiRoutes.ACCOUNTS_UNLOCK)
     @Operation(
@@ -169,13 +169,13 @@ public class AccountAdminController {
     }
 
     /**
-     * Reset user password by generating Auth0 password reset link.
+     * Reset user password by generating identity provider password reset link.
      * <p>
      * POST /api/v1/admin/accounts/{id}/reset-password (mapped from ApiRoutes.ACCOUNTS_RESET_PASSWORD)
      * </p>
      * <p>
      * Generates a password change ticket (24-hour expiry) that directs the user to
-     * Auth0 Universal Login to set a new password. The ticket URL must be sent to
+     * the identity provider login page to set a new password. The ticket URL must be sent to
      * the user via email or other communication channel.
      * </p>
      *
@@ -186,7 +186,7 @@ public class AccountAdminController {
      * @param id Account identifier to reset password for
      * @return 200 OK with ResetPasswordResponseDto containing password reset link and metadata
      * @throws AccountNotFoundException         if account not found (404)
-     * @throws MissingAuth0IntegrationException if account does not have Auth0 integration (400)
+     * @throws MissingAuth0IntegrationException if account does not have identity provider integration (400)
      */
     @PostMapping(ApiRoutes.ACCOUNTS_RESET_PASSWORD)
     @Operation(
@@ -222,17 +222,17 @@ public class AccountAdminController {
     }
 
     /**
-     * Create account with Auth0 integration.
+     * Create account with identity provider integration.
      * <p>
      * POST /api/v1/accounts (mapped from ApiRoutes.ACCOUNTS_CREATE)
      * </p>
      * <p>
-     * Creates a new user account in PostgreSQL and Auth0 in a two-phase commit transaction.
+     * Creates a new user account in PostgreSQL and identity provider in a two-phase commit transaction.
      * Returns a temporary password for the user's first login.
      * </p>
      *
-     * User Story: US1 - Admin Creates User Account via Auth0
-     * Functional Requirement: FR-001 - Create account with Auth0
+     * User Story: US1 - Admin Creates User Account
+     * Functional Requirement: FR-001 - Create account with identity provider
      *
      * @param request Account creation request (email, name, phone, company)
      * @return 201 Created with account details and temporary password
@@ -280,9 +280,9 @@ public class AccountAdminController {
     public ResponseEntity<AccountResponseDto> createAccount(
             @Valid @RequestBody CreateAccountRequestDto request) {
 
-        logger.info("Creating account with Auth0 integration for email: {}", request.email());
+        logger.info("Creating account with identity provider integration for email: {}", request.email());
 
-        // Create account with Auth0 integration (two-phase commit)
+        // Create account with identity provider integration (two-phase commit)
         var result = accountSyncService.createAccount(
                 request.email(),
                 request.name(),
@@ -296,7 +296,7 @@ public class AccountAdminController {
                 result.temporaryPassword()
         );
 
-        logger.info("Account created successfully with Auth0: accountId={}, auth0UserId={}",
+        logger.info("Account created successfully: accountId={}, identityProviderUserId={}",
                 result.account().getId(), result.account().getIdentityProviderUserId());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(response);

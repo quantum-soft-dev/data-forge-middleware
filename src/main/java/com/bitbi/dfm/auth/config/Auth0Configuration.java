@@ -62,7 +62,7 @@ public class Auth0Configuration {
      * Creates Auth0 ManagementAPI bean with automatic token management.
      * <p>
      * The ManagementAPI client is used for:
-     * - Creating users (createAccountWithAuth0)
+     * - Creating users (createAccount)
      * - Blocking/unblocking users (lockAccount/unlockAccount)
      * - Generating password reset tickets (resetPassword)
      * - Updating user metadata (linking accountId)

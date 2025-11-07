@@ -372,11 +372,11 @@ public record ResetPasswordResponseDto(
 }
 ```
 
-### AccountWithAuth0Dto (New)
+### AccountDetailDto (New)
 
 **Purpose**: Account details with Auth0-specific fields for admin listing
 
-**File**: `src/main/java/com/bitbi/dfm/account/presentation/dto/AccountWithAuth0Dto.java`
+**File**: `src/main/java/com/bitbi/dfm/account/presentation/dto/AccountDetailDto.java`
 
 ```java
 package com.bitbi.dfm.account.presentation.dto;
@@ -386,24 +386,24 @@ import com.bitbi.dfm.account.domain.Account;
 import java.time.Instant;
 import java.util.UUID;
 
-public record AccountWithAuth0Dto(
+public record AccountDetailDto(
     UUID id,
     String email,
     String name,
     String phone,
     String company,
     boolean isActive,
-    String auth0UserId, // Auth0 user ID (e.g., auth0|xxx)
-    boolean isBlocked,  // Auth0 blocked status
-    Instant lastLogin,  // Auth0 last_login timestamp
+    String identityProviderUserId, // Identity provider user ID (e.g., auth0|xxx)
+    boolean isBlocked,              // Auth0 blocked status
+    Instant lastLogin,              // Auth0 last_login timestamp
     Instant createdAt
 ) {
-    public static AccountWithAuth0Dto fromEntity(
+    public static AccountDetailDto fromEntity(
         Account account,
         boolean isBlocked,
         Instant lastLogin
     ) {
-        return new AccountWithAuth0Dto(
+        return new AccountDetailDto(
             account.getId(),
             account.getEmail(),
             account.getName(),
@@ -457,9 +457,9 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID> {
         AND a.identityProviderUserId LIKE 'auth0|%'
         AND a.isActive = true
         """)
-    List<Account> findAccountsWithAuth0Integration();
+    List<Account> findAccountsWithIdentityProvider();
 
-    // NEW: Search accounts with Auth0 by email or name
+    // NEW: Search accounts with identity provider by email or name
     @Query("""
         SELECT a FROM Account a
         WHERE a.identityProviderUserId IS NOT NULL
@@ -467,7 +467,7 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID> {
         AND (LOWER(a.email) LIKE LOWER(CONCAT('%', :search, '%'))
              OR LOWER(a.name) LIKE LOWER(CONCAT('%', :search, '%')))
         """)
-    Page<Account> findAccountsWithAuth0BySearch(
+    Page<Account> findAccountsBySearch(
         @Param("search") String search,
         Pageable pageable
     );
@@ -602,13 +602,13 @@ spring:
 - ✅ CreateAccountRequestDto: Add `role` field
 - ✅ CreateAccountResponseDto: Replace `temporaryPassword` with `passwordResetLink`
 - ✅ ResetPasswordResponseDto: Replace `temporaryPassword` with `passwordResetLink`
-- ✅ AccountWithAuth0Dto: New DTO for admin listing with Auth0 fields
+- ✅ AccountDetailDto: New DTO for admin listing with Auth0 fields (isBlocked, lastLogin)
 
 ### Repository
 - ✅ Update query methods to use `identityProviderUserId`
 - ✅ Add `findByIdentityProviderUserId()` query
-- ✅ Add `findAccountsWithAuth0Integration()` query
-- ✅ Add `findAccountsWithAuth0BySearch()` query
+- ✅ Add `findAccountsWithIdentityProvider()` query
+- ✅ Add `findAccountsBySearch()` query
 
 ### Domain Events
 - ✅ AccountAuth0LinkedEvent: New event for Auth0 linking
@@ -648,7 +648,7 @@ spring:
 - [ ] Update CreateAccountRequestDto (add `role`)
 - [ ] Update CreateAccountResponseDto (replace `temporaryPassword`)
 - [ ] Update ResetPasswordResponseDto (replace `temporaryPassword`)
-- [ ] Create AccountWithAuth0Dto
+- [ ] Create AccountDetailDto (with isBlocked, lastLogin fields)
 - [ ] Create AccountAuth0LinkedEvent
 - [ ] Create Auth0Properties
 - [ ] Update application.yml configuration

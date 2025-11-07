@@ -3,21 +3,24 @@ import type { InternalAxiosRequestConfig } from 'axios'
 import { logger } from '../lib/logger'
 
 /**
- * Axios request interceptor to attach JWT tokens
+ * Axios request interceptor to attach JWT tokens (Auth0 migration)
  *
- * This interceptor must be initialized AFTER the AuthProvider is mounted,
- * otherwise useAuth() will not be available.
+ * This interceptor must be initialized AFTER the Auth0Provider is mounted,
+ * otherwise useAuth0() will not be available.
  *
  * JWT is attached to all API requests in the Authorization header.
+ * Supports both sync and async token getters for Auth0 compatibility.
  *
- * Usage: Call setupInterceptors() in App.tsx after AuthProvider mounts
+ * Usage: Call setupInterceptors() in App.tsx after Auth0Provider mounts
+ *
+ * @version 2.0.0 (Auth0 migration)
  */
 
-// Store the auth getter function
-let getAccessToken: (() => string | undefined) | null = null
+// Store the auth getter function (supports async for Auth0)
+let getAccessToken: (() => string | undefined | Promise<string | undefined>) | null = null
 let requestInterceptorId: number | null = null
 
-export function setupInterceptors(tokenGetter: () => string | undefined) {
+export function setupInterceptors(tokenGetter: () => string | undefined | Promise<string | undefined>) {
   getAccessToken = tokenGetter
 
   // Clear previous interceptor if it exists (prevent duplicates)
@@ -26,21 +29,25 @@ export function setupInterceptors(tokenGetter: () => string | undefined) {
     logger.info('[Interceptor]', '🔄 Cleared previous interceptor')
   }
 
-  // Request interceptor: attach JWT token
+  // Request interceptor: attach JWT token (async for Auth0)
   requestInterceptorId = apiClient.interceptors.request.use(
-    (config: InternalAxiosRequestConfig) => {
-      const token = getAccessToken?.()
+    async (config: InternalAxiosRequestConfig) => {
+      try {
+        const token = await getAccessToken?.()
 
-      if (token && config.headers) {
-        config.headers.Authorization = `Bearer ${token}`
-        logger.debug('[Interceptor]', '✅ Added token to request:', config.url)
-        logger.debug('[Interceptor]', '🔑 Token preview:', token.substring(0, 50) + '...')
-      } else {
-        logger.warn('[Interceptor]', '⚠️ No token available for request:', config.url)
-        logger.debug('[Interceptor]', '📊 Auth state:', {
-          hasTokenGetter: !!getAccessToken,
-          tokenValue: token ? 'present' : 'missing'
-        })
+        if (token && config.headers) {
+          config.headers.Authorization = `Bearer ${token}`
+          logger.debug('[Interceptor]', '✅ Added token to request:', config.url)
+          logger.debug('[Interceptor]', '🔑 Token preview:', token.substring(0, 50) + '...')
+        } else {
+          logger.warn('[Interceptor]', '⚠️ No token available for request:', config.url)
+          logger.debug('[Interceptor]', '📊 Auth state:', {
+            hasTokenGetter: !!getAccessToken,
+            tokenValue: token ? 'present' : 'missing'
+          })
+        }
+      } catch (error) {
+        logger.error('[Interceptor]', '❌ Failed to get token:', error)
       }
 
       return config
@@ -51,7 +58,7 @@ export function setupInterceptors(tokenGetter: () => string | undefined) {
     }
   )
 
-  logger.info('[Interceptor]', '🚀 Request interceptor registered')
+  logger.info('[Interceptor]', '🚀 Request interceptor registered (Auth0)')
 }
 
 // Response interceptor for handling errors globally (implemented in error-handler.ts)

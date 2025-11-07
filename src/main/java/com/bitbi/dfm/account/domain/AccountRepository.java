@@ -74,11 +74,11 @@ public interface AccountRepository {
     void deleteById(UUID id);
 
     /**
-     * Find all accounts with Auth0 integration and optional search filter.
+     * Find all accounts with identity provider integration and optional search filter.
      *
      * @param search optional search term to filter by email or name (case-insensitive)
      * @param pageable pagination parameters
-     * @return page of accounts with Auth0 integration
+     * @return page of accounts with identity provider integration
      */
-    Page<Account> findAccountsWithAuth0BySearch(String search, Pageable pageable);
+    Page<Account> findAccountsBySearch(String search, Pageable pageable);
 }

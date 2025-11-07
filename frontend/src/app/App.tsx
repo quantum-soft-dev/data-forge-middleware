@@ -1,42 +1,54 @@
 import { useEffect } from 'react'
-import { useAuth } from 'react-oidc-context'
-import { AuthProvider, QueryProvider, RouterProvider } from '@/app/providers'
+import { useAuth0 } from '@auth0/auth0-react'
+import { Auth0Provider, QueryProvider, RouterProvider } from '@/app/providers'
 import { ErrorBoundary } from '@/app/ErrorBoundary'
 import { setupInterceptors } from '@/shared/api/interceptors'
 import { setupErrorHandler } from '@/shared/api/error-handler'
 import { Toaster } from 'sonner'
 
 /**
- * Root application component
+ * Root application component (Auth0 migration)
  *
  * Provider chain (outside → inside):
- * 1. AuthProvider: Keycloak OIDC authentication
+ * 1. Auth0Provider: Auth0 authentication
  * 2. QueryProvider: TanStack Query for server state
  * 3. RouterProvider: TanStack Router for navigation
  *
  * Interceptors are set up after auth is ready to access tokens.
+ *
+ * @author Data Forge Team
+ * @version 2.0.0 (Auth0 migration)
  */
 function AppContent() {
-  const auth = useAuth()
+  const { isLoading, isAuthenticated, error, getAccessTokenSilently, loginWithRedirect } = useAuth0()
 
   // Setup axios interceptors when auth is ready
   // The interceptor will dynamically get the token on each request via closure
   useEffect(() => {
     console.log('[App] 🔐 Auth state:', {
-      isLoading: auth.isLoading,
-      isAuthenticated: auth.isAuthenticated,
-      hasUser: !!auth.user,
-      hasToken: !!auth.user?.access_token,
+      isLoading,
+      isAuthenticated,
     })
 
-    // Always setup interceptors (even if not authenticated yet)
-    // The getter function will return undefined if no token, and the interceptor handles that
-    setupInterceptors(() => auth.user?.access_token)
+    // Setup interceptors with Auth0 token getter
+    // Token is fetched silently on each request
+    setupInterceptors(async () => {
+      if (isAuthenticated) {
+        try {
+          const token = await getAccessTokenSilently()
+          return token
+        } catch (error) {
+          console.error('[App] Failed to get access token:', error)
+          return undefined
+        }
+      }
+      return undefined
+    })
     setupErrorHandler()
-  }, [auth.isLoading, auth.isAuthenticated, auth.user])
+  }, [isLoading, isAuthenticated, getAccessTokenSilently])
 
   // Show loading state while auth is initializing
-  if (auth.isLoading) {
+  if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
@@ -48,7 +60,7 @@ function AppContent() {
   }
 
   // Show error state if auth failed
-  if (auth.error) {
+  if (error) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
@@ -56,10 +68,10 @@ function AppContent() {
             Authentication Error
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {auth.error.message}
+            {error.message}
           </p>
           <button
-            onClick={() => auth.signinRedirect()}
+            onClick={() => loginWithRedirect()}
             className="mt-4 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
             Try Again
@@ -73,18 +85,18 @@ function AppContent() {
 }
 
 /**
- * App component with providers
+ * App component with providers (Auth0 migration)
  */
 function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
+      <Auth0Provider>
         <QueryProvider>
           <AppContent />
           {/* Toast notifications */}
           <Toaster position="top-right" />
         </QueryProvider>
-      </AuthProvider>
+      </Auth0Provider>
     </ErrorBoundary>
   )
 }

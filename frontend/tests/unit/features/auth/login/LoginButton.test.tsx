@@ -1,71 +1,92 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { LoginButton } from '@/features/auth/login/LoginButton'
-import * as useAuthModule from '@/entities/user-session/api/useAuth'
+import { useAuth0 } from '@auth0/auth0-react'
 
-// Mock useAuth hook
-vi.mock('@/entities/user-session/api/useAuth')
+// Mock Auth0 React hook
+vi.mock('@auth0/auth0-react')
 
 describe('LoginButton', () => {
   it('renders button with correct text', () => {
-    vi.mocked(useAuthModule.useAuth).mockReturnValue({
+    vi.mocked(useAuth0).mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
-      user: null,
-      error: null,
-      signinRedirect: vi.fn(),
-      signoutRedirect: vi.fn(),
-      removeUser: vi.fn(),
-    })
+      user: undefined,
+      error: undefined,
+      loginWithRedirect: vi.fn(),
+      logout: vi.fn(),
+      getAccessTokenSilently: vi.fn(),
+      getAccessTokenWithPopup: vi.fn(),
+      getIdTokenClaims: vi.fn(),
+      loginWithPopup: vi.fn(),
+      handleRedirectCallback: vi.fn(),
+    } as any)
 
     render(<LoginButton />)
-    expect(screen.getByText('Sign In with Keycloak')).toBeInTheDocument()
+    expect(screen.getByText('Sign In with Auth0')).toBeInTheDocument()
   })
 
   it('triggers login on click', () => {
-    const mockSigninRedirect = vi.fn()
-    vi.mocked(useAuthModule.useAuth).mockReturnValue({
+    const mockLoginWithRedirect = vi.fn()
+    vi.mocked(useAuth0).mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
-      user: null,
-      error: null,
-      signinRedirect: mockSigninRedirect,
-      signoutRedirect: vi.fn(),
-      removeUser: vi.fn(),
-    })
+      user: undefined,
+      error: undefined,
+      loginWithRedirect: mockLoginWithRedirect,
+      logout: vi.fn(),
+      getAccessTokenSilently: vi.fn(),
+      getAccessTokenWithPopup: vi.fn(),
+      getIdTokenClaims: vi.fn(),
+      loginWithPopup: vi.fn(),
+      handleRedirectCallback: vi.fn(),
+    } as any)
 
     render(<LoginButton />)
-    const button = screen.getByText('Sign In with Keycloak')
+    const button = screen.getByText('Sign In with Auth0')
     fireEvent.click(button)
 
-    expect(mockSigninRedirect).toHaveBeenCalledTimes(1)
+    expect(mockLoginWithRedirect).toHaveBeenCalledTimes(1)
+    expect(mockLoginWithRedirect).toHaveBeenCalledWith({
+      appState: {
+        returnTo: '/dashboard',
+      },
+    })
   })
 
   it('shows loading state when isLoading is true', () => {
-    vi.mocked(useAuthModule.useAuth).mockReturnValue({
+    vi.mocked(useAuth0).mockReturnValue({
       isAuthenticated: false,
       isLoading: true,
-      user: null,
-      error: null,
-      signinRedirect: vi.fn(),
-      signoutRedirect: vi.fn(),
-      removeUser: vi.fn(),
-    })
+      user: undefined,
+      error: undefined,
+      loginWithRedirect: vi.fn(),
+      logout: vi.fn(),
+      getAccessTokenSilently: vi.fn(),
+      getAccessTokenWithPopup: vi.fn(),
+      getIdTokenClaims: vi.fn(),
+      loginWithPopup: vi.fn(),
+      handleRedirectCallback: vi.fn(),
+    } as any)
 
     render(<LoginButton />)
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
   it('disables button when loading', () => {
-    vi.mocked(useAuthModule.useAuth).mockReturnValue({
+    vi.mocked(useAuth0).mockReturnValue({
       isAuthenticated: false,
       isLoading: true,
-      user: null,
-      error: null,
-      signinRedirect: vi.fn(),
-      signoutRedirect: vi.fn(),
-      removeUser: vi.fn(),
-    })
+      user: undefined,
+      error: undefined,
+      loginWithRedirect: vi.fn(),
+      logout: vi.fn(),
+      getAccessTokenSilently: vi.fn(),
+      getAccessTokenWithPopup: vi.fn(),
+      getIdTokenClaims: vi.fn(),
+      loginWithPopup: vi.fn(),
+      handleRedirectCallback: vi.fn(),
+    } as any)
 
     render(<LoginButton />)
     const button = screen.getByRole('button')

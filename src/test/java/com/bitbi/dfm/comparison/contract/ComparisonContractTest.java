@@ -1,5 +1,6 @@
 package com.bitbi.dfm.comparison.contract;
 
+import com.bitbi.dfm.config.Auth0TestConfig;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import com.bitbi.dfm.config.TestS3Config;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class})
+@Import({Auth0TestConfig.class, TestSecurityConfig.class, TestS3Config.class})
 @Sql("/test-data.sql")
 @DisplayName("File Comparison API Contract Tests (User Story 1)")
 class ComparisonContractTest {

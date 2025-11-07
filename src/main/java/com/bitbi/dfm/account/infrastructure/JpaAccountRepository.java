@@ -77,13 +77,13 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
     boolean existsByIdentityProviderUserId(String identityProviderUserId);
 
     /**
-     * Find all accounts with Auth0 integration.
+     * Find all accounts with identity provider integration.
      * <p>
-     * This query filters accounts that have Auth0 user IDs (format: auth0|{id}).
-     * Returns only accounts integrated with Auth0, excluding legacy Keycloak accounts.
+     * This query filters accounts that have identity provider user IDs (format: auth0|{id}).
+     * Returns only accounts integrated with identity provider.
      * </p>
      *
-     * @return list of accounts with Auth0 integration
+     * @return list of accounts with identity provider integration
      */
     @Query("""
             SELECT a FROM Account a
@@ -92,19 +92,19 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
             AND a.isActive = true
             ORDER BY a.createdAt DESC
             """)
-    List<Account> findAccountsWithAuth0Integration();
+    List<Account> findAccountsWithIdentityProvider();
 
     /**
-     * Find all accounts with Auth0 integration and search filter.
+     * Find all accounts with identity provider integration and search filter.
      * <p>
-     * This query filters accounts that have Auth0 user IDs (format: auth0|{id}).
+     * This query filters accounts that have identity provider user IDs (format: auth0|{id}).
      * If search parameter is provided, filters by email or name (case-insensitive).
      * Database-level filtering for performance and accurate pagination.
      * </p>
      *
      * @param search optional search term to filter by email or name
      * @param pageable pagination parameters
-     * @return page of accounts with Auth0 integration
+     * @return page of accounts with identity provider integration
      */
     @Query("""
             SELECT a FROM Account a
@@ -115,5 +115,5 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
                  OR LOWER(a.name) LIKE LOWER(CONCAT('%', :search, '%')))
             ORDER BY a.createdAt DESC
             """)
-    Page<Account> findAccountsWithAuth0BySearch(@Param("search") String search, Pageable pageable);
+    Page<Account> findAccountsBySearch(@Param("search") String search, Pageable pageable);
 }

@@ -1,19 +1,33 @@
-import { useAuth } from '@/entities/user-session/api/useAuth'
+import { useAuth0 } from '@auth0/auth0-react'
 import { LogOut } from 'lucide-react'
 
 /**
- * Logout button component
+ * Logout button component for Auth0 authentication
  *
- * Terminates user session and clears Keycloak tokens
+ * Terminates user session and clears Auth0 tokens. Redirects user back to application origin after logout.
+ *
+ * Features:
+ * - Triggers Auth0 logout flow
+ * - Clears Auth0 session and tokens
+ * - Redirects to application origin (home page)
+ * - Hidden when user is not authenticated
+ * - Accessible with aria-label
+ *
+ * @author Data Forge Team
+ * @version 2.0.0 (Auth0 migration)
  */
 export function LogoutButton() {
-  const auth = useAuth()
+  const { logout, isAuthenticated } = useAuth0()
 
   const handleLogout = () => {
-    auth.signoutRedirect()
+    logout({
+      logoutParams: {
+        returnTo: window.location.origin,
+      },
+    })
   }
 
-  if (!auth.isAuthenticated) {
+  if (!isAuthenticated) {
     return null
   }
 

@@ -104,8 +104,8 @@
 
 - [x] **T019** Update `JpaAccountRepository.java` in `src/main/java/com/bitbi/dfm/account/infrastructure/JpaAccountRepository.java`:
   - Rename query method `findByKeycloakUserId` → `findByIdentityProviderUserId`
-  - Add `@Query` for `findAccountsWithAuth0Integration()` (WHERE identity_provider_user_id LIKE 'auth0|%')
-  - Add `@Query` for `findAccountsWithAuth0BySearch()` with pageable (search by email/name, filter Auth0 only)
+  - Add `@Query` for `findAccountsWithIdentityProvider()` (WHERE identity_provider_user_id IS NOT NULL)
+  - Add `@Query` for `findAccountsBySearch()` with pageable (search by email/name, filter by identity provider)
 
 ### Exception Handling
 
@@ -176,32 +176,32 @@
 
 ### DTOs for User Story 1
 
-- [x] **T031** [P] [US1] Create `CreateAccountWithAuth0RequestDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/`:
+- [x] **T031** [P] [US1] Create `CreateAccountRequestDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/`:
   - Fields: email, name, phone, company (all with validation)
   - Jakarta Bean Validation annotations
 
-- [x] **T032** [P] [US1] Create `AccountWithAuth0ResponseDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/`:
-  - Fields: id, email, name, phone, company, isActive, auth0UserId, temporaryPassword, passwordResetUrl, createdAt
+- [x] **T032** [P] [US1] Create `AccountResponseDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/`:
+  - Fields: id, email, name, phone, company, isActive, identityProviderUserId, createdAt
   - Factory methods: fromEntity(), fromEntityWithPassword(), fromEntityWithResetUrl()
 
 ### Implementation for User Story 1
 
-- [x] **T033** [US1] Create `Auth0AccountSyncService.java` in `src/main/java/com/bitbi/dfm/account/application/`:
-  - Method `createAccountWithAuth0(email, name, phone, company)` with two-phase commit:
+- [x] **T033** [US1] Create `AccountSyncService.java` in `src/main/java/com/bitbi/dfm/account/application/`:
+  - Method `createAccount(email, name, phone, company)` with two-phase commit:
     - Phase 1: Create user in Auth0 via Management API with temporary password
-    - Phase 2: Create Account entity in PostgreSQL with auth0UserId
+    - Phase 2: Create Account entity in PostgreSQL with identityProviderUserId
     - Phase 3: Update Auth0 user_metadata with accountId (bidirectional mapping)
     - Compensating transaction: Delete Auth0 user if PostgreSQL fails
   - Implements retry logic with `@Retryable` (maxAttempts=3, exponential backoff)
-  - Publishes `AccountAuth0LinkedEvent` on success
+  - Publishes `AccountLinkedEvent` on success
   - Converts Auth0Exception → Auth0RateLimitException (429) or Auth0ServiceUnavailableException (5xx)
 
 - [x] **T034** [US1] Update `AccountAdminController.java`:
-  - Add endpoint `POST /api/v1/admin/accounts`
+  - Add endpoint `POST /api/v1/accounts`
   - `@PreAuthorize("hasRole('ADMIN')")`
-  - Validate `@Valid CreateAccountWithAuth0RequestDto`
-  - Call `Auth0AccountSyncService.createAccountWithAuth0()`
-  - Return `ResponseEntity.status(201).body(AccountWithAuth0ResponseDto)`
+  - Validate `@Valid CreateAccountRequestDto`
+  - Call `AccountSyncService.createAccount()`
+  - Return `ResponseEntity.status(201).body(AccountResponseDto)`
   - OpenAPI annotations for Swagger documentation
 
 - [x] **T035** [US1] Create `Auth0Configuration.java` in `src/main/java/com/bitbi/dfm/auth/config/`:
@@ -209,7 +209,7 @@
   - Token caching (24h with 5min buffer)
   - Automatic token refresh using AuthAPI
 
-- [x] **T036** [US1] Create unit tests `Auth0AccountSyncServiceTest.java`:
+- [x] **T036** [US1] Create unit tests `AccountSyncServiceTest.java`:
   - TC01: Successful account creation
   - TC02: Rollback Auth0 user on PostgreSQL failure
   - TC03: Account already exists (409)
@@ -218,9 +218,9 @@
   - TC06: Metadata update failure handled gracefully
   - Mockito mocks for ManagementAPI, AccountRepository, EventPublisher
 
-- [x] **T037** [US1] Add structured logging with MDC in `Auth0AccountSyncService.createAccountWithAuth0`:
+- [x] **T037** [US1] Add structured logging with MDC in `AccountSyncService.createAccount`:
   - MDC.put("accountId", account.getId())
-  - MDC.put("auth0UserId", auth0UserId)
+  - MDC.put("identityProviderUserId", identityProviderUserId)
   - Log creation success/failure at INFO/ERROR level
 
 **Checkpoint**: User Story 1 complete - admins can create accounts with Auth0 integration
@@ -337,37 +337,37 @@
 
 ### Tests for User Story 4
 
-- [ ] **T051** [P] [US4] Frontend unit test for `AuthenticationGuard.test.tsx` in `frontend/tests/unit/AuthenticationGuard.test.tsx`:
+- [x] **T051** [P] [US4] Frontend unit test for `AuthenticationGuard.test.tsx` in `frontend/tests/unit/AuthenticationGuard.test.tsx`:
   - Test unauthenticated user sees loading spinner
   - Test authenticated user renders protected component
   - Mock `useAuth0()` hook
 
-- [ ] **T052** [P] [US4] Frontend integration test for auth flow in `frontend/tests/integration/auth-flow.test.tsx`:
+- [x] **T052** [P] [US4] Frontend integration test for auth flow in `frontend/tests/integration/auth-flow.test.tsx`:
   - Mock Auth0 redirect
   - Simulate login callback
   - Verify protected route accessible post-login
 
 ### Frontend Implementation for User Story 4
 
-- [ ] **T053** [P] [US4] Create `LoginButton.tsx` in `frontend/src/features/auth/ui/LoginButton.tsx`:
+- [x] **T053** [P] [US4] Create `LoginButton.tsx` in `frontend/src/features/auth/ui/LoginButton.tsx`:
   - Uses `useAuth0()` hook
   - Calls `loginWithRedirect({ appState: { returnTo: '/dashboard' } })`
 
-- [ ] **T054** [P] [US4] Create `LogoutButton.tsx` in `frontend/src/features/auth/ui/LogoutButton.tsx`:
+- [x] **T054** [P] [US4] Create `LogoutButton.tsx` in `frontend/src/features/auth/ui/LogoutButton.tsx`:
   - Uses `useAuth0()` hook
   - Calls `logout({ logoutParams: { returnTo: window.location.origin } })`
 
-- [ ] **T055** [P] [US4] Create `UserProfile.tsx` in `frontend/src/features/auth/ui/UserProfile.tsx`:
+- [x] **T055** [P] [US4] Create `UserProfile.tsx` in `frontend/src/features/auth/ui/UserProfile.tsx`:
   - Displays user.name, user.email, user.picture from `useAuth0()`
   - Shows roles from custom claim
 
-- [ ] **T056** [US4] Update `frontend/src/app/routes.tsx`:
+- [x] **T056** [US4] Update `frontend/src/app/routes.tsx`:
   - Wrap protected routes with `<AuthenticationGuard component={...} />`
   - Remove Keycloak login route
 
-- [ ] **T057** [US4] Delete Keycloak login page `frontend/src/pages/login/` directory
+- [x] **T057** [US4] Delete Keycloak login page `frontend/src/pages/login/` directory
 
-- [ ] **T058** [US4] Update API client `frontend/src/entities/user/api/userApi.ts`:
+- [x] **T058** [US4] Update API client `frontend/src/entities/user/api/userApi.ts`:
   - Use `getAccessTokenSilently()` from `useAuth0()` to get token
   - Add Authorization header: `Bearer ${token}`
 
@@ -432,28 +432,28 @@
 
 ### DTOs for User Story 6
 
-- [ ] **T065** [P] [US6] Create `AccountWithAuth0Dto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/AccountWithAuth0Dto.java`:
-  - Fields: id, email, name, phone, company, isActive, auth0UserId, isBlocked, lastLogin, createdAt
+- [ ] **T065** [P] [US6] Create `AccountDetailDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/AccountDetailDto.java`:
+  - Fields: id, email, name, phone, company, isActive, identityProviderUserId, isBlocked, lastLogin, createdAt
   - Static factory `fromEntity(Account, boolean isBlocked, Instant lastLogin)`
 
-- [ ] **T066** [P] [US6] Create `AccountsWithAuth0Page.java` DTO:
-  - Fields: content (List<AccountWithAuth0Dto>), page, size, totalElements, totalPages
+- [ ] **T066** [P] [US6] Create `AccountPageDto.java` DTO:
+  - Fields: content (List<AccountDetailDto>), page, size, totalElements, totalPages
 
 ### Implementation for User Story 6
 
 - [ ] **T067** [US6] Create `AccountQueryService.java` in `src/main/java/com/bitbi/dfm/account/application/AccountQueryService.java`:
-  - Method `listAccountsWithAuth0(String search, Pageable pageable)`:
-    - Query PostgreSQL using `findAccountsWithAuth0BySearch()` if search provided
-    - Otherwise use `findAccountsWithAuth0Integration()`
+  - Method `listAccounts(String search, Pageable pageable)`:
+    - Query PostgreSQL using `findAccountsBySearch()` if search provided
+    - Otherwise use `findAccountsWithIdentityProvider()`
     - For each account, call Auth0 Management API to get blocked status and last_login
-    - Map to `AccountWithAuth0Dto`
-    - Return `PageResponseDto<AccountWithAuth0Dto>`
+    - Map to `AccountDetailDto`
+    - Return `PageResponseDto<AccountDetailDto>`
 
 - [ ] **T068** [US6] Update `AccountAdminController.java`:
-  - Add endpoint `GET /api/v1/admin/accounts`
+  - Add endpoint `GET /api/v1/accounts`
   - Query params: `@RequestParam(required=false) String search`, `@RequestParam(defaultValue="0") int page`, `@RequestParam(defaultValue="20") int size`
   - Validate search with `@Size(max=100) @Pattern(regexp="^[a-zA-Z0-9@.\\s\\-]+$")`
-  - Call `AccountQueryService.listAccountsWithAuth0()`
+  - Call `AccountQueryService.listAccounts()`
   - Return `ResponseEntity.ok(page)`
 
 - [ ] **T069** [US6] Add caching for Auth0 user details (optional optimization):
@@ -693,7 +693,7 @@ Task: "Update CreateAccountResponseDto (replace temporaryPassword)"
 
 # Then implement services sequentially:
 Task: "Create Auth0UserManagementService"
-Task: "Update AccountService.createAccountWithAuth0"
+Task: "Update AccountSyncService.createAccount"
 Task: "Update AccountAdminController"
 ```
 

@@ -339,7 +339,7 @@ public CreateAccountResponse createAccount(...) {
 ```java
 // CreateAccountResponse.java
 public record CreateAccountResponse(
-    AccountWithAuth0Response account,
+    AccountResponseDto account,
     String passwordResetLink // было: temporaryPassword
 ) {}
 
