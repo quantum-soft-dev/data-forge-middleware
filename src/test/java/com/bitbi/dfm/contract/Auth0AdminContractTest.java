@@ -561,4 +561,98 @@ class Auth0AdminContractTest {
         // Verify Auth0ManagementApiClient was NOT called (authorization failed - not admin)
         verify(auth0Client, never()).blockUser(any(Auth0UserId.class));
     }
+
+    // ================================================================================
+    // User Story 3: Admin Resets User Password
+    // ================================================================================
+
+    /**
+     * TC15: Reset password - successful reset returns 200 with password reset link
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * And: Account exists in database with Auth0 integration
+     * When: POST /api/v1/admin/accounts/{id}/reset-password
+     * Then: Returns 200 OK
+     * And: Response contains passwordResetLink field
+     * And: Auth0 password change ticket is created
+     * </p>
+     */
+    @Test
+    @DisplayName("TC15: Reset password - successful reset returns 200 with passwordResetLink")
+    void resetPassword_validRequest_returns200WithResetLink() throws Exception {
+        String accountId = "0199bab1-fad2-bf76-c478-eae1f61e1c17"; // Test Account 2
+        String mockResetLink = "https://your-tenant.us.auth0.com/lo/reset?ticket=mockTicketToken123";
+
+        // Mock Auth0ManagementApiClient to return password reset link
+        when(auth0Client.generatePasswordResetLink(any(Auth0UserId.class), nullable(String.class)))
+            .thenReturn(mockResetLink);
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD.replace("{id}", accountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.passwordResetLink").value(mockResetLink))
+            .andExpect(jsonPath("$.accountId").value(accountId))
+            .andExpect(jsonPath("$.email").exists())
+            .andExpect(jsonPath("$.expiresAt").exists());
+
+        // Verify Auth0ManagementApiClient.generatePasswordResetLink was called with correct Auth0 user ID
+        verify(auth0Client, times(1)).generatePasswordResetLink(
+            argThat(userId -> userId != null && userId.value().equals(MOCK_AUTH0_USER_ID)),
+            nullable(String.class)
+        );
+    }
+
+    /**
+     * TC16: Reset password - non-existent account returns 404
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * When: POST /api/v1/admin/accounts/{id}/reset-password with non-existent account ID
+     * Then: Returns 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC16: Reset password - non-existent account returns 404")
+    void resetPassword_nonExistentAccount_returns404() throws Exception {
+        String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD.replace("{id}", nonExistentAccountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.status").value(404))
+            .andExpect(jsonPath("$.error").value("Not Found"))
+            .andExpect(jsonPath("$.message").value(containsString("Account not found")));
+
+        // Verify Auth0 Management API was NOT called
+        verify(auth0Client, never()).generatePasswordResetLink(any(Auth0UserId.class), nullable(String.class));
+    }
+
+    /**
+     * TC17: Reset password - account without Auth0 integration returns 400
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * And: Account exists but has no Auth0 user ID
+     * When: POST /api/v1/admin/accounts/{id}/reset-password
+     * Then: Returns 400 Bad Request
+     * And: Error message indicates missing Auth0 integration
+     * </p>
+     */
+    @Test
+    @DisplayName("TC17: Reset password - account without Auth0 integration returns 400")
+    void resetPassword_noAuth0Integration_returns400() throws Exception {
+        // Use Inactive Account which has no Auth0 integration (identity_provider_user_id is NULL)
+        String accountId = "0199bab2-3cbd-cc95-a989-57ba51d258c8"; // Inactive Account from test-data.sql
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_RESET_PASSWORD.replace("{id}", accountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.status").value(400))
+            .andExpect(jsonPath("$.error").value("Bad Request"))
+            .andExpect(jsonPath("$.message").value(containsString("Auth0 integration")));
+
+        // Verify Auth0 Management API was NOT called
+        verify(auth0Client, never()).generatePasswordResetLink(any(Auth0UserId.class), nullable(String.class));
+    }
 }

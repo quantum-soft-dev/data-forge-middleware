@@ -5,7 +5,7 @@ import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.convert.converter.Converter;
@@ -82,7 +82,7 @@ public class TestSecurityConfig {
      * Integration tests that need real AccountSyncService should import Auth0TestConfig.
      * </p>
      */
-    @MockBean
+    @MockitoBean
     private AccountSyncService accountSyncService;
 
     /**

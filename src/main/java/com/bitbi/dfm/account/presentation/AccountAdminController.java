@@ -4,6 +4,7 @@ import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
+import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import io.swagger.v3.oas.annotations.Operation;
@@ -165,6 +166,59 @@ public class AccountAdminController {
         accountService.unlockAccount(id);
 
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Reset user password by generating Auth0 password reset link.
+     * <p>
+     * POST /api/v1/admin/accounts/{id}/reset-password (mapped from ApiRoutes.ACCOUNTS_RESET_PASSWORD)
+     * </p>
+     * <p>
+     * Generates a password change ticket (24-hour expiry) that directs the user to
+     * Auth0 Universal Login to set a new password. The ticket URL must be sent to
+     * the user via email or other communication channel.
+     * </p>
+     *
+     * User Story: US3 - Admin Resets User Password
+     * Functional Requirement: FR-010 - Generate password reset link
+     * Task: T049 - Update AccountAdminController with reset-password endpoint
+     *
+     * @param id Account identifier to reset password for
+     * @return 200 OK with ResetPasswordResponseDto containing password reset link and metadata
+     * @throws AccountNotFoundException         if account not found (404)
+     * @throws MissingAuth0IntegrationException if account does not have Auth0 integration (400)
+     */
+    @PostMapping(ApiRoutes.ACCOUNTS_RESET_PASSWORD)
+    @Operation(
+        summary = "Reset user password",
+        description = "Generate Auth0 password reset link for user. Link expires in 24 hours."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Password reset link generated successfully",
+            content = @Content(schema = @Schema(implementation = ResetPasswordResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Account not found",
+            content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Account does not have Auth0 integration",
+            content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))
+        )
+    })
+    public ResponseEntity<ResetPasswordResponseDto> resetPassword(@PathVariable("id") UUID id) {
+
+        logger.info("Admin reset password request: accountId={}", id);
+
+        ResetPasswordResponseDto response = accountService.resetPassword(id);
+
+        logger.info("Password reset link generated: accountId={}, email={}", id, response.email());
+
+        return ResponseEntity.ok(response);
     }
 
     /**

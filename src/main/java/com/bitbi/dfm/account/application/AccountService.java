@@ -3,12 +3,16 @@ package com.bitbi.dfm.account.application;
 import com.auth0.exception.Auth0Exception;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponseDto;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
 import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
 import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
 import com.bitbi.dfm.shared.exception.CannotLockOwnAccountException;
+import com.bitbi.dfm.shared.exception.MissingAuth0IntegrationException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -39,14 +43,22 @@ public class AccountService {
     private final AccountRepository accountRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final Auth0ManagementApiClient auth0Client;
+    private final Counter passwordResetTicketsCounter;
 
     public AccountService(
             AccountRepository accountRepository,
             ApplicationEventPublisher eventPublisher,
-            Auth0ManagementApiClient auth0Client) {
+            Auth0ManagementApiClient auth0Client,
+            MeterRegistry meterRegistry) {
         this.accountRepository = accountRepository;
         this.eventPublisher = eventPublisher;
         this.auth0Client = auth0Client;
+
+        // Initialize Micrometer counter for password reset tickets generated
+        this.passwordResetTicketsCounter = Counter.builder("auth0.password_reset.tickets.generated")
+                .description("Total number of Auth0 password reset tickets generated")
+                .tag("service", "account")
+                .register(meterRegistry);
     }
 
     /**
@@ -338,6 +350,63 @@ public class AccountService {
             }
 
             logger.info("Account unlocked successfully: accountId={}, auth0UserId={}", accountId, auth0UserId);
+
+        } finally {
+            MDC.remove("accountId");
+            MDC.remove("auth0UserId");
+        }
+    }
+
+    /**
+     * Reset user password by generating Auth0 password reset link.
+     * <p>
+     * Generates a password change ticket (24-hour expiry) that directs the user to
+     * Auth0 Universal Login to set a new password. The ticket URL is returned and
+     * must be sent to the user via email or other communication channel.
+     * </p>
+     *
+     * User Story: US3 - Admin Resets User Password
+     * Task: T048 - Update AccountService with resetPassword method
+     *
+     * @param accountId account identifier to reset password for
+     * @return ResetPasswordResponseDto containing password reset link and metadata
+     * @throws AccountNotFoundException           if account not found
+     * @throws MissingAuth0IntegrationException   if account does not have Auth0 integration
+     * @throws Auth0ServiceUnavailableException   if Auth0 API is unavailable
+     * @throws Auth0RateLimitException            if Auth0 rate limit exceeded
+     */
+    public ResetPasswordResponseDto resetPassword(UUID accountId) {
+        MDC.put("accountId", accountId.toString());
+
+        logger.info("Resetting password for account: accountId={}", accountId);
+
+        try {
+            Account account = getAccount(accountId);
+
+            // Verify account has Auth0 integration
+            if (account.getIdentityProviderUserId() == null || account.getIdentityProviderUserId().isBlank()) {
+                throw new MissingAuth0IntegrationException(accountId);
+            }
+
+            Auth0UserId auth0UserId = Auth0UserId.of(account.getIdentityProviderUserId());
+            MDC.put("auth0UserId", auth0UserId.value());
+
+            // Generate password reset link via Auth0
+            String passwordResetLink;
+            try {
+                passwordResetLink = auth0Client.generatePasswordResetLink(auth0UserId, null);
+            } catch (Auth0Exception e) {
+                handleAuth0Exception(e, "reset password");
+                throw new RuntimeException("Unreachable - handleAuth0Exception should throw");
+            }
+
+            logger.info("Password reset link generated successfully: accountId={}, auth0UserId={}", accountId, auth0UserId);
+
+            // Increment Micrometer counter for password reset tickets
+            passwordResetTicketsCounter.increment();
+
+            // Create response DTO with 24-hour expiry
+            return ResetPasswordResponseDto.of(accountId, account.getEmail(), passwordResetLink);
 
         } finally {
             MDC.remove("accountId");

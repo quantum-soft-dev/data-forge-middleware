@@ -4,6 +4,8 @@ import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,13 +33,15 @@ class AccountServiceTest {
     private AccountRepository accountRepository;
     private ApplicationEventPublisher eventPublisher;
     private Auth0ManagementApiClient auth0Client;
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
         accountRepository = mock(AccountRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         auth0Client = mock(Auth0ManagementApiClient.class);
-        accountService = new AccountService(accountRepository, eventPublisher, auth0Client);
+        meterRegistry = new SimpleMeterRegistry();
+        accountService = new AccountService(accountRepository, eventPublisher, auth0Client, meterRegistry);
     }
 
     @Test

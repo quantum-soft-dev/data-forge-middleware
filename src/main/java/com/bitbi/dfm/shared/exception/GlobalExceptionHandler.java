@@ -174,6 +174,34 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle MissingAuth0IntegrationException (400 Bad Request).
+     * <p>
+     * This exception is thrown when an Auth0-specific operation (password reset, lock/unlock)
+     * is attempted on an account that has no Auth0 user ID (identity_provider_user_id is NULL).
+     * </p>
+     *
+     * User Story: US3 - Admin Resets User Password
+     * Functional Requirement: FR-011 - Validate Auth0 integration before password reset
+     */
+    @ExceptionHandler(MissingAuth0IntegrationException.class)
+    public ResponseEntity<ErrorResponseDto> handleMissingAuth0Integration(
+            MissingAuth0IntegrationException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Missing Auth0 integration: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle NoHandlerFoundException (404 Not Found).
      */
     @ExceptionHandler(NoHandlerFoundException.class)

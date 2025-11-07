@@ -291,12 +291,12 @@
 
 ### Tests for User Story 3
 
-- [ ] **T045** [P] [US3] Contract test for `POST /api/v1/admin/accounts/{id}/reset-password` in `Auth0AdminContractTest.java`:
+- [x] **T045** [P] [US3] Contract test for `POST /api/v1/admin/accounts/{id}/reset-password` in `Auth0AdminContractTest.java`:
   - Test successful reset returns 200 with passwordResetLink
   - Test non-existent account returns 404
   - Mock Auth0 ticket creation
 
-- [ ] **T046** [P] [US3] Integration test for password reset in `Auth0PasswordResetIntegrationTest.java`:
+- [x] **T046** [P] [US3] Integration test for password reset in `Auth0PasswordResetIntegrationTest.java`:
   - Create user with Auth0
   - Trigger password reset
   - Verify Auth0 ticket URL format (https://{domain}/lo/reset?ticket=xxx)
@@ -304,26 +304,26 @@
 
 ### DTOs for User Story 3
 
-- [ ] **T047** [P] [US3] Update `ResetPasswordResponseDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/ResetPasswordResponseDto.java`:
+- [x] **T047** [P] [US3] Update `ResetPasswordResponseDto.java` in `src/main/java/com/bitbi/dfm/account/presentation/dto/ResetPasswordResponseDto.java`:
   - Replace `String temporaryPassword` with `String passwordResetLink`
   - Static factory method `of(UUID accountId, String email, String resetLink)`
 
 ### Implementation for User Story 3
 
-- [ ] **T048** [US3] Update `AccountService.java`:
+- [x] **T048** [US3] Update `AccountService.java`:
   - Add `resetPassword(UUID accountId)`:
     - Verify account exists and has Auth0 integration
     - Get Auth0 user ID
     - Call `Auth0UserManagementService.generatePasswordResetLink()`
     - Return `ResetPasswordResponseDto`
 
-- [ ] **T049** [US3] Update `AccountAdminController.java`:
+- [x] **T049** [US3] Update `AccountAdminController.java`:
   - Add endpoint `POST /api/v1/admin/accounts/{id}/reset-password`
   - Require `@PreAuthorize("hasRole('ADMIN')")`
   - Call `AccountService.resetPassword()`
   - Return `ResponseEntity.ok(response)`
 
-- [ ] **T050** [US3] Add Micrometer counter `auth0.password_reset.tickets.generated`
+- [x] **T050** [US3] Add Micrometer counter `auth0.password_reset.tickets.generated`
 
 **Checkpoint**: User Story 3 complete - admins can generate password reset links
 

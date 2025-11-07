@@ -127,7 +127,25 @@ public class Auth0ManagementApiClient {
      * @throws Auth0Exception if ticket generation fails
      */
     public String createPasswordChangeTicket(Auth0UserId userId) throws Auth0Exception {
-        logger.info("Generating password change ticket for userId={}", userId);
+        return generatePasswordResetLink(userId, null);
+    }
+
+    /**
+     * Generate a password reset link (password change ticket) for a user.
+     * <p>
+     * Returns a URL that the user can visit to set their password via Auth0 Universal Login.
+     * The ticket expires after 24 hours. Optionally redirects user to resultUrl after password change.
+     * </p>
+     *
+     * User Story: US3 - Admin Resets User Password
+     *
+     * @param userId    Auth0 user ID
+     * @param resultUrl optional URL to redirect user after password change (can be null)
+     * @return password change ticket URL (expires in 24 hours)
+     * @throws Auth0Exception if ticket generation fails
+     */
+    public String generatePasswordResetLink(Auth0UserId userId, String resultUrl) throws Auth0Exception {
+        logger.info("Generating password reset link for userId={}, resultUrl={}", userId, resultUrl);
 
         try {
             String accessToken = tokenProvider.getAccessToken();
@@ -135,8 +153,11 @@ public class Auth0ManagementApiClient {
 
             PasswordChangeTicket ticket = new PasswordChangeTicket(userId.value());
             ticket.setTTLSeconds(PASSWORD_TICKET_TTL_SECONDS);
-            // Note: resultUrl can be set to redirect after password change
-            // ticket.setResultUrl("https://app.dataforge.com/login");
+
+            // Set result URL if provided (redirect after password change)
+            if (resultUrl != null && !resultUrl.isBlank()) {
+                ticket.setResultUrl(resultUrl);
+            }
 
             PasswordChangeTicket createdTicket = mgmt.tickets()
                     .requestPasswordChange(ticket)
@@ -148,12 +169,12 @@ public class Auth0ManagementApiClient {
             }
 
             String ticketUrl = createdTicket.getTicket();
-            logger.info("Password change ticket generated: userId={}, expiresIn=24h", userId);
+            logger.info("Password reset link generated: userId={}, expiresIn=24h", userId);
 
             return ticketUrl;
 
         } catch (Auth0Exception e) {
-            logger.error("Failed to generate password change ticket: userId={}, error={}", userId, e.getMessage(), e);
+            logger.error("Failed to generate password reset link: userId={}, error={}", userId, e.getMessage(), e);
             throw e;
         }
     }
