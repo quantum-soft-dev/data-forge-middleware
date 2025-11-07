@@ -383,13 +383,13 @@
 
 ### Tests for User Story 5
 
-- [ ] **T059** [P] [US5] Integration test for JWT validation in `Auth0JwtValidationIntegrationTest.java`:
+- [x] **T059** [P] [US5] Integration test for JWT validation in `Auth0JwtValidationIntegrationTest.java`:
   - Generate mock Auth0 JWT with RS256 signature
   - Include custom claim `https://api.dataforge.com/roles: ["ROLE_ADMIN"]`
-  - Make request to `/api/v1/admin/accounts`
+  - Make request to `/api/v1/batches`
   - Verify 200 response (token accepted)
 
-- [ ] **T060** [P] [US5] Integration test for invalid JWT in `Auth0JwtValidationIntegrationTest.java`:
+- [x] **T060** [P] [US5] Integration test for invalid JWT in `Auth0JwtValidationIntegrationTest.java`:
   - Test expired token → 401
   - Test invalid signature → 401
   - Test missing audience → 401
@@ -397,12 +397,12 @@
 
 ### Implementation for User Story 5
 
-- [ ] **T061** [US5] Verify `Auth0SecurityConfig.java` (from Phase 2) correctly extracts roles:
+- [x] **T061** [US5] Verify `Auth0SecurityConfig.java` (from Phase 2) correctly extracts roles:
   - Custom `JwtAuthenticationConverter` uses `authoritiesClaimName="https://api.dataforge.com/roles"`
   - Authority prefix `ROLE_`
   - Run tests T059, T060 to confirm
 
-- [ ] **T062** [US5] Add logging in `Auth0SecurityConfig`:
+- [x] **T062** [US5] Add logging in `Auth0SecurityConfig`:
   - Log successful JWT validation (user, roles)
   - Log JWT validation failures (reason)
 

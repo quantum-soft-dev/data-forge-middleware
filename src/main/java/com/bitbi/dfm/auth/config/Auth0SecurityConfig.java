@@ -1,5 +1,7 @@
 package com.bitbi.dfm.auth.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -53,6 +55,8 @@ import java.util.stream.Collectors;
 @Configuration
 @Profile("!test")
 public class Auth0SecurityConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(Auth0SecurityConfig.class);
 
     private final Auth0Properties auth0Properties;
 
@@ -111,6 +115,7 @@ public class Auth0SecurityConfig {
      * </p>
      */
     static class AudienceValidator implements OAuth2TokenValidator<Jwt> {
+        private static final Logger log = LoggerFactory.getLogger(AudienceValidator.class);
         private final String audience;
 
         AudienceValidator(String audience) {
@@ -120,9 +125,12 @@ public class Auth0SecurityConfig {
         @Override
         public OAuth2TokenValidatorResult validate(Jwt jwt) {
             if (jwt.getAudience() != null && jwt.getAudience().contains(audience)) {
+                log.debug("JWT audience validation successful: expected={}, actual={}", audience, jwt.getAudience());
                 return OAuth2TokenValidatorResult.success();
             }
 
+            log.warn("JWT audience validation failed: expected={}, actual={}, subject={}",
+                    audience, jwt.getAudience(), jwt.getSubject());
             return OAuth2TokenValidatorResult.failure(
                     new org.springframework.security.oauth2.core.OAuth2Error(
                             "invalid_token",
@@ -147,6 +155,7 @@ public class Auth0SecurityConfig {
      * </pre>
      */
     static class Auth0RolesConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
+        private static final Logger log = LoggerFactory.getLogger(Auth0RolesConverter.class);
         private static final String ROLES_CLAIM = "https://api.dataforge.com/roles";
 
         @Override
@@ -158,23 +167,37 @@ public class Auth0SecurityConfig {
             Object rolesClaim = jwt.getClaim(ROLES_CLAIM);
 
             if (rolesClaim instanceof List<?> roles) {
-                authorities.addAll(
-                        roles.stream()
-                                .filter(role -> role instanceof String)
-                                .map(role -> (String) role)
-                                .map(role -> new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()))
-                                .collect(Collectors.toList())
-                );
+                List<GrantedAuthority> roleAuthorities = roles.stream()
+                        .filter(role -> role instanceof String)
+                        .map(role -> (String) role)
+                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()))
+                        .collect(Collectors.toList());
+
+                authorities.addAll(roleAuthorities);
+
+                log.debug("Extracted {} roles from JWT custom claim for subject={}: {}",
+                        roleAuthorities.size(), jwt.getSubject(),
+                        roleAuthorities.stream().map(GrantedAuthority::getAuthority).collect(Collectors.toList()));
+            } else {
+                log.debug("No custom roles claim found in JWT for subject={}", jwt.getSubject());
             }
 
             // Fallback: extract standard "scope" claim if present
             String scopeClaim = jwt.getClaimAsString("scope");
             if (scopeClaim != null && !scopeClaim.isEmpty()) {
-                authorities.addAll(
-                        List.of(scopeClaim.split(" ")).stream()
-                                .map(scope -> new SimpleGrantedAuthority("SCOPE_" + scope))
-                                .collect(Collectors.toList())
-                );
+                List<GrantedAuthority> scopeAuthorities = List.of(scopeClaim.split(" ")).stream()
+                        .map(scope -> new SimpleGrantedAuthority("SCOPE_" + scope))
+                        .collect(Collectors.toList());
+
+                authorities.addAll(scopeAuthorities);
+
+                log.debug("Extracted {} scopes from JWT for subject={}: {}",
+                        scopeAuthorities.size(), jwt.getSubject(),
+                        scopeAuthorities.stream().map(GrantedAuthority::getAuthority).collect(Collectors.toList()));
+            }
+
+            if (authorities.isEmpty()) {
+                log.warn("No authorities extracted from JWT for subject={}", jwt.getSubject());
             }
 
             return authorities;
