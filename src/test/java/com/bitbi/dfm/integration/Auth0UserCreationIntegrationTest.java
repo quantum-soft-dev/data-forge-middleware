@@ -9,6 +9,7 @@ import com.auth0.net.Request;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.config.Auth0TestConfig;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
 import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
@@ -56,7 +57,7 @@ import static org.mockito.Mockito.*;
     "auth0.api.audience=https://test-api.example.com"
 })
 @ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
+@Import({TestSecurityConfig.class, Auth0TestConfig.class})
 @Sql("/test-data.sql")
 @DisplayName("Auth0 User Creation Integration Test - User Story 1")
 class Auth0UserCreationIntegrationTest {
@@ -70,7 +71,7 @@ class Auth0UserCreationIntegrationTest {
     @MockitoBean
     private ManagementAPI managementAPI;
 
-    private static final String MOCK_AUTH0_USER_ID = "auth0|60f7b8a8b4a0f10074c5d0e1";
+    private static final String MOCK_AUTH0_USER_ID = "auth0|test-created-user-id-12345";
 
     private UsersEntity mockUsersEntity;
     private Request<User> mockCreateUserRequest;
@@ -152,8 +153,8 @@ class Auth0UserCreationIntegrationTest {
         assertThat(account.getId()).isNotNull();
         assertThat(account.getEmail()).isEqualTo(email);
         assertThat(account.getName()).isEqualTo(name);
-        assertThat(account.getPhone()).isEqualTo(phone);
-        assertThat(account.getCompany()).isEqualTo(company);
+        assertThat(account.getPhone().getValue()).isEqualTo(phone);
+        assertThat(account.getCompany().getValue()).isEqualTo(company);
         assertThat(account.getIsActive()).isTrue();
         assertThat(account.getIdentityProviderUserId()).isEqualTo(MOCK_AUTH0_USER_ID);
 

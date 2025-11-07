@@ -1,10 +1,17 @@
 package com.bitbi.dfm.account.application;
 
+import com.auth0.exception.Auth0Exception;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.auth.domain.Auth0UserId;
+import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
+import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
+import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
+import com.bitbi.dfm.shared.exception.CannotLockOwnAccountException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -31,10 +38,15 @@ public class AccountService {
 
     private final AccountRepository accountRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final Auth0ManagementApiClient auth0Client;
 
-    public AccountService(AccountRepository accountRepository, ApplicationEventPublisher eventPublisher) {
+    public AccountService(
+            AccountRepository accountRepository,
+            ApplicationEventPublisher eventPublisher,
+            Auth0ManagementApiClient auth0Client) {
         this.accountRepository = accountRepository;
         this.eventPublisher = eventPublisher;
+        this.auth0Client = auth0Client;
     }
 
     /**
@@ -229,6 +241,136 @@ public class AccountService {
 
         logger.info("Account reactivated successfully: id={}", accountId);
         return saved;
+    }
+
+    /**
+     * Lock account (block Auth0 user).
+     * <p>
+     * Prevents user from logging in via Auth0. Existing sessions remain valid until token expiry.
+     * Admin cannot lock their own account (security measure).
+     * </p>
+     *
+     * User Story: US2 - Admin Locks/Unlocks User Accounts
+     * Task: T042 - Update AccountService with lockAccount method
+     *
+     * @param accountId      account identifier to lock
+     * @param adminAccountId admin performing the lock operation
+     * @throws AccountNotFoundException        if account not found
+     * @throws CannotLockOwnAccountException  if admin attempts to lock their own account
+     * @throws IllegalStateException           if account does not have Auth0 integration
+     * @throws Auth0ServiceUnavailableException if Auth0 API is unavailable
+     * @throws Auth0RateLimitException         if Auth0 rate limit exceeded
+     */
+    public void lockAccount(UUID accountId, UUID adminAccountId) {
+        MDC.put("accountId", accountId.toString());
+        MDC.put("adminAccountId", adminAccountId.toString());
+
+        logger.info("Locking account: accountId={}, adminAccountId={}", accountId, adminAccountId);
+
+        try {
+            // Prevent self-lock
+            if (accountId.equals(adminAccountId)) {
+                throw new CannotLockOwnAccountException(adminAccountId);
+            }
+
+            Account account = getAccount(accountId);
+
+            // Verify account has Auth0 integration
+            if (account.getIdentityProviderUserId() == null || account.getIdentityProviderUserId().isBlank()) {
+                throw new IllegalStateException("Account does not have Auth0 integration");
+            }
+
+            Auth0UserId auth0UserId = Auth0UserId.of(account.getIdentityProviderUserId());
+            MDC.put("auth0UserId", auth0UserId.value());
+
+            // Block user in Auth0
+            try {
+                auth0Client.blockUser(auth0UserId);
+            } catch (Auth0Exception e) {
+                handleAuth0Exception(e, "lock account");
+            }
+
+            logger.info("Account locked successfully: accountId={}, auth0UserId={}", accountId, auth0UserId);
+
+        } finally {
+            MDC.remove("accountId");
+            MDC.remove("adminAccountId");
+            MDC.remove("auth0UserId");
+        }
+    }
+
+    /**
+     * Unlock account (unblock Auth0 user).
+     * <p>
+     * Allows previously blocked user to log in again via Auth0.
+     * </p>
+     *
+     * User Story: US2 - Admin Locks/Unlocks User Accounts
+     * Task: T042 - Update AccountService with unlockAccount method
+     *
+     * @param accountId account identifier to unlock
+     * @throws AccountNotFoundException        if account not found
+     * @throws IllegalStateException           if account does not have Auth0 integration
+     * @throws Auth0ServiceUnavailableException if Auth0 API is unavailable
+     * @throws Auth0RateLimitException         if Auth0 rate limit exceeded
+     */
+    public void unlockAccount(UUID accountId) {
+        MDC.put("accountId", accountId.toString());
+
+        logger.info("Unlocking account: accountId={}", accountId);
+
+        try {
+            Account account = getAccount(accountId);
+
+            // Verify account has Auth0 integration
+            if (account.getIdentityProviderUserId() == null || account.getIdentityProviderUserId().isBlank()) {
+                throw new IllegalStateException("Account does not have Auth0 integration");
+            }
+
+            Auth0UserId auth0UserId = Auth0UserId.of(account.getIdentityProviderUserId());
+            MDC.put("auth0UserId", auth0UserId.value());
+
+            // Unblock user in Auth0
+            try {
+                auth0Client.unblockUser(auth0UserId);
+            } catch (Auth0Exception e) {
+                handleAuth0Exception(e, "unlock account");
+            }
+
+            logger.info("Account unlocked successfully: accountId={}, auth0UserId={}", accountId, auth0UserId);
+
+        } finally {
+            MDC.remove("accountId");
+            MDC.remove("auth0UserId");
+        }
+    }
+
+    /**
+     * Handle Auth0 exceptions and convert to application exceptions.
+     *
+     * @param e         Auth0 exception
+     * @param operation operation being performed
+     */
+    private void handleAuth0Exception(Auth0Exception e, String operation) {
+        String message = e.getMessage();
+
+        // Check if it's an APIException with status code
+        if (e instanceof com.auth0.exception.APIException apiException) {
+            int statusCode = apiException.getStatusCode();
+
+            logger.error("Auth0 API error during {}: statusCode={}, message={}", operation, statusCode, message, e);
+
+            if (statusCode == 429) {
+                throw new Auth0RateLimitException("Auth0 rate limit exceeded during " + operation);
+            } else if (statusCode >= 500) {
+                throw new Auth0ServiceUnavailableException("Auth0 service unavailable during " + operation);
+            } else {
+                throw new RuntimeException("Auth0 API error during " + operation + ": " + message, e);
+            }
+        } else {
+            logger.error("Auth0 error during {}: message={}", operation, message, e);
+            throw new RuntimeException("Auth0 error during " + operation + ": " + message, e);
+        }
     }
 
     /**

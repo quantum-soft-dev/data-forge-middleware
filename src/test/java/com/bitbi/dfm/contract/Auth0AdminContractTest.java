@@ -6,6 +6,9 @@ import com.auth0.exception.Auth0Exception;
 import com.auth0.json.mgmt.users.User;
 import com.auth0.net.Request;
 import com.bitbi.dfm.account.application.AccountSyncService;
+import com.bitbi.dfm.auth.application.Auth0TokenProvider;
+import com.bitbi.dfm.auth.domain.Auth0UserId;
+import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.config.TestSecurityConfig;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
@@ -52,6 +56,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 @Import(TestSecurityConfig.class)
 @Sql("/test-data.sql")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 @DisplayName("Auth0 Admin API Contract Tests - User Story 1")
 class Auth0AdminContractTest {
 
@@ -63,6 +68,15 @@ class Auth0AdminContractTest {
 
     @MockitoBean
     private ManagementAPI managementAPI;
+
+    @MockitoBean
+    private Auth0ManagementApiClient auth0Client;
+
+    @MockitoBean
+    private Auth0TokenProvider auth0TokenProvider;
+
+    @MockitoBean
+    private AccountSyncService accountSyncService;
 
     private static final String MOCK_ADMIN_JWT_TOKEN = "mock.admin.jwt.token";
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
@@ -112,6 +126,43 @@ class Auth0AdminContractTest {
         // Mock user deletion (for compensating transactions)
         when(mockUsersEntity.delete(anyString())).thenReturn(mockDeleteUserRequest);
         when(mockDeleteUserRequest.execute()).thenReturn(null);
+
+        // Mock Auth0ManagementApiClient for lock/unlock operations
+        doNothing().when(auth0Client).blockUser(any(Auth0UserId.class));
+        doNothing().when(auth0Client).unblockUser(any(Auth0UserId.class));
+
+        // Mock Auth0TokenProvider to prevent real HTTP calls for token generation
+        when(auth0TokenProvider.getAccessToken()).thenReturn("mock-management-api-token");
+
+        // Mock AccountSyncService.createAccount() - use doAnswer with nullable parameters
+        doAnswer(invocation -> {
+            String email = invocation.getArgument(0);
+            String name = invocation.getArgument(1);
+            String phone = invocation.getArgument(2);
+            String company = invocation.getArgument(3);
+
+            // Simulate duplicate email check (admin@dataforge.com exists in test-data.sql)
+            if ("admin@dataforge.com".equals(email)) {
+                throw new com.bitbi.dfm.account.application.AccountService.AccountAlreadyExistsException(
+                    "Account with email " + email + " already exists"
+                );
+            }
+
+            // Create a minimal mock account for testing the response format
+            com.bitbi.dfm.account.domain.Account mockAccount =
+                com.bitbi.dfm.account.domain.Account.createWithIdentityProvider(
+                    MOCK_AUTH0_USER_ID,
+                    email,
+                    name,
+                    phone,
+                    company
+                );
+
+            return new AccountSyncService.AccountCreationResult(
+                mockAccount,
+                "TempPass123!"
+            );
+        }).when(accountSyncService).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
     }
 
     /**
@@ -144,16 +195,20 @@ class Auth0AdminContractTest {
             .andExpect(jsonPath("$.phone").value("+12345678901"))
             .andExpect(jsonPath("$.company").value("Acme Corp"))
             .andExpect(jsonPath("$.isActive").value(true))
-            .andExpect(jsonPath("$.auth0UserId").value(MOCK_AUTH0_USER_ID))
+            .andExpect(jsonPath("$.identityProviderUserId").value(MOCK_AUTH0_USER_ID))
             .andExpect(jsonPath("$.temporaryPassword").exists())
             .andExpect(jsonPath("$.temporaryPassword").isString())
             .andExpect(jsonPath("$.temporaryPassword").value(not(emptyString())))
             .andExpect(jsonPath("$.passwordResetUrl").value(nullValue()))
             .andExpect(jsonPath("$.createdAt").exists());
 
-        // Verify Auth0 Management API was called
-        verify(managementAPI.users(), times(1)).create(any(User.class));
-        verify(managementAPI.users(), times(1)).update(eq(MOCK_AUTH0_USER_ID), any(User.class));
+        // Verify AccountSyncService.createAccount() was called with correct parameters
+        verify(accountSyncService, times(1)).createAccount(
+            eq("john.doe@example.com"),
+            eq("John Doe"),
+            eq("+12345678901"),
+            eq("Acme Corp")
+        );
     }
 
     /**
@@ -181,8 +236,8 @@ class Auth0AdminContractTest {
             .andExpect(jsonPath("$.error").value("Bad Request"))
             .andExpect(jsonPath("$.message").value(containsString("Email")));
 
-        // Verify Auth0 Management API was NOT called
-        verify(managementAPI.users(), never()).create(any(User.class));
+        // Verify AccountSyncService was NOT called (validation failed before service call)
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
     }
 
     /**
@@ -212,8 +267,13 @@ class Auth0AdminContractTest {
             .andExpect(jsonPath("$.error").value("Conflict"))
             .andExpect(jsonPath("$.message").value(containsString("already exists")));
 
-        // Verify Auth0 Management API was NOT called (early validation)
-        verify(managementAPI.users(), never()).create(any(User.class));
+        // Verify AccountSyncService was called and threw AccountAlreadyExistsException
+        verify(accountSyncService, times(1)).createAccount(
+            eq("admin@dataforge.com"),
+            eq("Duplicate User"),
+            isNull(),  // phone is null
+            isNull()   // company is null
+        );
     }
 
     /**
@@ -241,8 +301,8 @@ class Auth0AdminContractTest {
             .andExpect(jsonPath("$.error").value("Bad Request"))
             .andExpect(jsonPath("$.message").value(containsString("Name")));
 
-        // Verify Auth0 Management API was NOT called
-        verify(managementAPI.users(), never()).create(any(User.class));
+        // Verify AccountSyncService was NOT called (validation failed - missing required fields)
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
     }
 
     /**
@@ -266,8 +326,8 @@ class Auth0AdminContractTest {
                 .content(objectMapper.writeValueAsString(requestBody)))
             .andExpect(status().isUnauthorized());
 
-        // Verify Auth0 Management API was NOT called
-        verify(managementAPI.users(), never()).create(any(User.class));
+        // Verify AccountSyncService was NOT called (no authentication)
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
     }
 
     /**
@@ -292,8 +352,8 @@ class Auth0AdminContractTest {
                 .content(objectMapper.writeValueAsString(requestBody)))
             .andExpect(status().isForbidden());
 
-        // Verify Auth0 Management API was NOT called
-        verify(managementAPI.users(), never()).create(any(User.class));
+        // Verify AccountSyncService was NOT called (authorization failed - not admin)
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
     }
 
     /**
@@ -322,7 +382,183 @@ class Auth0AdminContractTest {
             .andExpect(jsonPath("$.error").value("Bad Request"))
             .andExpect(jsonPath("$.message").value(containsString("Phone")));
 
+        // Verify AccountSyncService was NOT called (validation failed - invalid phone format)
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+    }
+
+    // ==================== User Story 2: Lock/Unlock Accounts ====================
+
+    /**
+     * TC08: Lock account - successful lock returns 204
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * And: Account exists in database with Auth0 integration
+     * And: Admin is not locking their own account
+     * When: POST /api/v1/admin/accounts/{id}/lock
+     * Then: Returns 204 No Content
+     * And: Auth0 user is blocked
+     * </p>
+     */
+    @Test
+    @DisplayName("TC08: Lock account - successful lock returns 204")
+    void lockAccount_validRequest_returns204() throws Exception {
+        // Use test account with Auth0 integration from test-data.sql
+        // This is NOT the admin's own account (admin is a1b2c3d4-e5f6-7890-abcd-ef1234567890)
+        String accountId = "0199bab1-fad2-bf76-c478-eae1f61e1c17"; // Test Account 2 (different from admin)
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK.replace("{id}", accountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNoContent());
+
+        // Verify Auth0ManagementApiClient.blockUser was called with correct Auth0 user ID
+        verify(auth0Client, times(1)).blockUser(argThat(userId ->
+            userId != null && userId.value().equals(MOCK_AUTH0_USER_ID)
+        ));
+    }
+
+    /**
+     * TC09: Lock account - locking own account returns 403
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * When: POST /api/v1/admin/accounts/{id}/lock with admin's own account ID
+     * Then: Returns 403 Forbidden with error message
+     * </p>
+     */
+    @Test
+    @DisplayName("TC09: Lock account - locking own account returns 403")
+    void lockAccount_lockingOwnAccount_returns403() throws Exception {
+        // Use admin's account ID from test-data.sql
+        String adminAccountId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // Admin Test Account
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK.replace("{id}", adminAccountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.status").value(403))
+            .andExpect(jsonPath("$.error").value("Forbidden"))
+            .andExpect(jsonPath("$.message").value(containsString("cannot lock your own account")));
+
         // Verify Auth0 Management API was NOT called
-        verify(managementAPI.users(), never()).create(any(User.class));
+        verify(auth0Client, never()).blockUser(any(Auth0UserId.class));
+    }
+
+    /**
+     * TC10: Lock account - non-existent account returns 404
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * When: POST /api/v1/admin/accounts/{id}/lock with non-existent account ID
+     * Then: Returns 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC10: Lock account - non-existent account returns 404")
+    void lockAccount_nonExistentAccount_returns404() throws Exception {
+        String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK.replace("{id}", nonExistentAccountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.status").value(404))
+            .andExpect(jsonPath("$.error").value("Not Found"))
+            .andExpect(jsonPath("$.message").value(containsString("Account not found")));
+
+        // Verify Auth0 Management API was NOT called
+        verify(auth0Client, never()).blockUser(any(Auth0UserId.class));
+    }
+
+    /**
+     * TC11: Unlock account - successful unlock returns 204
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * And: Account exists in database with Auth0 integration
+     * When: POST /api/v1/admin/accounts/{id}/unlock
+     * Then: Returns 204 No Content
+     * And: Auth0 user is unblocked
+     * </p>
+     */
+    @Test
+    @DisplayName("TC11: Unlock account - successful unlock returns 204")
+    void unlockAccount_validRequest_returns204() throws Exception {
+        String accountId = "0199bab1-fad2-bf76-c478-eae1f61e1c17"; // Test Account 2
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK.replace("{id}", accountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNoContent());
+
+        // Verify Auth0ManagementApiClient.unblockUser was called with correct Auth0 user ID
+        verify(auth0Client, times(1)).unblockUser(argThat(userId ->
+            userId != null && userId.value().equals(MOCK_AUTH0_USER_ID)
+        ));
+    }
+
+    /**
+     * TC12: Unlock account - non-existent account returns 404
+     * <p>
+     * Given: Admin authenticated with valid JWT
+     * When: POST /api/v1/admin/accounts/{id}/unlock with non-existent account ID
+     * Then: Returns 404 Not Found
+     * </p>
+     */
+    @Test
+    @DisplayName("TC12: Unlock account - non-existent account returns 404")
+    void unlockAccount_nonExistentAccount_returns404() throws Exception {
+        String nonExistentAccountId = "00000000-0000-0000-0000-000000000000";
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_UNLOCK.replace("{id}", nonExistentAccountId))
+                .header("Authorization", "Bearer " + MOCK_ADMIN_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.status").value(404))
+            .andExpect(jsonPath("$.error").value("Not Found"))
+            .andExpect(jsonPath("$.message").value(containsString("Account not found")));
+
+        // Verify Auth0 Management API was NOT called
+        verify(auth0Client, never()).unblockUser(any(Auth0UserId.class));
+    }
+
+    /**
+     * TC13: Lock account - unauthenticated returns 401
+     * <p>
+     * Given: No authentication header
+     * When: POST /api/v1/admin/accounts/{id}/lock
+     * Then: Returns 401 Unauthorized
+     * </p>
+     */
+    @Test
+    @DisplayName("TC13: Lock account - unauthenticated returns 401")
+    void lockAccount_unauthenticated_returns401() throws Exception {
+        String accountId = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK.replace("{id}", accountId))
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnauthorized());
+
+        // Verify Auth0ManagementApiClient was NOT called (no authentication)
+        verify(auth0Client, never()).blockUser(any(Auth0UserId.class));
+    }
+
+    /**
+     * TC14: Lock account - non-admin returns 403
+     * <p>
+     * Given: User authenticated with USER role (not ADMIN)
+     * When: POST /api/v1/admin/accounts/{id}/lock
+     * Then: Returns 403 Forbidden
+     * </p>
+     */
+    @Test
+    @DisplayName("TC14: Lock account - non-admin returns 403")
+    void lockAccount_nonAdmin_returns403() throws Exception {
+        String accountId = "0199bab1-fad2-bf76-c478-eae1f61e1c17";
+
+        mockMvc.perform(post(ApiRoutes.ACCOUNTS_LOCK.replace("{id}", accountId))
+                .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isForbidden());
+
+        // Verify Auth0ManagementApiClient was NOT called (authorization failed - not admin)
+        verify(auth0Client, never()).blockUser(any(Auth0UserId.class));
     }
 }

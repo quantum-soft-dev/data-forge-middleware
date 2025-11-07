@@ -53,9 +53,17 @@ import java.util.stream.Collectors;
  *   <li>Any other token → No roles (authorization will fail)</li>
  * </ul>
  *
+ * <p><b>AccountSyncService:</b></p>
+ * <ul>
+ *   <li>Mocked by default here (required for Spring context to load)</li>
+ *   <li>Integration tests needing real AccountSyncService: @Import(Auth0TestConfig.class) which provides @Primary bean</li>
+ *   <li>Contract tests: configure mock behavior as needed in test setup</li>
+ * </ul>
+ *
  * @author Data Forge Team
  * @version 2.0.0
  * @see com.bitbi.dfm.shared.config.SecurityConfiguration Production security configuration
+ * @see Auth0TestConfig Configuration for real AccountSyncService in integration tests
  */
 @TestConfiguration
 @EnableWebSecurity
@@ -71,7 +79,7 @@ public class TestSecurityConfig {
      * AccountSyncService is excluded from test profile (@Profile("!test")) because it requires
      * Auth0 Management API credentials. We provide a mock bean here so that controllers
      * depending on it (like AccountAdminController) can be loaded in test context.
-     * Individual tests should configure mock behavior as needed.
+     * Integration tests that need real AccountSyncService should import Auth0TestConfig.
      * </p>
      */
     @MockBean
