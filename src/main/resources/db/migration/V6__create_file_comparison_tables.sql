@@ -1,6 +1,6 @@
--- Migration V16: Create file comparison tables
+-- Migration V6: Create file comparison tables
 -- Feature: File Diff Comparison Between Upload Sessions (Spec 009)
--- Date: 2025-11-03
+-- Date: 2025-11-08
 
 -- Table: file_comparisons
 CREATE TABLE file_comparisons (
