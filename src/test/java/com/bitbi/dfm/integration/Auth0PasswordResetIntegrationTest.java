@@ -7,18 +7,14 @@ import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponseDto;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.AbstractIntegrationTest;
 import com.bitbi.dfm.shared.exception.MissingAuth0IntegrationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -46,18 +42,9 @@ import static org.mockito.Mockito.*;
  * @author Data Forge Team
  * @version 1.0.0
  */
-@SpringBootTest(properties = {
-    "auth0.database-connection=Username-Password-Authentication",
-    "auth0.domain=test.auth0.com",
-    "auth0.api.audience=https://test-api.example.com",
-    "auth0.password-reset-ttl-seconds=86400"
-})
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@Sql("/test-data.sql")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 @DisplayName("Auth0 Password Reset Integration Test - User Story 3")
-class Auth0PasswordResetIntegrationTest {
+class Auth0PasswordResetIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private AccountService accountService;

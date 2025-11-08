@@ -1,14 +1,10 @@
 package com.bitbi.dfm.integration;
 
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -33,16 +29,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Data Forge Team
  * @version 1.0.0
  */
-@SpringBootTest(properties = {
-    "auth0.domain=test.auth0.com",
-    "auth0.api.audience=https://api.dataforge.com",
-    "auth0.api.issuer=https://test.auth0.com/"
-})
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@AutoConfigureMockMvc
 @DisplayName("Auth0 JWT Validation Integration Test - User Story 5")
-class Auth0JwtValidationIntegrationTest {
+class Auth0JwtValidationIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;

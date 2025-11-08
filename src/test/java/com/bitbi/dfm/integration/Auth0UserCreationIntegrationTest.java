@@ -10,7 +10,7 @@ import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.config.Auth0TestConfig;
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.AbstractIntegrationTest;
 import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
 import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,11 +18,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
 
 import java.util.Map;
 import java.util.Optional;
@@ -44,6 +40,10 @@ import static org.mockito.Mockito.*;
  * 3. Update Auth0 user with PostgreSQL accountId (bidirectional mapping)
  * 4. If PostgreSQL fails, delete Auth0 user (rollback compensation)
  * </p>
+ * <p>
+ * <b>IMPORTANT</b>: @Transactional ensures all database changes are rolled back after each test method,
+ * preventing duplicate key violations when tests run in parallel or multiple times.
+ * </p>
  *
  * User Story: US1 - Admin Creates User Account via Auth0
  * Task: T029 - Integration test for user creation
@@ -51,16 +51,9 @@ import static org.mockito.Mockito.*;
  * @author Data Forge Team
  * @version 1.0.0
  */
-@SpringBootTest(properties = {
-    "auth0.database-connection=Username-Password-Authentication",
-    "auth0.domain=test.auth0.com",
-    "auth0.api.audience=https://test-api.example.com"
-})
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class, Auth0TestConfig.class})
-@Sql("/test-data.sql")
+@org.springframework.transaction.annotation.Transactional
 @DisplayName("Auth0 User Creation Integration Test - User Story 1")
-class Auth0UserCreationIntegrationTest {
+class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private AccountSyncService auth0AccountSyncService;

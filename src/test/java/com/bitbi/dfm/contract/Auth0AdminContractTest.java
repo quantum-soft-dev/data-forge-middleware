@@ -9,7 +9,7 @@ import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.Auth0TokenProvider;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,15 +17,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -52,16 +46,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Data Forge Team
  * @version 1.0.0
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@Sql("/test-data.sql")
 @DisplayName("Auth0 Admin API Contract Tests - User Story 1")
-class Auth0AdminContractTest {
-
-    @Autowired
-    private MockMvc mockMvc;
+class Auth0AdminContractTest extends BaseIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -251,7 +237,6 @@ class Auth0AdminContractTest {
      */
     @Test
     @DisplayName("TC03: Create account with Auth0 - duplicate email returns 409")
-    @Sql("/test-data.sql") // Ensure test account exists
     void createAccount_duplicateEmail_returns409() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "admin@dataforge.com", // Exists in test-data.sql

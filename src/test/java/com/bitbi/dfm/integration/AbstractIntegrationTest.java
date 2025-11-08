@@ -10,14 +10,11 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
 
 import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
 /**
- * Base class for integration tests with Testcontainers.
+ * Base class for integration tests with Testcontainers singleton pattern.
  * <p>
  * Provides shared Testcontainers configuration:
  * - PostgreSQL 16 for database operations
@@ -25,12 +22,17 @@ import static org.testcontainers.containers.localstack.LocalStackContainer.Servi
  * - LocalStack for S3 operations
  * </p>
  * <p>
+ * <b>Singleton Pattern</b>: Uses {@link TestContainersManager} to ensure containers
+ * are started only once across all test classes, preventing race conditions during
+ * parallel test execution.
+ * </p>
+ * <p>
  * All integration tests should extend this class to inherit Testcontainers setup.
  * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
- * @since Phase 11 - Testcontainers Configuration
+ * @version 2.0.0
+ * @since Phase 11 - Testcontainers Singleton Configuration
  */
 @SpringBootTest(properties = {
     "auth0.enabled=false",  // Disable Auth0 for integration tests (use mocks)
@@ -39,45 +41,28 @@ import static org.testcontainers.containers.localstack.LocalStackContainer.Servi
 })
 @ActiveProfiles("test")
 @Import({TestSecurityConfig.class, Auth0TestConfig.class})
-@Testcontainers
 public abstract class AbstractIntegrationTest {
 
     /**
-     * PostgreSQL 16 container for integration tests.
-     * Shared across all tests in the same JVM (static).
+     * Singleton manager for all Testcontainers.
+     * Ensures containers are started only once across all test classes.
      */
-    @Container
-    protected static final PostgreSQLContainer<?> postgresContainer = new PostgreSQLContainer<>(
-            DockerImageName.parse("postgres:16-alpine")
-    )
-            .withDatabaseName("dataforge_test")
-            .withUsername("test")
-            .withPassword("test")
-            .withReuse(true);  // Reuse container across test classes for faster execution
+    protected static final TestContainersManager containersManager = TestContainersManager.getInstance();
 
     /**
-     * Redis 7 container for caching integration tests.
-     * Shared across all tests in the same JVM (static).
+     * PostgreSQL container reference from singleton manager.
      */
-    @Container
-    protected static final GenericContainer<?> redisContainer = new GenericContainer<>(
-            DockerImageName.parse("redis:7-alpine")
-    )
-            .withExposedPorts(6379)
-            .withCommand("redis-server", "--requirepass", "test_password")
-            .withReuse(true);
+    protected static final PostgreSQLContainer<?> postgresContainer = containersManager.getPostgresContainer();
 
     /**
-     * LocalStack container for S3 integration tests.
-     * Shared across all tests in the same JVM (static).
-     * Using 'stable' tag for production reliability.
+     * Redis container reference from singleton manager.
      */
-    @Container
-    protected static final LocalStackContainer localStackContainer = new LocalStackContainer(
-            DockerImageName.parse("localstack/localstack:stable")
-    )
-            .withServices(S3)
-            .withReuse(true);
+    protected static final GenericContainer<?> redisContainer = containersManager.getRedisContainer();
+
+    /**
+     * LocalStack container reference from singleton manager.
+     */
+    protected static final LocalStackContainer localStackContainer = containersManager.getLocalStackContainer();
 
     /**
      * Configure Spring properties dynamically from Testcontainers.
@@ -107,7 +92,7 @@ public abstract class AbstractIntegrationTest {
         registry.add("s3.region", localStackContainer::getRegion);
         registry.add("s3.access-key", localStackContainer::getAccessKey);
         registry.add("s3.secret-key", localStackContainer::getSecretKey);
-        registry.add("s3.bucket.name", () -> "dataforge-test-bucket");
+        registry.add("s3.bucket.name", () -> "data-forge-test-bucket"); // Match application-test.yml and TestContainersManager
 
         // AWS SDK configuration (alternative property names)
         registry.add("aws.s3.endpoint", () -> localStackContainer.getEndpointOverride(S3).toString());
@@ -126,9 +111,7 @@ public abstract class AbstractIntegrationTest {
      * @return true if all containers are running
      */
     protected boolean areContainersRunning() {
-        return postgresContainer.isRunning()
-                && redisContainer.isRunning()
-                && localStackContainer.isRunning();
+        return containersManager.areAllContainersRunning();
     }
 
     /**
@@ -138,7 +121,7 @@ public abstract class AbstractIntegrationTest {
      * @return JDBC URL
      */
     protected String getPostgresJdbcUrl() {
-        return postgresContainer.getJdbcUrl();
+        return containersManager.getPostgresJdbcUrl();
     }
 
     /**
@@ -148,9 +131,7 @@ public abstract class AbstractIntegrationTest {
      * @return Redis connection string
      */
     protected String getRedisConnectionInfo() {
-        return String.format("redis://%s:%d",
-                redisContainer.getHost(),
-                redisContainer.getMappedPort(6379));
+        return containersManager.getRedisConnectionInfo();
     }
 
     /**
@@ -160,6 +141,6 @@ public abstract class AbstractIntegrationTest {
      * @return S3 endpoint URL
      */
     protected String getS3Endpoint() {
-        return localStackContainer.getEndpointOverride(S3).toString();
+        return containersManager.getS3Endpoint();
     }
 }

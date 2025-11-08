@@ -1,17 +1,10 @@
 package com.bitbi.dfm.device.presentation;
 
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Base64;
 
@@ -40,16 +33,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @see com.bitbi.dfm.device.presentation.DeviceAuthController
  * @see <a href="specs/010-api-unification-goal/tasks.md">Task T007</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@Sql("/test-data.sql")
 @DisplayName("Device API - Authentication Contract Tests")
-class DeviceAuthContractTest {
-
-    @Autowired
-    private MockMvc mockMvc;
+class DeviceAuthContractTest extends BaseIntegrationTest {
 
     /**
      * TC07: Valid credentials should issue JWT token.

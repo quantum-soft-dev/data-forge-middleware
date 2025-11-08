@@ -1,17 +1,11 @@
 package com.bitbi.dfm.security;
 
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -41,16 +35,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @see com.bitbi.dfm.shared.config.SecurityConfiguration
  * @see <a href="specs/010-api-unification-goal/spec.md">API Unification Specification</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class})
-@Sql("/test-data.sql")
 @DisplayName("Security Filter Chain Contract Tests")
-class SecurityFilterChainTest {
-
-    @Autowired
-    private MockMvc mockMvc;
+class SecurityFilterChainTest extends BaseIntegrationTest {
 
     @Autowired
     private com.bitbi.dfm.auth.application.TokenService tokenService;

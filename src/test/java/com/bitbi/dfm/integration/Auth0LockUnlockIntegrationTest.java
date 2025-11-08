@@ -6,18 +6,14 @@ import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.AbstractIntegrationTest;
 import com.bitbi.dfm.shared.exception.CannotLockOwnAccountException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
 
 import java.util.UUID;
 
@@ -40,18 +36,9 @@ import static org.mockito.Mockito.*;
  *
  * @author Data Forge Team
  * @version 1.0.0
- */
-@SpringBootTest(properties = {
-    "auth0.database-connection=Username-Password-Authentication",
-    "auth0.domain=test.auth0.com",
-    "auth0.api.audience=https://test-api.example.com"
-})
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@Sql("/test-data.sql")
-@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
+ */@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)
 @DisplayName("Auth0 Lock/Unlock Integration Test - User Story 2")
-class Auth0LockUnlockIntegrationTest {
+class Auth0LockUnlockIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private AccountService accountService;

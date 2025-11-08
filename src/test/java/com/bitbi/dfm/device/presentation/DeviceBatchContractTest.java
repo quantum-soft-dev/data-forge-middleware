@@ -2,19 +2,13 @@ package com.bitbi.dfm.device.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
-import com.bitbi.dfm.config.TestSecurityConfig;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -40,17 +34,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @see com.bitbi.dfm.device.presentation.DeviceBatchController
  * @see <a href="specs/010-api-unification-goal/tasks.md">Task T009</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import(TestSecurityConfig.class)
-@Sql("/test-data.sql")
 @Transactional
 @DisplayName("Device API - Batch Management Contract Tests")
-class DeviceBatchContractTest {
-
-    @Autowired
-    private MockMvc mockMvc;
+class DeviceBatchContractTest extends BaseIntegrationTest {
 
     @Autowired
     private TokenService tokenService;
