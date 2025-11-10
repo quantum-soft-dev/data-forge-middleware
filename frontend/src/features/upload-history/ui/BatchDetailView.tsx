@@ -16,6 +16,8 @@ import { DownloadButton } from './DownloadButton';
 import { ExcelButton } from './ExcelButton';
 import { CompareButton } from './CompareButton';
 import { ComparisonHistorySection } from './ComparisonHistorySection';
+import { ErrorListView } from './ErrorListView';
+import { useBatchErrors } from '@/entities/batch/api/queries';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -42,6 +44,19 @@ export function BatchDetailView({
 }: BatchDetailViewProps) {
   // T077: Track selected file IDs for download functionality
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+
+  // T107: Track error pagination state
+  const [errorPage, setErrorPage] = useState(0);
+  const [errorPageSize, setErrorPageSize] = useState(20);
+
+  // T107: Fetch batch errors (only if batch has errors)
+  const {
+    data: errors,
+    isLoading: isLoadingErrors,
+    error: errorsError,
+  } = useBatchErrors(batch?.id ?? '', errorPage, errorPageSize, {
+    enabled: batch?.hasErrors === true,
+  });
 
   // Handle file selection changes from FileTable
   const handleSelectionChange = useCallback((fileIds: string[]) => {
@@ -210,8 +225,27 @@ export function BatchDetailView({
         />
       </div>
 
-      {/* Comparison History Section (Added 2025-11-03) */}
-      <ComparisonHistorySection batchId={batch.id} />
+      {/* T107: Conditionally show Errors or Comparison History (Added 2025-11-10) */}
+      {batch.hasErrors ? (
+        <div>
+          <h3 className="mb-4 text-lg font-medium text-gray-900">
+            Batch Errors
+          </h3>
+          <ErrorListView
+            batchId={batch.id}
+            errors={errors}
+            isLoading={isLoadingErrors}
+            error={errorsError?.message ?? null}
+            currentPage={errorPage}
+            pageSize={errorPageSize}
+            onPageChange={setErrorPage}
+            onPageSizeChange={setErrorPageSize}
+          />
+        </div>
+      ) : (
+        /* Comparison History Section (Added 2025-11-03) */
+        <ComparisonHistorySection batchId={batch.id} />
+      )}
     </div>
   );
 }
