@@ -87,6 +87,6 @@ CREATE INDEX idx_audit_created_at ON admin_action_logs(created_at DESC);
 COMMENT ON TABLE admin_action_logs IS 'Audit trail for administrative account and site management actions';
 COMMENT ON COLUMN admin_action_logs.target_account_id IS 'Target account ID. NULL allowed for CREATE_ACCOUNT failures where account was not created.';
 COMMENT ON COLUMN admin_action_logs.target_site_id IS 'Target site ID. NULL for account-level actions, populated for site-specific actions.';
-COMMENT ON COLUMN admin_action_logs.admin_account_id IS 'Admin account ID who performed the action. NULL when admin account mapping is not available.';
+COMMENT ON COLUMN admin_action_logs.admin_account_id IS 'Admin account ID who performed the action. ALWAYS NULL - admins are Auth0 users with ROLE_ADMIN but have no Account record. Admin identity tracked via Auth0 JWT (email, sub claims).';
 COMMENT ON COLUMN admin_action_logs.status IS 'Action outcome: SUCCESS or FAILED';
 COMMENT ON COLUMN admin_action_logs.error_message IS 'Error details for failed actions (required when status = FAILED)';

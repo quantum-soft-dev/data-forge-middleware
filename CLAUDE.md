@@ -278,7 +278,9 @@ user.setAppMetadata(Map.of("accountId", account.getId().toString()));
 - **Purpose**: Track all administrative actions for compliance and security audits
 - **Captured Data**: action type, target account ID, admin account ID, success/failure, IP address, user agent, timestamp
 - **Action Types**: CREATE_ACCOUNT, LOCK_ACCOUNT, UNLOCK_ACCOUNT, RESET_PASSWORD, DELETE_ACCOUNT
-- **Nullable admin_account_id**: Allows audit logs before identity provider user mapping is implemented
+- **Nullable admin_account_id**: ALWAYS NULL for admin actions - admins are Auth0 users with ROLE_ADMIN but have no corresponding Account record in PostgreSQL
+- **Admin Identity**: Admins are identified by Auth0 JWT (email, sub claims) but do not have accountId claim
+- **Rationale**: Admins are pure Auth0 RBAC roles for administrative operations, regular users are Account entities with business data
 
 #### Auth0 Management API Integration
 - **Library**: `com.auth0:auth0:2.26.0`, `com.auth0:java-jwt:4.4.0`
@@ -294,11 +296,29 @@ user.setAppMetadata(Map.of("accountId", account.getId().toString()));
 - **Reset Password**: POST /api/v1/admin/accounts/{id}/reset-password (generates Auth0 password change ticket, 24-hour expiry)
 - **List Accounts**: GET /api/v1/admin/accounts?search=email (DB-level filtering with search validation)
 
+#### User Types and Architecture
+**Two distinct user types:**
+1. **Admin Users** (ROLE_ADMIN):
+   - Pure Auth0 users with RBAC role assignment
+   - NO corresponding Account record in PostgreSQL
+   - NO accountId custom claim in JWT
+   - Identified by email and sub claims in JWT
+   - Used for administrative operations only (user management, system configuration)
+
+2. **Regular Users** (ROLE_USER):
+   - Auth0 users with Account record in PostgreSQL (bidirectional mapping)
+   - HAVE accountId custom claim in JWT (from Auth0 app_metadata)
+   - Can manage their own sites, upload files, view history
+   - Business data stored in PostgreSQL (phone, company, sites, batches)
+
+**Architectural Decision**: Separation of administrative and business users prevents complexity of self-referential Account relationships and clarifies audit trail responsibilities.
+
 #### Auth0 Custom Claims (Actions)
-- **Roles Claim**: `https://api.dataforge.com/roles` - extracted from Auth0 RBAC roles
-- **AccountId Claim**: `https://api.dataforge.com/accountId` - from Auth0 user app_metadata
+- **Roles Claim**: `https://api.dataforge.com/roles` - extracted from Auth0 RBAC roles (ROLE_ADMIN or ROLE_USER)
+- **AccountId Claim**: `https://api.dataforge.com/accountId` - from Auth0 user app_metadata (ONLY present for ROLE_USER, absent for ROLE_ADMIN)
 - **Implementation**: Login/Post-Login Action injects custom claims into access token and ID token
 - **Authority Mapping**: Spring Security `JwtAuthenticationConverter` extracts roles from custom claim with `ROLE_` prefix
+- **Graceful Degradation**: Backend handles missing accountId claim gracefully (logs warning, uses NULL for audit trail)
 
 #### Search Functionality
 - **Database-Level Query**: `findAccountsBySearch(@Param("search") String search, Pageable pageable)` with JPQL WHERE and LIKE

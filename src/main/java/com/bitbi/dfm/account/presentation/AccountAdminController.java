@@ -135,7 +135,15 @@ public class AccountAdminController {
         // Extract admin's account ID from JWT token
         Jwt jwt = (Jwt) authentication.getPrincipal();
         String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
-        UUID adminAccountId = UUID.fromString(adminAccountIdStr);
+
+        // Handle case where accountId claim is not present (e.g., old token, missing Auth0 Action)
+        if (adminAccountIdStr == null || adminAccountIdStr.isBlank()) {
+            logger.warn("Admin lock account request without accountId claim in JWT. Using null for audit log.");
+        }
+
+        UUID adminAccountId = (adminAccountIdStr != null && !adminAccountIdStr.isBlank())
+            ? UUID.fromString(adminAccountIdStr)
+            : null;
 
         logger.info("Admin lock account request: accountId={}, adminAccountId={}", id, adminAccountId);
 
@@ -240,7 +248,15 @@ public class AccountAdminController {
         // Extract admin's account ID from JWT token
         Jwt jwt = (Jwt) authentication.getPrincipal();
         String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
-        UUID adminAccountId = UUID.fromString(adminAccountIdStr);
+
+        // Handle case where accountId claim is not present (e.g., old token, missing Auth0 Action)
+        if (adminAccountIdStr == null || adminAccountIdStr.isBlank()) {
+            logger.warn("Admin reset password request without accountId claim in JWT. Using null for audit log.");
+        }
+
+        UUID adminAccountId = (adminAccountIdStr != null && !adminAccountIdStr.isBlank())
+            ? UUID.fromString(adminAccountIdStr)
+            : null;
 
         logger.info("Admin reset password request: accountId={}, adminAccountId={}", id, adminAccountId);
 
