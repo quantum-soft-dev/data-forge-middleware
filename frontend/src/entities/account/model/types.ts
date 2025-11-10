@@ -50,7 +50,7 @@ export interface CreateAccountRequest {
 
 export interface CreateAccountResponse {
   account: AccountWithKeycloakStatus
-  temporaryPassword: string
+  passwordResetLink: string // Auth0 password reset link (24-hour expiry)
 }
 
 export interface ResetPasswordResponse {
