@@ -310,38 +310,49 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Convert Keycloak JWT roles to Spring Security authorities.
+     * Convert Auth0 JWT roles to Spring Security authorities.
      * <p>
-     * Custom converter to extract roles from nested 'realm_access.roles' claim.
-     * Keycloak stores roles in: { "realm_access": { "roles": ["ROLE_ADMIN", ...] } }
+     * Custom converter to extract roles from Auth0 custom claim 'https://api.dataforge.com/roles'.
+     * Auth0 stores roles in custom claims via Auth0 Actions.
      * </p>
      */
     @Bean
     public JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
-        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(new KeycloakRoleConverter());
+        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(new Auth0RoleConverter());
         return jwtAuthenticationConverter;
     }
 
     /**
-     * Custom converter to extract roles from Keycloak's realm_access.roles claim.
+     * Custom converter to extract roles from Auth0's custom roles claim.
      * <p>
+     * Extracts roles from 'https://api.dataforge.com/roles' custom claim.
      * Automatically adds ROLE_ prefix if not present to ensure compatibility with
      * Spring Security's hasRole() method. Handles both formats:
      * - "ADMIN" → "ROLE_ADMIN"
      * - "ROLE_ADMIN" → "ROLE_ADMIN" (unchanged)
      * </p>
+     * <p>
+     * Falls back to Keycloak's realm_access.roles for backward compatibility during migration.
+     * </p>
      */
-    static class KeycloakRoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
+    static class Auth0RoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
+        private static final String AUTH0_ROLES_CLAIM = "https://api.dataforge.com/roles";
+
         @Override
         @SuppressWarnings("unchecked")
         public Collection<GrantedAuthority> convert(Jwt jwt) {
-            Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
-            if (realmAccess == null || !realmAccess.containsKey("roles")) {
-                return List.of();
+            // Strategy 1: Try Auth0 custom claim first
+            List<String> roles = jwt.getClaimAsStringList(AUTH0_ROLES_CLAIM);
+
+            // Strategy 2: Fall back to Keycloak realm_access.roles (backward compatibility)
+            if (roles == null || roles.isEmpty()) {
+                Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
+                if (realmAccess != null && realmAccess.containsKey("roles")) {
+                    roles = (List<String>) realmAccess.get("roles");
+                }
             }
 
-            List<String> roles = (List<String>) realmAccess.get("roles");
             if (roles == null || roles.isEmpty()) {
                 return List.of();
             }

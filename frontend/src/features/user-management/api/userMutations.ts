@@ -7,7 +7,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from '@/shared/api/client'
-import { ACCOUNTS_WITH_KEYCLOAK, ACCOUNTS_LOCK, ACCOUNTS_UNLOCK, ACCOUNTS_RESET_PASSWORD } from '@/shared/api/apiRoutes'
+import { ACCOUNTS, ACCOUNTS_LOCK, ACCOUNTS_UNLOCK, ACCOUNTS_RESET_PASSWORD } from '@/shared/api/apiRoutes'
 import type {
   CreateAccountRequest,
   CreateAccountResponse,
@@ -16,12 +16,12 @@ import type {
 import { accountKeys } from './userQueries'
 
 /**
- * Create account with Keycloak integration.
+ * Create account with Auth0 integration.
  */
 async function createAccount(request: CreateAccountRequest): Promise<CreateAccountResponse> {
   try {
     const response = await apiClient.post<CreateAccountResponse>(
-      ACCOUNTS_WITH_KEYCLOAK,
+      ACCOUNTS,
       request
     )
     return response.data
@@ -33,7 +33,7 @@ async function createAccount(request: CreateAccountRequest): Promise<CreateAccou
 }
 
 /**
- * Hook to create account with Keycloak.
+ * Hook to create account with Auth0.
  * Automatically invalidates account list queries on success.
  */
 export function useCreateAccountMutation() {
@@ -46,7 +46,7 @@ export function useCreateAccountMutation() {
       queryClient.invalidateQueries({ queryKey: accountKeys.lists() })
       // Show success toast
       toast.success('Account created successfully', {
-        description: `Account for ${data.account.email} has been created with temporary password.`,
+        description: `Account for ${data.account.email} has been created. Password reset link sent.`,
       })
     },
     onError: (error) => {
@@ -59,7 +59,7 @@ export function useCreateAccountMutation() {
 }
 
 /**
- * Lock account (disable Keycloak user).
+ * Lock account (disable Auth0 user).
  */
 async function lockAccount(accountId: string): Promise<void> {
   try {
@@ -85,7 +85,7 @@ export function useLockAccountMutation() {
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
       // Show success toast
       toast.success('Account locked successfully', {
-        description: 'The account has been disabled in Keycloak.',
+        description: 'The account has been disabled in Auth0.',
       })
     },
     onError: (error) => {
@@ -98,7 +98,7 @@ export function useLockAccountMutation() {
 }
 
 /**
- * Unlock account (enable Keycloak user).
+ * Unlock account (enable Auth0 user).
  */
 async function unlockAccount(accountId: string): Promise<void> {
   try {
@@ -124,7 +124,7 @@ export function useUnlockAccountMutation() {
       queryClient.invalidateQueries({ queryKey: accountKeys.detail(accountId) })
       // Show success toast
       toast.success('Account unlocked successfully', {
-        description: 'The account has been enabled in Keycloak.',
+        description: 'The account has been enabled in Auth0.',
       })
     },
     onError: (error) => {
@@ -173,6 +173,46 @@ export function useResetPasswordMutation() {
     onError: (error) => {
       // Show error toast
       toast.error('Failed to reset password', {
+        description: error.message,
+      })
+    },
+  })
+}
+
+/**
+ * Delete account (permanently remove from PostgreSQL and Auth0).
+ */
+async function deleteAccount(accountId: string): Promise<void> {
+  try {
+    await apiClient.delete(ACCOUNTS_ID(accountId))
+  } catch (error: any) {
+    const errorMessage = error.response?.data?.message || 'Failed to delete account'
+    const statusCode = error.response?.status || 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  }
+}
+
+/**
+ * Hook to delete account.
+ * Invalidates all account list queries on success.
+ * Navigates back to account list after successful deletion.
+ */
+export function useDeleteAccountMutation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: () => {
+      // Invalidate all account list queries to refetch fresh data
+      queryClient.invalidateQueries({ queryKey: accountKeys.lists() })
+      // Show success toast
+      toast.success('Account deleted successfully', {
+        description: 'The account has been permanently removed from PostgreSQL and Auth0.',
+      })
+    },
+    onError: (error) => {
+      // Show error toast
+      toast.error('Failed to delete account', {
         description: error.message,
       })
     },

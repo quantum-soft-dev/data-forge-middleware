@@ -459,4 +459,13 @@ public class AccountService {
             super(message);
         }
     }
+
+    /**
+     * Exception thrown when admin tries to delete their own account.
+     */
+    public static class CannotDeleteOwnAccountException extends RuntimeException {
+        public CannotDeleteOwnAccountException(String message) {
+            super(message);
+        }
+    }
 }

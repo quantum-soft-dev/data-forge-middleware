@@ -5,6 +5,7 @@ import com.bitbi.dfm.account.application.AccountService;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.presentation.dto.AccountDetailDto;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
+import com.bitbi.dfm.account.presentation.dto.AdminActionLogResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -29,8 +30,15 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.validation.annotation.Validated;
 import java.util.UUID;
+import java.util.List;
+import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
+import com.bitbi.dfm.account.domain.AdminActionLog;
+import com.bitbi.dfm.account.domain.AdminActionType;
 
 /**
  * REST controller for account administration (UI/Admin API).
@@ -61,14 +69,17 @@ public class AccountAdminController {
     private final AccountService accountService;
     private final AccountSyncService accountSyncService;
     private final AccountQueryService accountQueryService;
+    private final AdminActionLogRepository adminActionLogRepository;
 
     public AccountAdminController(
             AccountService accountService,
             AccountSyncService accountSyncService,
-            AccountQueryService accountQueryService) {
+            AccountQueryService accountQueryService,
+            AdminActionLogRepository adminActionLogRepository) {
         this.accountService = accountService;
         this.accountSyncService = accountSyncService;
         this.accountQueryService = accountQueryService;
+        this.adminActionLogRepository = adminActionLogRepository;
     }
 
     /**
@@ -222,13 +233,200 @@ public class AccountAdminController {
             content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))
         )
     })
-    public ResponseEntity<ResetPasswordResponseDto> resetPassword(@PathVariable("id") UUID id) {
+    public ResponseEntity<ResetPasswordResponseDto> resetPassword(
+            @PathVariable("id") UUID id,
+            Authentication authentication) {
 
-        logger.info("Admin reset password request: accountId={}", id);
+        // Extract admin's account ID from JWT token
+        Jwt jwt = (Jwt) authentication.getPrincipal();
+        String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+        UUID adminAccountId = UUID.fromString(adminAccountIdStr);
 
-        ResetPasswordResponseDto response = accountService.resetPassword(id);
+        logger.info("Admin reset password request: accountId={}, adminAccountId={}", id, adminAccountId);
 
-        logger.info("Password reset link generated: accountId={}, email={}", id, response.email());
+        try {
+            ResetPasswordResponseDto response = accountService.resetPassword(id);
+
+            // Log successful password reset action
+            AdminActionLog log = AdminActionLog.success(
+                    AdminActionType.RESET_PASSWORD,
+                    id,
+                    adminAccountId,
+                    null, // IP address - TODO: extract from request
+                    null  // User agent - TODO: extract from request
+            );
+            adminActionLogRepository.save(log);
+
+            logger.info("Password reset link generated: accountId={}, email={}", id, response.email());
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            // Log failed password reset action
+            AdminActionLog log = AdminActionLog.failure(
+                    AdminActionType.RESET_PASSWORD,
+                    id,
+                    adminAccountId,
+                    e.getMessage(),
+                    null, // IP address - TODO: extract from request
+                    null  // User agent - TODO: extract from request
+            );
+            adminActionLogRepository.save(log);
+            throw e;
+        }
+    }
+
+    /**
+     * Get single account by ID with Auth0 integration.
+     * <p>
+     * GET /api/v1/accounts/{id} (mapped from ApiRoutes.ACCOUNTS_ID)
+     * </p>
+     * <p>
+     * Returns account details with Auth0-specific fields (isBlocked, lastLogin).
+     * </p>
+     *
+     * @param id account identifier (UUID path parameter)
+     * @return 200 OK with account details
+     * @throws com.bitbi.dfm.account.application.AccountService.AccountNotFoundException if account not found (404)
+     */
+    @GetMapping(ApiRoutes.ACCOUNTS_ID)
+    @Operation(
+        summary = "Get account by ID with Auth0 integration",
+        description = "Returns account details with Auth0 fields (isBlocked, lastLogin)."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Account details retrieved successfully",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = AccountDetailDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Account not found",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Unauthorized - missing or invalid authentication token",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden - user does not have ROLE_ADMIN",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        )
+    })
+    public ResponseEntity<AccountDetailDto> getAccountById(@PathVariable("id") UUID id) {
+
+        logger.info("Admin get account request: accountId={}", id);
+
+        AccountDetailDto response = accountQueryService.getAccountById(id);
+
+        logger.info("Account retrieved successfully: accountId={}", id);
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get audit logs for an account.
+     * <p>
+     * GET /api/v1/accounts/{id}/audit-logs (mapped from ApiRoutes.ACCOUNTS_AUDIT_LOGS)
+     * </p>
+     * <p>
+     * Returns paginated list of administrative actions performed on this account
+     * (create, lock, unlock, reset password). Used for compliance and troubleshooting.
+     * </p>
+     *
+     * @param id account identifier (UUID path parameter)
+     * @param page page number (0-based, default=0)
+     * @param size page size (default=20)
+     * @param sort sort parameter (default=createdAt,desc)
+     * @return 200 OK with paginated list of audit log entries
+     */
+    @GetMapping(ApiRoutes.ACCOUNTS_AUDIT_LOGS)
+    @Operation(
+        summary = "Get audit logs for account",
+        description = "Returns paginated list of administrative actions performed on this account."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "200",
+            description = "Audit logs retrieved successfully",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = PageResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Account not found",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Unauthorized - missing or invalid authentication token",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Forbidden - user does not have ROLE_ADMIN",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        )
+    })
+    public ResponseEntity<PageResponseDto<AdminActionLogResponseDto>> getAuditLogs(
+            @PathVariable("id") UUID id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt,desc") String sort) {
+
+        logger.info("Admin get audit logs request: accountId={}, page={}, size={}", id, page, size);
+
+        // Parse sort parameter
+        String[] sortParts = sort.split(",");
+        String sortField = sortParts[0];
+        Sort.Direction sortDirection = sortParts.length > 1 && sortParts[1].equalsIgnoreCase("asc")
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
+
+        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(sortDirection, sortField));
+
+        // Fetch audit logs for this account
+        Page<AdminActionLog> logsPage = adminActionLogRepository.findByTargetAccountId(id, pageRequest);
+
+        // Convert to DTOs
+        List<AdminActionLogResponseDto> logDtos = logsPage.getContent().stream()
+                .map(AdminActionLogResponseDto::fromEntity)
+                .toList();
+
+        PageResponseDto<AdminActionLogResponseDto> response = new PageResponseDto<>(
+                logDtos,
+                logsPage.getNumber(),
+                logsPage.getSize(),
+                logsPage.getTotalElements(),
+                logsPage.getTotalPages()
+        );
+
+        logger.info("Audit logs retrieved successfully: accountId={}, count={}", id, logDtos.size());
 
         return ResponseEntity.ok(response);
     }
@@ -301,15 +499,26 @@ public class AccountAdminController {
             )
             String search,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            Authentication authentication) {
 
-        logger.info("Admin list accounts request: search={}, page={}, size={}",
+        // Extract admin's account ID from JWT token to exclude from results
+        UUID currentAdminAccountId = null;
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+            String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+            if (adminAccountIdStr != null && !adminAccountIdStr.isEmpty()) {
+                currentAdminAccountId = UUID.fromString(adminAccountIdStr);
+            }
+        }
+
+        logger.info("Admin list accounts request: search={}, page={}, size={}, excludingAdminId={}",
             search != null ? "[filtered]" : "null",
             page,
-            size);
+            size,
+            currentAdminAccountId);
 
         org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size);
-        PageResponseDto<AccountDetailDto> response = accountQueryService.listAccounts(search, pageable);
+        PageResponseDto<AccountDetailDto> response = accountQueryService.listAccounts(search, pageable, currentAdminAccountId);
 
         logger.info("Accounts listed successfully: count={}, totalElements={}",
             response.content().size(),
@@ -397,5 +606,72 @@ public class AccountAdminController {
                 result.account().getId(), result.account().getIdentityProviderUserId());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    /**
+     * Delete account (remove from PostgreSQL and Auth0).
+     * <p>
+     * DELETE /api/v1/accounts/{id}
+     * </p>
+     * <p>
+     * Permanently deletes the account from both PostgreSQL and Auth0.
+     * This action cannot be undone. Admin cannot delete their own account.
+     * </p>
+     *
+     * @param id             account identifier (UUID path parameter)
+     * @param authentication JWT authentication (contains admin's accountId)
+     * @return 204 No Content if successful
+     * @throws com.bitbi.dfm.account.application.AccountService.AccountNotFoundException if account not found (404)
+     * @throws com.bitbi.dfm.account.application.AccountService.CannotDeleteOwnAccountException if admin tries to delete their own account (403)
+     */
+    @DeleteMapping(ApiRoutes.ACCOUNTS_ID)
+    @Operation(
+        summary = "Delete account",
+        description = "Permanently delete account from PostgreSQL and Auth0. Admin cannot delete their own account."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(
+            responseCode = "204",
+            description = "Account deleted successfully"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Account not found",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Cannot delete own account",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ErrorResponseDto.class)
+            )
+        )
+    })
+    public ResponseEntity<Void> deleteAccount(
+            @PathVariable("id") UUID id,
+            Authentication authentication) {
+
+        logger.info("Admin delete account request: accountId={}", id);
+
+        // Prevent admin from deleting their own account
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+            String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+            if (adminAccountIdStr != null && !adminAccountIdStr.isEmpty()) {
+                UUID adminAccountId = UUID.fromString(adminAccountIdStr);
+                if (adminAccountId.equals(id)) {
+                    throw new AccountService.CannotDeleteOwnAccountException("Admin cannot delete their own account");
+                }
+            }
+        }
+
+        accountSyncService.deleteAccount(id);
+
+        logger.info("Account deleted successfully: accountId={}", id);
+
+        return ResponseEntity.noContent().build();
     }
 }

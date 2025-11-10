@@ -199,7 +199,7 @@ public class AccountSyncService {
         user.setName(name);
         user.setConnection(databaseConnection);
         user.setPassword(temporaryPassword);
-        user.setVerifyEmail(false); // Don't send verification email for temporary password
+        user.setVerifyEmail(true); // Send verification email to user
 
         Request<User> request = managementAPI.users().create(user);
         return request.execute().getBody();
@@ -307,6 +307,54 @@ public class AccountSyncService {
 
         // Client errors or generic Auth0Exception - wrap in RuntimeException
         return new RuntimeException("Auth0 API error during " + operation + ": " + message, ex);
+    }
+
+    /**
+     * Delete account with Auth0 integration (two-phase commit).
+     * <p>
+     * Phase 1: Delete account from PostgreSQL (soft delete)
+     * Phase 2: Delete user from Auth0
+     * If Phase 2 fails: Log critical error for manual cleanup
+     * </p>
+     *
+     * @param accountId Account UUID to delete
+     * @throws AccountService.AccountNotFoundException if account not found
+     */
+    @Transactional
+    public void deleteAccount(UUID accountId) {
+        try {
+            MDC.put("accountId", accountId.toString());
+
+            // Find account
+            Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountService.AccountNotFoundException("Account not found: " + accountId));
+
+            String auth0UserId = account.getIdentityProviderUserId();
+            MDC.put("auth0UserId", auth0UserId);
+
+            logger.info("Deleting account: accountId={}, auth0UserId={}", accountId, auth0UserId);
+
+            // PHASE 1: Delete account from PostgreSQL
+            accountRepository.deleteById(accountId);
+            logger.info("PostgreSQL account deleted successfully: accountId={}", accountId);
+
+            // PHASE 2: Delete user from Auth0
+            try {
+                deleteAuth0User(auth0UserId);
+                logger.info("Auth0 user deleted successfully: auth0UserId={}", auth0UserId);
+            } catch (Exception ex) {
+                // Critical error: Account deleted from PostgreSQL but Auth0 user still exists
+                logger.error("CRITICAL: Failed to delete Auth0 user after PostgreSQL deletion: {} - Manual cleanup required!",
+                    auth0UserId, ex);
+                // Don't throw exception - PostgreSQL deletion is already committed
+            }
+
+            logger.info("Account deletion completed: accountId={}", accountId);
+
+        } finally {
+            MDC.remove("accountId");
+            MDC.remove("auth0UserId");
+        }
     }
 
     /**

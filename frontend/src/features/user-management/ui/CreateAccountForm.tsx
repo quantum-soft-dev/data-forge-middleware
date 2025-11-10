@@ -7,7 +7,7 @@
  * @module features/user-management/ui/CreateAccountForm
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { createAccountSchema, type CreateAccountFormData } from '../model/userSchemas'
@@ -29,13 +29,30 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
     handleSubmit,
     formState: { errors, isSubmitting },
     reset,
+    watch,
+    setValue,
   } = useForm<CreateAccountFormData>({
     resolver: zodResolver(createAccountSchema),
   })
 
+  // Watch the role field to conditionally show/hide company field
+  const selectedRole = watch('role')
+
+  // Clear company field when ADMIN is selected
+  useEffect(() => {
+    if (selectedRole === 'ADMIN') {
+      setValue('company', '')
+    }
+  }, [selectedRole, setValue])
+
   const onSubmit = async (data: CreateAccountFormData) => {
     try {
-      const result = await mutation.mutateAsync(data)
+      // Remove company field for ADMIN role
+      const submitData = data.role === 'ADMIN'
+        ? { ...data, company: undefined }
+        : data
+
+      const result = await mutation.mutateAsync(submitData)
       setTemporaryPassword(result.temporaryPassword)
       setShowPassword(true)
       reset()
@@ -159,25 +176,28 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
         )}
       </div>
 
-      <div>
-        <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
-          Company
-        </label>
-        <input
-          {...register('company')}
-          type="text"
-          id="company"
-          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={isSubmitting}
-          aria-invalid={errors.company ? 'true' : 'false'}
-          aria-describedby={errors.company ? 'company-error' : undefined}
-        />
-        {errors.company && (
-          <p id="company-error" className="mt-1 text-sm text-red-600" role="alert">
-            {errors.company.message}
-          </p>
-        )}
-      </div>
+      {/* Only show Company field for USER role, not for ADMIN */}
+      {selectedRole === 'USER' && (
+        <div>
+          <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
+            Company
+          </label>
+          <input
+            {...register('company')}
+            type="text"
+            id="company"
+            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={isSubmitting}
+            aria-invalid={errors.company ? 'true' : 'false'}
+            aria-describedby={errors.company ? 'company-error' : undefined}
+          />
+          {errors.company && (
+            <p id="company-error" className="mt-1 text-sm text-red-600" role="alert">
+              {errors.company.message}
+            </p>
+          )}
+        </div>
+      )}
 
       <div>
         <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-1">

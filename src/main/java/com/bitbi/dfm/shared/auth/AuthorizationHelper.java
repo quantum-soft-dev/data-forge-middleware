@@ -85,8 +85,8 @@ public class AuthorizationHelper {
                     (org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) authentication;
             Jwt jwt = oauth2JwtAuth.getToken();
 
-            // Strategy 1: Try to extract accountId from direct "accountId" claim
-            String accountIdClaim = jwt.getClaimAsString("accountId");
+            // Strategy 1: Try to extract accountId from Auth0 custom claim (namespaced)
+            String accountIdClaim = jwt.getClaimAsString("https://api.dataforge.com/accountId");
             if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
                 try {
                     return UUID.fromString(accountIdClaim);
@@ -95,7 +95,17 @@ public class AuthorizationHelper {
                 }
             }
 
-            // Strategy 2: Try to extract from Keycloak user attributes (custom mapper)
+            // Strategy 2: Try to extract accountId from direct "accountId" claim (legacy Keycloak)
+            accountIdClaim = jwt.getClaimAsString("accountId");
+            if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
+                try {
+                    return UUID.fromString(accountIdClaim);
+                } catch (IllegalArgumentException e) {
+                    // Not a valid UUID, try next strategy
+                }
+            }
+
+            // Strategy 3: Try to extract from Keycloak user attributes (custom mapper)
             // Keycloak can be configured to include user attributes in JWT via mappers
             Object accountIdAttr = jwt.getClaim("account_id");
             if (accountIdAttr != null) {

@@ -2,22 +2,22 @@
  * Provider composition for the application
  *
  * Order matters! Providers are composed from outside to inside:
- * 1. AuthProvider - must wrap everything to provide authentication context
+ * 1. Auth0Provider - Auth0 authentication context
  * 2. QueryProvider - depends on auth for authenticated API calls
  * 3. RouterProvider - innermost, renders the actual application
  *
  * Usage in App.tsx:
  * ```tsx
- * import { AuthProvider, QueryProvider, RouterProvider } from '@/app/providers'
+ * import { Auth0Provider, QueryProvider, RouterProvider } from '@/app/providers'
  *
- * <AuthProvider>
+ * <Auth0Provider>
  *   <QueryProvider>
  *     <RouterProvider />
  *   </QueryProvider>
- * </AuthProvider>
+ * </Auth0Provider>
  * ```
  */
 
-export { AuthProvider } from './AuthProvider'
+export { Auth0Provider } from './Auth0Provider'
 export { QueryProvider } from './QueryProvider'
 export { RouterProvider } from './RouterProvider'

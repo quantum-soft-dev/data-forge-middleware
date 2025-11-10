@@ -329,4 +329,31 @@ public class Auth0ManagementApiClient {
             throw e;
         }
     }
+
+    /**
+     * Delete a user from Auth0.
+     * <p>
+     * Permanently deletes the user account. This action cannot be undone.
+     * All user data and metadata will be removed from Auth0.
+     * </p>
+     *
+     * @param userId Auth0 user ID
+     * @throws Auth0Exception if delete operation fails
+     */
+    public void deleteUser(Auth0UserId userId) throws Auth0Exception {
+        logger.info("Deleting Auth0 user: userId={}", userId);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            mgmt.users().delete(userId.value()).execute();
+
+            logger.info("Auth0 user deleted successfully: userId={}", userId);
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to delete Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
 }

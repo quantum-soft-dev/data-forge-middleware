@@ -15,11 +15,10 @@ import { useAuth } from '@/entities/user-session/api/useAuth'
 
 export function Header() {
   const { user, hasRole } = useAuth()
-  // Keycloak uses ROLE_ prefix for realm roles
   const isAdmin = hasRole('ROLE_ADMIN')
 
   // Get user name from token (prefer name, fallback to email, then username)
-  const userName = user?.profile?.name || user?.profile?.email || user?.profile?.preferred_username || 'User'
+  const userName = user?.name || user?.email || user?.preferred_username || 'User'
 
   return (
     <header className="border-b border-gray-200 bg-white shadow-sm">

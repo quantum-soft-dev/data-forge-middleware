@@ -44,12 +44,22 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
       </div>
 
       {/* Status Badges */}
-      <div className="mb-4">
-        <AccountStatusBadge
-          isActive={account.isActive}
-          keycloakEnabled={account.keycloakEnabled}
-          passwordTemporary={account.passwordTemporary}
-        />
+      <div className="mb-4 flex gap-2">
+        {account.isActive && (
+          <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+            Active
+          </span>
+        )}
+        {account.identityProviderUserId && (
+          <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+            Auth0
+          </span>
+        )}
+        {account.isBlocked && (
+          <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+            Blocked
+          </span>
+        )}
       </div>
 
       {/* Account Details Grid */}
@@ -94,13 +104,13 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
           </div>
         )}
 
-        {/* Keycloak User ID */}
-        {account.keycloakUserId && (
+        {/* Auth0 User ID */}
+        {account.identityProviderUserId && (
           <div className="flex items-start gap-2 sm:col-span-2">
             <Key className="mt-0.5 h-4 w-4 text-gray-400" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-gray-500">Keycloak User ID</p>
-              <p className="truncate font-mono text-xs text-gray-700">{account.keycloakUserId}</p>
+              <p className="text-xs font-medium text-gray-500">Auth0 User ID</p>
+              <p className="truncate font-mono text-xs text-gray-700">{account.identityProviderUserId}</p>
             </div>
           </div>
         )}
@@ -120,28 +130,11 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
           <div className="flex items-center gap-1.5">
             <Calendar className="h-3.5 w-3.5 text-gray-400" />
             <div>
-              <p className="font-medium text-gray-500">Updated</p>
-              <p className="text-gray-700">{formatDate(account.updatedAt)}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5 text-gray-400" />
-            <div>
               <p className="font-medium text-gray-500">Last Login</p>
               <p className="text-gray-700">{formatDate(account.lastLogin)}</p>
             </div>
           </div>
         </div>
-
-        {/* Password Expiration */}
-        {account.passwordTemporary && account.passwordExpiresAt && (
-          <div className="mt-3 rounded-md bg-yellow-50 p-3 border border-yellow-200">
-            <p className="text-xs font-medium text-yellow-800">
-              Temporary password expires: {formatDate(account.passwordExpiresAt)}
-            </p>
-          </div>
-        )}
       </div>
     </div>
   )

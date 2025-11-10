@@ -1,11 +1,11 @@
 /**
  * LockAccountButton Component
  *
- * Per T044: Button to lock (disable) a user account in Keycloak.
+ * Per T044: Button to lock (disable) a user account in Auth0.
  *
  * Features:
  * - Confirmation dialog before locking
- * - Disabled if account already locked or no Keycloak integration
+ * - Disabled if account already locked or no Auth0 integration
  * - Success/error toast notifications
  * - Accessibility with ARIA labels
  */
@@ -25,9 +25,9 @@ export function LockAccountButton({ account, onSuccess, className = '' }: LockAc
   const [showConfirmation, setShowConfirmation] = useState(false)
   const lockMutation = useLockAccountMutation()
 
-  const hasKeycloak = !!account.keycloakUserId
-  const isAlreadyLocked = !account.keycloakEnabled
-  const isDisabled = !hasKeycloak || isAlreadyLocked || lockMutation.isPending
+  const hasAuth0 = !!account.identityProviderUserId
+  const isAlreadyLocked = account.isBlocked
+  const isDisabled = !hasAuth0 || isAlreadyLocked || lockMutation.isPending
 
   const handleConfirm = async () => {
     try {
@@ -58,8 +58,8 @@ export function LockAccountButton({ account, onSuccess, className = '' }: LockAc
         } ${className}`}
         aria-label={`Lock account for ${account.email}`}
         title={
-          !hasKeycloak
-            ? 'Account does not have Keycloak integration'
+          !hasAuth0
+            ? 'Account does not have Auth0 integration'
             : isAlreadyLocked
             ? 'Account is already locked'
             : 'Lock this account'

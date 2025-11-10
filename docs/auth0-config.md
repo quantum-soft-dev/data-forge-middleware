@@ -4,12 +4,55 @@
 
 1. [Создание Auth0 Tenant](#1-создание-auth0-tenant)
 2. [Настройка приложений](#2-настройка-приложений)
+   - 2.1 API Application (Resource Server)
+   - 2.2 Machine-to-Machine Application (Backend Management API)
+   - 2.3 Single Page Application (Frontend UI) ⭐ **ВАЖНО**
+   - 2.4 Проверка CORS и Callback URLs
 3. [Создание ролей](#3-создание-ролей)
 4. [Настройка Database Connection](#4-настройка-database-connection)
 5. [Создание Auth0 Action для добавления ролей](#5-создание-auth0-action-для-добавления-ролей)
 6. [Получение credentials](#6-получение-credentials)
 7. [Настройка локальной разработки](#7-настройка-локальной-разработки)
 8. [Тестирование интеграции](#8-тестирование-интеграции)
+
+## 🏗️ Архитектура Auth0 интеграции
+
+```
+┌─────────────────────┐
+│   Frontend (React)  │
+│   localhost:3000    │
+└──────────┬──────────┘
+           │ Auth Code + PKCE
+           ▼
+┌─────────────────────────────┐
+│  Auth0 SPA Application      │  ← Callback URLs, CORS
+│  (Browser Authentication)   │
+└─────────────┬───────────────┘
+              │ JWT Token
+              ▼
+┌─────────────────────────────┐
+│  Backend (Spring Boot)      │
+│  localhost:8080             │
+└──────────┬──────────────────┘
+           │ Management API Calls
+           │ (Client Credentials)
+           ▼
+┌─────────────────────────────┐
+│  Auth0 M2M Application      │
+│  (Server-to-Server)         │
+└─────────────┬───────────────┘
+              │
+              ▼
+┌─────────────────────────────┐
+│  Auth0 Management API       │
+│  (Create/Block Users)       │
+└─────────────────────────────┘
+```
+
+**Компоненты:**
+- **Auth0 API** - определяет ваш Backend API (audience: `https://api.dataforge.com`)
+- **Auth0 M2M App** - для вызовов Management API с бэкенда
+- **Auth0 SPA App** - для логина пользователей через браузер (требует CORS настройки)
 
 ---
 
@@ -46,9 +89,10 @@ Environment Tag: Development
 
 ## 2. Настройка приложений
 
-Auth0 требует создать **2 приложения**:
-1. **API** - для валидации JWT токенов (Admin API)
-2. **Machine-to-Machine** - для Management API (создание пользователей)
+Auth0 требует создать **3 приложения**:
+1. **API** - для валидации JWT токенов (определяет ваш Backend API как Resource Server)
+2. **Machine-to-Machine (M2M)** - для вызовов Management API с бэкенда (создание/блокировка пользователей)
+3. **Single Page Application (SPA)** - для аутентификации пользователей во фронтенде через браузер
 
 ### Шаг 2.1: Создание API Application
 
@@ -65,8 +109,14 @@ Auth0 требует создать **2 приложения**:
 2. **Настройки API**
 
    - **Settings → Token Expiration**: `86400` секунд (24 часа) - должно совпадать с `jwt.expiration-seconds` в application.yml
-   - **Settings → Allow Offline Access**: ❌ Отключить (не используем refresh tokens)
+   - **Settings → Allow Offline Access**: ✅ **Включить** (фронтенд использует refresh tokens для silent authentication)
    - **Settings → Allow Skipping User Consent**: ✅ Включить (для internal API)
+
+   **⚠️ Важно:** Allow Offline Access должен быть включен, потому что:
+   - Фронтенд использует `useRefreshTokens={true}` в Auth0Provider
+   - Refresh tokens позволяют пользователю оставаться в системе без повторного логина
+   - Access tokens обновляются автоматически в фоне (silent authentication)
+   - Улучшает UX - пользователь не видит редиректов на Auth0 при истечении токена
 
 3. **Permissions (Scopes)**
 
@@ -117,6 +167,228 @@ Auth0 требует создать **2 приложения**:
    - **Client Secret**: `SuperSecretString-1234567890abcdefghijklmnop`
 
    **⚠️ ВАЖНО:** `Client Secret` показывается только один раз! Сохраните в безопасном месте.
+
+### Шаг 2.3: Создание Single Page Application для Frontend
+
+**Зачем нужно SPA приложение?**
+
+Auth0 требует создать **отдельное приложение** для фронтенда (Single Page Application), потому что:
+
+1. **Разные типы клиентов**:
+   - **M2M приложение (Шаг 2.2)** - для бэкенда (серверная аутентификация через Client Credentials flow)
+   - **SPA приложение** - для фронтенда (браузерная аутентификация через Authorization Code + PKCE flow)
+
+2. **Разная модель безопасности**:
+   - M2M использует **Client Secret** (серверное приложение может безопасно хранить секрет)
+   - SPA использует **PKCE** без Client Secret (браузер не может безопасно хранить секреты)
+
+3. **Разные сценарии использования**:
+   - M2M для административных операций (создание пользователей, блокировка аккаунтов)
+   - SPA для входа пользователей через браузер (Universal Login с редиректом)
+
+4. **CORS и Callback URLs**:
+   - SPA требует настройки CORS и Callback URLs для работы в браузере
+   - M2M работает server-to-server, CORS не требуется
+
+**Итог:** Вам нужно **3 приложения в Auth0**:
+- ✅ **API (Шаг 2.1)** - определяет ваш API как Resource Server
+- ✅ **Machine-to-Machine (Шаг 2.2)** - для вызовов Management API с бэкенда
+- ✅ **Single Page Application (Шаг 2.3)** - для аутентификации пользователей во фронтенде
+
+---
+
+1. **Applications → Applications → Create Application**
+
+   ```
+   Name: Data Forge Admin UI
+   Type: Single Page Web Applications
+   ```
+
+2. **Configure Application Settings**
+
+   В настройках приложения (**Applications → Data Forge Admin UI → Settings**) заполнить:
+
+   **Application URIs**:
+
+   ```
+   Application Login URI: (оставить пустым)
+   ```
+
+   **⚠️ Что такое Application Login URI?**
+
+   Это URL **вашего собственного** login экрана, если вы НЕ используете Auth0 Universal Login.
+
+   - **Оставьте пустым** если используете Auth0 Universal Login (наш случай)
+   - Auth0 Universal Login - это hosted login page от Auth0 (рекомендуется)
+   - Заполняйте только если создаете custom login UI на своем домене (не рекомендуется для новых проектов)
+
+   **Для data-forge-middleware**: Оставьте это поле **пустым**, потому что мы используем Auth0 Universal Login (встроенный login экран Auth0).
+
+   ```
+
+   Allowed Callback URLs:
+   http://localhost:3000,
+   http://localhost:3000/callback,
+   https://dataforge-dev.example.com,
+   https://dataforge-dev.example.com/callback,
+   https://dataforge.example.com,
+   https://dataforge.example.com/callback
+
+   Allowed Logout URLs:
+   http://localhost:3000,
+   https://dataforge-dev.example.com,
+   https://dataforge.example.com
+
+   Allowed Web Origins:
+   http://localhost:3000,
+   https://dataforge-dev.example.com,
+   https://dataforge.example.com
+
+   Allowed Origins (CORS):
+   http://localhost:3000,
+   https://dataforge-dev.example.com,
+   https://dataforge.example.com
+   ```
+
+   **⚠️ Важно:**
+   - `localhost:3000` - для локальной разработки (React dev server)
+   - `dataforge-dev.example.com` - для staging окружения
+   - `dataforge.example.com` - для production окружения
+   - Замените `example.com` на ваш реальный домен
+
+3. **Advanced Settings**
+
+   **Grant Types** (оставить по умолчанию для SPA):
+   ```
+   ✅ Authorization Code
+   ✅ Refresh Token
+   ✅ Implicit (deprecated, отключить для безопасности)
+   ```
+
+   **Application Type**:
+   ```
+   ✅ Single Page Application
+   ```
+
+   **Token Endpoint Authentication Method**:
+   ```
+   None (Public Client - SPA не использует client secret)
+   ```
+
+4. **API Authorization**
+
+   **Applications → Data Forge Admin UI → APIs**
+
+   Авторизовать приложение для доступа к вашему API:
+   - Выбрать: **Data Forge API** (созданный в Шаге 2.1)
+   - Не требуется выбирать permissions (они определяются ролями пользователя)
+
+5. **Refresh Token Rotation**
+
+   **Applications → Data Forge Admin UI → Settings → Advanced Settings → Refresh Token Rotation**
+
+   ```
+   ✅ Rotation: Enabled
+   ✅ Reuse Interval: 10 seconds
+   ✅ Absolute Expiration: 30 days
+   ✅ Inactivity Expiration: 3 days
+   ```
+
+   **Зачем нужна Refresh Token Rotation?**
+
+   Refresh tokens используются для автоматического обновления access токенов без повторного логина пользователя:
+
+   - **Access Token** живет 24 часа → истекает → пользователь НЕ выкидывается из системы
+   - **Refresh Token** используется для получения нового Access Token в фоне (silent authentication)
+   - **Rotation** повышает безопасность - каждый refresh token используется только 1 раз, затем заменяется новым
+   - **Absolute Expiration (30 дней)** - максимальное время, после которого пользователь должен перелогиниться
+   - **Inactivity Expiration (3 дня)** - если пользователь неактивен 3 дня, refresh token инвалидируется
+
+   **Как это работает во фронтенде?**
+
+   В `Auth0Provider.tsx` установлено `useRefreshTokens={true}`:
+   ```typescript
+   <Auth0ProviderSDK
+     useRefreshTokens={true}  // ← Включает использование refresh tokens
+     cacheLocation="memory"   // ← Refresh токены хранятся в памяти (безопаснее localStorage)
+   />
+   ```
+
+   **Итог**: Пользователь может работать в системе 30 дней без повторного логина (если активен каждые 3 дня).
+
+6. **Получить Credentials**
+
+   В настройках приложения скопировать:
+   - **Domain**: `dataforge-dev.us.auth0.com`
+   - **Client ID**: `XyZ123AbC456DeF789` (отличается от M2M Client ID!)
+
+   **⚠️ Примечание:** SPA приложения **НЕ используют** Client Secret (публичный клиент).
+
+7. **Connections**
+
+   **Applications → Data Forge Admin UI → Connections**
+
+   Включить Database connection:
+   ```
+   ✅ Username-Password-Authentication
+   ```
+
+   Отключить социальные логины (если не нужны):
+   ```
+   ❌ google-oauth2
+   ❌ github
+   ```
+
+### Шаг 2.4: Проверка настроек CORS и Callbacks
+
+**⚠️ КРИТИЧНО:** Неправильная настройка приведет к ошибкам:
+- `Callback URL mismatch` - если redirect_uri не в списке Allowed Callback URLs
+- `CORS error` - если origin не в списке Allowed Origins (CORS)
+- `Invalid logout URL` - если returnTo не в списке Allowed Logout URLs
+
+**Тестирование локально:**
+
+1. Запустить frontend dev server:
+   ```bash
+   cd frontend
+   npm run dev
+   # React dev server запустится на http://localhost:3000
+   ```
+
+2. Создать `.env.local` в `frontend/`:
+   ```bash
+   VITE_AUTH0_DOMAIN=dataforge-dev.us.auth0.com
+   VITE_AUTH0_CLIENT_ID=XyZ123AbC456DeF789  # Client ID из Шага 2.3
+   VITE_AUTH0_AUDIENCE=https://api.dataforge.com
+   ```
+
+3. Открыть браузер: `http://localhost:3000`
+
+4. Нажать "Login" → должен произойти редирект на Auth0 Universal Login
+
+5. После логина → редирект обратно на `http://localhost:3000`
+
+6. Проверить DevTools Console на наличие CORS ошибок
+
+**Если возникают ошибки:**
+
+- **`Callback URL mismatch`**:
+  ```
+  Решение: Убедитесь, что http://localhost:3000 добавлен в Allowed Callback URLs
+  ```
+
+- **`Origin has been blocked by CORS policy`**:
+  ```
+  Решение: Добавьте http://localhost:3000 в Allowed Origins (CORS) и Allowed Web Origins
+  ```
+
+- **`The redirectUri must be in the list of allowed Callback URLs`**:
+  ```
+  Решение: Проверьте, что в Auth0Provider.tsx используется:
+  redirect_uri: window.location.origin
+
+  И что этот origin присутствует в Allowed Callback URLs
+  ```
 
 ---
 
@@ -755,8 +1027,13 @@ Block duration: 24 hours
 
 - [ ] Создан tenant (dev/staging/prod)
 - [ ] Создан API (Data Forge API)
-- [ ] Создан Machine-to-Machine приложение
+- [ ] Создан Machine-to-Machine приложение (для Backend Management API)
 - [ ] Authorized M2M на Management API
+- [ ] Создан Single Page Application (для Frontend UI)
+- [ ] Настроены Allowed Callback URLs для SPA
+- [ ] Настроены Allowed Logout URLs для SPA
+- [ ] Настроены Allowed Web Origins для SPA
+- [ ] Настроены Allowed Origins (CORS) для SPA
 - [ ] Созданы роли (ROLE_USER, ROLE_ADMIN)
 - [ ] Настроен Database Connection
 - [ ] Создан Auth0 Action "Add Roles to Access Token"
@@ -765,14 +1042,23 @@ Block duration: 24 hours
 
 ### ✅ Локальная разработка
 
-- [ ] Скопированы credentials (client_id, client_secret, domain)
+**Backend:**
+- [ ] Скопированы M2M credentials (client_id, client_secret, domain)
 - [ ] Обновлен application-dev.yml
-- [ ] Создан .env файл
+- [ ] Создан .env файл (AUTH0_MGMT_CLIENT_ID, AUTH0_MGMT_CLIENT_SECRET)
 - [ ] Запущено приложение с profile=dev
 - [ ] Создан тестовый админ
 - [ ] Получен access token
 - [ ] Проверены JWT claims (роли присутствуют)
 - [ ] Вызван /admin/accounts endpoint
+
+**Frontend:**
+- [ ] Скопированы SPA credentials (domain, client_id)
+- [ ] Создан frontend/.env.local (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID, VITE_AUTH0_AUDIENCE)
+- [ ] Запущен frontend dev server (npm run dev)
+- [ ] Проверен редирект на Auth0 Universal Login
+- [ ] Проверен успешный логин и callback на localhost:3000
+- [ ] Проверено отсутствие CORS ошибок в DevTools Console
 
 ### ✅ Тестирование
 
@@ -786,11 +1072,21 @@ Block duration: 24 hours
 
 ## 12. Полезные ссылки
 
+### Auth0 Документация
+
 - **Auth0 Java SDK Documentation:** https://github.com/auth0/auth0-java
 - **Management API Reference:** https://auth0.com/docs/api/management/v2
 - **Authentication API Reference:** https://auth0.com/docs/api/authentication
 - **Actions Documentation:** https://auth0.com/docs/customize/actions
+- **Universal Login vs Embedded Login:** https://auth0.com/docs/authenticate/login/auth0-universal-login
+- **Refresh Token Rotation:** https://auth0.com/docs/secure/tokens/refresh-tokens/refresh-token-rotation
+
+### Spring Security
+
 - **Spring Security OAuth2 Resource Server:** https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/jwt.html
+
+### Сообщество
+
 - **Auth0 Community:** https://community.auth0.com/
 
 ---

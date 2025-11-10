@@ -174,6 +174,31 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle CannotDeleteOwnAccountException (403 Forbidden).
+     * <p>
+     * This exception is thrown when an admin attempts to delete their own account,
+     * which is prevented as a security measure.
+     * </p>
+     */
+    @ExceptionHandler(AccountService.CannotDeleteOwnAccountException.class)
+    public ResponseEntity<ErrorResponseDto> handleCannotDeleteOwnAccount(
+            AccountService.CannotDeleteOwnAccountException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Cannot delete own account: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
      * Handle MissingAuth0IntegrationException (400 Bad Request).
      * <p>
      * This exception is thrown when an Auth0-specific operation (password reset, lock/unlock)

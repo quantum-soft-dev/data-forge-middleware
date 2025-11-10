@@ -6,7 +6,7 @@
  * Features:
  * - Confirmation dialog with warning about password reset
  * - Displays temporary password ONCE after successful reset (with copy button)
- * - Disabled if account has no Keycloak integration
+ * - Disabled if account has no Auth0 integration
  * - Success/error toast notifications
  * - Accessibility with ARIA labels and focus trap
  */
@@ -33,7 +33,7 @@ export function ResetPasswordDialog({
   const [copied, setCopied] = useState(false)
   const resetMutation = useResetPasswordMutation()
 
-  const hasKeycloak = !!account.keycloakUserId
+  const hasAuth0 = !!account.identityProviderUserId
 
   const handleConfirm = async () => {
     try {
@@ -54,13 +54,13 @@ export function ResetPasswordDialog({
   }
 
   const handleCopy = async () => {
-    if (resetResponse?.temporaryPassword) {
+    if (resetResponse?.passwordResetLink) {
       try {
-        await navigator.clipboard.writeText(resetResponse.temporaryPassword)
+        await navigator.clipboard.writeText(resetResponse.passwordResetLink)
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
       } catch (error) {
-        console.error('Failed to copy password:', error)
+        console.error('Failed to copy password reset link:', error)
       }
     }
   }
@@ -96,13 +96,13 @@ export function ResetPasswordDialog({
                 Are you sure you want to reset the password for <strong>{account.email}</strong>?
               </p>
               <p className="mt-2 text-sm text-gray-500 italic">
-                A temporary password will be generated. The user must change it on their next login.
+                A password reset link will be generated. Send this link to the user to set a new password.
               </p>
             </div>
 
             <div className="mb-4 rounded-md bg-orange-50 border border-orange-200 p-3">
               <p className="text-sm text-orange-800">
-                ⚠️ The user's current password will be invalidated immediately.
+                ⚠️ The user will receive a one-time password reset link valid for 24 hours.
               </p>
             </div>
 
@@ -116,9 +116,9 @@ export function ResetPasswordDialog({
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={resetMutation.isPending || !hasKeycloak}
+                disabled={resetMutation.isPending || !hasAuth0}
                 className="rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
-                title={!hasKeycloak ? 'Account does not have Keycloak integration' : 'Reset password'}
+                title={!hasAuth0 ? 'Account does not have Auth0 integration' : 'Reset password'}
               >
                 {resetMutation.isPending ? 'Resetting...' : 'Reset Password'}
               </button>
@@ -126,7 +126,7 @@ export function ResetPasswordDialog({
           </>
         ) : (
           <>
-            {/* Success Step with Temporary Password */}
+            {/* Success Step with Password Reset Link */}
             <div className="mb-4">
               <div className="flex items-center gap-2 mb-2">
                 <Check className="h-5 w-5 text-green-600" />
@@ -134,27 +134,27 @@ export function ResetPasswordDialog({
                   id="reset-password-dialog-title"
                   className="text-lg font-semibold text-gray-900"
                 >
-                  Password Reset Successfully
+                  Password Reset Link Generated
                 </h2>
               </div>
               <p className="mt-2 text-sm text-gray-600">
-                The password has been reset for <strong>{account.email}</strong>.
+                A password reset link has been generated for <strong>{account.email}</strong>.
               </p>
             </div>
 
-            {/* Temporary Password Display */}
+            {/* Password Reset Link Display */}
             <div className="mb-4 rounded-md bg-red-50 border border-red-300 p-4">
               <p className="text-sm font-semibold text-red-900 mb-2">
-                ⚠️ Save this password now. It will NOT be shown again.
+                ⚠️ Save this link now. Send it to the user to reset their password.
               </p>
               <div className="flex items-center gap-2 bg-white rounded border border-red-200 p-3">
-                <code className="flex-1 font-mono text-sm text-gray-900 select-all">
-                  {resetResponse.temporaryPassword}
+                <code className="flex-1 font-mono text-xs text-gray-900 select-all break-all">
+                  {resetResponse.passwordResetLink}
                 </code>
                 <button
                   onClick={handleCopy}
-                  className="rounded px-2 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
-                  aria-label="Copy password to clipboard"
+                  className="flex-shrink-0 rounded px-2 py-1 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
+                  aria-label="Copy password reset link to clipboard"
                 >
                   {copied ? (
                     <Check className="h-4 w-4 text-green-600" />
@@ -164,13 +164,13 @@ export function ResetPasswordDialog({
                 </button>
               </div>
               <p className="text-xs text-gray-600 mt-2">
-                Expires: {new Date(resetResponse.expiresAt).toLocaleDateString()} (30 days)
+                Expires: {new Date(resetResponse.expiresAt).toLocaleDateString()} at {new Date(resetResponse.expiresAt).toLocaleTimeString()} (24 hours)
               </p>
             </div>
 
             <div className="mb-4 rounded-md bg-blue-50 border border-blue-200 p-3">
               <p className="text-sm text-blue-800">
-                ℹ️ The user will be required to change this password on their next login.
+                ℹ️ This is a one-time use link. The user will be directed to Auth0 to set a new password.
               </p>
             </div>
 

@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Application service for querying accounts with Auth0 enrichment.
@@ -69,10 +70,11 @@ public class AccountQueryService {
      *
      * @param search   optional search term to filter by email or name (null or empty for all accounts)
      * @param pageable pagination parameters (page, size, sort)
+     * @param excludeAccountId optional account ID to exclude from results (e.g., current admin)
      * @return paginated list of accounts with Auth0 fields
      * @throws Auth0ServiceUnavailableException if Auth0 is unavailable and graceful degradation is disabled
      */
-    public PageResponseDto<AccountDetailDto> listAccounts(String search, Pageable pageable) {
+    public PageResponseDto<AccountDetailDto> listAccounts(String search, Pageable pageable, UUID excludeAccountId) {
         try {
             MDC.put("search", search != null ? "[filtered]" : "null"); // PII protection in logs
             MDC.put("page", String.valueOf(pageable.getPageNumber()));
@@ -90,8 +92,9 @@ public class AccountQueryService {
                 accountsPage.getNumberOfElements(),
                 accountsPage.getTotalElements());
 
-            // Enrich each account with Auth0 user details
+            // Enrich each account with Auth0 user details and exclude specified account ID
             List<AccountDetailDto> enrichedAccounts = accountsPage.getContent().stream()
+                .filter(account -> excludeAccountId == null || !account.getId().equals(excludeAccountId))
                 .map(this::enrichWithAuth0Details)
                 .toList();
 
@@ -114,6 +117,38 @@ public class AccountQueryService {
             MDC.remove("search");
             MDC.remove("page");
             MDC.remove("size");
+        }
+    }
+
+    /**
+     * Get single account by ID with Auth0 integration.
+     * <p>
+     * Returns account details with Auth0 fields (isBlocked, lastLogin) populated.
+     * </p>
+     *
+     * @param accountId account identifier (UUID)
+     * @return account details with Auth0 fields
+     * @throws AccountService.AccountNotFoundException if account not found
+     */
+    public AccountDetailDto getAccountById(UUID accountId) {
+        try {
+            MDC.put("accountId", accountId.toString());
+
+            logger.info("Fetching account with Auth0 integration: accountId={}", accountId);
+
+            // Query PostgreSQL for account
+            Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountService.AccountNotFoundException("Account not found: " + accountId));
+
+            // Enrich with Auth0 user details
+            AccountDetailDto result = enrichWithAuth0Details(account);
+
+            logger.info("Successfully fetched account: accountId={}, isBlocked={}", accountId, result.isBlocked());
+
+            return result;
+
+        } finally {
+            MDC.remove("accountId");
         }
     }
 

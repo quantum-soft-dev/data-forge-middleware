@@ -1,11 +1,11 @@
 /**
  * UnlockAccountButton Component
  *
- * Per T045: Button to unlock (enable) a user account in Keycloak.
+ * Per T045: Button to unlock (enable) a user account in Auth0.
  *
  * Features:
  * - Confirmation dialog before unlocking
- * - Disabled if account already unlocked or no Keycloak integration
+ * - Disabled if account already unlocked or no Auth0 integration
  * - Success/error toast notifications
  * - Accessibility with ARIA labels
  */
@@ -25,9 +25,9 @@ export function UnlockAccountButton({ account, onSuccess, className = '' }: Unlo
   const [showConfirmation, setShowConfirmation] = useState(false)
   const unlockMutation = useUnlockAccountMutation()
 
-  const hasKeycloak = !!account.keycloakUserId
-  const isAlreadyUnlocked = account.keycloakEnabled
-  const isDisabled = !hasKeycloak || isAlreadyUnlocked || unlockMutation.isPending
+  const hasAuth0 = !!account.identityProviderUserId
+  const isAlreadyUnlocked = !account.isBlocked
+  const isDisabled = !hasAuth0 || isAlreadyUnlocked || unlockMutation.isPending
 
   const handleConfirm = async () => {
     try {
@@ -58,8 +58,8 @@ export function UnlockAccountButton({ account, onSuccess, className = '' }: Unlo
         } ${className}`}
         aria-label={`Unlock account for ${account.email}`}
         title={
-          !hasKeycloak
-            ? 'Account does not have Keycloak integration'
+          !hasAuth0
+            ? 'Account does not have Auth0 integration'
             : isAlreadyUnlocked
             ? 'Account is already unlocked'
             : 'Unlock this account'
