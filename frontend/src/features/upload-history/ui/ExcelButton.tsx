@@ -56,14 +56,26 @@ export function ExcelButton({
 }: ExcelButtonProps) {
   const { mutate: exportExcel, isPending } = useExcelExport();
 
+  const MAX_FILES_FOR_EXCEL = 20;
+
   // Calculate button state
   const isDisabled =
     selectedFileIds.length === 0 ||
     batchStatus !== 'COMPLETED' ||
     isPending;
 
+  const isTooManyFiles = selectedFileIds.length > MAX_FILES_FOR_EXCEL;
+
   // Handle export click
   const handleExport = () => {
+    // Validate file count before export
+    if (isTooManyFiles) {
+      toast.error('Too many files selected', {
+        description: `Cannot export more than ${MAX_FILES_FOR_EXCEL} files at once. Please select fewer files.`,
+      });
+      return;
+    }
+
     exportExcel(
       {
         batchId,
@@ -92,23 +104,30 @@ export function ExcelButton({
   };
 
   return (
-    <Button
-      onClick={handleExport}
-      disabled={isDisabled}
-      variant="outline"
-      className="gap-2"
-    >
-      {isPending ? (
-        <>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Generating Excel...
-        </>
-      ) : (
-        <>
-          <FileSpreadsheet className="h-4 w-4" />
-          {children || `Create Excel ${selectedFileIds.length > 0 ? `(${selectedFileIds.length})` : ''}`}
-        </>
+    <div className="flex flex-col gap-1">
+      <Button
+        onClick={handleExport}
+        disabled={isDisabled}
+        variant={isTooManyFiles ? "destructive" : "outline"}
+        className="gap-2"
+      >
+        {isPending ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Generating Excel...
+          </>
+        ) : (
+          <>
+            <FileSpreadsheet className="h-4 w-4" />
+            {children || `Create Excel ${selectedFileIds.length > 0 ? `(${selectedFileIds.length})` : ''}`}
+          </>
+        )}
+      </Button>
+      {isTooManyFiles && (
+        <p className="text-xs text-destructive">
+          Max {MAX_FILES_FOR_EXCEL} files allowed. Selected: {selectedFileIds.length}
+        </p>
       )}
-    </Button>
+    </div>
   );
 }
