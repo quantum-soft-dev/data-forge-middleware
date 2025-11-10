@@ -36,8 +36,18 @@ const rootRoute = createRootRoute({
 // Route definitions - Auth0 automatically redirects to login, no index route needed
 const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/',
+  path: '/dashboard',
   component: () => <AuthenticationGuard component={DashboardPage} />,
+})
+
+// Index route redirects to dashboard
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/',
+  component: () => {
+    window.location.href = '/dashboard'
+    return null
+  },
 })
 
 // Admin routes - protected with AuthenticationGuard and RoleGuard for ROLE_ADMIN
@@ -104,6 +114,7 @@ const comparisonDetailRoute = createRoute({
 
 // Create route tree
 const routeTree = rootRoute.addChildren([
+  indexRoute,
   dashboardRoute,
   usersListRoute,
   createAccountRoute,
