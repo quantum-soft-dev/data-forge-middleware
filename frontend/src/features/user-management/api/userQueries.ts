@@ -27,8 +27,8 @@ export const accountKeys = {
 }
 
 /**
- * Fetch accounts with Keycloak integration data (pagination and filtering).
- * Returns accounts with lastLogin and Keycloak status information.
+ * Fetch accounts with Auth0 integration data (pagination and filtering).
+ * Returns accounts with lastLogin and Auth0 status information.
  */
 async function fetchAccounts(filters: AccountFilters): Promise<{
   content: AccountWithKeycloakStatus[]
