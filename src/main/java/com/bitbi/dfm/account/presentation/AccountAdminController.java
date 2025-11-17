@@ -2,6 +2,7 @@ package com.bitbi.dfm.account.presentation;
 
 import com.bitbi.dfm.account.application.AccountQueryService;
 import com.bitbi.dfm.account.application.AccountService;
+import com.bitbi.dfm.account.application.AccountService.AccountNotFoundException;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.presentation.dto.AccountDetailDto;
 import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
@@ -276,8 +277,14 @@ public class AccountAdminController {
             logger.info("Password reset link generated: accountId={}, email={}", id, response.email());
 
             return ResponseEntity.ok(response);
+        } catch (AccountNotFoundException e) {
+            // Don't log AccountNotFoundException to admin_action_logs because:
+            // 1. target_account_id foreign key constraint requires account to exist
+            // 2. Failed lookups for non-existent accounts are not significant security events
+            logger.warn("Reset password failed: Account not found accountId={}", id);
+            throw e;
         } catch (Exception e) {
-            // Log failed password reset action
+            // Log failed password reset action (only for existing accounts)
             AdminActionLog log = AdminActionLog.failure(
                     AdminActionType.RESET_PASSWORD,
                     id,

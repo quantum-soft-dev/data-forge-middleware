@@ -4,12 +4,22 @@
 -- - MOCK_SITE_ID = b2c3d4e5-f6a7-8901-bcde-f12345678901
 -- - MOCK_BATCH_ID = c3d4e5f6-a7b8-9012-cdef-123456789012
 
--- Clean up (idempotent)
+-- Create missing partitions for test data (if not exists)
+CREATE TABLE IF NOT EXISTS error_logs_2025_09 PARTITION OF error_logs
+    FOR VALUES FROM ('2025-09-01') TO ('2025-10-01');
+
+CREATE TABLE IF NOT EXISTS error_logs_2025_10 PARTITION OF error_logs
+    FOR VALUES FROM ('2025-10-01') TO ('2025-11-01');
+
+-- Clean up (idempotent) - Order matters due to foreign key constraints
+-- Delete child tables first, then parent tables
+DELETE FROM comparison_results WHERE comparison_id IN (SELECT id FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com'));
+DELETE FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
+DELETE FROM admin_action_logs WHERE target_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com') OR admin_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM sites WHERE domain LIKE '%.example.com';
-DELETE FROM sites WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 
 -- Test accounts
