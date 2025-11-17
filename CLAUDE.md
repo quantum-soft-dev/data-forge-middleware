@@ -13,7 +13,7 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
 - **Spring Boot 3.5.6** - Core framework
-- **Spring Security 6** - JWT + OAuth2 Resource Server (Keycloak)
+- **Spring Security 6** - JWT + OAuth2 Resource Server (Auth0)
 - **Spring Data JPA** - Repository pattern with custom queries
 - **PostgreSQL 16** - Primary database with table partitioning
 - **Flyway 11** - Database migrations
@@ -24,7 +24,7 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - **SpringDoc OpenAPI 3** - API documentation (Swagger UI)
 - **JUnit 5 + Mockito** - Unit testing
 - **Testcontainers** - Integration testing (PostgreSQL + LocalStack S3)
-- **Keycloak 23.0.1** - Admin Client SDK for user management
+- **Auth0 2.26.0** - Management API client for user management
 
 ### Frontend Stack (Added 2025-10-30 - Spec 005/006)
 - **React 19.2** with TypeScript 5.6
@@ -39,7 +39,7 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - **Sonner** - Toast notifications
 - **Lucide React** - Icon library
 - **Vitest + React Testing Library** - Frontend testing
-- **OIDC Client TS** - Keycloak authentication client
+- **@auth0/auth0-react 2.8.0** - Auth0 authentication client
 
 ## Project Structure
 
@@ -78,9 +78,9 @@ src/test/java/
 
 ### Authentication & Authorization
 - **Client API**: JWT Bearer tokens (custom implementation with HMAC-SHA256)
-- **Admin API**: OAuth2 Resource Server with Keycloak (ROLE_ADMIN required)
+- **Admin API**: OAuth2 Resource Server with Auth0 (ROLE_ADMIN required)
 - **Basic Auth**: Used only for initial token generation endpoint
-- **Token Claims**: siteId, accountId, domain (embedded in JWT)
+- **Token Claims**: siteId, accountId, domain (embedded in JWT for client API); roles, accountId, email (Auth0 custom claims for admin API)
 
 ### Database Design
 - **Partitioning**: error_logs table partitioned by month (range partitioning on occurred_at)
@@ -241,76 +241,105 @@ Admin API controllers refactored to use typed request DTOs instead of Map<String
 - ✅ Contract tests added for DTO validation (AdminContractTest: 7 account tests, 9 site tests)
 - ⚠️ Unit tests need updating (28 compilation errors - tests still use Map instead of DTOs)
 
-### Keycloak-First User Management Architecture (Added 2025-10-30 - Spec 006)
+### Auth0 User Management Architecture (Added 2025-11-07 - Spec 011)
 
-**Key Architectural Decision**: Extend existing `accounts` table instead of creating separate users table.
+**Migration**: Migrated from Keycloak to Auth0 for improved scalability, managed infrastructure, and better developer experience.
 
-#### Account-Keycloak Integration Pattern
-- **Single Column Extension**: Added `keycloak_user_id VARCHAR(36) UNIQUE` to accounts table (Migration V006)
-- **Backwards Compatible**: Nullable column allows existing accounts to work without Keycloak
+**Key Architectural Decision**: Repurpose existing `keycloak_user_id` column as `identity_provider_user_id` for Auth0 integration.
+
+#### Account-Auth0 Integration Pattern
+- **Column Rename**: Renamed `keycloak_user_id` → `identity_provider_user_id VARCHAR(64)` (Migration V017)
+- **Expanded Size**: Increased from 36 chars (Keycloak UUID) to 64 chars (Auth0 user ID format: `auth0|{id}`)
+- **Backwards Compatible**: Nullable column allows existing accounts to work without identity provider
 - **DDD Compliance**: Account remains the aggregate root for user operations
-- **No Data Duplication**: Keycloak stores authentication data, PostgreSQL stores business data (phone, company, isActive)
+- **No Data Duplication**: Auth0 stores authentication data, PostgreSQL stores business data (phone, company, isActive)
 
 #### Bidirectional Mapping
 ```java
-// PostgreSQL → Keycloak
-@Column(name = "keycloak_user_id", length = 36, unique = true)
-private String keycloakUserId;  // Immutable Keycloak UUID
+// PostgreSQL → Auth0
+@Column(name = "identity_provider_user_id", length = 64, unique = true)
+private String identityProviderUserId;  // Auth0 user ID (format: auth0|xxx)
 
-// Keycloak → PostgreSQL
-user.setAttributes(Map.of("accountId", List.of(account.getId().toString())));
+// Auth0 → PostgreSQL
+user.setAppMetadata(Map.of("accountId", account.getId().toString()));
 ```
 
-#### Keycloak-First Creation Pattern (Two-Phase Commit)
-1. **Phase 1**: Create user in Keycloak (authentication layer) with temporary password
-2. **Phase 2**: Create Account in PostgreSQL (business layer) with keycloakUserId reference
-3. **Bidirectional Link**: Update Keycloak user attributes with PostgreSQL accountId
-4. **Compensating Transaction**: If PostgreSQL fails, delete Keycloak user (rollback)
+#### Auth0-First Creation Pattern (Two-Phase Commit)
+1. **Phase 1**: Create user in Auth0 (authentication layer) via Management API
+2. **Phase 2**: Create Account in PostgreSQL (business layer) with identityProviderUserId reference
+3. **Bidirectional Link**: Update Auth0 user app_metadata with PostgreSQL accountId
+4. **Compensating Transaction**: If PostgreSQL fails, delete Auth0 user (rollback)
 5. **Audit Trail**: Log all operations to admin_action_logs table
 
-**Implementation**: `KeycloakAccountSyncService` handles atomic operations with try-catch rollback
-**Critical Error Handling**: Orphaned Keycloak users logged as CRITICAL for manual cleanup
+**Implementation**: `AccountSyncService` handles atomic operations with try-catch rollback
+**Critical Error Handling**: Orphaned Auth0 users logged as CRITICAL for manual cleanup
 
 #### Admin Action Audit Logs (Migration V007)
 - **Purpose**: Track all administrative actions for compliance and security audits
 - **Captured Data**: action type, target account ID, admin account ID, success/failure, IP address, user agent, timestamp
 - **Action Types**: CREATE_ACCOUNT, LOCK_ACCOUNT, UNLOCK_ACCOUNT, RESET_PASSWORD, DELETE_ACCOUNT
-- **Nullable admin_account_id**: Allows audit logs before Keycloak user mapping is implemented (V013 migration)
+- **Nullable admin_account_id**: ALWAYS NULL for admin actions - admins are Auth0 users with ROLE_ADMIN but have no corresponding Account record in PostgreSQL
+- **Admin Identity**: Admins are identified by Auth0 JWT (email, sub claims) but do not have accountId claim
+- **Rationale**: Admins are pure Auth0 RBAC roles for administrative operations, regular users are Account entities with business data
 
-#### Keycloak Admin Client Integration
-- **Library**: `org.keycloak:keycloak-admin-client:23.0.1`
-- **Authentication**: Service account with `CLIENT_CREDENTIALS` grant type
-- **Configuration**: Server URL, realm, client ID, client secret via application.yml
-- **Wrapper Service**: `KeycloakAdminClient` provides simplified API (createUser, disableUser, enableUser, resetPassword, getUser, getLastLogin)
-- **Error Handling**: Maps Keycloak exceptions to domain exceptions (AccountNotFoundException, KeycloakSyncException)
+#### Auth0 Management API Integration
+- **Library**: `com.auth0:auth0:2.26.0`, `com.auth0:java-jwt:4.4.0`
+- **Authentication**: Management API with `CLIENT_CREDENTIALS` grant type (24-hour token caching)
+- **Configuration**: Domain, client ID, client secret, audience, database connection via application.yml
+- **Wrapper Service**: `Auth0ManagementApiClient` provides simplified API (createUser, blockUser, unblockUser, generatePasswordResetLink, getUser)
+- **Error Handling**: Maps Auth0 exceptions to domain exceptions (AccountNotFoundException, Auth0SyncException, Auth0RateLimitException)
 
 #### User Management Operations
-- **Create Account**: POST /api/admin/accounts/with-keycloak (returns temporary password + account details)
-- **Lock Account**: POST /api/admin/accounts/{id}/lock (disables Keycloak user, preserves data)
-- **Unlock Account**: POST /api/admin/accounts/{id}/unlock (re-enables Keycloak user)
-- **Reset Password**: POST /api/admin/accounts/{id}/reset-password (generates new temporary password, expires in 30 days)
-- **List Accounts**: GET /api/admin/accounts/with-keycloak?search=email (DB-level filtering with search validation)
+- **Create Account**: POST /api/v1/admin/accounts (returns password reset link instead of temporary password)
+- **Lock Account**: POST /api/v1/admin/accounts/{id}/lock (blocks Auth0 user, preserves data)
+- **Unlock Account**: POST /api/v1/admin/accounts/{id}/unlock (unblocks Auth0 user)
+- **Reset Password**: POST /api/v1/admin/accounts/{id}/reset-password (generates Auth0 password change ticket, 24-hour expiry)
+- **List Accounts**: GET /api/v1/admin/accounts?search=email (DB-level filtering with search validation)
 
-#### Search Functionality (PR #11 Optimizations - 2025-10-30)
-- **Database-Level Query**: `findAccountsWithKeycloak(@Param("search") String search, Pageable pageable)` with JPQL WHERE and LIKE
-- **Performance**: Moved from in-memory filtering to SQL query, fixes N+1 problem
+#### User Types and Architecture
+**Two distinct user types:**
+1. **Admin Users** (ROLE_ADMIN):
+   - Pure Auth0 users with RBAC role assignment
+   - NO corresponding Account record in PostgreSQL
+   - NO accountId custom claim in JWT
+   - Identified by email and sub claims in JWT
+   - Used for administrative operations only (user management, system configuration)
+
+2. **Regular Users** (ROLE_USER):
+   - Auth0 users with Account record in PostgreSQL (bidirectional mapping)
+   - HAVE accountId custom claim in JWT (from Auth0 app_metadata)
+   - Can manage their own sites, upload files, view history
+   - Business data stored in PostgreSQL (phone, company, sites, batches)
+
+**Architectural Decision**: Separation of administrative and business users prevents complexity of self-referential Account relationships and clarifies audit trail responsibilities.
+
+#### Auth0 Custom Claims (Actions)
+- **Roles Claim**: `https://api.dataforge.com/roles` - extracted from Auth0 RBAC roles (ROLE_ADMIN or ROLE_USER)
+- **AccountId Claim**: `https://api.dataforge.com/accountId` - from Auth0 user app_metadata (ONLY present for ROLE_USER, absent for ROLE_ADMIN)
+- **Implementation**: Login/Post-Login Action injects custom claims into access token and ID token
+- **Authority Mapping**: Spring Security `JwtAuthenticationConverter` extracts roles from custom claim with `ROLE_` prefix
+- **Graceful Degradation**: Backend handles missing accountId claim gracefully (logs warning, uses NULL for audit trail)
+
+#### Search Functionality
+- **Database-Level Query**: `findAccountsBySearch(@Param("search") String search, Pageable pageable)` with JPQL WHERE and LIKE
+- **Performance**: SQL query with JOIN FETCH prevents N+1 queries
 - **Security**: Input validation with `@Size(max=100)` and `@Pattern` to prevent ReDoS attacks
 - **Case-Insensitive**: Uses `LOWER()` in SQL for email and name matching
-- **Accurate Pagination**: `totalElements` now reflects actual filtered count from database
+- **Accurate Pagination**: `totalElements` reflects actual filtered count from database
 - **PII Protection**: Logs `"[filtered]"` instead of raw search term
-- **ConstraintViolationException Handler**: Added to GlobalExceptionHandler for @RequestParam validation
 
 #### Validation & Security
 - **Input Validation**: @Validated on controller + @Size/@Pattern annotations on search parameters
-- **Role-Based Access**: All admin endpoints require `ROLE_ADMIN` from Keycloak JWT
+- **Role-Based Access**: All admin endpoints require `ROLE_ADMIN` from Auth0 JWT
 - **Prevent Self-Lock**: Admins cannot lock their own accounts (CannotLockOwnAccountException)
-- **Duplicate Prevention**: Unique constraint on keycloak_user_id prevents duplicate integrations
-- **Test Coverage**: 7 contract tests for search (TC22-TC28) covering validation, filtering, edge cases
+- **Duplicate Prevention**: Unique constraint on identity_provider_user_id prevents duplicate integrations
+- **Rate Limiting**: Auth0 Management API calls respect rate limits (15 req/s sustained, 50 req/s burst)
+- **Test Coverage**: Contract tests (Auth0AdminContractTest) + Integration tests with mocked Auth0 Management API
 
 #### Edge Cases Handled
-- **Keycloak Unavailable**: Fail fast with 503 Service Unavailable
-- **Orphaned Keycloak Users**: CRITICAL log + monitoring alert for manual cleanup
-- **Legacy Accounts**: Accounts without keycloak_user_id continue working (admin API excludes them from listing)
+- **Auth0 Unavailable**: Fail fast with 503 Service Unavailable
+- **Orphaned Auth0 Users**: CRITICAL log + monitoring alert for manual cleanup
+- **Legacy Accounts**: Accounts without identity_provider_user_id continue working (admin API excludes them from listing)
 - **Concurrent Operations**: Spring @Transactional ensures database consistency
 - **Session Continuity**: Locking account does NOT terminate existing sessions (graceful degradation)
 

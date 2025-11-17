@@ -6,7 +6,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '@/shared/api/client'
-import { ACCOUNTS_WITH_KEYCLOAK, ACCOUNTS_WITH_KEYCLOAK_ID, ACCOUNTS_AUDIT_LOGS } from '@/shared/api/apiRoutes'
+import { ACCOUNTS, ACCOUNTS_ID, ACCOUNTS_AUDIT_LOGS } from '@/shared/api/apiRoutes'
 import type {
   AccountWithKeycloakStatus,
   AdminActionLogListResponse,
@@ -27,8 +27,8 @@ export const accountKeys = {
 }
 
 /**
- * Fetch accounts with Keycloak integration data (pagination and filtering).
- * Returns accounts with lastLogin and Keycloak status information.
+ * Fetch accounts with Auth0 integration data (pagination and filtering).
+ * Returns accounts with lastLogin and Auth0 status information.
  */
 async function fetchAccounts(filters: AccountFilters): Promise<{
   content: AccountWithKeycloakStatus[]
@@ -58,7 +58,7 @@ async function fetchAccounts(filters: AccountFilters): Promise<{
     size: number
     totalElements: number
     totalPages: number
-  }>(`${ACCOUNTS_WITH_KEYCLOAK}?${params.toString()}`)
+  }>(`${ACCOUNTS}?${params.toString()}`)
 
   return response.data
 }
@@ -83,12 +83,12 @@ export function useAccountsQuery(
 }
 
 /**
- * Fetch single account by ID with Keycloak integration data.
- * Uses the /with-keycloak endpoint to get full Keycloak status.
+ * Fetch single account by ID with Auth0 integration data.
+ * Uses the standard accounts endpoint to get full Auth0 status.
  */
 async function fetchAccount(accountId: string): Promise<AccountWithKeycloakStatus> {
   const response = await apiClient.get<AccountWithKeycloakStatus>(
-    ACCOUNTS_WITH_KEYCLOAK_ID(accountId)
+    ACCOUNTS_ID(accountId)
   )
 
   return response.data

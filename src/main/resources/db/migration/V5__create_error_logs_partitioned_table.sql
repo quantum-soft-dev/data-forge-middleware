@@ -28,11 +28,11 @@ CREATE INDEX idx_error_logs_occurred_at ON error_logs(occurred_at);
 CREATE INDEX idx_error_logs_metadata_gin ON error_logs USING GIN (metadata);
 
 -- Initial partitions (current and next month)
-CREATE TABLE error_logs_2025_10 PARTITION OF error_logs
-    FOR VALUES FROM ('2025-10-01') TO ('2025-11-01');
-
 CREATE TABLE error_logs_2025_11 PARTITION OF error_logs
     FOR VALUES FROM ('2025-11-01') TO ('2025-12-01');
+
+CREATE TABLE error_logs_2025_12 PARTITION OF error_logs
+    FOR VALUES FROM ('2025-12-01') TO ('2026-01-01');
 
 -- Comments for documentation
 COMMENT ON TABLE error_logs IS 'Time-partitioned error log records with flexible metadata';

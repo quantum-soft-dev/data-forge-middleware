@@ -14,13 +14,12 @@ s3:
   access-key: test  # LocalStack dummy credentials
   secret-key: test  # LocalStack dummy credentials
 
-# Keycloak configuration for tests (mock)
-keycloak:
-  enabled: false  # Disable Keycloak for tests
-  auth-server-url: http://localhost:8080
-  realm: test-realm
-  admin:
-    client-id: test-client
-    client-secret: test-secret
-    username: test-admin
-    password: test-password
+# Auth0 configuration for tests (mock)
+auth0:
+  domain: test-domain.auth0.com
+  management-client-id: test-client-id
+  management-client-secret: test-secret
+  api-audience: https://api.test.com
+  database-connection: Username-Password-Authentication
+  password-reset-ttl-seconds: 86400
+  roles-namespace: https://api.test.com/roles

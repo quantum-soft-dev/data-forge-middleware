@@ -1,7 +1,7 @@
 package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
-import com.bitbi.dfm.account.application.KeycloakAccountSyncService;
+// import com.bitbi.dfm.account.application.KeycloakAccountSyncService; // DEPRECATED: Removed for Auth0 migration
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -143,6 +143,87 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle CannotLockOwnAccountException (403 Forbidden).
+     * <p>
+     * This exception is thrown when an admin attempts to lock their own account,
+     * which is prevented as a security measure.
+     * </p>
+     *
+     * User Story: US2 - Admin Locks/Unlocks User Accounts
+     * Functional Requirement: FR-007 - Prevent self-lock
+     */
+    @ExceptionHandler(CannotLockOwnAccountException.class)
+    public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
+            CannotLockOwnAccountException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Cannot lock own account: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle CannotDeleteOwnAccountException (403 Forbidden).
+     * <p>
+     * This exception is thrown when an admin attempts to delete their own account,
+     * which is prevented as a security measure.
+     * </p>
+     */
+    @ExceptionHandler(AccountService.CannotDeleteOwnAccountException.class)
+    public ResponseEntity<ErrorResponseDto> handleCannotDeleteOwnAccount(
+            AccountService.CannotDeleteOwnAccountException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Cannot delete own account: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle MissingAuth0IntegrationException (400 Bad Request).
+     * <p>
+     * This exception is thrown when an Auth0-specific operation (password reset, lock/unlock)
+     * is attempted on an account that has no Auth0 user ID (identity_provider_user_id is NULL).
+     * </p>
+     *
+     * User Story: US3 - Admin Resets User Password
+     * Functional Requirement: FR-011 - Validate Auth0 integration before password reset
+     */
+    @ExceptionHandler(MissingAuth0IntegrationException.class)
+    public ResponseEntity<ErrorResponseDto> handleMissingAuth0Integration(
+            MissingAuth0IntegrationException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Missing Auth0 integration: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 
     /**
@@ -391,23 +472,23 @@ public class GlobalExceptionHandler {
      * Prevents administrators from accidentally locking themselves out.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.CannotLockOwnAccountException.class)
-    public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
-            KeycloakAccountSyncService.CannotLockOwnAccountException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Admin attempted to lock own account: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.FORBIDDEN.value(),
-                "Forbidden",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.CannotLockOwnAccountException.class)
+//     public ResponseEntity<ErrorResponseDto> handleCannotLockOwnAccount(
+//             KeycloakAccountSyncService.CannotLockOwnAccountException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Admin attempted to lock own account: {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.FORBIDDEN.value(),
+//                 "Forbidden",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+//     }
 
     /**
      * Handle AccountNotFoundException from KeycloakAccountSyncService (404 Not Found).
@@ -415,23 +496,23 @@ public class GlobalExceptionHandler {
      * Thrown when account is not found during Keycloak sync operations.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.AccountNotFoundException.class)
-    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountNotFound(
-            KeycloakAccountSyncService.AccountNotFoundException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Account not found (Keycloak sync): {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.NOT_FOUND.value(),
-                "Not Found",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.AccountNotFoundException.class)
+//     public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountNotFound(
+//             KeycloakAccountSyncService.AccountNotFoundException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Account not found (Keycloak sync): {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.NOT_FOUND.value(),
+//                 "Not Found",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+//     }
 
     /**
      * Handle AccountNotFoundException from domain package (404 Not Found).
@@ -487,43 +568,43 @@ public class GlobalExceptionHandler {
      * Thrown when attempting to lock an account that is already locked in Keycloak.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyLockedException.class)
-    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountAlreadyLocked(
-            KeycloakAccountSyncService.AccountAlreadyLockedException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Account already locked (Keycloak sync): {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Bad Request",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyLockedException.class)
+//     public ResponseEntity<ErrorResponseDto> handleKeycloakSyncAccountAlreadyLocked(
+//             KeycloakAccountSyncService.AccountAlreadyLockedException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Account already locked (Keycloak sync): {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.BAD_REQUEST.value(),
+//                 "Bad Request",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+//     }
 
     /**
-     * Handle KeycloakSyncException (503 Service Unavailable).
+     * Handle Auth0SyncException (503 Service Unavailable).
      * <p>
-     * Thrown when synchronization with Keycloak fails.
+     * Thrown when synchronization with Auth0 fails.
      * Returns 503 to indicate temporary service unavailability.
      * </p>
      */
-    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.KeycloakSyncException.class)
-    public ResponseEntity<ErrorResponseDto> handleKeycloakSyncException(
-            com.bitbi.dfm.account.domain.exception.KeycloakSyncException ex,
+    @ExceptionHandler(com.bitbi.dfm.account.domain.exception.Auth0SyncException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0SyncException(
+            com.bitbi.dfm.account.domain.exception.Auth0SyncException ex,
             HttpServletRequest request) {
 
-        logger.error("Keycloak sync failed: {}", ex.getMessage(), ex);
+        logger.error("Auth0 sync failed: {}", ex.getMessage(), ex);
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),
                 HttpStatus.SERVICE_UNAVAILABLE.value(),
                 "Service Unavailable",
-                "Failed to synchronize with Keycloak: " + ex.getMessage(),
+                "Failed to synchronize with Auth0: " + ex.getMessage(),
                 request.getRequestURI()
         );
 
@@ -536,23 +617,23 @@ public class GlobalExceptionHandler {
      * Thrown when attempting to unlock an account that is already unlocked.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyUnlockedException.class)
-    public ResponseEntity<ErrorResponseDto> handleAccountAlreadyUnlocked(
-            KeycloakAccountSyncService.AccountAlreadyUnlockedException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Account already unlocked: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Bad Request",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.AccountAlreadyUnlockedException.class)
+//     public ResponseEntity<ErrorResponseDto> handleAccountAlreadyUnlocked(
+//             KeycloakAccountSyncService.AccountAlreadyUnlockedException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("Account already unlocked: {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.BAD_REQUEST.value(),
+//                 "Bad Request",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+//     }
 
     /**
      * Handle NoKeycloakIntegrationException (400 Bad Request).
@@ -561,29 +642,29 @@ public class GlobalExceptionHandler {
      * that doesn't have Keycloak integration.
      * </p>
      */
-    @ExceptionHandler(KeycloakAccountSyncService.NoKeycloakIntegrationException.class)
-    public ResponseEntity<ErrorResponseDto> handleNoKeycloakIntegration(
-            KeycloakAccountSyncService.NoKeycloakIntegrationException ex,
-            HttpServletRequest request) {
-
-        logger.warn("No Keycloak integration: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Bad Request",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
+//     @ExceptionHandler(KeycloakAccountSyncService.NoKeycloakIntegrationException.class)
+//     public ResponseEntity<ErrorResponseDto> handleNoKeycloakIntegration(
+//             KeycloakAccountSyncService.NoKeycloakIntegrationException ex,
+//             HttpServletRequest request) {
+// 
+//         logger.warn("No Keycloak integration: {}", ex.getMessage());
+// 
+//         ErrorResponseDto error = new ErrorResponseDto(
+//                 Instant.now(),
+//                 HttpStatus.BAD_REQUEST.value(),
+//                 "Bad Request",
+//                 ex.getMessage(),
+//                 request.getRequestURI()
+//         );
+// 
+//         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+//     }
 
     /**
-     * Handle IllegalStateException (500 Internal Server Error).
+     * Handle IllegalStateException (400 Bad Request OR 500 Internal Server Error).
      * <p>
-     * Returns generic error message to client to prevent information disclosure.
-     * Full technical details are logged server-side for debugging.
+     * For Auth0 integration issues (account validation errors), return 400 Bad Request.
+     * For other illegal states, return 500 Internal Server Error with generic message.
      * </p>
      */
     @ExceptionHandler(IllegalStateException.class)
@@ -591,7 +672,24 @@ public class GlobalExceptionHandler {
             IllegalStateException ex,
             HttpServletRequest request) {
 
-        logger.error("Illegal state: {}", ex.getMessage(), ex);
+        // Check if it's an Auth0 integration validation error
+        String message = ex.getMessage();
+        if (message != null && message.contains("Auth0 integration")) {
+            logger.warn("Auth0 integration validation failed: {}", message);
+
+            ErrorResponseDto error = new ErrorResponseDto(
+                    Instant.now(),
+                    HttpStatus.BAD_REQUEST.value(),
+                    "Bad Request",
+                    message,
+                    request.getRequestURI()
+            );
+
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        }
+
+        // For other illegal states, return 500 with generic message
+        logger.error("Illegal state: {}", message, ex);
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),
@@ -723,6 +821,109 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle Auth0ServiceUnavailableException (503 Service Unavailable).
+     * <p>
+     * Thrown when Auth0 Management API is unavailable or returns 5xx errors.
+     * This indicates temporary Auth0 service issues or network problems.
+     * </p>
+     * User Story: Auth0 Migration (Phase 2 - Foundational)
+     */
+    @ExceptionHandler(Auth0ServiceUnavailableException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0ServiceUnavailable(
+            Auth0ServiceUnavailableException ex,
+            HttpServletRequest request) {
+
+        logger.error("Auth0 service unavailable: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Auth0 authentication service is temporarily unavailable. Please try again later.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
+     * Handle Auth0RateLimitException (503 Service Unavailable).
+     * <p>
+     * Thrown when Auth0 Management API rate limit is exceeded (HTTP 429).
+     * This indicates the application is making too many requests to Auth0.
+     * Returns Retry-After header if available from Auth0.
+     * </p>
+     * User Story: Auth0 Migration (Phase 2 - Foundational)
+     */
+    @ExceptionHandler(Auth0RateLimitException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0RateLimit(
+            Auth0RateLimitException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Auth0 rate limit exceeded: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Too many authentication requests. Please try again in a few moments.",
+                request.getRequestURI()
+        );
+
+        // Add Retry-After header if available
+        var response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+        if (ex.getRetryAfterSeconds() != null) {
+            response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", ex.getRetryAfterSeconds().toString())
+                    .body(error);
+        }
+
+        return response;
+    }
+
+    /**
+     * Handle Auth0 APIException with duplicate email (409 Conflict).
+     * <p>
+     * Thrown when attempting to create a user with an email that already exists in Auth0.
+     * This is a specific case of Auth0 APIException that should return 409 instead of 500.
+     * </p>
+     * User Story: US1 - Admin Creates User Account via Auth0
+     */
+    @ExceptionHandler(com.auth0.exception.APIException.class)
+    public ResponseEntity<ErrorResponseDto> handleAuth0APIException(
+            com.auth0.exception.APIException ex,
+            HttpServletRequest request) {
+
+        // Check if it's a duplicate email error
+        if (ex.getMessage() != null && ex.getMessage().toLowerCase().contains("user already exists")) {
+            logger.warn("Auth0 duplicate user: {}", ex.getMessage());
+
+            ErrorResponseDto error = new ErrorResponseDto(
+                    Instant.now(),
+                    HttpStatus.CONFLICT.value(),
+                    "Conflict",
+                    "A user with this email already exists",
+                    request.getRequestURI()
+            );
+
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+        }
+
+        // For other API exceptions, log and return 500
+        logger.error("Auth0 API error: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "Internal Server Error",
+                "An error occurred while communicating with the authentication service",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
     }
 
     /**

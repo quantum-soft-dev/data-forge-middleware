@@ -1,19 +1,12 @@
 package com.bitbi.dfm.comparison.contract;
 
-import com.bitbi.dfm.config.TestSecurityConfig;
-import com.bitbi.dfm.config.TestS3Config;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
-import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Map;
 
@@ -35,23 +28,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * @see <a href="specs/009-markdown-user-story/contracts/comparison-api.yaml">Comparison API Contract</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
-@Sql("/test-data.sql")
 @DisplayName("File Comparison API Contract Tests (User Story 1)")
-class ComparisonContractTest {
-
-    @Autowired
-    private MockMvc mockMvc;
+class ComparisonContractTest extends BaseIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
 
     private static final String COMPARISONS_ENDPOINT = "/api/v1/comparisons";
 
-    // Use mock Keycloak token for /api/v1/** endpoints (OAuth2 authentication)
+    // Use mock Auth0 token for /api/v1/** endpoints (OAuth2 authentication)
     private static final String MOCK_USER_TOKEN_ACCOUNT_1 = "mock-jwt-token-account-1";
     private static final String MOCK_USER_TOKEN_ACCOUNT_2 = "mock-jwt-token-account-2";
 
@@ -59,7 +44,7 @@ class ComparisonContractTest {
 
     @BeforeEach
     void setUp() {
-        // Use mock Keycloak token for authenticated user
+        // Use mock Auth0 token for authenticated user
         jwtToken = MOCK_USER_TOKEN_ACCOUNT_1;
     }
 

@@ -85,8 +85,8 @@ public class AuthorizationHelper {
                     (org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) authentication;
             Jwt jwt = oauth2JwtAuth.getToken();
 
-            // Strategy 1: Try to extract accountId from direct "accountId" claim
-            String accountIdClaim = jwt.getClaimAsString("accountId");
+            // Strategy 1: Try to extract accountId from Auth0 custom claim (namespaced)
+            String accountIdClaim = jwt.getClaimAsString("https://api.dataforge.com/accountId");
             if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
                 try {
                     return UUID.fromString(accountIdClaim);
@@ -95,7 +95,17 @@ public class AuthorizationHelper {
                 }
             }
 
-            // Strategy 2: Try to extract from Keycloak user attributes (custom mapper)
+            // Strategy 2: Try to extract accountId from direct "accountId" claim (legacy Keycloak)
+            accountIdClaim = jwt.getClaimAsString("accountId");
+            if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
+                try {
+                    return UUID.fromString(accountIdClaim);
+                } catch (IllegalArgumentException e) {
+                    // Not a valid UUID, try next strategy
+                }
+            }
+
+            // Strategy 3: Try to extract from Keycloak user attributes (custom mapper)
             // Keycloak can be configured to include user attributes in JWT via mappers
             Object accountIdAttr = jwt.getClaim("account_id");
             if (accountIdAttr != null) {
@@ -121,6 +131,13 @@ public class AuthorizationHelper {
             // Strategy 4: Look up account by email in database
             // This is the fallback strategy when accountId is not in JWT claims
             String email = jwt.getClaimAsString("email");
+
+            // Try Auth0 namespaced email claim
+            if (email == null || email.isEmpty()) {
+                email = jwt.getClaimAsString("https://api.dataforge.com/email");
+            }
+
+            // Try preferred_username as fallback
             if (email == null || email.isEmpty()) {
                 email = jwt.getClaimAsString("preferred_username");
             }
@@ -137,10 +154,10 @@ public class AuthorizationHelper {
                 }
             }
 
-            // If we reach here, accountId is not configured in Keycloak JWT and no email found
+            // If we reach here, accountId is not configured in Auth0/Keycloak JWT and no email found
             // Log available claims for debugging
             throw new UnauthorizedException(
-                "Account ID not found in JWT token. Please configure Keycloak user mapper to include 'accountId' attribute " +
+                "Account ID not found in JWT token. Please configure Auth0 Action to include 'accountId' claim " +
                 "or ensure 'email' claim is present for database lookup. " +
                 "Available claims: " + jwt.getClaims().keySet()
             );

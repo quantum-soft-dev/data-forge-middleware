@@ -94,9 +94,13 @@ public class BatchHistoryAdminController {
 
         Jwt jwt = (Jwt) authentication.getPrincipal();
 
-        // Strategy 1: Try accountId from custom claim
-        String accountIdClaim = jwt.getClaimAsString("accountId");
-        if (accountIdClaim != null) {
+        // Strategy 1: Try accountId from custom claim (Auth0 namespaced or legacy)
+        String accountIdClaim = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+        if (accountIdClaim == null || accountIdClaim.isEmpty()) {
+            accountIdClaim = jwt.getClaimAsString("accountId"); // Fallback to legacy Keycloak claim
+        }
+
+        if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
             try {
                 UUID accountId = UUID.fromString(accountIdClaim);
                 logger.debug("Extracted account ID from 'accountId' claim: {}", accountId);
@@ -119,7 +123,13 @@ public class BatchHistoryAdminController {
         }
 
         // Strategy 3: Use email or preferred_username to look up account
-        final String email = jwt.getClaimAsString("email");
+        String email = jwt.getClaimAsString("email");
+
+        // Try Auth0 namespaced email claim
+        if (email == null || email.isEmpty()) {
+            email = jwt.getClaimAsString("https://api.dataforge.com/email");
+        }
+
         final String username = jwt.getClaimAsString("preferred_username");
         final String identifier = (email != null) ? email : username;
 

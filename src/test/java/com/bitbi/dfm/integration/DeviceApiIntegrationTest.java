@@ -146,22 +146,22 @@ class DeviceApiIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Verify that Device API rejects Keycloak tokens.
+     * Verify that Device API rejects Auth0 tokens.
      * <p>
-     * Tests that Device API endpoints properly reject OAuth2/Keycloak tokens
+     * Tests that Device API endpoints properly reject OAuth2/Auth0 tokens
      * and only accept Custom JWT tokens.
      * </p>
      */
     @Test
-    @DisplayName("Should reject Keycloak token on Device API endpoints")
-    void shouldRejectKeycloakTokenOnDeviceApiEndpoints() throws Exception {
-        // Given: Mock Keycloak token (invalid for Device API)
-        String keycloakToken = "Bearer mock.keycloak.jwt.token";
+    @DisplayName("Should reject Auth0 token on Device API endpoints")
+    void shouldRejectAuth0TokenOnDeviceApiEndpoints() throws Exception {
+        // Given: Mock Auth0 token (invalid for Device API)
+        String auth0Token = "Bearer mock.auth0.jwt.token";
 
-        // When: Attempt to start batch with Keycloak token
+        // When: Attempt to start batch with Auth0 token
         // Then: 401 Unauthorized (rejected by JwtAuthenticationFilter)
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", keycloakToken)
+                        .header("Authorization", auth0Token)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isUnauthorized());
     }

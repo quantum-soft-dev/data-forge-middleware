@@ -61,38 +61,59 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
     List<Account> findAllActive();
 
     /**
-     * Find account by Keycloak user ID.
+     * Find account by identity provider user ID (Auth0 or legacy Keycloak).
      *
-     * @param keycloakUserId Keycloak user UUID
+     * @param identityProviderUserId Identity provider user ID (e.g., auth0|xxx or UUID)
      * @return Optional containing account if found
      */
-    Optional<Account> findByKeycloakUserId(String keycloakUserId);
+    Optional<Account> findByIdentityProviderUserId(String identityProviderUserId);
 
     /**
-     * Check if account exists with given Keycloak user ID.
+     * Check if account exists with given identity provider user ID.
      *
-     * @param keycloakUserId Keycloak user UUID to check
+     * @param identityProviderUserId Identity provider user ID to check
      * @return true if account exists
      */
-    boolean existsByKeycloakUserId(String keycloakUserId);
+    boolean existsByIdentityProviderUserId(String identityProviderUserId);
 
     /**
-     * Find all accounts with Keycloak integration and optional search filter.
+     * Find all accounts with identity provider integration.
      * <p>
-     * This query filters accounts that have keycloakUserId (meaning they're integrated with Keycloak).
+     * This query filters accounts that have identity provider user IDs (format: auth0|{id}).
+     * Returns only accounts integrated with identity provider.
+     * </p>
+     *
+     * @return list of accounts with identity provider integration
+     */
+    @Query("""
+            SELECT a FROM Account a
+            WHERE a.identityProviderUserId IS NOT NULL
+            AND a.identityProviderUserId LIKE 'auth0|%'
+            AND a.isActive = true
+            ORDER BY a.createdAt DESC
+            """)
+    List<Account> findAccountsWithIdentityProvider();
+
+    /**
+     * Find all accounts with identity provider integration and search filter.
+     * <p>
+     * This query filters accounts that have identity provider user IDs (format: auth0|{id}).
      * If search parameter is provided, filters by email or name (case-insensitive).
+     * Database-level filtering for performance and accurate pagination.
      * </p>
      *
      * @param search optional search term to filter by email or name
      * @param pageable pagination parameters
-     * @return page of accounts with Keycloak integration
+     * @return page of accounts with identity provider integration
      */
     @Query("""
             SELECT a FROM Account a
-            WHERE a.keycloakUserId IS NOT NULL
+            WHERE a.identityProviderUserId IS NOT NULL
+            AND a.identityProviderUserId LIKE 'auth0|%'
             AND (:search IS NULL OR :search = ''
                  OR LOWER(a.email) LIKE LOWER(CONCAT('%', :search, '%'))
                  OR LOWER(a.name) LIKE LOWER(CONCAT('%', :search, '%')))
+            ORDER BY a.createdAt DESC
             """)
-    Page<Account> findAccountsWithKeycloak(@Param("search") String search, Pageable pageable);
+    Page<Account> findAccountsBySearch(@Param("search") String search, Pageable pageable);
 }

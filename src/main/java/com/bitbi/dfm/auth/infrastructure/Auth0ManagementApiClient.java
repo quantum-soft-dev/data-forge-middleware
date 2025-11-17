@@ -1,0 +1,359 @@
+package com.bitbi.dfm.auth.infrastructure;
+
+import com.auth0.client.mgmt.ManagementAPI;
+import com.auth0.client.mgmt.filter.UserFilter;
+import com.auth0.exception.Auth0Exception;
+import com.auth0.json.mgmt.tickets.PasswordChangeTicket;
+import com.auth0.json.mgmt.users.User;
+import com.bitbi.dfm.auth.application.Auth0TokenProvider;
+import com.bitbi.dfm.auth.config.Auth0Properties;
+import com.bitbi.dfm.auth.domain.Auth0UserId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Infrastructure wrapper for Auth0 Management API SDK.
+ * <p>
+ * Provides simplified, domain-oriented methods for user management operations
+ * via the Auth0 Management API. Handles token management, error handling, and
+ * logging for all Auth0 API calls.
+ * </p>
+ *
+ * <h3>Operations:</h3>
+ * <ul>
+ *   <li>Create user with email and metadata</li>
+ *   <li>Block/unblock user accounts</li>
+ *   <li>Generate password reset tickets</li>
+ *   <li>Get user by ID or email</li>
+ *   <li>Update user metadata</li>
+ * </ul>
+ *
+ * <h3>Error Handling:</h3>
+ * <ul>
+ *   <li>Auth0Exception: Wrapped and rethrown with context</li>
+ *   <li>429 Rate Limit: Logged with retry recommendation</li>
+ *   <li>4xx Client Errors: Invalid requests logged</li>
+ *   <li>5xx Server Errors: Auth0 service issues logged</li>
+ * </ul>
+ *
+ * @author Data Forge Team
+ * @version 1.0.0
+ */
+@Component
+public class Auth0ManagementApiClient {
+
+    private static final Logger logger = LoggerFactory.getLogger(Auth0ManagementApiClient.class);
+
+    private final Auth0Properties properties;
+    private final Auth0TokenProvider tokenProvider;
+
+    /**
+     * Database connection name in Auth0 (default: "Username-Password-Authentication").
+     * Users created via this client will use database authentication.
+     */
+    private static final String DATABASE_CONNECTION = "Username-Password-Authentication";
+
+    /**
+     * Password change ticket expiry time in seconds (24 hours).
+     */
+    private static final int PASSWORD_TICKET_TTL_SECONDS = 86400; // 24 hours
+
+    public Auth0ManagementApiClient(Auth0Properties properties, Auth0TokenProvider tokenProvider) {
+        this.properties = properties;
+        this.tokenProvider = tokenProvider;
+        logger.info("Auth0ManagementApiClient initialized for domain: {}", properties.domain());
+    }
+
+    /**
+     * Create a new user in Auth0 database connection.
+     * <p>
+     * The user will be created with email verification disabled and blocked=false.
+     * A password change ticket should be generated immediately after creation
+     * to allow the user to set their password via Auth0 Universal Login.
+     * </p>
+     *
+     * @param email     user's email address (must be unique)
+     * @param name      user's display name
+     * @param accountId PostgreSQL account UUID (stored in app_metadata)
+     * @return Auth0 user ID (e.g., auth0|507f1f77bcf86cd799439011)
+     * @throws Auth0Exception if user creation fails (e.g., duplicate email, invalid input)
+     */
+    public Auth0UserId createUser(String email, String name, String accountId) throws Auth0Exception {
+        logger.info("Creating Auth0 user: email={}, name={}, accountId={}", email, name, accountId);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            User user = new User(DATABASE_CONNECTION);
+            user.setEmail(email);
+            user.setName(name);
+            user.setEmailVerified(false); // User must verify email via password reset link
+            user.setBlocked(false);
+
+            // Store accountId in app_metadata for JWT claims (Auth0 Action will read this)
+            user.setAppMetadata(Map.of("accountId", accountId));
+
+            User createdUser = mgmt.users().create(user).execute().getBody();
+
+            if (createdUser == null || createdUser.getId() == null) {
+                throw new Auth0Exception("User creation returned null response");
+            }
+
+            Auth0UserId userId = Auth0UserId.of(createdUser.getId());
+            logger.info("Auth0 user created successfully: userId={}, email={}", userId, email);
+
+            return userId;
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to create Auth0 user: email={}, error={}", email, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Generate a password change ticket for a user.
+     * <p>
+     * Returns a URL that the user can visit to set their password via Auth0 Universal Login.
+     * The ticket expires after 24 hours.
+     * </p>
+     *
+     * @param userId Auth0 user ID
+     * @return password change ticket URL (expires in 24 hours)
+     * @throws Auth0Exception if ticket generation fails
+     */
+    public String createPasswordChangeTicket(Auth0UserId userId) throws Auth0Exception {
+        return generatePasswordResetLink(userId, null);
+    }
+
+    /**
+     * Generate a password reset link (password change ticket) for a user.
+     * <p>
+     * Returns a URL that the user can visit to set their password via Auth0 Universal Login.
+     * The ticket expires after 24 hours. Optionally redirects user to resultUrl after password change.
+     * </p>
+     *
+     * User Story: US3 - Admin Resets User Password
+     *
+     * @param userId    Auth0 user ID
+     * @param resultUrl optional URL to redirect user after password change (can be null)
+     * @return password change ticket URL (expires in 24 hours)
+     * @throws Auth0Exception if ticket generation fails
+     */
+    public String generatePasswordResetLink(Auth0UserId userId, String resultUrl) throws Auth0Exception {
+        logger.info("Generating password reset link for userId={}, resultUrl={}", userId, resultUrl);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            PasswordChangeTicket ticket = new PasswordChangeTicket(userId.value());
+            ticket.setTTLSeconds(PASSWORD_TICKET_TTL_SECONDS);
+
+            // Set result URL if provided (redirect after password change)
+            if (resultUrl != null && !resultUrl.isBlank()) {
+                ticket.setResultUrl(resultUrl);
+            }
+
+            PasswordChangeTicket createdTicket = mgmt.tickets()
+                    .requestPasswordChange(ticket)
+                    .execute()
+                    .getBody();
+
+            if (createdTicket == null || createdTicket.getTicket() == null) {
+                throw new Auth0Exception("Password change ticket generation returned null");
+            }
+
+            String ticketUrl = createdTicket.getTicket();
+            logger.info("Password reset link generated: userId={}, expiresIn=24h", userId);
+
+            return ticketUrl;
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to generate password reset link: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Block a user account in Auth0.
+     * <p>
+     * Blocked users cannot log in. Existing sessions remain valid until token expiry.
+     * </p>
+     *
+     * @param userId Auth0 user ID
+     * @throws Auth0Exception if block operation fails
+     */
+    public void blockUser(Auth0UserId userId) throws Auth0Exception {
+        logger.info("Blocking Auth0 user: userId={}", userId);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            User user = new User();
+            user.setBlocked(true);
+
+            mgmt.users().update(userId.value(), user).execute();
+
+            logger.info("Auth0 user blocked successfully: userId={}", userId);
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to block Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Unblock a user account in Auth0.
+     * <p>
+     * Unblocked users can log in again.
+     * </p>
+     *
+     * @param userId Auth0 user ID
+     * @throws Auth0Exception if unblock operation fails
+     */
+    public void unblockUser(Auth0UserId userId) throws Auth0Exception {
+        logger.info("Unblocking Auth0 user: userId={}", userId);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            User user = new User();
+            user.setBlocked(false);
+
+            mgmt.users().update(userId.value(), user).execute();
+
+            logger.info("Auth0 user unblocked successfully: userId={}", userId);
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to unblock Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Get a user by Auth0 user ID.
+     *
+     * @param userId Auth0 user ID
+     * @return User object with all details
+     * @throws Auth0Exception if user not found or API call fails
+     */
+    public User getUser(Auth0UserId userId) throws Auth0Exception {
+        logger.debug("Fetching Auth0 user: userId={}", userId);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            User user = mgmt.users().get(userId.value(), null).execute().getBody();
+
+            if (user == null) {
+                throw new Auth0Exception("User not found: " + userId);
+            }
+
+            return user;
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to fetch Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Search for users by email.
+     * <p>
+     * Uses Lucene query syntax. Email must be exact match.
+     * </p>
+     *
+     * @param email email address to search
+     * @return list of matching users (typically 0 or 1 due to unique constraint)
+     * @throws Auth0Exception if search fails
+     */
+    public List<User> getUsersByEmail(String email) throws Auth0Exception {
+        logger.debug("Searching Auth0 users by email: email={}", email);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            // Lucene query: email:"user@example.com"
+            UserFilter filter = new UserFilter()
+                    .withQuery("email:\"" + email + "\"")
+                    .withSearchEngine("v3");
+
+            List<User> users = mgmt.users().list(filter).execute().getBody().getItems();
+
+            logger.debug("Found {} Auth0 users with email: {}", users.size(), email);
+
+            return users;
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to search Auth0 users: email={}, error={}", email, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Update user metadata (app_metadata or user_metadata).
+     * <p>
+     * app_metadata is used for internal system data (accountId, roles).
+     * user_metadata is for user-editable profile data.
+     * </p>
+     *
+     * @param userId      Auth0 user ID
+     * @param appMetadata application metadata to merge
+     * @throws Auth0Exception if update fails
+     */
+    public void updateUserMetadata(Auth0UserId userId, Map<String, Object> appMetadata) throws Auth0Exception {
+        logger.info("Updating Auth0 user metadata: userId={}, metadata={}", userId, appMetadata);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            User user = new User();
+            user.setAppMetadata(appMetadata);
+
+            mgmt.users().update(userId.value(), user).execute();
+
+            logger.info("Auth0 user metadata updated successfully: userId={}", userId);
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to update Auth0 user metadata: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Delete a user from Auth0.
+     * <p>
+     * Permanently deletes the user account. This action cannot be undone.
+     * All user data and metadata will be removed from Auth0.
+     * </p>
+     *
+     * @param userId Auth0 user ID
+     * @throws Auth0Exception if delete operation fails
+     */
+    public void deleteUser(Auth0UserId userId) throws Auth0Exception {
+        logger.info("Deleting Auth0 user: userId={}", userId);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            mgmt.users().delete(userId.value()).execute();
+
+            logger.info("Auth0 user deleted successfully: userId={}", userId);
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to delete Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
+            throw e;
+        }
+    }
+}

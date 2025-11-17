@@ -41,11 +41,16 @@ class FileDownloadIntegrationTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // Debug: Print S3 endpoint to verify LocalStack connection
+        System.out.println("[FileDownloadIntegrationTest] S3 endpoint: " + getS3Endpoint());
+        System.out.println("[FileDownloadIntegrationTest] Containers running: " + areContainersRunning());
+
         // Create S3 bucket if it doesn't exist (LocalStack requirement)
         try {
             s3Client.createBucket(builder -> builder.bucket(TEST_BUCKET));
+            System.out.println("[FileDownloadIntegrationTest] S3 bucket created: " + TEST_BUCKET);
         } catch (Exception e) {
-            // Bucket might already exist, ignore
+            System.out.println("[FileDownloadIntegrationTest] S3 bucket creation error (might already exist): " + e.getMessage());
         }
 
         // Upload test file to LocalStack S3
@@ -53,6 +58,7 @@ class FileDownloadIntegrationTest extends BaseIntegrationTest {
         testS3Key = "0199bab0-c9f1-e16b-bc71-63bf6efed26c/store-01.example.com/2025-11-01/10-30/test-file.csv.gz";
         byte[] testContent = "id,name,value\n1,Test,123\n".getBytes();
 
+        System.out.println("[FileDownloadIntegrationTest] Attempting to upload test file to S3...");
         s3Client.putObject(
                 PutObjectRequest.builder()
                         .bucket(TEST_BUCKET)
@@ -61,6 +67,7 @@ class FileDownloadIntegrationTest extends BaseIntegrationTest {
                         .build(),
                 RequestBody.fromBytes(testContent)
         );
+        System.out.println("[FileDownloadIntegrationTest] Test file uploaded successfully");
     }
 
     /**

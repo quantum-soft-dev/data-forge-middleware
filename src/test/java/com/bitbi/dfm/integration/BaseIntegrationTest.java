@@ -2,36 +2,27 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
-import com.bitbi.dfm.config.TestSecurityConfig;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * Base class for integration tests.
+ * Base class for integration tests with MockMvc support.
  * <p>
- * Provides common configuration and utilities for integration tests:
- * - Test security configuration with mock OAuth2
- * - Real S3 configuration with LocalStack (from application-test.yml)
+ * Extends AbstractIntegrationTest to inherit Testcontainers configuration.
+ * Provides common utilities for HTTP integration tests:
+ * - MockMvc for HTTP request testing
  * - Test data loaded from test-data.sql
- * - JWT token generation helper
+ * - JWT token generation helpers
  * </p>
  *
  * @author Data Forge Team
  * @version 1.0.0
  */
-@SpringBootTest(properties = {
-    "keycloak.enabled=false"  // Disable Keycloak for integration tests
-})
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
 @Sql("/test-data.sql")
-public abstract class BaseIntegrationTest {
+public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     protected MockMvc mockMvc;

@@ -1,15 +1,15 @@
 /**
  * AccountsListPage - User Management
  *
- * Per T032: Accounts list page with Keycloak integration and filters.
- * Displays users with their Keycloak status and management actions.
+ * Per T032: Accounts list page with Auth0 integration and filters.
+ * Displays users with their Auth0 status and management actions.
  *
  * Features:
- * - UserListTable with Keycloak fields
- * - Filters: isActive, hasKeycloakIntegration, passwordTemporary
+ * - UserListTable with Auth0 fields
+ * - Filters: isActive, hasAuth0Integration
  * - Search by name/email
  * - Create Account button → CreateAccountPage
- * - Row click → AccountDetailsPage (future)
+ * - Row click → AccountDetailsPage
  * - Pagination
  */
 
@@ -30,8 +30,7 @@ export default function AccountsListPage() {
 
   // Filters
   const [filterActive, setFilterActive] = useState<boolean | 'all'>('all')
-  const [filterKeycloak, setFilterKeycloak] = useState<boolean | 'all'>('all')
-  const [filterTempPassword, setFilterTempPassword] = useState<boolean | 'all'>('all')
+  const [filterAuth0, setFilterAuth0] = useState<boolean | 'all'>('all')
   const [showFilters, setShowFilters] = useState(false)
 
   const { data, isLoading, isError, error } = useAccountsQuery(page - 1, pageSize, {
@@ -41,11 +40,10 @@ export default function AccountsListPage() {
   // Filter data client-side (TODO: move to server-side filtering)
   const filteredUsers = data?.content.filter((user) => {
     if (filterActive !== 'all' && user.isActive !== filterActive) return false
-    if (filterKeycloak !== 'all') {
-      const hasKeycloak = !!user.keycloakUserId
-      if (hasKeycloak !== filterKeycloak) return false
+    if (filterAuth0 !== 'all') {
+      const hasAuth0 = !!user.identityProviderUserId
+      if (hasAuth0 !== filterAuth0) return false
     }
-    if (filterTempPassword !== 'all' && user.passwordTemporary !== filterTempPassword) return false
     return true
   }) ?? []
 
@@ -92,7 +90,7 @@ export default function AccountsListPage() {
           <div>
             <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
             <p className="mt-2 text-sm text-gray-600">
-              Manage users with Keycloak authentication integration
+              Manage users with Auth0 authentication integration
             </p>
           </div>
           <button
@@ -116,7 +114,7 @@ export default function AccountsListPage() {
             >
               <Filter className="h-4 w-4" />
               Filters
-              {(filterActive !== 'all' || filterKeycloak !== 'all' || filterTempPassword !== 'all') && (
+              {(filterActive !== 'all' || filterAuth0 !== 'all') && (
                 <span className="ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white">
                   Active
                 </span>
@@ -128,7 +126,7 @@ export default function AccountsListPage() {
           {showFilters && (
             <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
               <h3 className="mb-3 text-sm font-medium text-gray-900">Filter Options</h3>
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2">
                 {/* Active Status Filter */}
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -149,54 +147,33 @@ export default function AccountsListPage() {
                   </select>
                 </div>
 
-                {/* Keycloak Integration Filter */}
+                {/* Auth0 Integration Filter */}
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Keycloak Integration
+                    Auth0 Integration
                   </label>
                   <select
-                    value={filterKeycloak === 'all' ? 'all' : filterKeycloak ? 'true' : 'false'}
+                    value={filterAuth0 === 'all' ? 'all' : filterAuth0 ? 'true' : 'false'}
                     onChange={(e) =>
-                      setFilterKeycloak(
+                      setFilterAuth0(
                         e.target.value === 'all' ? 'all' : e.target.value === 'true'
                       )
                     }
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
                     <option value="all">All</option>
-                    <option value="true">Has Keycloak</option>
-                    <option value="false">No Keycloak</option>
-                  </select>
-                </div>
-
-                {/* Password Temporary Filter */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Password Type
-                  </label>
-                  <select
-                    value={filterTempPassword === 'all' ? 'all' : filterTempPassword ? 'true' : 'false'}
-                    onChange={(e) =>
-                      setFilterTempPassword(
-                        e.target.value === 'all' ? 'all' : e.target.value === 'true'
-                      )
-                    }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  >
-                    <option value="all">All</option>
-                    <option value="true">Temporary</option>
-                    <option value="false">Permanent</option>
+                    <option value="true">Has Auth0</option>
+                    <option value="false">No Auth0</option>
                   </select>
                 </div>
               </div>
 
               {/* Clear Filters */}
-              {(filterActive !== 'all' || filterKeycloak !== 'all' || filterTempPassword !== 'all') && (
+              {(filterActive !== 'all' || filterAuth0 !== 'all') && (
                 <button
                   onClick={() => {
                     setFilterActive('all')
-                    setFilterKeycloak('all')
-                    setFilterTempPassword('all')
+                    setFilterAuth0('all')
                   }}
                   className="mt-3 text-sm text-blue-600 hover:text-blue-700"
                 >

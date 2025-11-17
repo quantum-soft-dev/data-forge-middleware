@@ -3,34 +3,30 @@ package com.bitbi.dfm.account.presentation.dto;
 import com.bitbi.dfm.account.domain.Account;
 
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
- * Response DTO for account data (admin endpoints).
+ * Response DTO for account.
+ * <p>
+ * This DTO is returned when creating or listing accounts.
+ * Includes authentication user ID and temporary password (for create operations only).
+ * </p>
  *
- * Provides immutable representation of account data for API responses.
- * Excludes sensitive fields like passwords or internal metadata.
+ * User Story: US1 - Admin Creates User Account
  *
- * FR-001: Structured response objects
- * FR-002: Consistent field naming and types
- * FR-003: Complete information preservation (non-sensitive)
+ * @param id The account's unique identifier (PostgreSQL UUID)
+ * @param email The user's email address
+ * @param name The user's full name
+ * @param phone The user's phone number (nullable)
+ * @param company The user's company name (nullable)
+ * @param isActive Whether the account is active
+ * @param identityProviderUserId The identity provider user ID (e.g., auth0|{id})
+ * @param temporaryPassword Temporary password for first login (only present on create, null on list)
+ * @param passwordResetUrl URL for password reset (alternative to temporaryPassword)
+ * @param createdAt Account creation timestamp
  *
- * BACKWARD COMPATIBILITY NOTE:
- * - The `isActive` field is DEPRECATED as of version 1.1.0 (2025-10-11)
- * - Use the `status` field instead ("active" or "inactive")
- * - The `isActive` field will be removed in version 2.0.0 (planned for 2026-Q1)
- * - Both fields are provided during the deprecation period for smooth migration
- *
- * @param id                   Unique account identifier
- * @param email                Account email address
- * @param name                 Account display name
- * @param phone                Account phone number (nullable)
- * @param company              Account company name (nullable)
- * @param status               Active status ("active" or "inactive")
- * @param isActive             DEPRECATED: Use status field instead. Will be removed in v2.0.0
- * @param createdAt            Creation timestamp (ISO 8601)
- * @param maxConcurrentBatches Maximum concurrent batches allowed (default: 5)
+ * @author Data Forge Team
+ * @version 1.0.0
  */
 public record AccountResponseDto(
     UUID id,
@@ -38,38 +34,83 @@ public record AccountResponseDto(
     String name,
     String phone,
     String company,
-    String status,
-    @Deprecated(since = "1.1.0", forRemoval = true)
-    Boolean isActive,
-    Instant createdAt,
-    Integer maxConcurrentBatches
+    boolean isActive,
+    String identityProviderUserId,
+    String temporaryPassword,
+    String passwordResetUrl,
+    Instant createdAt
 ) {
-
     /**
-     * Convert Account domain entity to AccountResponseDto.
+     * Factory method to create response from Account entity (without temporary password).
+     * Used for list operations.
      *
-     * Maps all non-sensitive fields from entity to DTO, converting:
-     * - LocalDateTime timestamp to Instant (UTC)
-     * - Boolean isActive to String status ("active" or "inactive")
-     * - Populates both status (new) and isActive (deprecated) for backward compatibility
-     * - Excludes sensitive fields (passwords, secrets)
-     *
-     * @param account The domain entity to convert
-     * @param maxConcurrentBatches Maximum concurrent batches allowed for this account
-     * @return AccountResponseDto with all fields mapped
+     * @param account The account entity
+     * @return Response DTO
      */
-    public static AccountResponseDto fromEntity(Account account, int maxConcurrentBatches) {
-        boolean isActive = account.getIsActive();
+    public static AccountResponseDto fromEntity(Account account) {
         return new AccountResponseDto(
             account.getId(),
             account.getEmail(),
             account.getName(),
             account.getPhone() != null ? account.getPhone().getValue() : null,
             account.getCompany() != null ? account.getCompany().getValue() : null,
-            isActive ? "active" : "inactive",  // New field (v1.1.0+)
-            isActive,                           // Deprecated field (for backward compatibility)
-            account.getCreatedAt().toInstant(ZoneOffset.UTC),
-            maxConcurrentBatches
+            account.getIsActive(),
+            account.getIdentityProviderUserId(),
+            null, // No temporary password for list operations
+            null, // No password reset URL for list operations
+            Instant.ofEpochSecond(account.getCreatedAt().toEpochSecond(java.time.ZoneOffset.UTC))
+        );
+    }
+
+    /**
+     * Factory method to create response from Account entity with temporary password.
+     * Used for create operations.
+     *
+     * @param account The account entity
+     * @param temporaryPassword The temporary password generated by Auth0
+     * @return Response DTO with temporary password
+     */
+    public static AccountResponseDto fromEntityWithPassword(
+        Account account,
+        String temporaryPassword
+    ) {
+        return new AccountResponseDto(
+            account.getId(),
+            account.getEmail(),
+            account.getName(),
+            account.getPhone() != null ? account.getPhone().getValue() : null,
+            account.getCompany() != null ? account.getCompany().getValue() : null,
+            account.getIsActive(),
+            account.getIdentityProviderUserId(),
+            temporaryPassword,
+            null, // No URL when returning temporary password
+            Instant.ofEpochSecond(account.getCreatedAt().toEpochSecond(java.time.ZoneOffset.UTC))
+        );
+    }
+
+    /**
+     * Factory method to create response from Account entity with password reset URL.
+     * Used for create operations with Auth0 password change tickets.
+     *
+     * @param account The account entity
+     * @param passwordResetUrl The Auth0 password reset URL
+     * @return Response DTO with password reset URL
+     */
+    public static AccountResponseDto fromEntityWithResetUrl(
+        Account account,
+        String passwordResetUrl
+    ) {
+        return new AccountResponseDto(
+            account.getId(),
+            account.getEmail(),
+            account.getName(),
+            account.getPhone() != null ? account.getPhone().getValue() : null,
+            account.getCompany() != null ? account.getCompany().getValue() : null,
+            account.getIsActive(),
+            account.getIdentityProviderUserId(),
+            null, // No temporary password when returning URL
+            passwordResetUrl,
+            Instant.ofEpochSecond(account.getCreatedAt().toEpochSecond(java.time.ZoneOffset.UTC))
         );
     }
 }

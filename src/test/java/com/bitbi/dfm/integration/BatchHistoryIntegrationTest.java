@@ -5,7 +5,6 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
-import com.bitbi.dfm.config.TestSecurityConfig;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
@@ -14,15 +13,9 @@ import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -43,21 +36,9 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  *
  * Feature: Upload History (User Stories 1 & 2)
  */
-@SpringBootTest(properties = {
-    "keycloak.enabled=false"  // Disable Keycloak for integration tests
-})
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
-@Testcontainers
 @Sql("/test-data.sql")
 @DisplayName("Upload History Integration Tests (Testcontainers)")
-class BatchHistoryIntegrationTest {
-
-    @Container
-    private static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
-            .withDatabaseName("dataforge_test")
-            .withUsername("test")
-            .withPassword("test");
+class BatchHistoryIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private BatchHistoryService batchHistoryService;
@@ -74,9 +55,10 @@ class BatchHistoryIntegrationTest {
         // This is a placeholder test from Phase 3 (User Story 1)
         // The actual implementation will use BatchHistoryService.listBatchHistory()
 
-        // For now, just verify Testcontainers PostgreSQL is working
-        assertThat(postgres.isRunning()).isTrue();
-        assertThat(postgres.getDatabaseName()).isEqualTo("dataforge_test");
+        // For now, just verify Testcontainers are working
+        assertThat(areContainersRunning()).isTrue();
+        assertThat(postgresContainer.isRunning()).isTrue();
+        assertThat(postgresContainer.getDatabaseName()).isEqualTo("dataforge_test");
     }
 
     /**

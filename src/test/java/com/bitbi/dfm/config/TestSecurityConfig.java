@@ -1,9 +1,12 @@
 package com.bitbi.dfm.config;
 
+import com.auth0.client.mgmt.ManagementAPI;
+import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.convert.converter.Converter;
@@ -28,11 +31,11 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Test security configuration that mocks OAuth2/Keycloak authentication.
+ * Test security configuration that mocks OAuth2/Auth0 authentication.
  *
  * <p>This configuration mirrors the production SecurityConfiguration architecture with
  * unified API structure, but uses mocked authentication for testing without requiring
- * a running Keycloak instance.</p>
+ * a running Auth0 instance.</p>
  *
  * <p><b>Unified Filter Chain Architecture:</b></p>
  * <ul>
@@ -51,9 +54,17 @@ import java.util.stream.Collectors;
  *   <li>Any other token → No roles (authorization will fail)</li>
  * </ul>
  *
+ * <p><b>AccountSyncService:</b></p>
+ * <ul>
+ *   <li>Mocked by default here (required for Spring context to load)</li>
+ *   <li>Integration tests needing real AccountSyncService: @Import(Auth0TestConfig.class) which provides @Primary bean</li>
+ *   <li>Contract tests: configure mock behavior as needed in test setup</li>
+ * </ul>
+ *
  * @author Data Forge Team
  * @version 2.0.0
  * @see com.bitbi.dfm.shared.config.SecurityConfiguration Production security configuration
+ * @see Auth0TestConfig Configuration for real AccountSyncService in integration tests
  */
 @TestConfiguration
 @EnableWebSecurity
@@ -62,6 +73,32 @@ public class TestSecurityConfig {
 
     @Autowired(required = false)
     private TokenService tokenService;
+
+    /**
+     * Mock Auth0 ManagementAPI bean for tests.
+     * <p>
+     * Required by Auth0TestConfig to create AccountSyncService.
+     * Individual tests should configure mock behavior as needed.
+     * </p>
+     */
+    @Bean
+    public ManagementAPI managementAPI() {
+        return org.mockito.Mockito.mock(ManagementAPI.class);
+    }
+
+    /**
+     * Mock AccountSyncService bean for tests.
+     * <p>
+     * AccountSyncService is excluded from test profile (@Profile("!test")) because it requires
+     * Auth0 Management API credentials. We provide a mock bean here so that controllers
+     * depending on it (like AccountAdminController) can be loaded in test context.
+     * Integration tests that need real AccountSyncService should import Auth0TestConfig.
+     * </p>
+     */
+    @Bean
+    public AccountSyncService accountSyncService() {
+        return org.mockito.Mockito.mock(AccountSyncService.class);
+    }
 
     /**
      * Mock JWT decoder for testing.
@@ -112,6 +149,7 @@ public class TestSecurityConfig {
                     .claim("email", email)
                     .claim("preferred_username", username)
                     .claim("accountId", accountId)
+                    .claim("https://api.dataforge.com/accountId", accountId) // Namespaced claim for Auth0
                     .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
                     .expiresAt(Instant.now().plusSeconds(3600))
@@ -120,7 +158,7 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Custom JWT authorities converter for Keycloak realm roles.
+     * Custom JWT authorities converter for Auth0 realm roles.
      * <p>
      * Extracts roles from nested "realm_access.roles" claim and converts them
      * to Spring Security authorities with "ROLE_" prefix.
@@ -232,7 +270,7 @@ public class TestSecurityConfig {
      * UI/Admin API filter chain (NEW unified structure).
      * <p>
      * Order 3: Third priority - matches /api/v1/** (excluding /api/v1/device/**).
-     * Keycloak OAuth2 Resource Server only.
+     * Auth0 OAuth2 Resource Server only.
      * </p>
      */
     @Bean
@@ -262,15 +300,15 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Legacy Keycloak filter chain for old admin endpoints.
+     * Legacy Auth0 filter chain for old admin endpoints.
      * <p>
      * Order 4: Fourth priority - matches /api/admin/** (deprecated).
-     * Keycloak OAuth2 Resource Server only - ROLE_ADMIN required.
+     * Auth0 OAuth2 Resource Server only - ROLE_ADMIN required.
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(4)
-    public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain legacyAuth0FilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/admin/**")
             .csrf(csrf -> csrf.disable())

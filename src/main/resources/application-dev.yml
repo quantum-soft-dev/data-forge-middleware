@@ -20,17 +20,21 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: http://localhost:8081/realms/dfm
-          jwk-set-uri: http://localhost:8081/realms/dfm/protocol/openid-connect/certs
+          # Auth0 dev tenant - override with actual values
+          issuer-uri: https://${AUTH0_DOMAIN:dev-example.us.auth0.com}/
+          audiences: ${AUTH0_AUDIENCE:https://api.dataforge.com}
 
-keycloak:
-  auth-server-url: ${KEYCLOAK_SERVER_URL:http://localhost:8081}
-  realm: ${KEYCLOAK_REALM:dfm}
-  admin:
-    client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:admin-cli}
-    client-secret: ${KEYCLOAK_ADMIN_CLIENT_SECRET:}
-    username: ${KEYCLOAK_ADMIN_USERNAME:admin}
-    password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
+# Auth0 Development Configuration
+auth0:
+  domain: ${AUTH0_DOMAIN:dev-example.us.auth0.com}
+  management:
+    client-id: ${AUTH0_MGMT_CLIENT_ID:}
+    client-secret: ${AUTH0_MGMT_CLIENT_SECRET:}
+    audience: ${AUTH0_MGMT_AUDIENCE:https://dev-example.us.auth0.com/api/v2/}
+  api:
+    audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
+    issuer: ${AUTH0_ISSUER:https://dev-example.us.auth0.com/}
+  database-connection: Username-Password-Authentication
 
 s3:
   endpoint: ${AWS_S3_ENDPOINT:http://localhost:4566}
@@ -62,7 +66,10 @@ logging:
   level:
     root: INFO
     com.bitbi.dfm: DEBUG
+    com.bitbi.dfm.auth: DEBUG
     org.springframework.web: DEBUG
     org.springframework.security: DEBUG
+    org.springframework.security.oauth2: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    com.auth0: DEBUG

@@ -1,8 +1,8 @@
 /**
  * Account Entity Types
  *
- * Domain model for account management with Keycloak integration.
- * Per data-model.md: Account entity with status tracking and Keycloak correlation.
+ * Domain model for account management with Auth0 integration.
+ * Per data-model.md: Account entity with status tracking and Auth0 correlation.
  */
 
 export type AccountStatus = 'active' | 'inactive'
@@ -14,16 +14,14 @@ export interface Account {
   phone: string | null
   company: string | null
   status: AccountStatus
-  keycloakUserId: string | null // Keycloak user UUID (null for legacy accounts)
+  identityProviderUserId: string | null // Auth0 user ID (format: auth0|xxx)
   isActive: boolean // Business logic status
   createdAt: string // ISO 8601 datetime
   updatedAt: string // ISO 8601 datetime
 }
 
 export interface AccountWithKeycloakStatus extends Account {
-  keycloakEnabled: boolean // From Keycloak user.enabled
-  passwordTemporary: boolean // From Keycloak credentials
-  passwordExpiresAt: string | null // From Keycloak (if temporary)
+  isBlocked: boolean // From Auth0 user.blocked
   lastLogin: string | null // ISO 8601
 }
 
@@ -52,13 +50,14 @@ export interface CreateAccountRequest {
 
 export interface CreateAccountResponse {
   account: AccountWithKeycloakStatus
-  temporaryPassword: string
+  passwordResetLink: string // Auth0 password reset link (24-hour expiry)
 }
 
 export interface ResetPasswordResponse {
   accountId: string
-  temporaryPassword: string
-  expiresAt: string // 30 days from now
+  email: string
+  passwordResetLink: string // Auth0 password change ticket URL (one-time use, 24 hours)
+  expiresAt: string // ISO 8601 timestamp (24 hours from now)
 }
 
 export interface AdminActionLog {

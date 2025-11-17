@@ -14,6 +14,12 @@ import java.util.UUID;
  * This entity provides a complete audit trail for security and compliance purposes.
  * All account management operations (create, lock, unlock, password reset) are logged.
  * </p>
+ * <p>
+ * <b>Admin Identity Architecture:</b>
+ * Admins are Auth0 users with ROLE_ADMIN but have NO corresponding Account record in PostgreSQL.
+ * Therefore, admin_account_id is ALWAYS NULL. Admin identity is tracked via Auth0 JWT claims (email, sub).
+ * Regular users (ROLE_USER) have Account records with bidirectional Auth0 mapping.
+ * </p>
  *
  * @author Data Forge Team
  * @version 1.0.0

@@ -29,6 +29,20 @@ spring:
           issuer-uri: http://localhost:8081/realms/dfm-test
           jwk-set-uri: http://localhost:8081/realms/dfm-test/protocol/openid-connect/certs
 
+# Auth0 Configuration for tests (mocked by TestAuth0Config and MockAuth0JwtDecoder)
+# enabled: false flag ensures real Auth0 connections are disabled in tests
+auth0:
+  enabled: false  # Disable Auth0 integration in tests - use mocks instead
+  domain: test.auth0.com
+  management:
+    audience: https://test.auth0.com/api/v2/
+  api:
+    audience: https://api.test.com
+    issuer: https://test.auth0.com/
+  database-connection: Username-Password-Authentication
+  password-reset-ttl-seconds: 86400
+  roles-namespace: https://api.dataforge.com/roles
+
 s3:
   endpoint: http://localhost:4566
   region: us-east-1

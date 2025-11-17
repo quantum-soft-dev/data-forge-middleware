@@ -9,19 +9,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * T040: E2E Integration Test - Scenario 5: Admin Endpoints (Keycloak-Only).
+ * T040: E2E Integration Test - Scenario 5: Admin Endpoints (Auth0-Only).
  * <p>
- * Implements quickstart Scenario 5: Verify admin endpoints accept Keycloak only, reject JWT.
+ * Implements quickstart Scenario 5: Verify admin endpoints accept Auth0 only, reject JWT.
  * </p>
  * <p>
  * <strong>Production Behavior (FR-008, FR-009)</strong>: Admin endpoints (/api/v1/admin/**)
- * accept ONLY Keycloak OAuth2 tokens. JWT tokens are rejected with 403 Forbidden.
+ * accept ONLY Auth0 OAuth2 tokens. JWT tokens are rejected with 403 Forbidden.
  * </p>
  * <p>
  * <strong>Test Environment Behavior</strong>: TestSecurityConfig uses separate filter chains:
  * <ul>
  *   <li>Client API (/api/v1/**) → JwtAuthenticationFilter → accepts JWT only</li>
- *   <li>Admin API (/admin/**) → OAuth2 Resource Server → accepts Keycloak only</li>
+ *   <li>Admin API (/admin/**) → OAuth2 Resource Server → accepts Auth0 only</li>
  * </ul>
  * Test environment behavior matches production for admin endpoints.
  * </p>
@@ -31,24 +31,24 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Data Forge Team
  * @version 1.0.0
  */
-@DisplayName("T040: E2E - Scenario 5: Admin Endpoints (Keycloak-Only)")
+@DisplayName("T040: E2E - Scenario 5: Admin Endpoints (Auth0-Only)")
 class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
 
     /**
-     * Scenario 5a: Admin endpoint with Keycloak token should return 200 OK with paged data.
+     * Scenario 5a: Admin endpoint with Auth0 token should return 200 OK with paged data.
      * <p>
-     * Verifies Keycloak authentication works on admin endpoints (test + production behavior).
+     * Verifies Auth0 authentication works on admin endpoints (test + production behavior).
      * </p>
      */
     @Test
-    @DisplayName("listAccounts_withKeycloak_shouldReturn200AndPagedDto")
-    void listAccounts_withKeycloak_shouldReturn200AndPagedDto() throws Exception {
-        // Given: Valid Keycloak OAuth2 token (mocked in TestSecurityConfig)
-        String keycloakToken = "Bearer mock.admin.jwt.token";
+    @DisplayName("listAccounts_withAuth0_shouldReturn200AndPagedDto")
+    void listAccounts_withAuth0_shouldReturn200AndPagedDto() throws Exception {
+        // Given: Valid Auth0 OAuth2 token (mocked in TestSecurityConfig)
+        String auth0Token = "Bearer mock.admin.jwt.token";
 
-        // When: GET admin accounts list with Keycloak token
+        // When: GET admin accounts list with Auth0 token
         mockMvc.perform(get(ApiRoutes.ACCOUNTS)
-                        .header("Authorization", keycloakToken))
+                        .header("Authorization", auth0Token))
 
                 // Then: 200 OK with PageResponseDto<AccountResponseDto>
                 .andExpect(status().isOk())
@@ -56,9 +56,8 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.content[0].id").exists())
                 .andExpect(jsonPath("$.content[0].email").exists())
                 .andExpect(jsonPath("$.content[0].name").exists())
-                .andExpect(jsonPath("$.content[0].status").isString())
+                .andExpect(jsonPath("$.content[0].isActive").isBoolean())
                 .andExpect(jsonPath("$.content[0].createdAt").exists())
-                .andExpect(jsonPath("$.content[0].maxConcurrentBatches").isNumber())
                 .andExpect(jsonPath("$.page").isNumber())
                 .andExpect(jsonPath("$.size").isNumber())
                 .andExpect(jsonPath("$.totalElements").isNumber())
@@ -87,7 +86,7 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
                         .header("Authorization", jwtToken))
 
                 // Then: 401 Unauthorized (test environment limitation - real JWT not recognized by mock decoder)
-                // Note: In production with full Keycloak, this would be 403 Forbidden
+                // Note: In production with full Auth0, this would be 403 Forbidden
                 .andExpect(status().isUnauthorized());
 
         // Note: In production, this would return ErrorResponseDto with generic auth failure message (FR-014)
@@ -107,22 +106,22 @@ class AdminEndpointsIntegrationTest extends BaseIntegrationTest {
                         .header("Authorization", jwtToken))
 
                 // Then: 401 Unauthorized (test environment limitation - real JWT not recognized by mock decoder)
-                // Note: In production with full Keycloak, this would be 403 Forbidden
+                // Note: In production with full Auth0, this would be 403 Forbidden
                 .andExpect(status().isUnauthorized());
     }
 
     /**
-     * Additional verification: Sites admin endpoint with Keycloak token should return 200.
+     * Additional verification: Sites admin endpoint with Auth0 token should return 200.
      */
     @Test
-    @DisplayName("listSites_withKeycloak_shouldReturn200AndPagedDto")
-    void listSites_withKeycloak_shouldReturn200AndPagedDto() throws Exception {
-        // Given: Valid Keycloak token
-        String keycloakToken = "Bearer mock.admin.jwt.token";
+    @DisplayName("listSites_withAuth0_shouldReturn200AndPagedDto")
+    void listSites_withAuth0_shouldReturn200AndPagedDto() throws Exception {
+        // Given: Valid Auth0 token
+        String auth0Token = "Bearer mock.admin.jwt.token";
 
-        // When: GET admin sites list with Keycloak token
+        // When: GET admin sites list with Auth0 token
         mockMvc.perform(get(ApiRoutes.SITES)
-                        .header("Authorization", keycloakToken))
+                        .header("Authorization", auth0Token))
 
                 // Then: 200 OK with PageResponseDto<SiteResponseDto>
                 .andExpect(status().isOk())

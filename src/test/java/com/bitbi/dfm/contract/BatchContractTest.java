@@ -2,20 +2,14 @@ package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
-import com.bitbi.dfm.config.TestSecurityConfig;
-import com.bitbi.dfm.config.TestS3Config;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -30,13 +24,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * @see <a href="specs/001-technical-specification-data/contracts/batch-api.md">Batch API Contract</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class})
-@Sql("/test-data.sql")
 @DisplayName("Batch API Contract Tests")
-class BatchContractTest {
+class BatchContractTest extends BaseIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
@@ -456,22 +445,22 @@ class BatchContractTest {
     }
 
     /**
-     * T010 Requirement 4: Verify Keycloak token behavior on GET endpoint.
+     * T010 Requirement 4: Verify Auth0 token behavior on GET endpoint.
      * <p>
-     * Production (FR-005): GET endpoints should accept both JWT and Keycloak tokens.
-     * Test Environment: TestSecurityConfig uses separate filter chains, so Keycloak
+     * Production (FR-005): GET endpoints should accept both JWT and Auth0 tokens.
+     * Test Environment: TestSecurityConfig uses separate filter chains, so Auth0
      * returns 403 on client API endpoints. This test documents expected production behavior.
      * </p>
      */
     @Test
-    @DisplayName("T010: GET Device batch with Keycloak token returns 401 (test env limitation)")
-    void getBatch_withKeycloakToken_shouldReturn401InTestEnv() throws Exception {
-        // Given: Mock Keycloak OAuth2 token
-        String keycloakToken = "Bearer mock.admin.jwt.token";
+    @DisplayName("T010: GET Device batch with Auth0 token returns 401 (test env limitation)")
+    void getBatch_withAuth0Token_shouldReturn401InTestEnv() throws Exception {
+        // Given: Mock Auth0 OAuth2 token
+        String auth0Token = "Bearer mock.admin.jwt.token";
 
-        // When: GET Device batch with Keycloak token
+        // When: GET Device batch with Auth0 token
         mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES_GET, IN_PROGRESS_BATCH_ID)
-                        .header("Authorization", keycloakToken))
+                        .header("Authorization", auth0Token))
 
                 // Then: 401 Unauthorized (invalid JWT format triggers AuthenticationEntryPoint)
                 // Production would return 200 OK with BatchResponseDto per FR-005

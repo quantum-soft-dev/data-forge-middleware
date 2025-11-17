@@ -8,6 +8,8 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MvcResult;
@@ -40,6 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Excel Export Integration Tests (User Story 4)")
 class ExcelExportIntegrationTest extends BaseIntegrationTest {
 
+    private static final Logger log = LoggerFactory.getLogger(ExcelExportIntegrationTest.class);
     @Autowired
     private S3Client s3Client;
 
@@ -317,6 +320,7 @@ class ExcelExportIntegrationTest extends BaseIntegrationTest {
                 RequestBody.fromBytes(csvBytes)
         );
 
+        log.info("Uploaded CSV file to S3: {}", s3Key);
         return s3Key;
     }
 }

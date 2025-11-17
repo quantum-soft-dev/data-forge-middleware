@@ -17,6 +17,7 @@ import { AccountCard } from '@/entities/account/ui/AccountCard'
 import { LockAccountButton } from '@/features/user-management/ui/LockAccountButton'
 import { UnlockAccountButton } from '@/features/user-management/ui/UnlockAccountButton'
 import { ResetPasswordDialog } from '@/features/user-management/ui/ResetPasswordDialog'
+import { DeleteAccountButton } from '@/features/user-management/ui/DeleteAccountButton'
 import { AdminActionLogList } from '@/features/user-management/ui/AdminActionLogList'
 import { useAccountQuery } from '@/features/user-management/api/userQueries'
 import { useState } from 'react'
@@ -52,6 +53,11 @@ export default function AccountDetailsPage() {
     console.log('Password reset successfully')
   }
 
+  const handleDeleteSuccess = () => {
+    // Navigate back to user list after successful deletion
+    navigate({ to: '/admin/users' })
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -81,8 +87,9 @@ export default function AccountDetailsPage() {
     )
   }
 
-  const hasKeycloak = !!account.keycloakUserId
-  const isLocked = !account.keycloakEnabled
+  const hasAuth0 = !!account.identityProviderUserId
+  const isLocked = account.isBlocked
+  const isAdmin = !account.company // Admins don't have company
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -107,7 +114,7 @@ export default function AccountDetailsPage() {
             </div>
 
             {/* Action Buttons */}
-            {hasKeycloak && (
+            {hasAuth0 && (
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowResetPasswordDialog(true)}
@@ -123,6 +130,7 @@ export default function AccountDetailsPage() {
                 ) : (
                   <LockAccountButton account={account} onSuccess={handleLockSuccess} />
                 )}
+                <DeleteAccountButton account={account} onSuccess={handleDeleteSuccess} />
               </div>
             )}
           </div>
@@ -133,32 +141,34 @@ export default function AccountDetailsPage() {
           <AccountCard account={account} />
         </div>
 
-        {/* Keycloak Integration Info */}
-        {!hasKeycloak && (
+        {/* Auth0 Integration Info */}
+        {!hasAuth0 && (
           <div className="mb-8 rounded-lg border border-yellow-200 bg-yellow-50 p-4">
             <h3 className="text-sm font-medium text-yellow-900 mb-1">
-              No Keycloak Integration
+              No Auth0 Integration
             </h3>
             <p className="text-sm text-yellow-800">
-              This account was created without Keycloak integration. Lock/unlock actions
+              This account was created without Auth0 integration. Lock/unlock/delete actions
               are not available.
             </p>
           </div>
         )}
 
-        {/* Sites Section */}
-        <div className="mb-8">
-          <p className="text-sm text-gray-600 mb-4">
-            Manage sites for this user account
-          </p>
-          <button
-            onClick={handleManageSites}
-            className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-          >
-            <Globe className="h-4 w-4" />
-            Manage Sites
-          </button>
-        </div>
+        {/* Sites Section - Only show for non-admin accounts */}
+        {!isAdmin && (
+          <div className="mb-8">
+            <p className="text-sm text-gray-600 mb-4">
+              Manage sites for this user account
+            </p>
+            <button
+              onClick={handleManageSites}
+              className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            >
+              <Globe className="h-4 w-4" />
+              Manage Sites
+            </button>
+          </div>
+        )}
 
         {/* Admin Action Log Section */}
         <div>

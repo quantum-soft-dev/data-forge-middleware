@@ -1,13 +1,13 @@
 /**
  * CreateAccountForm component for admin user management.
  *
- * Creates new account with Keycloak integration and displays
- * temporary password exactly once.
+ * Creates new account with Auth0 integration and displays
+ * password reset link exactly once.
  *
  * @module features/user-management/ui/CreateAccountForm
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { createAccountSchema, type CreateAccountFormData } from '../model/userSchemas'
@@ -19,8 +19,8 @@ interface CreateAccountFormProps {
 }
 
 export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProps) {
-  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null)
-  const [showPassword, setShowPassword] = useState(false)
+  const [passwordResetLink, setPasswordResetLink] = useState<string | null>(null)
+  const [showResetLink, setShowResetLink] = useState(false)
 
   const mutation = useCreateAccountMutation()
 
@@ -29,15 +29,32 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
     handleSubmit,
     formState: { errors, isSubmitting },
     reset,
+    watch,
+    setValue,
   } = useForm<CreateAccountFormData>({
     resolver: zodResolver(createAccountSchema),
   })
 
+  // Watch the role field to conditionally show/hide company field
+  const selectedRole = watch('role')
+
+  // Clear company field when ADMIN is selected
+  useEffect(() => {
+    if (selectedRole === 'ADMIN') {
+      setValue('company', '')
+    }
+  }, [selectedRole, setValue])
+
   const onSubmit = async (data: CreateAccountFormData) => {
     try {
-      const result = await mutation.mutateAsync(data)
-      setTemporaryPassword(result.temporaryPassword)
-      setShowPassword(true)
+      // Remove company field for ADMIN role
+      const submitData = data.role === 'ADMIN'
+        ? { ...data, company: undefined }
+        : data
+
+      const result = await mutation.mutateAsync(submitData)
+      setPasswordResetLink(result.passwordResetLink)
+      setShowResetLink(true)
       reset()
     } catch (error) {
       console.error('Failed to create account:', error)
@@ -46,34 +63,34 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
   }
 
   const handleClose = () => {
-    setTemporaryPassword(null)
-    setShowPassword(false)
+    setPasswordResetLink(null)
+    setShowResetLink(false)
     onSuccess?.()
   }
 
   const copyToClipboard = async () => {
-    if (temporaryPassword) {
-      await navigator.clipboard.writeText(temporaryPassword)
+    if (passwordResetLink) {
+      await navigator.clipboard.writeText(passwordResetLink)
       // TODO: Show toast notification
     }
   }
 
-  // Show temporary password modal after successful creation
-  if (showPassword && temporaryPassword) {
+  // Show password reset link modal after successful creation
+  if (showResetLink && passwordResetLink) {
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div className="bg-white rounded-lg p-6 max-w-md w-full">
           <h2 className="text-xl font-bold mb-4">Account Created Successfully</h2>
           <div className="mb-4">
             <p className="text-sm text-gray-600 mb-2">
-              Temporary password (save this now - it will not be shown again):
+              Password reset link (save this now - it will not be shown again):
             </p>
-            <div className="bg-gray-100 p-3 rounded font-mono text-lg flex items-center justify-between">
-              <span>{temporaryPassword}</span>
+            <div className="bg-gray-100 p-3 rounded font-mono text-xs break-all flex items-start justify-between">
+              <span className="flex-1">{passwordResetLink}</span>
               <button
                 type="button"
                 onClick={copyToClipboard}
-                className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+                className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 flex-shrink-0"
               >
                 Copy
               </button>
@@ -81,7 +98,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
           </div>
           <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4">
             <p className="text-sm text-yellow-800">
-              ⚠️ User must change this password on first login. Password expires in 30 days.
+              ⚠️ Send this link to the user. Link expires in 24 hours and can only be used once.
             </p>
           </div>
           <button
@@ -159,25 +176,28 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
         )}
       </div>
 
-      <div>
-        <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
-          Company
-        </label>
-        <input
-          {...register('company')}
-          type="text"
-          id="company"
-          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={isSubmitting}
-          aria-invalid={errors.company ? 'true' : 'false'}
-          aria-describedby={errors.company ? 'company-error' : undefined}
-        />
-        {errors.company && (
-          <p id="company-error" className="mt-1 text-sm text-red-600" role="alert">
-            {errors.company.message}
-          </p>
-        )}
-      </div>
+      {/* Only show Company field for USER role, not for ADMIN */}
+      {selectedRole === 'USER' && (
+        <div>
+          <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
+            Company
+          </label>
+          <input
+            {...register('company')}
+            type="text"
+            id="company"
+            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={isSubmitting}
+            aria-invalid={errors.company ? 'true' : 'false'}
+            aria-describedby={errors.company ? 'company-error' : undefined}
+          />
+          {errors.company && (
+            <p id="company-error" className="mt-1 text-sm text-red-600" role="alert">
+              {errors.company.message}
+            </p>
+          )}
+        </div>
+      )}
 
       <div>
         <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-1">

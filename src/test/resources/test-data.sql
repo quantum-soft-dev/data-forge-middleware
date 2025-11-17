@@ -13,11 +13,12 @@ DELETE FROM sites WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE 
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 
 -- Test accounts
-INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, keycloak_user_id)
-VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-test@example.com', 'Admin Test Account', true, '2025-09-06 00:00:00', CURRENT_TIMESTAMP, 'd4e5f6a7-b8c9-0123-def4-567890123456');
+-- NOTE: identity_provider_user_id must follow Auth0 format: {provider}|{alphanumeric} (e.g., 'auth0|abc123')
+INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, identity_provider_user_id)
+VALUES ('a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-test@example.com', 'Admin Test Account', true, '2025-09-06 00:00:00', CURRENT_TIMESTAMP, 'auth0|admintest123456');
 
-INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
-VALUES ('0199bab1-fad2-bf76-c478-eae1f61e1c17', 'test-account-2@example.com', 'Test Account 2', true, '2025-09-16 00:00:00', CURRENT_TIMESTAMP);
+INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, identity_provider_user_id)
+VALUES ('0199bab1-fad2-bf76-c478-eae1f61e1c17', 'test-account-2@example.com', 'Test Account 2', true, '2025-09-16 00:00:00', CURRENT_TIMESTAMP, 'auth0|60f7b8a8b4a0f10074c5d0e1');
 
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
 VALUES ('0199bab2-3cbd-cc95-a989-57ba51d258c8', 'inactive@example.com', 'Inactive Account', false, '2025-09-26 00:00:00', CURRENT_TIMESTAMP);

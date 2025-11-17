@@ -1,0 +1,656 @@
+openapi: 3.0.3
+info:
+  title: Data Forge Admin API (Auth0 Migration)
+  description: |
+    Admin API endpoints for Auth0 user management, replacing Keycloak integration.
+
+    **Changes from Keycloak**:
+    - Password reset returns `passwordResetLink` instead of `temporaryPassword`
+    - User creation requires `role` field (USER or ADMIN)
+    - Blocked status replaces enabled status (inverse logic)
+    - Auth0 user IDs format: `auth0|{id}` (up to 64 characters)
+  version: 1.0.0
+  contact:
+    name: Data Forge Support
+    email: support@dataforge.com
+
+servers:
+  - url: https://api.dataforge.com/api/v1
+    description: Production
+  - url: https://staging-api.dataforge.com/api/v1
+    description: Staging
+  - url: http://localhost:8080/api/v1
+    description: Local Development
+
+tags:
+  - name: Admin - Accounts (Auth0)
+    description: Admin operations for managing user accounts with Auth0 integration
+
+security:
+  - Auth0Bearer: []
+
+paths:
+  /admin/accounts:
+    post:
+      tags:
+        - Admin - Accounts (Auth0)
+      summary: Create account with Auth0 integration
+      description: |
+        Creates a new user account in both PostgreSQL and Auth0. The user is assigned
+        a role in Auth0 and receives a password reset link via email.
+
+        **Auth0 Workflow**:
+        1. Create user in Auth0 with email and role
+        2. Create account record in PostgreSQL with Auth0 user ID
+        3. Generate password change ticket (24-hour expiry)
+        4. Return password reset link to admin
+
+        **Breaking Change**: Returns `passwordResetLink` instead of `temporaryPassword`
+      operationId: createAccount
+      security:
+        - Auth0Bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+            examples:
+              createUser:
+                summary: Create regular user
+                value:
+                  email: "user@example.com"
+                  name: "John Doe"
+                  phone: "+1234567890"
+                  company: "Acme Inc"
+                  role: "USER"
+              createAdmin:
+                summary: Create admin user
+                value:
+                  email: "admin@example.com"
+                  name: "Admin User"
+                  role: "ADMIN"
+      responses:
+        '201':
+          description: Account created successfully with Auth0 integration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAccountResponse'
+              examples:
+                success:
+                  value:
+                    id: "550e8400-e29b-41d4-a716-446655440000"
+                    email: "user@example.com"
+                    name: "John Doe"
+                    passwordResetLink: "https://dev-example.us.auth0.com/lo/reset?ticket=abc123xyz"
+                    isActive: true
+                    createdAt: "2025-11-06T10:30:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Account with email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-11-06T10:30:00Z"
+                status: 409
+                error: "Conflict"
+                message: "Account with email user@example.com already exists"
+                path: "/api/v1/admin/accounts"
+        '503':
+          description: Auth0 service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-11-06T10:30:00Z"
+                status: 503
+                error: "Service Unavailable"
+                message: "Auth0 service is temporarily unavailable. Please try again later."
+                path: "/api/v1/admin/accounts"
+
+    get:
+      tags:
+        - Admin - Accounts (Auth0)
+      summary: List accounts with Auth0 integration
+      description: |
+        Returns paginated list of accounts that have Auth0 integration, including
+        Auth0-specific fields (blocked status, last login timestamp).
+
+        **Auth0 Fields**:
+        - `auth0UserId`: Auth0 user ID (format: auth0|xxx)
+        - `isBlocked`: User blocked status from Auth0
+        - `lastLogin`: Last successful login timestamp from Auth0
+      operationId: listAccounts
+      security:
+        - Auth0Bearer: []
+      parameters:
+        - name: search
+          in: query
+          description: Search by email or name (case-insensitive, partial match)
+          required: false
+          schema:
+            type: string
+            maxLength: 100
+            pattern: '^[a-zA-Z0-9@.\s\-]+$'
+          example: "john"
+        - name: page
+          in: query
+          description: Page number (0-indexed)
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          example: 0
+        - name: size
+          in: query
+          description: Page size
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+      responses:
+        '200':
+          description: List of accounts with identity provider integration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountPageDto'
+              examples:
+                success:
+                  value:
+                    content:
+                      - id: "550e8400-e29b-41d4-a716-446655440000"
+                        email: "user@example.com"
+                        name: "John Doe"
+                        phone: "+1234567890"
+                        company: "Acme Inc"
+                        isActive: true
+                        auth0UserId: "auth0|60f7b8a8b4a0f10074c5d0e1"
+                        isBlocked: false
+                        lastLogin: "2025-11-05T15:30:00Z"
+                        createdAt: "2025-11-01T10:00:00Z"
+                    page: 0
+                    size: 20
+                    totalElements: 1
+                    totalPages: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/accounts/{id}/lock:
+    post:
+      tags:
+        - Admin - Accounts (Auth0)
+      summary: Lock (block) user account
+      description: |
+        Locks (blocks) a user account by setting `blocked=true` in Auth0. Blocked users
+        cannot login, but existing sessions continue (same behavior as Keycloak).
+
+        **Auth0 Behavior**:
+        - Sets `user.blocked = true` via Management API
+        - User cannot login after lock
+        - Existing sessions remain active until expiration
+        - Admin cannot lock their own account (403 error)
+      operationId: lockAccount
+      security:
+        - Auth0Bearer: []
+      parameters:
+        - name: id
+          in: path
+          description: Account ID (PostgreSQL UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '204':
+          description: Account locked successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Cannot lock own account or insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                selfLock:
+                  summary: Cannot lock own account
+                  value:
+                    timestamp: "2025-11-06T10:30:00Z"
+                    status: 403
+                    error: "Forbidden"
+                    message: "Admins cannot lock their own accounts"
+                    path: "/api/v1/admin/accounts/550e8400-e29b-41d4-a716-446655440000/lock"
+                insufficientPermissions:
+                  summary: Insufficient permissions
+                  value:
+                    timestamp: "2025-11-06T10:30:00Z"
+                    status: 403
+                    error: "Forbidden"
+                    message: "Insufficient permissions"
+                    path: "/api/v1/admin/accounts/550e8400-e29b-41d4-a716-446655440000/lock"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Auth0 service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/accounts/{id}/unlock:
+    post:
+      tags:
+        - Admin - Accounts (Auth0)
+      summary: Unlock (unblock) user account
+      description: |
+        Unlocks (unblocks) a user account by setting `blocked=false` in Auth0.
+        User can login again after unlock.
+
+        **Auth0 Behavior**:
+        - Sets `user.blocked = false` via Management API
+        - User can login immediately after unlock
+      operationId: unlockAccount
+      security:
+        - Auth0Bearer: []
+      parameters:
+        - name: id
+          in: path
+          description: Account ID (PostgreSQL UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '204':
+          description: Account unlocked successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Auth0 service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/accounts/{id}/reset-password:
+    post:
+      tags:
+        - Admin - Accounts (Auth0)
+      summary: Reset user password
+      description: |
+        Generates an Auth0 password change ticket (temporary URL) and returns the link.
+        The link expires in 24 hours (configurable). User clicks the link to set a new password.
+
+        **Breaking Change**: Returns `passwordResetLink` instead of `temporaryPassword`
+
+        **Auth0 Workflow**:
+        1. Generate password change ticket via Auth0 Management API
+        2. Return ticket URL to admin
+        3. Admin sends link to user (email, support ticket, etc.)
+        4. User clicks link and sets new password on Auth0-hosted page
+        5. Link expires after 24 hours or one-time use
+      operationId: resetPassword
+      security:
+        - Auth0Bearer: []
+      parameters:
+        - name: id
+          in: path
+          description: Account ID (PostgreSQL UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Password reset link generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResetPasswordResponse'
+              example:
+                accountId: "550e8400-e29b-41d4-a716-446655440000"
+                email: "user@example.com"
+                passwordResetLink: "https://dev-example.us.auth0.com/lo/reset?ticket=xyz789abc"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Auth0 service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    Auth0Bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Auth0-issued JWT token with ROLE_ADMIN. Token must include:
+        - `iss`: https://{your-domain}.auth0.com/
+        - `aud`: https://api.dataforge.com
+        - Custom claim `https://api.dataforge.com/roles`: ["ROLE_ADMIN"]
+
+  schemas:
+    CreateAccountRequest:
+      type: object
+      required:
+        - email
+        - name
+        - role
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: User email address (must be unique)
+          example: "user@example.com"
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: User full name
+          example: "John Doe"
+        phone:
+          type: string
+          maxLength: 20
+          nullable: true
+          description: User phone number (optional)
+          example: "+1234567890"
+        company:
+          type: string
+          maxLength: 200
+          nullable: true
+          description: User company name (optional)
+          example: "Acme Inc"
+        role:
+          type: string
+          enum: [USER, ADMIN]
+          description: Auth0 role to assign (USER or ADMIN)
+          example: "USER"
+
+    CreateAccountResponse:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - passwordResetLink
+        - isActive
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Account ID (PostgreSQL UUID)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        email:
+          type: string
+          format: email
+          description: User email address
+          example: "user@example.com"
+        name:
+          type: string
+          description: User full name
+          example: "John Doe"
+        passwordResetLink:
+          type: string
+          format: uri
+          description: Auth0 password change ticket URL (expires in 24 hours)
+          example: "https://dev-example.us.auth0.com/lo/reset?ticket=abc123xyz"
+        isActive:
+          type: boolean
+          description: Account active status
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+          example: "2025-11-06T10:30:00Z"
+
+    ResetPasswordResponse:
+      type: object
+      required:
+        - accountId
+        - email
+        - passwordResetLink
+      properties:
+        accountId:
+          type: string
+          format: uuid
+          description: Account ID (PostgreSQL UUID)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        email:
+          type: string
+          format: email
+          description: User email address
+          example: "user@example.com"
+        passwordResetLink:
+          type: string
+          format: uri
+          description: Auth0 password change ticket URL (expires in 24 hours)
+          example: "https://dev-example.us.auth0.com/lo/reset?ticket=xyz789abc"
+
+    AccountDetailDto:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - isActive
+        - identityProviderUserId
+        - isBlocked
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Account ID (PostgreSQL UUID)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        email:
+          type: string
+          format: email
+          description: User email address
+          example: "user@example.com"
+        name:
+          type: string
+          description: User full name
+          example: "John Doe"
+        phone:
+          type: string
+          nullable: true
+          description: User phone number
+          example: "+1234567890"
+        company:
+          type: string
+          nullable: true
+          description: User company name
+          example: "Acme Inc"
+        isActive:
+          type: boolean
+          description: Account active status (PostgreSQL)
+          example: true
+        identityProviderUserId:
+          type: string
+          description: Identity provider user ID (format auth0|xxx)
+          example: "auth0|60f7b8a8b4a0f10074c5d0e1"
+        isBlocked:
+          type: boolean
+          description: User blocked status from identity provider
+          example: false
+        lastLogin:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last successful login timestamp from identity provider
+          example: "2025-11-05T15:30:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+          example: "2025-11-01T10:00:00Z"
+
+    AccountPageDto:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountDetailDto'
+        page:
+          type: integer
+          minimum: 0
+          description: Current page number (0-indexed)
+          example: 0
+        size:
+          type: integer
+          minimum: 1
+          description: Page size
+          example: 20
+        totalElements:
+          type: integer
+          minimum: 0
+          description: Total number of accounts with Auth0 integration
+          example: 100
+        totalPages:
+          type: integer
+          minimum: 0
+          description: Total number of pages
+          example: 5
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Error occurrence timestamp
+          example: "2025-11-06T10:30:00Z"
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        error:
+          type: string
+          description: Error type
+          example: "Bad Request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Email is required"
+        path:
+          type: string
+          description: Request path that triggered the error
+          example: "/api/v1/admin/accounts"
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validationError:
+              summary: Validation error
+              value:
+                timestamp: "2025-11-06T10:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Email is required"
+                path: "/api/v1/admin/accounts"
+            invalidRole:
+              summary: Invalid role
+              value:
+                timestamp: "2025-11-06T10:30:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Role must be either USER or ADMIN"
+                path: "/api/v1/admin/accounts"
+
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-11-06T10:30:00Z"
+            status: 401
+            error: "Unauthorized"
+            message: "Full authentication is required to access this resource"
+            path: "/api/v1/admin/accounts"
+
+    Forbidden:
+      description: Insufficient permissions (ROLE_ADMIN required)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-11-06T10:30:00Z"
+            status: 403
+            error: "Forbidden"
+            message: "Insufficient permissions"
+            path: "/api/v1/admin/accounts"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            timestamp: "2025-11-06T10:30:00Z"
+            status: 404
+            error: "Not Found"
+            message: "Account not found with ID: 550e8400-e29b-41d4-a716-446655440000"
+            path: "/api/v1/admin/accounts/550e8400-e29b-41d4-a716-446655440000"

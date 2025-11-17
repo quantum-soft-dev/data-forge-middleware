@@ -24,7 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </p>
  * <p>
  * Tests end-to-end user site creation, listing, activation, deactivation, and deletion.
- * Uses test database with Keycloak OAuth2 JWT authentication.
+ * Uses test database with Auth0 OAuth2 JWT authentication.
  * </p>
  *
  * @see <a href="specs/007-adding-a-site/spec.md">Feature Spec 007</a>

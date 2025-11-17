@@ -2,19 +2,13 @@ package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
-import com.bitbi.dfm.config.TestSecurityConfig;
-import com.bitbi.dfm.config.TestS3Config;
+import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.*;
@@ -34,13 +28,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * @see <a href="specs/008-upload-history-user/contracts/upload-history-api.yaml">Upload History API Contract</a>
  */
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import({TestSecurityConfig.class, TestS3Config.class, com.bitbi.dfm.config.TestKeycloakConfig.class})
-@Sql("/test-data.sql")
 @DisplayName("Upload History API Contract Tests (User Story 1)")
-class BatchHistoryContractTest {
+class BatchHistoryContractTest extends BaseIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
@@ -48,9 +37,13 @@ class BatchHistoryContractTest {
     @Autowired(required = false)
     private TokenService tokenService;
 
-    private static final String BATCH_HISTORY_ENDPOINT = ApiRoutes.HISTORY_BATCHES;
+    @Autowired
+    private software.amazon.awssdk.services.s3.S3Client s3Client;
 
-    // Use mock Keycloak token for /api/user/** endpoints
+    private static final String BATCH_HISTORY_ENDPOINT = ApiRoutes.HISTORY_BATCHES;
+    private static final String TEST_BUCKET = "data-forge-test-bucket";
+
+    // Use mock Auth0 token for /api/user/** endpoints
     private static final String MOCK_USER_TOKEN = "mock.user.jwt.token";
     // Use mock tokens for different accounts
     private static final String MOCK_USER_TOKEN_ACCOUNT_1 = "mock-jwt-token-account-1";
@@ -59,9 +52,57 @@ class BatchHistoryContractTest {
     private String jwtToken;
 
     @BeforeEach
-    void setUp() {
-        // Use mock Keycloak token for /api/user/** endpoints (OAuth2 authentication)
+    void setUp() throws Exception {
+        // Use mock Auth0 token for /api/user/** endpoints (OAuth2 authentication)
         jwtToken = MOCK_USER_TOKEN;
+
+        // Upload test CSV files to S3 for download/export tests (TC10, TC11)
+        // These files are referenced in test-data.sql but not physically uploaded to LocalStack
+        uploadTestFilesToS3();
+    }
+
+    /**
+     * Upload test CSV files to S3 for download and export tests.
+     * Files match test-data.sql entries for batch c3d4e5f6-a7b8-9012-cdef-123456789012
+     */
+    private void uploadTestFilesToS3() throws Exception {
+        // Create bucket if it doesn't exist
+        try {
+            s3Client.createBucket(builder -> builder.bucket(TEST_BUCKET));
+        } catch (Exception e) {
+            // Bucket might already exist, ignore
+        }
+
+        // File 1: data1.csv (file ID: 0199bab3-0429-c04f-9482-7f3b88456918)
+        String csvContent1 = """
+                id,name,description
+                1,Product A,First product
+                2,Product B,Second product
+                """;
+        String s3Key1 = "a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/data1.csv";
+        uploadCsvToS3(s3Key1, csvContent1);
+
+        // File 2: data2.csv (file ID: 0199bab3-69d1-d291-0fb6-c8dd6d09ee88)
+        String csvContent2 = """
+                id,product,price
+                1,Item X,$10.00
+                2,Item Y,$20.00
+                """;
+        String s3Key2 = "a1b2c3d4-e5f6-7890-abcd-ef1234567890/admin-site.example.com/2025-10-05/14-30/data2.csv";
+        uploadCsvToS3(s3Key2, csvContent2);
+    }
+
+    private void uploadCsvToS3(String s3Key, String csvContent) {
+        byte[] csvBytes = csvContent.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        s3Client.putObject(
+                software.amazon.awssdk.services.s3.model.PutObjectRequest.builder()
+                        .bucket(TEST_BUCKET)
+                        .key(s3Key)
+                        .contentType("text/csv")
+                        .build(),
+                software.amazon.awssdk.core.sync.RequestBody.fromBytes(csvBytes)
+        );
     }
 
     /**
