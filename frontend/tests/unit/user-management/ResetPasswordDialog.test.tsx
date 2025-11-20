@@ -32,18 +32,22 @@ describe('ResetPasswordDialog', () => {
     id: 'acc-123',
     email: 'test.user@example.com',
     name: 'Test User',
+    phone: null,
+    company: null,
+    status: 'active',
     role: 'USER',
     isActive: true,
     createdAt: '2025-10-29T10:00:00Z',
-    keycloakUserId: 'keycloak-123',
-    accountEnabled: true,
+    updatedAt: '2025-10-29T10:00:00Z',
+    identityProviderUserId: 'auth0|123',
+    isBlocked: false,
     lastLogin: null,
   }
 
   const mockAccountNoKeycloak: AccountWithKeycloakStatus = {
     ...mockAccount,
-    keycloakUserId: null,
-    accountEnabled: false,
+    identityProviderUserId: null,
+    isBlocked: true,
   }
 
   beforeEach(() => {
@@ -162,8 +166,8 @@ describe('ResetPasswordDialog', () => {
         />
       )
 
-      expect(screen.getByText(/a temporary password will be generated/i)).toBeInTheDocument()
-      expect(screen.getByText(/user must change it on their next login/i)).toBeInTheDocument()
+      expect(screen.getByText(/a password reset link will be generated/i)).toBeInTheDocument()
+      expect(screen.getByText(/send this link to the user to set a new password/i)).toBeInTheDocument()
     })
 
     it('displays warning about current password invalidation', () => {
@@ -183,7 +187,7 @@ describe('ResetPasswordDialog', () => {
         />
       )
 
-      expect(screen.getByText(/the user's current password will be invalidated immediately/i)).toBeInTheDocument()
+      expect(screen.getByText(/the user will receive a one-time password reset link/i)).toBeInTheDocument()
     })
   })
 
@@ -228,7 +232,7 @@ describe('ResetPasswordDialog', () => {
 
       const resetButton = screen.getByRole('button', { name: /reset password/i })
       expect(resetButton).toBeDisabled()
-      expect(resetButton).toHaveAttribute('title', 'Account does not have Keycloak integration')
+      expect(resetButton).toHaveAttribute('title', 'Account does not have Auth0 integration')
     })
 
     it('disables buttons when mutation is pending', () => {
@@ -258,7 +262,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -289,7 +294,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockResponse = {
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       }
 
@@ -314,11 +320,11 @@ describe('ResetPasswordDialog', () => {
       await user.click(resetButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/password reset successfully/i)).toBeInTheDocument()
+        expect(screen.getByText(/password reset link generated/i)).toBeInTheDocument()
       })
 
-      expect(screen.getByText(mockResponse.temporaryPassword)).toBeInTheDocument()
-      expect(screen.getByText(/save this password now/i)).toBeInTheDocument()
+      expect(screen.getByText(mockResponse.passwordResetLink)).toBeInTheDocument()
+      expect(screen.getByText(/save this link now/i)).toBeInTheDocument()
     })
 
     it('calls onSuccess callback after successful reset', async () => {
@@ -326,7 +332,8 @@ describe('ResetPasswordDialog', () => {
       const mockOnSuccess = vi.fn()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -360,7 +367,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -383,16 +391,17 @@ describe('ResetPasswordDialog', () => {
       await user.click(resetButton)
 
       await waitFor(() => {
-        expect(screen.getByRole('button', { name: /copy password to clipboard/i })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /copy password reset link to clipboard/i })).toBeInTheDocument()
       })
     })
 
     it('copies password to clipboard when copy button is clicked', async () => {
       const user = userEvent.setup()
-      const mockPassword = 'TempPass123!@#'
+      const mockLink = 'https://auth0.com/reset-password'
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: mockPassword,
+        email: mockAccount.email,
+        passwordResetLink: mockLink,
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -417,16 +426,16 @@ describe('ResetPasswordDialog', () => {
 
       // Wait for success screen
       await waitFor(() => {
-        expect(screen.getByText(mockPassword)).toBeInTheDocument()
+        expect(screen.getByText(mockLink)).toBeInTheDocument()
       })
 
       // Click copy button
-      const copyButton = screen.getByRole('button', { name: /copy password to clipboard/i })
+      const copyButton = screen.getByRole('button', { name: /copy password reset link to clipboard/i })
       await user.click(copyButton)
 
       // Verify clipboard.writeText was called
       await waitFor(() => {
-        expect(mockClipboardWriteText).toHaveBeenCalledWith(mockPassword)
+        expect(mockClipboardWriteText).toHaveBeenCalledWith(mockLink)
       })
     })
 
@@ -434,7 +443,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -459,11 +469,11 @@ describe('ResetPasswordDialog', () => {
 
       // Wait for success screen
       await waitFor(() => {
-        expect(screen.getByText('TempPass123!@#')).toBeInTheDocument()
+        expect(screen.getByText('https://auth0.com/reset-password')).toBeInTheDocument()
       })
 
       // Click copy button
-      const copyButton = screen.getByRole('button', { name: /copy password to clipboard/i })
+      const copyButton = screen.getByRole('button', { name: /copy password reset link to clipboard/i })
       await user.click(copyButton)
 
       // The check icon should appear (copy icon is replaced)
@@ -476,11 +486,12 @@ describe('ResetPasswordDialog', () => {
   })
 
   describe('Warning Messages', () => {
-    it('displays "save this password now" warning after reset', async () => {
+    it('displays "save this link now" warning after reset', async () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -503,7 +514,7 @@ describe('ResetPasswordDialog', () => {
       await user.click(resetButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/save this password now\. it will not be shown again/i)).toBeInTheDocument()
+        expect(screen.getByText(/save this link now/i)).toBeInTheDocument()
       })
     })
 
@@ -511,7 +522,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -535,7 +547,7 @@ describe('ResetPasswordDialog', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/expires:/i)).toBeInTheDocument()
-        expect(screen.getByText(/30 days/i)).toBeInTheDocument()
+        expect(screen.getByText(/24 hours/i)).toBeInTheDocument()
       })
     })
 
@@ -543,7 +555,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -566,7 +579,7 @@ describe('ResetPasswordDialog', () => {
       await user.click(resetButton)
 
       await waitFor(() => {
-        expect(screen.getByText(/the user will be required to change this password on their next login/i)).toBeInTheDocument()
+        expect(screen.getByText(/this is a one-time use link/i)).toBeInTheDocument()
       })
     })
   })
@@ -604,7 +617,8 @@ describe('ResetPasswordDialog', () => {
       const mockOnClose = vi.fn()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -719,7 +733,8 @@ describe('ResetPasswordDialog', () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         accountId: mockAccount.id,
-        temporaryPassword: 'TempPass123!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       })
 
@@ -742,8 +757,8 @@ describe('ResetPasswordDialog', () => {
       await user.click(resetButton)
 
       await waitFor(() => {
-        const copyButton = screen.getByRole('button', { name: /copy password to clipboard/i })
-        expect(copyButton).toHaveAttribute('aria-label', 'Copy password to clipboard')
+        const copyButton = screen.getByRole('button', { name: /copy password reset link to clipboard/i })
+        expect(copyButton).toHaveAttribute('aria-label', 'Copy password reset link to clipboard')
       })
     })
   })

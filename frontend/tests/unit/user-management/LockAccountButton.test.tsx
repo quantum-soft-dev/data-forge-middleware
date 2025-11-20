@@ -4,7 +4,7 @@
  * Tests:
  * - Button enabled for unlocked account
  * - Button disabled for already locked account
- * - Button disabled for account without Keycloak integration
+ * - Button disabled for account without Auth0 integration
  * - Confirmation dialog appears on click
  * - Mutation called after confirmation
  * - Cancel closes dialog without calling mutation
@@ -24,7 +24,7 @@ vi.mock('@/features/user-management/api/userMutations')
 // Helper to create a mock account
 const createMockAccount = (overrides?: Partial<AccountWithKeycloakStatus>): AccountWithKeycloakStatus => ({
   id: '550e8400-e29b-41d4-a716-446655440000',
-  keycloakUserId: 'a3bb189e-8bf9-3888-9912-ace4e6543002',
+  identityProviderUserId: 'auth0|a3bb189e-8bf9-3888-9912-ace4e6543002',
   email: 'test@example.com',
   name: 'Test User',
   phone: null,
@@ -32,11 +32,10 @@ const createMockAccount = (overrides?: Partial<AccountWithKeycloakStatus>): Acco
   isActive: true,
   createdAt: '2025-10-28T12:00:00Z',
   updatedAt: '2025-10-28T12:00:00Z',
-  keycloakEnabled: true,
-  passwordTemporary: false,
-  passwordExpiresAt: null,
+  isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
+  status: 'active',
+  updatedAt: '2025-10-28T12:00:00Z',
   lastLogin: null,
-  role: 'USER',
   ...overrides,
 })
 
@@ -61,7 +60,7 @@ describe('LockAccountButton', () => {
     vi.clearAllMocks()
   })
 
-  it('renders button enabled for unlocked account with Keycloak integration', () => {
+  it('renders button enabled for unlocked account with Auth0 integration', () => {
     const mockMutateAsync = vi.fn().mockResolvedValue({})
     vi.mocked(userMutationsModule.useLockAccountMutation).mockReturnValue({
       mutateAsync: mockMutateAsync,
@@ -72,8 +71,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
@@ -95,8 +94,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: false, // Already locked
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: true, // Already locked
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
@@ -106,7 +105,7 @@ describe('LockAccountButton', () => {
     expect(button).toHaveAttribute('title', 'Account is already locked')
   })
 
-  it('renders button disabled for account without Keycloak integration', () => {
+  it('renders button disabled for account without Auth0 integration', () => {
     const mockMutateAsync = vi.fn().mockResolvedValue({})
     vi.mocked(userMutationsModule.useLockAccountMutation).mockReturnValue({
       mutateAsync: mockMutateAsync,
@@ -117,15 +116,15 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: null, // No Keycloak integration
-      keycloakEnabled: true,
+      identityProviderUserId: null, // No Auth0 integration
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
 
     const button = screen.getByRole('button', { name: /lock account for test@example.com/i })
     expect(button).toBeDisabled()
-    expect(button).toHaveAttribute('title', 'Account does not have Keycloak integration')
+    expect(button).toHaveAttribute('title', 'Account does not have Auth0 integration')
   })
 
   it('shows confirmation dialog when button is clicked', async () => {
@@ -139,8 +138,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
@@ -178,8 +177,8 @@ describe('LockAccountButton', () => {
 
     const account = createMockAccount({
       id: '550e8400-e29b-41d4-a716-446655440000',
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(
@@ -226,8 +225,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
@@ -265,8 +264,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
@@ -306,8 +305,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     renderWithQueryClient(<LockAccountButton account={account} />)
@@ -330,8 +329,8 @@ describe('LockAccountButton', () => {
     } as any)
 
     const account = createMockAccount({
-      keycloakUserId: 'test-keycloak-id',
-      keycloakEnabled: true,
+      identityProviderUserId: 'auth0|test-id',
+      isBlocked: false,  // Auth0 blocked status (false = enabled/unlocked)
     })
 
     const { rerender } = renderWithQueryClient(<LockAccountButton account={account} />)

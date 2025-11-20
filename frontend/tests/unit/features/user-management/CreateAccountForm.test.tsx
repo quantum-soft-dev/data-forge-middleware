@@ -63,7 +63,7 @@ describe('CreateAccountForm', () => {
   })
 
   describe('Form Rendering', () => {
-    it('renders all required form fields', () => {
+    it('renders all required form fields', async () => {
       const mockMutateAsync = vi.fn()
       vi.mocked(userMutationsModule.useCreateAccountMutation).mockReturnValue({
         mutateAsync: mockMutateAsync,
@@ -78,8 +78,12 @@ describe('CreateAccountForm', () => {
       expect(screen.getByLabelText(/email address/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/full name/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/phone number/i)).toBeInTheDocument()
-      expect(screen.getByLabelText(/company/i)).toBeInTheDocument()
+      expect(screen.queryByLabelText(/company/i)).not.toBeInTheDocument()
       expect(screen.getByLabelText(/role/i)).toBeInTheDocument()
+
+      // Select USER role to show company field
+      await userEvent.setup().selectOptions(screen.getByLabelText(/role/i), 'USER')
+      expect(screen.getByLabelText(/company/i)).toBeInTheDocument()
 
       // Check submit button
       expect(screen.getByRole('button', { name: /create account/i })).toBeInTheDocument()
@@ -253,7 +257,7 @@ describe('CreateAccountForm', () => {
           name: 'Test User',
           role: 'USER',
         },
-        temporaryPassword: 'TempPass123!',
+        passwordResetLink: 'https://auth0.com/reset-password',
       })
 
       vi.mocked(userMutationsModule.useCreateAccountMutation).mockReturnValue({
@@ -269,8 +273,8 @@ describe('CreateAccountForm', () => {
       await user.type(screen.getByLabelText(/email address/i), 'test@example.com')
       await user.type(screen.getByLabelText(/full name/i), 'Test User')
       await user.type(screen.getByLabelText(/phone number/i), '+1234567890')
-      await user.type(screen.getByLabelText(/company/i), 'Test Company')
       await user.selectOptions(screen.getByLabelText(/role/i), 'USER')
+      await user.type(screen.getByLabelText(/company/i), 'Test Company')
 
       // Submit form
       await user.click(screen.getByRole('button', { name: /create account/i }))
@@ -296,7 +300,7 @@ describe('CreateAccountForm', () => {
           name: 'Admin User',
           role: 'ADMIN',
         },
-        temporaryPassword: 'TempPass123!',
+        passwordResetLink: 'https://auth0.com/reset-password',
       })
 
       vi.mocked(userMutationsModule.useCreateAccountMutation).mockReturnValue({
@@ -367,7 +371,7 @@ describe('CreateAccountForm', () => {
           name: 'Test User',
           role: 'USER',
         },
-        temporaryPassword: 'TempPass123!@#',
+        passwordResetLink: 'https://auth0.com/reset-password',
       })
 
       vi.mocked(userMutationsModule.useCreateAccountMutation).mockReturnValue({
@@ -386,19 +390,17 @@ describe('CreateAccountForm', () => {
       await user.click(screen.getByRole('button', { name: /create account/i }))
 
       // Check modal appears with temporary password
-      await waitFor(() => {
-        expect(screen.getByText(/account created successfully/i)).toBeInTheDocument()
-        expect(screen.getByText('TempPass123!@#')).toBeInTheDocument()
-        expect(screen.getByText(/save this now - it will not be shown again/i)).toBeInTheDocument()
-        expect(screen.getByText(/user must change this password on first login/i)).toBeInTheDocument()
-      })
+      expect(await screen.findByText(/account created successfully/i)).toBeInTheDocument()
+      expect(screen.getByText('https://auth0.com/reset-password')).toBeInTheDocument()
+      expect(screen.getByText(/save this now - it will not be shown again/i)).toBeInTheDocument()
+      expect(screen.getByText(/Send this link to the user. Link expires in 24 hours/i)).toBeInTheDocument()
     })
 
     it('copies temporary password to clipboard when copy button clicked', async () => {
       const user = userEvent.setup()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         account: { id: 'test-id', email: 'test@example.com', name: 'Test User', role: 'USER' },
-        temporaryPassword: 'TempPass123!@#',
+        passwordResetLink: 'https://auth0.com/reset-password',
       })
 
       vi.mocked(userMutationsModule.useCreateAccountMutation).mockReturnValue({
@@ -417,16 +419,14 @@ describe('CreateAccountForm', () => {
       await user.click(screen.getByRole('button', { name: /create account/i }))
 
       // Wait for modal and click copy button
-      await waitFor(() => {
-        expect(screen.getByText('TempPass123!@#')).toBeInTheDocument()
-      })
+      expect(await screen.findByText('https://auth0.com/reset-password')).toBeInTheDocument()
 
       const copyButton = screen.getByRole('button', { name: /copy/i })
       await user.click(copyButton)
 
       // Check clipboard.writeText was called
       await waitFor(() => {
-        expect(mockClipboardWriteText).toHaveBeenCalledWith('TempPass123!@#')
+        expect(mockClipboardWriteText).toHaveBeenCalledWith('https://auth0.com/reset-password')
       })
     })
 
@@ -435,7 +435,7 @@ describe('CreateAccountForm', () => {
       const mockOnSuccess = vi.fn()
       const mockMutateAsync = vi.fn().mockResolvedValue({
         account: { id: 'test-id', email: 'test@example.com', name: 'Test User', role: 'USER' },
-        temporaryPassword: 'TempPass123!@#',
+        passwordResetLink: 'https://auth0.com/reset-password',
       })
 
       vi.mocked(userMutationsModule.useCreateAccountMutation).mockReturnValue({
@@ -454,9 +454,7 @@ describe('CreateAccountForm', () => {
       await user.click(screen.getByRole('button', { name: /create account/i }))
 
       // Wait for modal and close it
-      await waitFor(() => {
-        expect(screen.getByText(/account created successfully/i)).toBeInTheDocument()
-      })
+      expect(await screen.findByText(/account created successfully/i)).toBeInTheDocument()
 
       const closeButton = screen.getByRole('button', { name: /close/i })
       await user.click(closeButton)

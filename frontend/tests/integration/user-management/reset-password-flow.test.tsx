@@ -35,20 +35,23 @@ describe('Reset Password Flow - Integration Test', () => {
     id: 'acc-reset-123',
     email: 'reset.user@example.com',
     name: 'Reset Test User',
-    role: 'USER',
+    status: 'active',
     isActive: true,
     createdAt: '2025-10-29T10:00:00Z',
-    keycloakUserId: 'keycloak-reset-123',
-    accountEnabled: true,
+    updatedAt: '2025-10-29T10:00:00Z',
+    identityProviderUserId: 'auth0|reset-123',
+    isBlocked: false,
     lastLogin: null,
+    phone: null,
+    company: null,
   }
 
   const mockAccountNoKeycloak: AccountWithKeycloakStatus = {
     ...mockAccount,
-    id: 'acc-no-keycloak',
-    email: 'no.keycloak@example.com',
-    keycloakUserId: null,
-    accountEnabled: false,
+    id: 'acc-no-auth0',
+    email: 'no.auth0@example.com',
+    identityProviderUserId: null,
+    isBlocked: true,
   }
 
   beforeEach(() => {
@@ -100,7 +103,8 @@ describe('Reset Password Flow - Integration Test', () => {
     const mockResponse = {
       data: {
         accountId: mockAccount.id,
-        temporaryPassword: 'ResetPass789!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       },
     }
@@ -132,20 +136,20 @@ describe('Reset Password Flow - Integration Test', () => {
       )
     })
 
-    // Step 4: Verify temporary password is displayed
+    // Step 4: Verify password reset link is displayed
     await waitFor(() => {
-      expect(screen.getByText(/password reset successfully/i)).toBeInTheDocument()
+      expect(screen.getByText(/password reset link generated/i)).toBeInTheDocument()
     })
 
-    expect(screen.getByText(mockResponse.data.temporaryPassword)).toBeInTheDocument()
-    expect(screen.getByText(/save this password now/i)).toBeInTheDocument()
+    expect(screen.getByText(mockResponse.data.passwordResetLink)).toBeInTheDocument()
+    expect(screen.getByText(/save this link now/i)).toBeInTheDocument()
 
-    // Step 5: Copy password to clipboard
-    const copyButton = screen.getByRole('button', { name: /copy password to clipboard/i })
+    // Step 5: Copy password reset link to clipboard
+    const copyButton = screen.getByRole('button', { name: /copy password reset link to clipboard/i })
     await user.click(copyButton)
 
     await waitFor(() => {
-      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(mockResponse.data.temporaryPassword)
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(mockResponse.data.passwordResetLink)
     })
 
     // Verify onSuccess was called
@@ -162,7 +166,8 @@ describe('Reset Password Flow - Integration Test', () => {
     const mockResponse = {
       data: {
         accountId: mockAccount.id,
-        temporaryPassword: 'ResetPass789!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       },
     }
@@ -177,8 +182,8 @@ describe('Reset Password Flow - Integration Test', () => {
     )
 
     // Verify pre-reset warnings
-    expect(screen.getByText(/a temporary password will be generated/i)).toBeInTheDocument()
-    expect(screen.getByText(/the user's current password will be invalidated immediately/i)).toBeInTheDocument()
+    expect(screen.getByText(/a password reset link will be generated/i)).toBeInTheDocument()
+    expect(screen.getByText(/the user will receive a one-time password reset link/i)).toBeInTheDocument()
 
     // Click reset
     const resetButton = screen.getByRole('button', { name: /reset password/i })
@@ -186,12 +191,12 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Verify post-reset warnings
     await waitFor(() => {
-      expect(screen.getByText(/save this password now\. it will not be shown again/i)).toBeInTheDocument()
+      expect(screen.getByText(/save this link now/i)).toBeInTheDocument()
     })
 
-    expect(screen.getByText(/the user will be required to change this password on their next login/i)).toBeInTheDocument()
+    expect(screen.getByText(/this is a one-time use link/i)).toBeInTheDocument()
     expect(screen.getByText(/expires:/i)).toBeInTheDocument()
-    expect(screen.getByText(/30 days/i)).toBeInTheDocument()
+    expect(screen.getByText(/24 hours/i)).toBeInTheDocument()
   })
 
   it('handles API error correctly', async () => {
@@ -229,7 +234,7 @@ describe('Reset Password Flow - Integration Test', () => {
     })
 
     // Verify success screen did NOT appear
-    expect(screen.queryByText(/password reset successfully/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/password reset link generated/i)).not.toBeInTheDocument()
 
     // Verify onSuccess was NOT called
     expect(mockOnSuccess).not.toHaveBeenCalled()
@@ -248,7 +253,7 @@ describe('Reset Password Flow - Integration Test', () => {
 
     const resetButton = screen.getByRole('button', { name: /reset password/i })
     expect(resetButton).toBeDisabled()
-    expect(resetButton).toHaveAttribute('title', 'Account does not have Keycloak integration')
+    expect(resetButton).toHaveAttribute('title', 'Account does not have Auth0 integration')
   })
 
   it('disables buttons while mutation is pending', async () => {
@@ -259,7 +264,8 @@ describe('Reset Password Flow - Integration Test', () => {
           resolve({
             data: {
               accountId: mockAccount.id,
-              temporaryPassword: 'ResetPass789!@#',
+              email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
               expiresAt: '2025-11-28T10:00:00Z',
             },
           })
@@ -286,7 +292,7 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Wait for completion
     await waitFor(() => {
-      expect(screen.getByText(/password reset successfully/i)).toBeInTheDocument()
+      expect(screen.getByText(/password reset link generated/i)).toBeInTheDocument()
     })
   })
 
@@ -317,7 +323,8 @@ describe('Reset Password Flow - Integration Test', () => {
     const mockResponse = {
       data: {
         accountId: mockAccount.id,
-        temporaryPassword: 'ResetPass789!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: expirationDate,
       },
     }
@@ -337,7 +344,7 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Wait for success screen
     await waitFor(() => {
-      expect(screen.getByText(/password reset successfully/i)).toBeInTheDocument()
+      expect(screen.getByText(/password reset link generated/i)).toBeInTheDocument()
     })
 
     // Verify expiration date is shown
@@ -350,7 +357,8 @@ describe('Reset Password Flow - Integration Test', () => {
     const mockResponse = {
       data: {
         accountId: mockAccount.id,
-        temporaryPassword: 'ResetPass789!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       },
     }
@@ -379,11 +387,11 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Wait for success screen
     await waitFor(() => {
-      expect(screen.getByText(mockResponse.data.temporaryPassword)).toBeInTheDocument()
+      expect(screen.getByText(mockResponse.data.passwordResetLink)).toBeInTheDocument()
     })
 
     // Try to copy
-    const copyButton = screen.getByRole('button', { name: /copy password to clipboard/i })
+    const copyButton = screen.getByRole('button', { name: /copy password reset link to clipboard/i })
     await user.click(copyButton)
 
     // Verify writeText was called (but failed)
@@ -400,7 +408,8 @@ describe('Reset Password Flow - Integration Test', () => {
     const mockResponse = {
       data: {
         accountId: mockAccount.id,
-        temporaryPassword: 'ResetPass789!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       },
     }
@@ -421,11 +430,11 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Wait for success
     await waitFor(() => {
-      expect(screen.getByText(/password reset successfully/i)).toBeInTheDocument()
+      expect(screen.getByText(/password reset link generated/i)).toBeInTheDocument()
     })
 
-    // Copy password
-    const copyButton = screen.getByRole('button', { name: /copy password to clipboard/i })
+    // Copy password reset link
+    const copyButton = screen.getByRole('button', { name: /copy password reset link to clipboard/i })
     await user.click(copyButton)
 
     // Close dialog
@@ -447,14 +456,15 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Should show confirmation dialog again (not success screen)
     expect(screen.getByText(/are you sure you want to reset the password for/i)).toBeInTheDocument()
-    expect(screen.queryByText(/password reset successfully/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/password reset link generated/i)).not.toBeInTheDocument()
   })
 
   it('displays account email correctly throughout the flow', async () => {
     const mockResponse = {
       data: {
         accountId: mockAccount.id,
-        temporaryPassword: 'ResetPass789!@#',
+        email: mockAccount.email,
+        passwordResetLink: 'https://auth0.com/reset-password',
         expiresAt: '2025-11-28T10:00:00Z',
       },
     }
@@ -477,7 +487,7 @@ describe('Reset Password Flow - Integration Test', () => {
 
     // Email shown in success
     await waitFor(() => {
-      expect(screen.getByText(/password reset successfully/i)).toBeInTheDocument()
+      expect(screen.getByText(/password reset link generated/i)).toBeInTheDocument()
     })
 
     expect(screen.getByText(mockAccount.email)).toBeInTheDocument()
