@@ -2,26 +2,23 @@
  * AccountStatusBadge Component
  *
  * Per T030: Display account status indicators.
- * Shows isActive, keycloakEnabled, and passwordTemporary states with color-coded badges.
+ * Shows isActive and isBlocked states with color-coded badges.
  *
  * Features:
  * - Active/Inactive status (green/red)
- * - Keycloak enabled status (green/red)
- * - Password temporary indicator (yellow/gray)
+ * - Auth0 blocked status (red/green)
  * - Accessibility with ARIA labels
  */
 
 interface AccountStatusBadgeProps {
   isActive: boolean
-  keycloakEnabled?: boolean
-  passwordTemporary?: boolean
+  isBlocked?: boolean
   className?: string
 }
 
 export function AccountStatusBadge({
   isActive,
-  keycloakEnabled,
-  passwordTemporary,
+  isBlocked,
   className = '',
 }: AccountStatusBadgeProps) {
   return (
@@ -38,31 +35,17 @@ export function AccountStatusBadge({
         {isActive ? '● Active' : '● Inactive'}
       </span>
 
-      {/* Keycloak Integration Status */}
-      {keycloakEnabled !== undefined && (
+      {/* Auth0 Blocked Status */}
+      {isBlocked !== undefined && (
         <span
           className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            keycloakEnabled
-              ? 'bg-green-100 text-green-800'
-              : 'bg-red-100 text-red-800'
+            isBlocked
+              ? 'bg-red-100 text-red-800'
+              : 'bg-green-100 text-green-800'
           }`}
-          aria-label={`Keycloak status: ${keycloakEnabled ? 'Enabled' : 'Disabled'}`}
+          aria-label={`Auth0 status: ${isBlocked ? 'Blocked' : 'Active'}`}
         >
-          {keycloakEnabled ? 'Keycloak Enabled' : 'Keycloak Disabled'}
-        </span>
-      )}
-
-      {/* Password Temporary Status */}
-      {passwordTemporary !== undefined && (
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            passwordTemporary
-              ? 'bg-yellow-100 text-yellow-800'
-              : 'bg-gray-100 text-gray-800'
-          }`}
-          aria-label={`Password type: ${passwordTemporary ? 'Temporary' : 'Permanent'}`}
-        >
-          {passwordTemporary ? '⚠ Temporary Password' : 'Permanent Password'}
+          {isBlocked ? '● Blocked' : '● Auth0 Active'}
         </span>
       )}
     </div>

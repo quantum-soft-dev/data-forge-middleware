@@ -17,8 +17,8 @@ export function Header() {
   const { user, hasRole } = useAuth()
   const isAdmin = hasRole('ROLE_ADMIN')
 
-  // Get user name from token (prefer name, fallback to email, then username)
-  const userName = user?.name || user?.email || user?.preferred_username || 'User'
+  // Get user name from token (prefer name, fallback to email)
+  const userName = user?.name || user?.email || 'User'
 
   return (
     <header className="border-b border-gray-200 bg-white shadow-sm">

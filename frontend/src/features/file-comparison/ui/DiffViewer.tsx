@@ -138,7 +138,6 @@ export function DiffViewer({
           useDarkTheme={false}
           hideLineNumbers={!showLineNumbers}
           disableWordDiff={!highlightInline}
-          compareMethod="diffWords"
           leftTitle={diff.oldFileName || 'Original'}
           rightTitle={diff.newFileName || 'Modified'}
           styles={{

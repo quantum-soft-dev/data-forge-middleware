@@ -96,8 +96,7 @@ export function UserListTable({
         return (
           <AccountStatusBadge
             isActive={user.isActive}
-            keycloakEnabled={user.keycloakEnabled}
-            passwordTemporary={user.passwordTemporary}
+            isBlocked={user.isBlocked}
           />
         )
       },
@@ -148,7 +147,7 @@ export function UserListTable({
       header: 'Actions',
       cell: (info) => {
         const user = info.row.original
-        const hasKeycloak = !!user.keycloakUserId
+        const hasAuth0 = !!user.identityProviderUserId
 
         return (
           <div className="flex items-center gap-1">
@@ -162,7 +161,7 @@ export function UserListTable({
               </button>
             )}
 
-            {hasKeycloak && user.keycloakEnabled && onLock && (
+            {hasAuth0 && !user.isBlocked && onLock && (
               <button
                 onClick={() => onLock(user)}
                 className="rounded p-1.5 text-orange-600 hover:bg-orange-50 hover:text-orange-900"
@@ -172,7 +171,7 @@ export function UserListTable({
               </button>
             )}
 
-            {hasKeycloak && !user.keycloakEnabled && onUnlock && (
+            {hasAuth0 && user.isBlocked && onUnlock && (
               <button
                 onClick={() => onUnlock(user)}
                 className="rounded p-1.5 text-green-600 hover:bg-green-50 hover:text-green-900"

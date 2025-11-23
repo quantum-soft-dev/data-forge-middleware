@@ -193,7 +193,6 @@ export function BatchDetailView({
 
           {/* T077, T099: Action buttons for selected files */}
           <div className="flex items-center gap-2">
-            {console.log('[BatchDetailView] Rendering buttons with selectedFileIds:', selectedFileIds)}
             {/* T077: Download button for selected files */}
             <DownloadButton
               batchId={batch.id}

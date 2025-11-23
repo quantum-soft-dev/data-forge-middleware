@@ -170,7 +170,7 @@ export function CompareFilesModal({
                                 <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                                   <span className="flex items-center gap-1">
                                     <Files className="h-3 w-3" />
-                                    {batch.fileCount}
+                                    {batch.uploadedFilesCount}
                                   </span>
                                   <span className="flex items-center gap-1">
                                     <HardDrive className="h-3 w-3" />

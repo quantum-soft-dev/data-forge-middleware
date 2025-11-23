@@ -7,7 +7,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from '@/shared/api/client'
-import { ACCOUNTS, ACCOUNTS_LOCK, ACCOUNTS_UNLOCK, ACCOUNTS_RESET_PASSWORD } from '@/shared/api/apiRoutes'
+import { ACCOUNTS, ACCOUNTS_ID, ACCOUNTS_LOCK, ACCOUNTS_UNLOCK, ACCOUNTS_RESET_PASSWORD } from '@/shared/api/apiRoutes'
 import type {
   CreateAccountRequest,
   CreateAccountResponse,
