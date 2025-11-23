@@ -13,7 +13,6 @@
  */
 
 import { Mail, User, Phone, Building, Calendar, Key } from 'lucide-react'
-import { AccountStatusBadge } from './AccountStatusBadge'
 import type { AccountWithKeycloakStatus } from '../model/types'
 
 interface AccountCardProps {

@@ -26,6 +26,9 @@ export interface ComparisonResponse {
   errorMessage?: string | null;
 }
 
+// Alias for backward compatibility
+export type Comparison = ComparisonResponse;
+
 export interface PagedComparisonResponse {
   content: ComparisonResponse[];
   page: number;

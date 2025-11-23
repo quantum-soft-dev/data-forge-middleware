@@ -15,6 +15,10 @@
 
 import { useQuery, UseQueryOptions } from '@tanstack/react-query';
 import { comparisonApi } from '../api/comparisonApi';
+import type { PagedComparisonResponse, Comparison } from '@/entities/comparison/model/types';
+
+// Re-export types for backward compatibility
+export type { PagedComparisonResponse, Comparison };
 
 /**
  * Parameters for the useComparisons hook
@@ -24,38 +28,8 @@ export interface UseComparisonsParams {
   page?: number;
   /** Page size (items per page) */
   size?: number;
-  /** Optional status filter (COMPLETED, FAILED, IN_PROGRESS) */
+  /** Optional status filter (PENDING, COMPLETED, FAILED, IN_PROGRESS) */
   status?: string;
-}
-
-/**
- * Paginated response structure for comparisons
- */
-export interface PagedComparisonResponse {
-  content: Comparison[];
-  page: number;
-  size: number;
-  totalElements: number;
-  totalPages: number;
-}
-
-/**
- * Comparison entity structure
- */
-export interface Comparison {
-  id: number;
-  currentBatchId: string;
-  targetBatchId: string;
-  status: 'COMPLETED' | 'FAILED' | 'IN_PROGRESS';
-  totalFilesCompared: number;
-  filesChanged: number;
-  filesAdded: number;
-  filesUnchanged: number;
-  totalChangeSize?: number;
-  errorMessage?: string;
-  createdAt: string;
-  startedAt?: string;
-  completedAt?: string;
 }
 
 /**

@@ -18,7 +18,6 @@ import {
 } from '@/shared/api/apiRoutes';
 import type {
   Comparison,
-  ComparisonResult,
   ComparisonSummary,
   CreateComparisonRequest,
   PagedComparisonResponse,

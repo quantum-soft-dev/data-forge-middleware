@@ -1,5 +1,5 @@
 import { RouterProvider as TanStackRouterProvider } from '@tanstack/react-router'
-import { useAuth } from 'react-oidc-context'
+import { useAuth } from '@/entities/user-session/api/useAuth'
 import { router } from '@/app/router'
 
 /**

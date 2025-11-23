@@ -181,7 +181,7 @@ export function UserListTable({
               </button>
             )}
 
-            {hasKeycloak && onResetPassword && (
+            {hasAuth0 && onResetPassword && (
               <button
                 onClick={() => onResetPassword(user)}
                 className="rounded p-1.5 text-blue-600 hover:bg-blue-50 hover:text-blue-900"
