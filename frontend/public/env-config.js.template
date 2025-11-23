@@ -1,0 +1,13 @@
+// Runtime environment configuration
+// This file is generated at container startup by envsubst
+// Variables are substituted from environment variables passed to the Docker container
+
+window._env_ = {
+  // Auth0 configuration
+  VITE_AUTH0_DOMAIN: "${VITE_AUTH0_DOMAIN}",
+  VITE_AUTH0_CLIENT_ID: "${VITE_AUTH0_CLIENT_ID}",
+  VITE_AUTH0_AUDIENCE: "${VITE_AUTH0_AUDIENCE}",
+
+  // API configuration
+  VITE_API_BASE_URL: "${VITE_API_BASE_URL}"
+};
