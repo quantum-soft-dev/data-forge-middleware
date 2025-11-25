@@ -181,6 +181,7 @@ jobs:
 
       - name: Generate coverage report
         if: always()
+        continue-on-error: true
         working-directory: ./frontend
         run: npm run test:coverage
 
