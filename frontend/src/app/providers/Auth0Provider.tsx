@@ -16,10 +16,23 @@ import { PropsWithChildren } from 'react';
  * @author Data Forge Team
  * @version 1.0.0
  */
+// Runtime environment config (injected by Docker entrypoint)
+declare global {
+  interface Window {
+    _env_?: {
+      VITE_AUTH0_DOMAIN?: string;
+      VITE_AUTH0_CLIENT_ID?: string;
+      VITE_AUTH0_AUDIENCE?: string;
+      VITE_API_BASE_URL?: string;
+    };
+  }
+}
+
 export function Auth0Provider({ children }: PropsWithChildren) {
-  const domain = import.meta.env.VITE_AUTH0_DOMAIN;
-  const clientId = import.meta.env.VITE_AUTH0_CLIENT_ID;
-  const audience = import.meta.env.VITE_AUTH0_AUDIENCE;
+  // Prefer runtime config (window._env_), fallback to build-time (import.meta.env)
+  const domain = window._env_?.VITE_AUTH0_DOMAIN || import.meta.env.VITE_AUTH0_DOMAIN;
+  const clientId = window._env_?.VITE_AUTH0_CLIENT_ID || import.meta.env.VITE_AUTH0_CLIENT_ID;
+  const audience = window._env_?.VITE_AUTH0_AUDIENCE || import.meta.env.VITE_AUTH0_AUDIENCE;
 
   if (!domain || !clientId || !audience) {
     throw new Error(
