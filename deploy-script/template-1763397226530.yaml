@@ -1,0 +1,977 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC with RDS PostgreSQL 17.7 and ECS Fargate - automatic app user
+  creation via Lambda
+
+Parameters:
+  DBMasterUsername:
+    Type: String
+    Default: postgres
+    Description: Master username for RDS (admin access)
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    Description: Master password for RDS (admin access)
+    MinLength: 8
+    MaxLength: 41
+
+  AppDBUsername:
+    Type: String
+    Default: dfm
+    Description: Application database username (will be created automatically)
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+
+  AppDBPassword:
+    Type: String
+    NoEcho: true
+    Description: Application database password
+    MinLength: 8
+    MaxLength: 41
+
+  AllowedCIDR:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR block allowed to connect to HTTPS ALB and RDS PostgreSQL
+
+  CertificateArn:
+    Type: String
+    Description: ARN of ACM certificate for HTTPS
+    AllowedPattern: arn:aws:acm:.*
+
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub Container Registry PAT
+    MinLength: 1
+
+  SpringProfileActive:
+    Type: String
+    Default: prod
+    Description: Spring Boot profile
+    AllowedValues:
+      - dev
+      - prod
+      - staging
+
+  Auth0Domain:
+    Type: String
+    Description: Auth0 domain
+
+  Auth0MgmtClientId:
+    Type: String
+    Description: Auth0 Management API Client ID
+    NoEcho: true
+
+  Auth0MgmtClientSecret:
+    Type: String
+    Description: Auth0 Management API Client Secret
+    NoEcho: true
+
+  Auth0SPAClientId:
+    Type: String
+    Description: Auth0 SPA Client ID (for Frontend)
+
+  Auth0Audience:
+    Type: String
+    Default: https://api.dataforge.com
+    Description: Auth0 API Audience
+
+  JWTSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT Secret (min 256 bits)
+    MinLength: 32
+
+  RedisHost:
+    Type: String
+    Description: Redis host endpoint
+    Default: redis.example.com
+
+  RedisPort:
+    Type: String
+    Description: Redis port
+    Default: '6379'
+
+  RedisPassword:
+    Type: String
+    NoEcho: true
+    Description: Redis password
+    MinLength: 1
+
+  HostedZoneId:
+    Type: String
+    Description: Route53 Hosted Zone ID for DNS records
+
+  DomainName:
+    Type: String
+    Description: Full domain name for the application (e.g. api.example.com)
+
+  BackendContainerName:
+    Type: String
+    Default: dfm-backend
+    Description: Name of the application container (backend)
+
+  FrontendContainerName:
+    Type: String
+    Default: dfm-frontend
+    Description: Name of the frontend container
+
+  BackendContainerImage:
+    Type: String
+    Default: ghcr.io/quantum-soft-dev/data-forge-middleware
+    Description: Container image repository
+
+  BackendContainerImageTag:
+    Type: String
+    Default: develop
+    Description: Container image tag (version)
+
+  FrontendContainerImage:
+    Type: String
+    Default: ghcr.io/quantum-soft-dev/data-forge-middleware-frontend
+    Description: Frontend container image repository
+
+  FrontendContainerImageTag:
+    Type: String
+    Default: main
+    Description: Frontend container image tag (version)
+
+Resources:
+  # DNS Record (Alias to ALB)
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+        DNSName: !GetAtt ALB.DNSName
+        EvaluateTargetHealth: false
+
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 192.168.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-VPC
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-IGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.1.0/24
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.2.0/24
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PublicSubnet2
+
+  # Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PublicRT
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group for ALB
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTPS access
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedCIDR
+          Description: HTTP access (redirect to HTTPS)
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ALB-SG
+
+  # Security Group for ECS Tasks
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS Fargate tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow traffic from ALB to Frontend
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow traffic from ALB to Backend
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ECS-SG
+
+  # Security Group for Lambda
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda function
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Lambda-SG
+
+  # Security Group for RDS
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS PostgreSQL instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: PostgreSQL access from ECS
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+          Description: PostgreSQL access from Lambda
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref AllowedCIDR
+          Description: PostgreSQL public access
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-RDS-SG
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS PostgreSQL
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-DBSubnetGroup
+
+  # RDS PostgreSQL Instance
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-postgres
+      DBName: dfm
+      Engine: postgres
+      EngineVersion: '17.7'
+      DBInstanceClass: db.m5.large
+      AllocatedStorage: 100
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      PubliclyAccessible: true
+      MultiAZ: false
+      BackupRetentionPeriod: 30
+      PreferredBackupWindow: 03:00-04:00
+      PreferredMaintenanceWindow: sun:04:00-sun:05:00
+      EnableCloudwatchLogsExports:
+        - postgresql
+      DeletionProtection: false
+      CopyTagsToSnapshot: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PostgreSQL
+
+  # S3 Bucket for uploads
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedHeaders:
+              - '*'
+            MaxAge: 3000
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-dfm-uploads
+
+  # Secrets Manager - Database Password
+  DBPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/db/password
+      Description: RDS PostgreSQL master password (admin)
+      SecretString: !Ref DBMasterPassword
+
+  # Secrets Manager - App Database Credentials
+  AppDBCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/db/app-credentials
+      Description: Application database credentials
+      SecretString: !Sub |
+        {
+          "username": "${AppDBUsername}",
+          "password": "${AppDBPassword}"
+        }
+
+  # Secrets Manager - GitHub Token
+  GitHubSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/github/token
+      Description: GitHub Container Registry credentials
+      SecretString: !Sub |
+        {
+          "username": "wbelka",
+          "password": "${GitHubToken}"
+        }
+
+  # Secrets Manager - Auth0 Credentials
+  Auth0Secret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/auth0/credentials
+      Description: Auth0 configuration
+      SecretString: !Sub |
+        {
+          "domain": "${Auth0Domain}",
+          "mgmt_client_id": "${Auth0MgmtClientId}",
+          "mgmt_client_secret": "${Auth0MgmtClientSecret}",
+          "audience": "${Auth0Audience}"
+        }
+
+  # Secrets Manager - JWT Secret
+  JWTSecretSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/jwt/secret
+      Description: JWT signing secret
+      SecretString: !Ref JWTSecret
+
+  # Secrets Manager - Redis Password
+  RedisPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${AWS::StackName}/redis/password
+      Description: Redis password
+      SecretString: !Ref RedisPassword
+
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DBPasswordSecret
+                  - !Ref AppDBCredentialsSecret
+
+  # Lambda Function to Create DB User
+  CreateDBUserFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-create-db-user
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      Layers:
+        # AWS-optimized AWSSDKPandas layer (contains pg8000)
+        - arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python311:24
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt DBInstance.Endpoint.Address
+          DB_PORT: !GetAtt DBInstance.Endpoint.Port
+          DB_NAME: dfm
+          DB_MASTER_USER: !Ref DBMasterUsername
+          MASTER_SECRET_ARN: !Ref DBPasswordSecret
+          APP_SECRET_ARN: !Ref AppDBCredentialsSecret
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import pg8000.native
+          import cfnresponse
+          import os
+
+          def handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+
+              response_data = {}
+
+              try:
+                  request_type = event['RequestType']
+
+                  if request_type == 'Delete':
+                      # Don't delete the user on stack deletion
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                      return
+
+                  if request_type in ['Create', 'Update']:
+                      # Get secrets
+                      secrets_client = boto3.client('secretsmanager')
+
+                      # Master password is stored as plain string
+                      master_password = secrets_client.get_secret_value(
+                          SecretId=os.environ['MASTER_SECRET_ARN']
+                      )['SecretString']
+
+                      # App credentials stored as JSON
+                      app_secret = json.loads(
+                          secrets_client.get_secret_value(
+                              SecretId=os.environ['APP_SECRET_ARN']
+                          )['SecretString']
+                      )
+
+                      # Connect to database as master user
+                      print(f"Connecting to {os.environ['DB_HOST']}:{os.environ['DB_PORT']}")
+                      conn = pg8000.native.Connection(
+                          host=os.environ['DB_HOST'],
+                          port=int(os.environ['DB_PORT']),
+                          database=os.environ['DB_NAME'],
+                          user=os.environ['DB_MASTER_USER'],
+                          password=master_password
+                      )
+                      # pg8000.native doesn't use cursors in the same way, it returns results directly from run()
+                      # But for compatibility with the rest of the logic, we'll use run() for execution
+
+                      app_username = app_secret['username']
+                      app_password = app_secret['password']
+
+                      print(f"Creating/updating user: {app_username}")
+
+                      # Check if user exists
+                      # pg8000 uses :param for placeholders by default? No, it's native so literal string interpolation is safer if parameters aren't supported in the same way, 
+                      # BUT pg8000 native supports server-side params. Let's use basic string formatting for DDL as parameters aren't allowed there anyway.
+                      
+                      # Check user existence
+                      rows = conn.run("SELECT 1 FROM pg_roles WHERE rolname=:username", username=app_username)
+                      user_exists = len(rows) > 0
+
+                      if not user_exists:
+                          # Create user (DDL commands cannot use parameters usually)
+                          # Warning: Basic SQL injection risk if app_username is unchecked, but here it comes from a controlled secret.
+                          conn.run(f"CREATE USER {app_username} WITH PASSWORD '{app_password}'")
+                          print(f"Created user: {app_username}")
+                      else:
+                          # Update password
+                          conn.run(f"ALTER USER {app_username} WITH PASSWORD '{app_password}'")
+                          print(f"Updated password for user: {app_username}")
+
+                      # Grant privileges
+                      conn.run(f"GRANT ALL PRIVILEGES ON DATABASE dfm TO {app_username}")
+                      conn.run(f"GRANT ALL ON SCHEMA public TO {app_username}")
+                      conn.run(f"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {app_username}")
+                      conn.run(f"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {app_username}")
+                      conn.run(f"GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO {app_username}")
+
+                      # Grant default privileges for future objects
+                      conn.run(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {app_username}")
+                      conn.run(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {app_username}")
+                      conn.run(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO {app_username}")
+
+                      print("Privileges granted successfully")
+
+                      conn.close()
+
+                      response_data['Message'] = f'Successfully created/updated user: {app_username} with full privileges'
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
+                  response_data['Error'] = str(e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+
+  # Custom Resource to trigger Lambda
+  CreateDBUser:
+    Type: Custom::CreateDBUser
+    DependsOn:
+      - DBInstance
+      - AppDBCredentialsSecret
+    Properties:
+      ServiceToken: !GetAtt CreateDBUserFunction.Arn
+      DBHost: !GetAtt DBInstance.Endpoint.Address
+      Timestamp: !Sub ${AWS::StackName}-${AWS::Region}
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${AWS::StackName}/dfm
+      RetentionInDays: 7
+
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: GetSecrets
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref GitHubSecret
+                  - !Ref DBPasswordSecret
+                  - !Ref AppDBCredentialsSecret
+                  - !Ref Auth0Secret
+                  - !Ref JWTSecretSecret
+                  - !Ref RedisPasswordSecret
+
+  # ECS Task Role (for application)
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3BucketAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetObjectVersion
+                  - s3:DeleteObjectVersion
+                Resource:
+                  - !GetAtt S3Bucket.Arn
+                  - !Sub ${S3Bucket.Arn}/*
+
+  # ECS Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: CreateDBUser
+    Properties:
+      Family: !Sub ${AWS::StackName}-dfm
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Ref FrontendContainerName
+          Image: !Sub ${FrontendContainerImage}:${FrontendContainerImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          RepositoryCredentials:
+            CredentialsParameter: !Ref GitHubSecret
+          Environment:
+            - Name: VITE_AUTH0_DOMAIN
+              Value: !Ref Auth0Domain
+            - Name: VITE_AUTH0_CLIENT_ID
+              Value: !Ref Auth0SPAClientId
+            - Name: VITE_AUTH0_AUDIENCE
+              Value: !Ref Auth0Audience
+            - Name: VITE_API_BASE_URL
+              Value: /api
+            - Name: BACKEND_URL
+              Value: http://127.0.0.1:8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+        - Name: !Ref BackendContainerName
+          Image: !Sub ${BackendContainerImage}:${BackendContainerImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          RepositoryCredentials:
+            CredentialsParameter: !Ref GitHubSecret
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: !Ref SpringProfileActive
+            - Name: DB_URL
+              Value: !Sub jdbc:postgresql://${DBInstance.Endpoint.Address}:5432/dfm
+            - Name: AWS_S3_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_S3_BUCKET_NAME
+              Value: !Ref S3Bucket
+            - Name: JWT_EXPIRATION
+              Value: '86400'
+            - Name: LOGGING_LEVEL_ROOT
+              Value: INFO
+            - Name: LOGGING_LEVEL_COM_BITBI_DFM
+              Value: DEBUG
+            - Name: SPRING_DATA_REDIS_HOST
+              Value: !Ref RedisHost
+            - Name: SPRING_DATA_REDIS_PORT
+              Value: !Ref RedisPort
+            - Name: AUTH0_ISSUER
+              Value: !Sub 'https://${Auth0Domain}/'
+            - Name: AUTH0_MGMT_AUDIENCE
+              Value: !Sub 'https://${Auth0Domain}/api/v2/'
+          Secrets:
+            - Name: DB_USERNAME
+              ValueFrom: !Sub '${AppDBCredentialsSecret}:username::'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub '${AppDBCredentialsSecret}:password::'
+            - Name: AUTH0_DOMAIN
+              ValueFrom: !Sub '${Auth0Secret}:domain::'
+            - Name: AUTH0_MGMT_CLIENT_ID
+              ValueFrom: !Sub '${Auth0Secret}:mgmt_client_id::'
+            - Name: AUTH0_MGMT_CLIENT_SECRET
+              ValueFrom: !Sub '${Auth0Secret}:mgmt_client_secret::'
+            - Name: AUTH0_AUDIENCE
+              ValueFrom: !Sub '${Auth0Secret}:audience::'
+            - Name: JWT_SECRET
+              ValueFrom: !Ref JWTSecretSecret
+            - Name: SPRING_DATA_REDIS_PASSWORD
+              ValueFrom: !Ref RedisPasswordSecret
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+
+  # Application Load Balancer
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${AWS::StackName}-alb
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ALB
+
+  # Frontend Target Group
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${AWS::StackName}-frontend-tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckEnabled: true
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+
+  # Backend Target Group
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${AWS::StackName}-backend-tg
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckEnabled: true
+      HealthCheckPath: /actuator/health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200-299'
+
+  # HTTPS Listener
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  # Listener Rule for API
+  ApiListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /api/*
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # HTTP Listener (redirect to HTTPS)
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  # ECS Service
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPSListener
+      - HTTPListener
+      - CreateDBUser
+      - ApiListenerRule
+    Properties:
+      ServiceName: !Sub ${AWS::StackName}-dfm
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: !Ref FrontendContainerName
+          ContainerPort: 80
+          TargetGroupArn: !Ref FrontendTargetGroup
+        - ContainerName: !Ref BackendContainerName
+          ContainerPort: 8080
+          TargetGroupArn: !Ref BackendTargetGroup
+      HealthCheckGracePeriodSeconds: 600
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VPC-ID
+
+  DBInstanceEndpoint:
+    Description: RDS PostgreSQL endpoint (publicly accessible)
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DB-Endpoint
+
+  DBInstancePort:
+    Description: RDS PostgreSQL port
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub ${AWS::StackName}-DB-Port
+
+  DBMasterConnectionString:
+    Description: PostgreSQL master connection string
+    Value: !Sub postgresql://${DBMasterUsername}@${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/dfm
+
+  DBAppConnectionString:
+    Description: PostgreSQL app user connection string (password in Secrets Manager)
+    Value: !Sub postgresql://${AppDBUsername}@${DBInstance.Endpoint.Address}:${DBInstance.Endpoint.Port}/dfm
+
+  ALBDNSName:
+    Description: Application Load Balancer DNS name
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-ALB-DNS
+
+  DomainUrl:
+    Description: Application Domain URL
+    Value: !Sub https://${DomainName}
+
+  HTTPSUrl:
+    Description: HTTPS URL for application (ALB)
+    Value: !Sub https://${ALB.DNSName}
+
+  ECSClusterName:
+    Description: ECS Cluster name
+    Value: !Ref ECSCluster
+
+  ECSServiceName:
+    Description: ECS Service name
+    Value: !GetAtt ECSService.Name
+
+  LogGroupName:
+    Description: CloudWatch Log Group
+    Value: !Ref LogGroup
+
+  S3BucketName:
+    Description: S3 bucket for file uploads
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub ${AWS::StackName}-S3-Bucket
+
+  S3BucketArn:
+    Description: S3 bucket ARN
+    Value: !GetAtt S3Bucket.Arn
+
+  AppDBUserCreated:
+    Description: Application database user creation status
+    Value: !GetAtt CreateDBUser.Message
+
+  SecretsManagerConsole:
+    Description: Link to Secrets Manager
+    Value: !Sub https://console.aws.amazon.com/secretsmanager/home?region=${AWS::Region}
