@@ -21,7 +21,7 @@
   },
   {
     "ParameterKey": "CertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:055383451253:certificate/bd25e0b5-bb73-44a0-ba3c-105a213c972e"
+    "ParameterValue": "arn:aws:acm:us-east-1:055383451253:certificate/5f3b82a6-c9fe-435d-a05c-99213fdbbe6b"
   },
   {
     "ParameterKey": "GitHubToken",
@@ -73,7 +73,7 @@
   },
   {
     "ParameterKey": "DomainName",
-    "ParameterValue": "dfm.bitbi.io"
+    "ParameterValue": "dev.dfm.bitbi.io"
   },
   {
     "ParameterKey": "BackendContainerName",
