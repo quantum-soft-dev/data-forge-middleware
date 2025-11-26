@@ -81,11 +81,6 @@ Parameters:
     Default: https://api.dataforge.com
     Description: Auth0 API Audience
 
-  Auth0ClaimsNamespace:
-    Type: String
-    Default: https://api.dataforge.com
-    Description: Auth0 custom claims namespace prefix (e.g., https://dev.dfm.bitbi.io)
-
   JWTSecret:
     Type: String
     NoEcho: true
@@ -710,8 +705,6 @@ Resources:
               Value: !Ref Auth0SPAClientId
             - Name: VITE_AUTH0_AUDIENCE
               Value: !Ref Auth0Audience
-            - Name: VITE_AUTH0_CLAIMS_NAMESPACE
-              Value: !Ref Auth0ClaimsNamespace
             - Name: VITE_API_BASE_URL
               Value: /api
             - Name: BACKEND_URL
@@ -754,8 +747,6 @@ Resources:
               Value: !Sub 'https://${Auth0Domain}/'
             - Name: AUTH0_MGMT_AUDIENCE
               Value: !Sub 'https://${Auth0Domain}/api/v2/'
-            - Name: AUTH0_CLAIMS_NAMESPACE
-              Value: !Ref Auth0ClaimsNamespace
           Secrets:
             - Name: DB_USERNAME
               ValueFrom: !Sub '${AppDBCredentialsSecret}:username::'
