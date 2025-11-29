@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.presentation;
 
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.infrastructure.JpaAccountRepository;
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.batch.application.BatchHistoryService;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
@@ -63,15 +64,18 @@ public class BatchHistoryAdminController {
     private final BatchHistoryService batchHistoryService;
     private final JpaAccountRepository accountRepository;
     private final MeterRegistry meterRegistry;
+    private final Auth0Properties auth0Properties;
 
     public BatchHistoryAdminController(
             BatchHistoryService batchHistoryService,
             JpaAccountRepository accountRepository,
-            MeterRegistry meterRegistry
+            MeterRegistry meterRegistry,
+            Auth0Properties auth0Properties
     ) {
         this.batchHistoryService = batchHistoryService;
         this.accountRepository = accountRepository;
         this.meterRegistry = meterRegistry;
+        this.auth0Properties = auth0Properties;
     }
 
     /**
@@ -95,7 +99,7 @@ public class BatchHistoryAdminController {
         Jwt jwt = (Jwt) authentication.getPrincipal();
 
         // Strategy 1: Try accountId from custom claim (Auth0 namespaced or legacy)
-        String accountIdClaim = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+        String accountIdClaim = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
         if (accountIdClaim == null || accountIdClaim.isEmpty()) {
             accountIdClaim = jwt.getClaimAsString("accountId"); // Fallback to legacy Keycloak claim
         }
@@ -127,7 +131,7 @@ public class BatchHistoryAdminController {
 
         // Try Auth0 namespaced email claim
         if (email == null || email.isEmpty()) {
-            email = jwt.getClaimAsString("https://api.dataforge.com/email");
+            email = jwt.getClaimAsString(auth0Properties.api().emailClaim());
         }
 
         final String username = jwt.getClaimAsString("preferred_username");

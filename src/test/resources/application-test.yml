@@ -17,9 +17,12 @@ s3:
 # Auth0 configuration for tests (mock)
 auth0:
   domain: test-domain.auth0.com
-  management-client-id: test-client-id
-  management-client-secret: test-secret
-  api-audience: https://api.test.com
+  management:
+    client-id: test-client-id
+    client-secret: test-secret
+    audience: https://test-domain.auth0.com/api/v2/
+  api:
+    audience: https://api.test.com
+    issuer: https://test-domain.auth0.com/
+    claims-namespace: https://api.test.com
   database-connection: Username-Password-Authentication
-  password-reset-ttl-seconds: 86400
-  roles-namespace: https://api.test.com/roles

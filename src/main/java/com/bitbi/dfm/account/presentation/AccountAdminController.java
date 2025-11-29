@@ -9,6 +9,7 @@ import com.bitbi.dfm.account.presentation.dto.AccountResponseDto;
 import com.bitbi.dfm.account.presentation.dto.AdminActionLogResponseDto;
 import com.bitbi.dfm.account.presentation.dto.CreateAccountRequestDto;
 import com.bitbi.dfm.account.presentation.dto.ResetPasswordResponseDto;
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
@@ -71,16 +72,19 @@ public class AccountAdminController {
     private final AccountSyncService accountSyncService;
     private final AccountQueryService accountQueryService;
     private final AdminActionLogRepository adminActionLogRepository;
+    private final Auth0Properties auth0Properties;
 
     public AccountAdminController(
             AccountService accountService,
             AccountSyncService accountSyncService,
             AccountQueryService accountQueryService,
-            AdminActionLogRepository adminActionLogRepository) {
+            AdminActionLogRepository adminActionLogRepository,
+            Auth0Properties auth0Properties) {
         this.accountService = accountService;
         this.accountSyncService = accountSyncService;
         this.accountQueryService = accountQueryService;
         this.adminActionLogRepository = adminActionLogRepository;
+        this.auth0Properties = auth0Properties;
     }
 
     /**
@@ -135,7 +139,7 @@ public class AccountAdminController {
 
         // Extract admin's account ID from JWT token
         Jwt jwt = (Jwt) authentication.getPrincipal();
-        String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+        String adminAccountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
 
         // Handle case where accountId claim is not present (e.g., old token, missing Auth0 Action)
         if (adminAccountIdStr == null || adminAccountIdStr.isBlank()) {
@@ -248,7 +252,7 @@ public class AccountAdminController {
 
         // Extract admin's account ID from JWT token
         Jwt jwt = (Jwt) authentication.getPrincipal();
-        String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+        String adminAccountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
 
         // Handle case where accountId claim is not present (e.g., old token, missing Auth0 Action)
         if (adminAccountIdStr == null || adminAccountIdStr.isBlank()) {
@@ -528,7 +532,7 @@ public class AccountAdminController {
         // Extract admin's account ID from JWT token to exclude from results
         UUID currentAdminAccountId = null;
         if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
-            String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+            String adminAccountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
             if (adminAccountIdStr != null && !adminAccountIdStr.isEmpty()) {
                 currentAdminAccountId = UUID.fromString(adminAccountIdStr);
             }
@@ -682,7 +686,7 @@ public class AccountAdminController {
 
         // Prevent admin from deleting their own account
         if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
-            String adminAccountIdStr = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+            String adminAccountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
             if (adminAccountIdStr != null && !adminAccountIdStr.isEmpty()) {
                 UUID adminAccountId = UUID.fromString(adminAccountIdStr);
                 if (adminAccountId.equals(id)) {
