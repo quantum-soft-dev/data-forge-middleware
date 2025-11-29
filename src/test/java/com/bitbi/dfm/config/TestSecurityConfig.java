@@ -149,7 +149,9 @@ public class TestSecurityConfig {
                     .claim("email", email)
                     .claim("preferred_username", username)
                     .claim("accountId", accountId)
-                    .claim("https://api.dataforge.com/accountId", accountId) // Namespaced claim for Auth0
+                    .claim("https://api.test.com/accountId", accountId) // Namespaced claim for Auth0 (matches application-test.yml)
+                    .claim("https://api.test.com/email", email) // Namespaced email claim
+                    .claim("https://api.test.com/roles", roles) // Namespaced roles claim
                     .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
                     .expiresAt(Instant.now().plusSeconds(3600))
