@@ -52,6 +52,10 @@
     "ParameterValue": "https://dev-dfm.bitbi.io"
   },
   {
+    "ParameterKey": "Auth0ClaimsNamespace",
+    "ParameterValue": "https://dev.dfm.bitbi.io"
+  },
+  {
     "ParameterKey": "JWTSecret",
     "ParameterValue": "RandomGeneratedJWTSecretKeyThatIsAtLeast32BytesLongForSecurity"
   },
