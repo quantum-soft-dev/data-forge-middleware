@@ -1,0 +1,226 @@
+# Local Development Docker Compose Configuration
+# Uses pre-built images from GitHub Container Registry (GHCR)
+# Auth0 is used for authentication (Keycloak removed)
+#
+# Prerequisites:
+# 1. Copy .env.example to .env and configure:
+#    - GITHUB_REPOSITORY (e.g., bit-bi/data-forge-middleware)
+#    - IMAGE_TAG (default: develop)
+#    - AUTH0_DOMAIN, AUTH0_MGMT_CLIENT_ID, AUTH0_MGMT_CLIENT_SECRET
+#
+# 2. Login to GitHub Container Registry:
+#    echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+#
+# 3. Start services:
+#    docker-compose -f docker-compose-local.yaml up -d
+#
+# 4. Check health:
+#    docker-compose -f docker-compose-local.yaml ps
+#
+# 5. View logs:
+#    docker-compose -f docker-compose-local.yaml logs -f
+#
+# 6. Stop services:
+#    docker-compose -f docker-compose-local.yaml down
+#
+# 7. Clean all data (WARNING: destroys volumes):
+#    docker-compose -f docker-compose-local.yaml down -v
+
+services:
+  # ============================================
+  # Infrastructure Services (Public Images)
+  # ============================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dfm-postgres-local
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Only dfm database (Auth0 replaced Keycloak)
+      POSTGRES_MULTIPLE_DATABASES: dfm
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_local:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dfm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dfm-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: dfm-redis-local
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_local:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dfm-network
+
+  localstack:
+    image: localstack/localstack:stable
+    container_name: dfm-localstack-local
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+      DATA_DIR: /var/lib/localstack
+      DEBUG: 1
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data_local:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dfm-network
+
+  # ============================================
+  # Application Services (GHCR Images)
+  # ============================================
+
+  dfm-backend:
+    image: ghcr.io/${GITHUB_REPOSITORY}:${IMAGE_TAG:-develop}
+    container_name: dfm-backend-local
+    environment:
+      # Spring profiles
+      SPRING_PROFILES_ACTIVE: dev
+
+      # Database
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dfm
+      SPRING_DATASOURCE_USERNAME: dfm
+      SPRING_DATASOURCE_PASSWORD: ${DFM_DB_PASSWORD:-dfm_password}
+
+      # Redis
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_password}
+
+      # S3 (LocalStack)
+      AWS_S3_ENDPOINT: http://localstack:4566
+      AWS_S3_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_S3_BUCKET_NAME: dfm-uploads
+
+      # Auth0 Configuration (replaces Keycloak)
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_MGMT_CLIENT_ID: ${AUTH0_MGMT_CLIENT_ID}
+      AUTH0_MGMT_CLIENT_SECRET: ${AUTH0_MGMT_CLIENT_SECRET}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://api.dataforge.com}
+      AUTH0_DATABASE_CONNECTION: ${AUTH0_DATABASE_CONNECTION:-Username-Password-Authentication}
+
+      # JWT (for backward compatibility with client API)
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production-minimum-256-bits-required-for-hmac-sha256-algorithm}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400}
+
+      # Logging
+      LOGGING_LEVEL_ROOT: INFO
+      LOGGING_LEVEL_COM_BITBI_DFM: DEBUG
+
+      # Server port
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - dfm-network
+
+  dfm-frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY}-frontend:${IMAGE_TAG:-develop}
+    container_name: dfm-frontend-local
+    environment:
+      # Backend URL (for NGINX proxy configuration)
+      BACKEND_URL: http://dfm-backend:8080
+
+      # Auth0 Configuration (injected at runtime into env-config.js)
+      VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID}
+      VITE_AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://api.dataforge.com}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    ports:
+      - "3000:80"
+    depends_on:
+      dfm-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dfm-network
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  postgres_data_local:
+    driver: local
+  redis_data_local:
+    driver: local
+  localstack_data_local:
+    driver: local
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  dfm-network:
+    driver: bridge
+
+# ============================================
+# Usage Notes
+# ============================================
+# Access Points:
+# - Backend API: http://localhost:8080
+# - Frontend UI: http://localhost:3000
+# - PostgreSQL: localhost:5432 (user: dfm, password: dfm_password)
+# - Redis: localhost:6379 (password: redis_password)
+# - LocalStack S3: http://localhost:4566
+# - Actuator: http://localhost:8080/actuator
+# - Swagger UI: http://localhost:8080/swagger-ui.html
+# - API Docs: http://localhost:8080/v3/api-docs
+#
+# Database Connections:
+# - Database: dfm
+# - Username: dfm
+# - Password: dfm_password (or from .env)
+# - JDBC URL: jdbc:postgresql://localhost:5432/dfm
+#
+# S3 Bucket Access (LocalStack):
+#   aws --endpoint-url=http://localhost:4566 s3 ls s3://dfm-uploads
+#
+# Troubleshooting:
+# - Check logs: docker-compose -f docker-compose-local.yaml logs -f [service-name]
+# - Restart service: docker-compose -f docker-compose-local.yaml restart [service-name]
+# - Rebuild (if image updated): docker-compose -f docker-compose-local.yaml pull
+# - Verify health: docker-compose -f docker-compose-local.yaml ps
