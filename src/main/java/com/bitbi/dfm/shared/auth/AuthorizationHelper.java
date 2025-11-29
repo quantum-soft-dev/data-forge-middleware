@@ -2,6 +2,7 @@ package com.bitbi.dfm.shared.auth;
 
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter.JwtAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,7 +16,7 @@ import java.util.UUID;
  * <p>
  * Provides utility methods to verify that authenticated users can access
  * only their own resources. Supports both custom JWT tokens (/api/dfc endpoints)
- * and Keycloak OAuth2 JWT tokens (/api/user, /api/admin endpoints).
+ * and Auth0 OAuth2 JWT tokens (/api/user, /api/admin endpoints).
  * </p>
  *
  * @author Data Forge Team
@@ -25,9 +26,11 @@ import java.util.UUID;
 public class AuthorizationHelper {
 
     private final AccountRepository accountRepository;
+    private final Auth0Properties auth0Properties;
 
-    public AuthorizationHelper(AccountRepository accountRepository) {
+    public AuthorizationHelper(AccountRepository accountRepository, Auth0Properties auth0Properties) {
         this.accountRepository = accountRepository;
+        this.auth0Properties = auth0Properties;
     }
 
     /**
@@ -86,7 +89,7 @@ public class AuthorizationHelper {
             Jwt jwt = oauth2JwtAuth.getToken();
 
             // Strategy 1: Try to extract accountId from Auth0 custom claim (namespaced)
-            String accountIdClaim = jwt.getClaimAsString("https://api.dataforge.com/accountId");
+            String accountIdClaim = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
             if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
                 try {
                     return UUID.fromString(accountIdClaim);
@@ -134,7 +137,7 @@ public class AuthorizationHelper {
 
             // Try Auth0 namespaced email claim
             if (email == null || email.isEmpty()) {
-                email = jwt.getClaimAsString("https://api.dataforge.com/email");
+                email = jwt.getClaimAsString(auth0Properties.api().emailClaim());
             }
 
             // Try preferred_username as fallback

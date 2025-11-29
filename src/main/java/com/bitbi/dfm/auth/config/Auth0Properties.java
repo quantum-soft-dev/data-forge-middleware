@@ -80,16 +80,44 @@ public record Auth0Properties(
      * to validate JWT tokens issued by Auth0.
      * </p>
      *
-     * @param audience API identifier registered in Auth0 (e.g., https://api.dataforge.com)
-     * @param issuer   Auth0 tenant issuer URL (e.g., https://dev-abc123.us.auth0.com/)
+     * @param audience        API identifier registered in Auth0 (e.g., https://api.dataforge.com)
+     * @param issuer          Auth0 tenant issuer URL (e.g., https://dev-abc123.us.auth0.com/)
+     * @param claimsNamespace Namespace prefix for custom claims in JWT (e.g., https://dev.dfm.bitbi.io)
      */
     public record Api(
             @NotBlank(message = "Auth0 API audience is required")
             String audience,
 
             @NotBlank(message = "Auth0 API issuer is required")
-            String issuer
-    ) {}
+            String issuer,
+
+            @NotBlank(message = "Auth0 claims namespace is required")
+            String claimsNamespace
+    ) {
+        /**
+         * Get the full claim name for roles.
+         * @return roles claim name (e.g., https://dev.dfm.bitbi.io/roles)
+         */
+        public String rolesClaim() {
+            return claimsNamespace + "/roles";
+        }
+
+        /**
+         * Get the full claim name for accountId.
+         * @return accountId claim name (e.g., https://dev.dfm.bitbi.io/accountId)
+         */
+        public String accountIdClaim() {
+            return claimsNamespace + "/accountId";
+        }
+
+        /**
+         * Get the full claim name for email.
+         * @return email claim name (e.g., https://dev.dfm.bitbi.io/email)
+         */
+        public String emailClaim() {
+            return claimsNamespace + "/email";
+        }
+    }
 
     /**
      * Get the full Auth0 Management API base URL.

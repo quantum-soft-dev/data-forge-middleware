@@ -1,11 +1,11 @@
 import { useAuth0 } from '@auth0/auth0-react';
+import { env } from '@/shared/config/env';
 
 /**
  * Custom hook to extract and check user roles from Auth0 JWT.
  *
- * Roles are stored in a namespaced custom claim in the Auth0 token:
- * - Claim name: https://api.dataforge.com/roles
- * - Format: string[] (e.g., ["ROLE_ADMIN", "ROLE_USER"])
+ * Roles are stored in a namespaced custom claim in the Auth0 token.
+ * The namespace is configurable via VITE_AUTH0_CLAIMS_NAMESPACE environment variable.
  *
  * Usage:
  * ```tsx
@@ -28,9 +28,9 @@ import { useAuth0 } from '@auth0/auth0-react';
 export function useAuth0Roles() {
   const { user } = useAuth0();
 
-  // Extract roles from Auth0 custom claim
-  const rolesNamespace = 'https://api.dataforge.com/roles';
-  const roles = (user?.[rolesNamespace] as string[]) || [];
+  // Extract roles from Auth0 custom claim (namespace from env)
+  const rolesClaimKey = `${env.auth0.claimsNamespace}/roles`;
+  const roles = (user?.[rolesClaimKey] as string[]) || [];
 
   /**
    * Check if user has a specific role.

@@ -94,7 +94,7 @@ public class Auth0SecurityConfig {
     /**
      * Create JwtAuthenticationConverter for Auth0 custom claims.
      * <p>
-     * Extracts roles from the custom "https://api.dataforge.com/roles" claim
+     * Extracts roles from the custom claims namespace (e.g., https://dev.dfm.bitbi.io/roles)
      * and converts them to Spring Security authorities (ROLE_ADMIN, ROLE_USER, etc.).
      * </p>
      *
@@ -103,7 +103,7 @@ public class Auth0SecurityConfig {
     @Bean
     public JwtAuthenticationConverter auth0JwtAuthenticationConverter() {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(new Auth0RolesConverter());
+        converter.setJwtGrantedAuthoritiesConverter(new Auth0RolesConverter(auth0Properties.api().rolesClaim()));
         return converter;
     }
 
@@ -144,19 +144,23 @@ public class Auth0SecurityConfig {
     /**
      * Custom roles converter for Auth0 JWT tokens.
      * <p>
-     * Extracts roles from the custom "https://api.dataforge.com/roles" claim
+     * Extracts roles from the configurable custom claim namespace
      * and converts them to Spring Security GrantedAuthority objects with "ROLE_" prefix.
      * </p>
      *
      * <h4>Example:</h4>
      * <pre>
-     * JWT claim: "https://api.dataforge.com/roles": ["admin", "user"]
+     * JWT claim: "https://dev.dfm.bitbi.io/roles": ["admin", "user"]
      * Authorities: [ROLE_ADMIN, ROLE_USER]
      * </pre>
      */
     static class Auth0RolesConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
         private static final Logger log = LoggerFactory.getLogger(Auth0RolesConverter.class);
-        private static final String ROLES_CLAIM = "https://api.dataforge.com/roles";
+        private final String rolesClaim;
+
+        Auth0RolesConverter(String rolesClaim) {
+            this.rolesClaim = rolesClaim;
+        }
 
         @Override
         @SuppressWarnings("unchecked")
@@ -164,7 +168,7 @@ public class Auth0SecurityConfig {
             Collection<GrantedAuthority> authorities = new ArrayList<>();
 
             // Extract custom roles claim
-            Object rolesClaim = jwt.getClaim(ROLES_CLAIM);
+            Object rolesClaim = jwt.getClaim(this.rolesClaim);
 
             if (rolesClaim instanceof List<?> roles) {
                 List<GrantedAuthority> roleAuthorities = roles.stream()

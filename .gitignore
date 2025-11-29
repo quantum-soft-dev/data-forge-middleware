@@ -58,3 +58,9 @@ jacoco/
 
 # Claude
 .claude/settings.local.json
+
+# Gemini
+.gemini/settings.json
+
+# Deploy secrets
+deploy-script/parameters-*.json
