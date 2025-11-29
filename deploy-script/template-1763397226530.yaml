@@ -710,6 +710,8 @@ Resources:
               Value: !Ref Auth0SPAClientId
             - Name: VITE_AUTH0_AUDIENCE
               Value: !Ref Auth0Audience
+            - Name: VITE_AUTH0_CLAIMS_NAMESPACE
+              Value: !Ref Auth0ClaimsNamespace
             - Name: VITE_API_BASE_URL
               Value: /api
             - Name: BACKEND_URL
