@@ -1,6 +1,7 @@
 import { createRouter, createRoute, createRootRoute, Outlet } from '@tanstack/react-router'
 import { lazy, Suspense } from 'react'
 import { AuthenticationGuard } from '@/shared/lib/auth/AuthenticationGuard'
+import { UserOnlyGuard } from '@/shared/lib/auth/UserOnlyGuard'
 
 // Lazy-loaded page components for code splitting
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
@@ -75,41 +76,41 @@ const userSitesRoute = createRoute({
   component: () => <AuthenticationGuard component={UserSitesPage} />,
 })
 
-// User routes - protected with AuthenticationGuard
+// User routes - protected with UserOnlyGuard (redirects admins to /admin/users)
 const siteManagementRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/sites',
-  component: () => <AuthenticationGuard component={SiteManagementPage} />,
+  component: () => <UserOnlyGuard component={SiteManagementPage} />,
 })
 
 const uploadHistoryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/upload-history',
-  component: () => <AuthenticationGuard component={UploadHistoryPage} />,
+  component: () => <UserOnlyGuard component={UploadHistoryPage} />,
 })
 
 const batchDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/upload-history/$batchId',
-  component: () => <AuthenticationGuard component={BatchDetailPage} />,
+  component: () => <UserOnlyGuard component={BatchDetailPage} />,
 })
 
 const comparisonListRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/comparisons',
-  component: () => <AuthenticationGuard component={ComparisonListPage} />,
+  component: () => <UserOnlyGuard component={ComparisonListPage} />,
 })
 
 const comparisonCreateRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/comparisons/create',
-  component: () => <AuthenticationGuard component={ComparisonPage} />,
+  component: () => <UserOnlyGuard component={ComparisonPage} />,
 })
 
 const comparisonDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/comparisons/$comparisonId',
-  component: () => <AuthenticationGuard component={ComparisonDetailPage} />,
+  component: () => <UserOnlyGuard component={ComparisonDetailPage} />,
 })
 
 // Create route tree
