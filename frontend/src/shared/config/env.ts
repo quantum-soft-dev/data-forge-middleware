@@ -6,11 +6,13 @@
  */
 
 export const env = {
-  // Keycloak Configuration
-  keycloak: {
-    url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180',
-    realm: import.meta.env.VITE_KEYCLOAK_REALM || 'dataforge',
-    clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'dataforge-ui',
+  // Auth0 Configuration
+  auth0: {
+    domain: import.meta.env.VITE_AUTH0_DOMAIN || 'dev-dfm.us.auth0.com',
+    clientId: import.meta.env.VITE_AUTH0_CLIENT_ID || '',
+    audience: import.meta.env.VITE_AUTH0_AUDIENCE || '',
+    // Custom claims namespace - must match Auth0 Post-Login Action
+    claimsNamespace: import.meta.env.VITE_AUTH0_CLAIMS_NAMESPACE || 'https://dev.dfm.bitbi.io',
   },
 
   // API Configuration

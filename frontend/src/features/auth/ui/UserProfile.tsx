@@ -1,5 +1,6 @@
 import { useAuth0 } from '@auth0/auth0-react'
 import { User, Mail, Shield } from 'lucide-react'
+import { env } from '@/shared/config/env'
 
 /**
  * UserProfile component displays authenticated user information from Auth0
@@ -11,7 +12,7 @@ import { User, Mail, Shield } from 'lucide-react'
  * - Returns null if user is not authenticated
  *
  * Custom Claims:
- * - Roles are extracted from 'https://api.dataforge.com/roles' custom claim
+ * - Roles are extracted from configurable namespace (VITE_AUTH0_CLAIMS_NAMESPACE)
  * - Roles follow ROLE_* prefix convention (e.g., ROLE_ADMIN, ROLE_USER)
  *
  * @author Data Forge Team
@@ -32,8 +33,9 @@ export function UserProfile() {
     return null
   }
 
-  // Extract roles from custom Auth0 claim
-  const roles = (user['https://api.dataforge.com/roles'] as string[]) || []
+  // Extract roles from custom Auth0 claim (namespace from env)
+  const rolesClaimKey = `${env.auth0.claimsNamespace}/roles`
+  const roles = (user[rolesClaimKey] as string[]) || []
 
   return (
     <div className="rounded-lg border bg-card p-6 shadow-sm">

@@ -1,5 +1,9 @@
 import { useAuth0 } from '@auth0/auth0-react'
 import { useState, useEffect } from 'react'
+import { env } from '@/shared/config/env'
+
+// Get claims namespace from environment
+const CLAIMS_NAMESPACE = env.auth0.claimsNamespace
 
 /**
  * Type-safe wrapper around Auth0 useAuth0 hook
@@ -20,6 +24,7 @@ export interface AuthState {
 
 /**
  * Auth0 user type with custom claims
+ * Note: Claim keys are dynamic based on CLAIMS_NAMESPACE
  */
 export interface Auth0User {
   sub?: string
@@ -27,18 +32,13 @@ export interface Auth0User {
   email?: string
   email_verified?: boolean
   picture?: string
-  'https://api.dataforge.com/roles'?: string[]
-  'https://api.dataforge.com/accountId'?: string
-  'https://api.dataforge.com/email'?: string
+  [key: string]: any // Allow dynamic claim keys
 }
 
 /**
  * Decoded access token payload with custom claims
  */
 interface AccessTokenPayload {
-  'https://api.dataforge.com/roles'?: string[]
-  'https://api.dataforge.com/accountId'?: string
-  'https://api.dataforge.com/email'?: string
   [key: string]: any
 }
 
@@ -82,8 +82,9 @@ export function useAuth(): AuthState {
       getAccessTokenSilently()
         .then((accessToken) => {
           const payload = decodeJwtPayload(accessToken)
-          const tokenRoles = payload?.['https://api.dataforge.com/roles'] || []
-          console.log('[useAuth] Extracted roles from access token:', tokenRoles)
+          const rolesClaimKey = `${CLAIMS_NAMESPACE}/roles`
+          const tokenRoles = payload?.[rolesClaimKey] || []
+          console.log('[useAuth] Extracted roles from access token:', tokenRoles, 'using claim:', rolesClaimKey)
           setRoles(tokenRoles)
         })
         .catch((err) => {

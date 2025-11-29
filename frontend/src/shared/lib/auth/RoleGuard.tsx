@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
+import { env } from '@/shared/config/env';
 
 /**
  * Role Guard component that restricts access based on user roles.
@@ -14,7 +15,7 @@ import { useAuth0 } from '@auth0/auth0-react';
  * Behavior:
  * - If user has required role: renders children
  * - If user lacks required role: renders 403 Forbidden message
- * - Extracts roles from Auth0 custom claim: https://api.dataforge.com/roles
+ * - Extracts roles from Auth0 custom claim (configurable via VITE_AUTH0_CLAIMS_NAMESPACE)
  *
  * @param requiredRole - The role required to access the content (e.g., "ROLE_ADMIN", "ROLE_USER")
  * @param children - Content to render if user has required role
@@ -39,8 +40,8 @@ export function RoleGuard({ requiredRole, children }: RoleGuardProps) {
   }
 
   // Extract roles from Auth0 custom claim
-  const rolesNamespace = 'https://api.dataforge.com/roles';
-  const roles = (user?.[rolesNamespace] as string[]) || [];
+  const rolesClaimKey = `${env.auth0.claimsNamespace}/roles`;
+  const roles = (user?.[rolesClaimKey] as string[]) || [];
 
   const hasRequiredRole = roles.includes(requiredRole);
 
