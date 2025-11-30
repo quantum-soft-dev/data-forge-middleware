@@ -19,8 +19,12 @@ interface CreateAccountFormProps {
 }
 
 export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProps) {
-  const [passwordResetLink, setPasswordResetLink] = useState<string | null>(null)
-  const [showResetLink, setShowResetLink] = useState(false)
+  const [createdAccountData, setCreatedAccountData] = useState<{
+    email: string
+    temporaryPassword: string | null
+    passwordResetUrl: string | null
+  } | null>(null)
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
 
   const mutation = useCreateAccountMutation()
 
@@ -53,8 +57,12 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
         : data
 
       const result = await mutation.mutateAsync(submitData)
-      setPasswordResetLink(result.passwordResetLink)
-      setShowResetLink(true)
+      setCreatedAccountData({
+        email: result.email,
+        temporaryPassword: result.temporaryPassword,
+        passwordResetUrl: result.passwordResetUrl,
+      })
+      setShowSuccessModal(true)
       reset()
     } catch (error) {
       console.error('Failed to create account:', error)
@@ -63,42 +71,69 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
   }
 
   const handleClose = () => {
-    setPasswordResetLink(null)
-    setShowResetLink(false)
+    setCreatedAccountData(null)
+    setShowSuccessModal(false)
     onSuccess?.()
   }
 
-  const copyToClipboard = async () => {
-    if (passwordResetLink) {
-      await navigator.clipboard.writeText(passwordResetLink)
-      // TODO: Show toast notification
-    }
+  const copyToClipboard = async (text: string) => {
+    await navigator.clipboard.writeText(text)
+    // TODO: Show toast notification
   }
 
-  // Show password reset link modal after successful creation
-  if (showResetLink && passwordResetLink) {
+  // Show success modal after account creation
+  if (showSuccessModal && createdAccountData) {
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div className="bg-white rounded-lg p-6 max-w-md w-full">
           <h2 className="text-xl font-bold mb-4">Account Created Successfully</h2>
           <div className="mb-4">
             <p className="text-sm text-gray-600 mb-2">
-              Password reset link (save this now - it will not be shown again):
+              Account created for: <strong>{createdAccountData.email}</strong>
             </p>
-            <div className="bg-gray-100 p-3 rounded font-mono text-xs break-all flex items-start justify-between">
-              <span className="flex-1">{passwordResetLink}</span>
-              <button
-                type="button"
-                onClick={copyToClipboard}
-                className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 flex-shrink-0"
-              >
-                Copy
-              </button>
-            </div>
           </div>
+
+          {/* Show temporary password if available */}
+          {createdAccountData.temporaryPassword && (
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 mb-2">
+                Temporary password (save this now - it will not be shown again):
+              </p>
+              <div className="bg-gray-100 p-3 rounded font-mono text-sm break-all flex items-start justify-between">
+                <span className="flex-1">{createdAccountData.temporaryPassword}</span>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(createdAccountData.temporaryPassword!)}
+                  className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 flex-shrink-0"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Show password reset URL if available */}
+          {createdAccountData.passwordResetUrl && (
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 mb-2">
+                Password reset link:
+              </p>
+              <div className="bg-gray-100 p-3 rounded font-mono text-xs break-all flex items-start justify-between">
+                <span className="flex-1">{createdAccountData.passwordResetUrl}</span>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(createdAccountData.passwordResetUrl!)}
+                  className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 flex-shrink-0"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4">
             <p className="text-sm text-yellow-800">
-              ⚠️ Send this link to the user. Link expires in 24 hours and can only be used once.
+              Send these credentials to the user. The user should change their password after first login.
             </p>
           </div>
           <button

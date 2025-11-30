@@ -46,7 +46,7 @@ export function useCreateAccountMutation() {
       queryClient.invalidateQueries({ queryKey: accountKeys.lists() })
       // Show success toast
       toast.success('Account created successfully', {
-        description: `Account for ${data.account.email} has been created. Password reset link sent.`,
+        description: `Account for ${data.email} has been created.`,
       })
     },
     onError: (error) => {

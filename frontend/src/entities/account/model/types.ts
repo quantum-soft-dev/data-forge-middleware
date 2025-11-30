@@ -48,9 +48,21 @@ export interface CreateAccountRequest {
   role: string // Keycloak role assignment
 }
 
+/**
+ * Backend response from POST /api/v1/accounts
+ * Returns flat account data with optional password reset URL
+ */
 export interface CreateAccountResponse {
-  account: AccountWithKeycloakStatus
-  passwordResetLink: string // Auth0 password reset link (24-hour expiry)
+  id: string
+  email: string
+  name: string
+  phone: string | null
+  company: string | null
+  isActive: boolean
+  identityProviderUserId: string | null
+  temporaryPassword: string | null
+  passwordResetUrl: string | null // Auth0 password reset link (24-hour expiry)
+  createdAt: string
 }
 
 export interface ResetPasswordResponse {
