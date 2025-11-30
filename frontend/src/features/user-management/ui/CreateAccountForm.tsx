@@ -10,6 +10,7 @@
 import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { toast } from 'sonner'
 import { createAccountSchema, type CreateAccountFormData } from '../model/userSchemas'
 import { useCreateAccountMutation } from '../api/userMutations'
 
@@ -78,7 +79,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
 
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text)
-    // TODO: Show toast notification
+    toast.success('Copied to clipboard')
   }
 
   // Show success modal after account creation
