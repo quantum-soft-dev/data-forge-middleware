@@ -76,23 +76,18 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnSuccess = vi.fn()
     const mockOnCancel = vi.fn()
 
-    // Mock API response for USER role
+    // Mock API response for USER role (flat structure matching backend)
     const mockResponse = {
-      account: {
-        id: 'acc-12345',
-        email: 'john.doe@example.com',
-        name: 'John Doe',
-        status: 'active',
-        isActive: true,
-        identityProviderUserId: 'auth0|12345',
-        isBlocked: false,
-        lastLogin: null,
-        createdAt: '2025-10-29T10:00:00Z',
-        updatedAt: '2025-10-29T10:00:00Z',
-        phone: null,
-        company: null,
-      },
-      passwordResetLink: 'https://auth0.com/reset-password-user',
+      id: 'acc-12345',
+      email: 'john.doe@example.com',
+      name: 'John Doe',
+      phone: null,
+      company: null,
+      isActive: true,
+      identityProviderUserId: 'auth0|12345',
+      temporaryPassword: 'TempPass123!',
+      passwordResetUrl: null,
+      createdAt: '2025-10-29T10:00:00Z',
     }
 
     mockAxios.onPost('/v1/accounts').reply(200, mockResponse)
@@ -137,8 +132,8 @@ describe('Create Account Flow - Integration Test', () => {
       expect(screen.getByRole('heading', { name: /account created successfully/i })).toBeInTheDocument()
     })
 
-    expect(screen.getByText(/password reset link/i)).toBeInTheDocument()
-    expect(screen.getByText('https://auth0.com/reset-password-user')).toBeInTheDocument()
+    expect(screen.getByText(/temporary password/i)).toBeInTheDocument()
+    expect(screen.getByText('TempPass123!')).toBeInTheDocument()
 
     // Verify copy button is present
     const copyButton = screen.getByRole('button', { name: /copy/i })
@@ -168,23 +163,18 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnSuccess = vi.fn()
     const mockOnCancel = vi.fn()
 
-    // Mock API response for ADMIN role
+    // Mock API response for ADMIN role (flat structure matching backend)
     const mockResponse = {
-      account: {
-        id: 'acc-67890',
-        email: 'admin@example.com',
-        name: 'Admin User',
-        status: 'active',
-        isActive: true,
-        identityProviderUserId: 'auth0|67890',
-        isBlocked: false,
-        lastLogin: null,
-        createdAt: '2025-10-29T10:00:00Z',
-        updatedAt: '2025-10-29T10:00:00Z',
-        phone: null,
-        company: null,
-      },
-      passwordResetLink: 'https://auth0.com/reset-password-admin',
+      id: 'acc-67890',
+      email: 'admin@example.com',
+      name: 'Admin User',
+      phone: null,
+      company: null,
+      isActive: true,
+      identityProviderUserId: 'auth0|67890',
+      temporaryPassword: 'AdminPass456!',
+      passwordResetUrl: null,
+      createdAt: '2025-10-29T10:00:00Z',
     }
 
     mockAxios.onPost('/v1/accounts').reply(200, mockResponse)
@@ -218,7 +208,7 @@ describe('Create Account Flow - Integration Test', () => {
       expect(screen.getByRole('heading', { name: /account created successfully/i })).toBeInTheDocument()
     })
 
-    expect(screen.getByText('https://auth0.com/reset-password-admin')).toBeInTheDocument()
+    expect(screen.getByText('AdminPass456!')).toBeInTheDocument()
 
     // Close modal
     const closeButton = screen.getByRole('button', { name: /close/i })
@@ -356,23 +346,18 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnSuccess = vi.fn()
     const mockOnCancel = vi.fn()
 
-    // Mock API with delay to simulate pending state
+    // Mock API with delay to simulate pending state (flat structure matching backend)
     const mockResponse = {
-      account: {
-        id: 'acc-12345',
-        email: 'test@example.com',
-        name: 'Test User',
-        status: 'active',
-        isActive: true,
-        identityProviderUserId: 'auth0|12345',
-        isBlocked: false,
-        lastLogin: null,
-        createdAt: '2025-10-29T10:00:00Z',
-        updatedAt: '2025-10-29T10:00:00Z',
-        phone: null,
-        company: null,
-      },
-      passwordResetLink: 'https://auth0.com/reset-password',
+      id: 'acc-12345',
+      email: 'test@example.com',
+      name: 'Test User',
+      phone: null,
+      company: null,
+      isActive: true,
+      identityProviderUserId: 'auth0|12345',
+      temporaryPassword: 'TempPass789!',
+      passwordResetUrl: null,
+      createdAt: '2025-10-29T10:00:00Z',
     }
 
     mockAxios.onPost('/v1/accounts').reply(() => {
@@ -421,22 +406,18 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnSuccess = vi.fn()
     const mockOnCancel = vi.fn()
 
+    // Flat structure matching backend
     const mockResponse = {
-      account: {
-        id: 'acc-12345',
-        email: 'test@example.com',
-        name: 'Test User',
-        phone: '+1234567890',
-        company: 'Test Company',
-        status: 'active',
-        isActive: true,
-        identityProviderUserId: 'auth0|12345',
-        isBlocked: false,
-        lastLogin: null,
-        createdAt: '2025-10-29T10:00:00Z',
-        updatedAt: '2025-10-29T10:00:00Z',
-      },
-      passwordResetLink: 'https://auth0.com/reset-password',
+      id: 'acc-12345',
+      email: 'test@example.com',
+      name: 'Test User',
+      phone: '+1234567890',
+      company: 'Test Company',
+      isActive: true,
+      identityProviderUserId: 'auth0|12345',
+      temporaryPassword: 'TempOptional!',
+      passwordResetUrl: null,
+      createdAt: '2025-10-29T10:00:00Z',
     }
 
     mockAxios.onPost('/v1/accounts').reply(200, mockResponse)
