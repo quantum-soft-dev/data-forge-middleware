@@ -1,5 +1,6 @@
 package com.bitbi.dfm.shared.config;
 
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
 import com.bitbi.dfm.shared.auth.AuthenticationAuditLogger;
 import org.springframework.context.annotation.Bean;
@@ -64,12 +65,15 @@ public class SecurityConfiguration {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final AuthenticationAuditLogger authenticationAuditLogger;
+    private final Auth0Properties auth0Properties;
 
     public SecurityConfiguration(
             JwtAuthenticationFilter jwtAuthenticationFilter,
-            AuthenticationAuditLogger authenticationAuditLogger) {
+            AuthenticationAuditLogger authenticationAuditLogger,
+            Auth0Properties auth0Properties) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.authenticationAuditLogger = authenticationAuditLogger;
+        this.auth0Properties = auth0Properties;
     }
 
     /**
@@ -312,21 +316,24 @@ public class SecurityConfiguration {
     /**
      * Convert Auth0 JWT roles to Spring Security authorities.
      * <p>
-     * Custom converter to extract roles from Auth0 custom claim 'https://api.dataforge.com/roles'.
+     * Custom converter to extract roles from configurable Auth0 custom claim.
+     * The claim namespace is configured via AUTH0_CLAIMS_NAMESPACE environment variable.
      * Auth0 stores roles in custom claims via Auth0 Actions.
      * </p>
      */
     @Bean
     public JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
-        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(new Auth0RoleConverter());
+        jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(
+            new Auth0RoleConverter(auth0Properties.api().rolesClaim())
+        );
         return jwtAuthenticationConverter;
     }
 
     /**
      * Custom converter to extract roles from Auth0's custom roles claim.
      * <p>
-     * Extracts roles from 'https://api.dataforge.com/roles' custom claim.
+     * Extracts roles from configurable custom claim (e.g., 'https://dev.dfm.bitbi.io/roles').
      * Automatically adds ROLE_ prefix if not present to ensure compatibility with
      * Spring Security's hasRole() method. Handles both formats:
      * - "ADMIN" → "ROLE_ADMIN"
@@ -337,13 +344,17 @@ public class SecurityConfiguration {
      * </p>
      */
     static class Auth0RoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
-        private static final String AUTH0_ROLES_CLAIM = "https://api.dataforge.com/roles";
+        private final String rolesClaim;
+
+        Auth0RoleConverter(String rolesClaim) {
+            this.rolesClaim = rolesClaim;
+        }
 
         @Override
         @SuppressWarnings("unchecked")
         public Collection<GrantedAuthority> convert(Jwt jwt) {
-            // Strategy 1: Try Auth0 custom claim first
-            List<String> roles = jwt.getClaimAsStringList(AUTH0_ROLES_CLAIM);
+            // Strategy 1: Try Auth0 custom claim first (using configurable namespace)
+            List<String> roles = jwt.getClaimAsStringList(rolesClaim);
 
             // Strategy 2: Fall back to Keycloak realm_access.roles (backward compatibility)
             if (roles == null || roles.isEmpty()) {
