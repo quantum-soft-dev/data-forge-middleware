@@ -14,8 +14,8 @@ import { LogoutButton } from '@/features/auth/logout/LogoutButton'
 import { useAuth } from '@/entities/user-session/api/useAuth'
 
 export function Header() {
-  const { user, hasRole } = useAuth()
-  const isAdmin = hasRole('ROLE_ADMIN')
+  const { user, hasRole, isRolesLoading } = useAuth()
+  const isAdmin = !isRolesLoading && hasRole('ROLE_ADMIN')
 
   // Get user name from token (prefer name, fallback to email)
   const userName = user?.name || user?.email || 'User'

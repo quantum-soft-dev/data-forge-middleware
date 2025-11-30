@@ -14,6 +14,7 @@ const CLAIMS_NAMESPACE = env.auth0.claimsNamespace
 export interface AuthState {
   isAuthenticated: boolean
   isLoading: boolean
+  isRolesLoading: boolean
   user: Auth0User | undefined
   error: Error | undefined
   signinRedirect: () => Promise<void>
@@ -75,10 +76,12 @@ export function useAuth(): AuthState {
 
   // Store roles from access token (not ID token)
   const [roles, setRoles] = useState<string[]>([])
+  const [isRolesLoading, setIsRolesLoading] = useState(true)
 
   // Extract roles from access token when authenticated
   useEffect(() => {
     if (isAuthenticated) {
+      setIsRolesLoading(true)
       getAccessTokenSilently()
         .then((accessToken) => {
           const payload = decodeJwtPayload(accessToken)
@@ -91,8 +94,12 @@ export function useAuth(): AuthState {
           console.error('[useAuth] Failed to get access token:', err)
           setRoles([])
         })
+        .finally(() => {
+          setIsRolesLoading(false)
+        })
     } else {
       setRoles([])
+      setIsRolesLoading(false)
     }
   }, [isAuthenticated, getAccessTokenSilently])
 
@@ -126,6 +133,7 @@ export function useAuth(): AuthState {
   return {
     isAuthenticated,
     isLoading,
+    isRolesLoading,
     user,
     error,
     signinRedirect,

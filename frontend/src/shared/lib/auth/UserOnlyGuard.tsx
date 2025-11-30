@@ -1,6 +1,6 @@
 import { ComponentType, useEffect } from 'react';
-import { useAuth0, withAuthenticationRequired } from '@auth0/auth0-react';
-import { env } from '@/shared/config/env';
+import { withAuthenticationRequired } from '@auth0/auth0-react';
+import { useAuth } from '@/entities/user-session/api/useAuth';
 
 /**
  * Guard that restricts access to regular users only (non-admins).
@@ -32,20 +32,21 @@ function LoadingSpinner() {
 }
 
 function UserOnlyWrapper({ component: Component }: { component: ComponentType }) {
-  const { user, isLoading } = useAuth0();
+  const { isLoading, isRolesLoading, hasRole } = useAuth();
 
-  // Extract roles from Auth0 custom claim
-  const rolesClaimKey = `${env.auth0.claimsNamespace}/roles`;
-  const roles = (user?.[rolesClaimKey] as string[]) || [];
-  const isAdmin = roles.includes('ROLE_ADMIN');
+  // Wait for both auth and roles to load before checking admin status
+  const stillLoading = isLoading || isRolesLoading;
+
+  // Check if user is admin using access token roles
+  const isAdmin = hasRole('ROLE_ADMIN');
 
   useEffect(() => {
-    if (!isLoading && isAdmin) {
+    if (!stillLoading && isAdmin) {
       window.location.href = '/admin/users';
     }
-  }, [isLoading, isAdmin]);
+  }, [stillLoading, isAdmin]);
 
-  if (isLoading || isAdmin) {
+  if (stillLoading || isAdmin) {
     return <LoadingSpinner />;
   }
 
