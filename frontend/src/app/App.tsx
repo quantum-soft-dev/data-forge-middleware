@@ -2,8 +2,10 @@ import { useEffect } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { Auth0Provider, QueryProvider, RouterProvider } from '@/app/providers'
 import { ErrorBoundary } from '@/app/ErrorBoundary'
-import { setupInterceptors } from '@/shared/api/interceptors'
+import { setupInterceptors, setupResponseInterceptor } from '@/shared/api/interceptors'
+import { initTokenRefresh } from '@/shared/api/token-refresh'
 import { setupErrorHandler } from '@/shared/api/error-handler'
+import { SessionExpiredBanner } from '@/entities/user-session/ui/SessionExpiredBanner'
 import { Toaster } from 'sonner'
 
 /**
@@ -20,7 +22,7 @@ import { Toaster } from 'sonner'
  * @version 2.0.0 (Auth0 migration)
  */
 function AppContent() {
-  const { isLoading, isAuthenticated, error, getAccessTokenSilently, loginWithRedirect } = useAuth0()
+  const { isLoading, isAuthenticated, error, getAccessTokenSilently, loginWithRedirect, logout } = useAuth0()
 
   // Setup axios interceptors when auth is ready
   // The interceptor will dynamically get the token on each request via closure
@@ -30,7 +32,7 @@ function AppContent() {
       isAuthenticated,
     })
 
-    // Setup interceptors with Auth0 token getter
+    // Setup request interceptors with Auth0 token getter
     // Token is fetched silently on each request
     setupInterceptors(async () => {
       if (isAuthenticated) {
@@ -44,8 +46,19 @@ function AppContent() {
       }
       return undefined
     })
+
+    // Initialize token refresh manager for automatic 401 handling
+    // This enables automatic token refresh when API returns 401
+    initTokenRefresh(
+      getAccessTokenSilently,
+      () => logout({ logoutParams: { returnTo: window.location.origin } })
+    )
+
+    // Setup response interceptor for 401 handling with token refresh
+    setupResponseInterceptor()
+
     setupErrorHandler()
-  }, [isLoading, isAuthenticated, getAccessTokenSilently])
+  }, [isLoading, isAuthenticated, getAccessTokenSilently, logout])
 
   // Show loading state while auth is initializing
   if (isLoading) {
@@ -81,7 +94,13 @@ function AppContent() {
     )
   }
 
-  return <RouterProvider />
+  return (
+    <>
+      {/* Show session expiry notification after user logs back in */}
+      <SessionExpiredBanner />
+      <RouterProvider />
+    </>
+  )
 }
 
 /**
