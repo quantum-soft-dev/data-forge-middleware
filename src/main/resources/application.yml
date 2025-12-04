@@ -92,6 +92,9 @@ auth0:
     client-id: ${AUTH0_MGMT_CLIENT_ID:}
     client-secret: ${AUTH0_MGMT_CLIENT_SECRET:}
     audience: ${AUTH0_MGMT_AUDIENCE:https://dev-example.us.auth0.com/api/v2/}
+    # Buffer time before token expiry to trigger refresh (default: 1 hour)
+    # Prevents using tokens that are about to expire due to clock skew or network delays
+    token-expiry-buffer-seconds: ${AUTH0_TOKEN_EXPIRY_BUFFER_SECONDS:3600}
   api:
     audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
     issuer: ${AUTH0_ISSUER:https://dev-example.us.auth0.com/}

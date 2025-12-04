@@ -52,6 +52,9 @@ public class Auth0Configuration {
     @Value("${auth0.management.client-secret:}")
     private String managementClientSecret;
 
+    @Value("${auth0.management.token-expiry-buffer-seconds:3600}")
+    private long tokenExpiryBufferSeconds;
+
     private ManagementAPI managementAPI;
     private AuthAPI authAPI;
     private String cachedToken;
@@ -132,11 +135,12 @@ public class Auth0Configuration {
             Request<TokenHolder> request = authAPI.requestToken("https://" + domain + "/api/v2/");
             TokenHolder holder = request.execute().getBody();
 
-            // Cache token with 5-minute buffer before expiry
+            // Cache token with configurable buffer before expiry (default: 1 hour)
             this.cachedToken = holder.getAccessToken();
-            this.tokenExpiry = Instant.now().plusSeconds(holder.getExpiresIn() - 300);
+            this.tokenExpiry = Instant.now().plusSeconds(holder.getExpiresIn() - tokenExpiryBufferSeconds);
 
-            logger.info("Auth0 Management API token refreshed successfully. Expires at: {}", tokenExpiry);
+            logger.info("Auth0 Management API token refreshed successfully. Expires at: {} (buffer: {}s)",
+                    tokenExpiry, tokenExpiryBufferSeconds);
 
         } catch (Auth0Exception e) {
             logger.error("Failed to refresh Auth0 Management API token: {}", e.getMessage(), e);

@@ -46,10 +46,11 @@ public class Auth0TokenProvider {
     private static final Logger logger = LoggerFactory.getLogger(Auth0TokenProvider.class);
 
     /**
-     * Buffer time before token expiry to trigger refresh (5 minutes).
+     * Buffer time before token expiry to trigger refresh.
+     * Configurable via auth0.management.token-expiry-buffer-seconds (default: 3600 = 1 hour).
      * Prevents using tokens that are about to expire.
      */
-    private static final long EXPIRY_BUFFER_SECONDS = 300; // 5 minutes
+    private final long expiryBufferSeconds;
 
     private final AuthAPI authAPI;
     private final Auth0Properties properties;
@@ -71,13 +72,15 @@ public class Auth0TokenProvider {
 
     public Auth0TokenProvider(Auth0Properties properties) {
         this.properties = properties;
+        this.expiryBufferSeconds = properties.management().getTokenExpiryBufferSeconds();
         this.authAPI = AuthAPI.newBuilder(
                 properties.domain(),
                 properties.management().clientId(),
                 properties.management().clientSecret()
         ).build();
 
-        logger.info("Auth0TokenProvider initialized for domain: {}", properties.domain());
+        logger.info("Auth0TokenProvider initialized for domain: {} (token expiry buffer: {}s)",
+                properties.domain(), expiryBufferSeconds);
     }
 
     /**
@@ -139,9 +142,10 @@ public class Auth0TokenProvider {
 
             this.tokenExpiry = Instant.now()
                     .plus(expiresIn, ChronoUnit.SECONDS)
-                    .minus(EXPIRY_BUFFER_SECONDS, ChronoUnit.SECONDS);
+                    .minus(expiryBufferSeconds, ChronoUnit.SECONDS);
 
-            logger.info("Auth0 Management API token refreshed successfully. Expires at: {}", tokenExpiry);
+            logger.info("Auth0 Management API token refreshed successfully. Expires at: {} (buffer: {}s)",
+                    tokenExpiry, expiryBufferSeconds);
 
         } catch (Auth0Exception e) {
             logger.error("Failed to refresh Auth0 Management API token: {}", e.getMessage(), e);
