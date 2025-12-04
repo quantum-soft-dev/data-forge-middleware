@@ -9,6 +9,8 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - PostgreSQL 16 (new tables: file_comparisons, comparison_results), AWS S3 (file content retrieval) (009-markdown-user-story)
 - Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6, SpringDoc OpenAPI 3 (010-api-unification-goal)
 - N/A (refactoring only - no schema changes) (010-api-unification-goal)
+- TypeScript 5.6 (React 19.2) + @auth0/auth0-react 2.8.0, Axios, TanStack Query v5 (012-key-caching-logic)
+- Memory (Auth0 SDK handles token storage securely) (012-key-caching-logic)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
@@ -284,10 +286,34 @@ user.setAppMetadata(Map.of("accountId", account.getId().toString()));
 
 #### Auth0 Management API Integration
 - **Library**: `com.auth0:auth0:2.26.0`, `com.auth0:java-jwt:4.4.0`
-- **Authentication**: Management API with `CLIENT_CREDENTIALS` grant type (24-hour token caching)
+- **Authentication**: Management API with `CLIENT_CREDENTIALS` grant type (24-hour token from Auth0)
 - **Configuration**: Domain, client ID, client secret, audience, database connection via application.yml
 - **Wrapper Service**: `Auth0ManagementApiClient` provides simplified API (createUser, blockUser, unblockUser, generatePasswordResetLink, getUser)
 - **Error Handling**: Maps Auth0 exceptions to domain exceptions (AccountNotFoundException, Auth0SyncException, Auth0RateLimitException)
+
+#### M2M Token Caching (Updated 2025-12-04)
+Machine-to-Machine tokens for Auth0 Management API are cached in memory with configurable expiry buffer.
+
+**Configuration** (`application.yml`):
+```yaml
+auth0:
+  management:
+    token-expiry-buffer-seconds: ${AUTH0_TOKEN_EXPIRY_BUFFER_SECONDS:3600}  # Default: 1 hour
+```
+
+**Token Lifecycle**:
+- Auth0 M2M tokens have 24-hour TTL (`expires_in: 86400`)
+- Token is refreshed when `current_time >= (token_issued_at + expires_in - buffer)`
+- Default buffer: **3600 seconds (1 hour)** - protects against clock skew and network delays
+- Scheduled refresh runs every 23 hours as backup (`@Scheduled(fixedRate = 23 * 60 * 60 * 1000)`)
+- Thread-safe refresh with `ReentrantLock` (double-check locking pattern)
+
+**Implementation**:
+- `Auth0Configuration.java`: Manages `ManagementAPI` bean with scheduled token refresh
+- `Auth0TokenProvider.java`: Provides `getAccessToken()` with lazy refresh on demand
+- `Auth0Properties.Management.tokenExpiryBufferSeconds`: Configurable buffer (default: 3600)
+
+**Environment Variable**: `AUTH0_TOKEN_EXPIRY_BUFFER_SECONDS` (override default buffer)
 
 #### User Management Operations
 - **Create Account**: POST /api/v1/admin/accounts (returns password reset link instead of temporary password)

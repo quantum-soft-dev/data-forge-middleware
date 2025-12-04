@@ -6,12 +6,15 @@ import type { AxiosError } from 'axios'
  * Global error handler for API requests
  *
  * Handles common HTTP error responses:
- * - 401 Unauthorized: Redirect to login (token expired)
+ * - 401 Unauthorized: Handled by token refresh interceptor (see interceptors.ts)
  * - 403 Forbidden: Show permission error
  * - 404 Not Found: Show not found error
  * - 409 Conflict: Show conflict error (e.g., duplicate email)
  * - 500 Server Error: Show generic server error
  * - Network Error: Show network error
+ *
+ * Note: 401 errors are NOT shown as toasts here because the response interceptor
+ * handles them with automatic token refresh. If refresh fails, logout is triggered.
  *
  * Usage: Call setupErrorHandler() in App.tsx
  */
@@ -29,12 +32,8 @@ export function setupErrorHandler() {
       const { status, data } = error.response
 
       switch (status) {
-        case 401:
-          // Unauthorized - redirect to login
-          toast.error('Session expired. Please log in again.')
-          // Note: Actual redirect will be handled by react-oidc-context
-          // when the 401 error bubbles up and token refresh fails
-          break
+        // Note: 401 is handled by setupResponseInterceptor() in interceptors.ts
+        // which attempts token refresh before showing any error
 
         case 403:
           // Forbidden - wrong token type or insufficient permissions

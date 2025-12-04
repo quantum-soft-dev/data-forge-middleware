@@ -58,9 +58,10 @@ public record Auth0Properties(
      * that has permissions to call the Auth0 Management API for user CRUD operations.
      * </p>
      *
-     * @param clientId     Machine-to-Machine application client ID
-     * @param clientSecret Machine-to-Machine application client secret (keep secure!)
-     * @param audience     Auth0 Management API audience (https://{domain}/api/v2/)
+     * @param clientId                 Machine-to-Machine application client ID
+     * @param clientSecret             Machine-to-Machine application client secret (keep secure!)
+     * @param audience                 Auth0 Management API audience (https://{domain}/api/v2/)
+     * @param tokenExpiryBufferSeconds Buffer time before token expiry to trigger refresh (default: 3600 = 1 hour)
      */
     public record Management(
             @NotBlank(message = "Auth0 Management API client ID is required")
@@ -70,8 +71,20 @@ public record Auth0Properties(
             String clientSecret,
 
             @NotBlank(message = "Auth0 Management API audience is required")
-            String audience
-    ) {}
+            String audience,
+
+            Long tokenExpiryBufferSeconds
+    ) {
+        /**
+         * Get the token expiry buffer in seconds.
+         * Returns default of 3600 (1 hour) if not configured.
+         *
+         * @return buffer seconds before token expiry to trigger refresh
+         */
+        public long getTokenExpiryBufferSeconds() {
+            return tokenExpiryBufferSeconds != null ? tokenExpiryBufferSeconds : 3600L;
+        }
+    }
 
     /**
      * Auth0 API configuration for JWT validation.
