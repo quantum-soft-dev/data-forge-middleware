@@ -9,6 +9,8 @@ import com.auth0.net.Request;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.auth.domain.UserRole;
+import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.config.Auth0TestConfig;
 import com.bitbi.dfm.integration.AbstractIntegrationTest;
 import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
@@ -63,6 +65,9 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
 
     @MockitoBean
     private ManagementAPI managementAPI;
+
+    @MockitoBean
+    private Auth0ManagementApiClient auth0ManagementApiClient;
 
     private static final String MOCK_AUTH0_USER_ID = "auth0|test-created-user-id-12345";
 
@@ -134,7 +139,7 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
 
         // When
         AccountSyncService.AccountCreationResult result =
-            auth0AccountSyncService.createAccount(email, name, phone, company);
+            auth0AccountSyncService.createAccount(email, name, phone, company, UserRole.USER);
 
         // Then: Account created successfully
         assertThat(result).isNotNull();
@@ -193,7 +198,7 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
 
         // When/Then: Exception thrown
         assertThatThrownBy(() ->
-            auth0AccountSyncService.createAccount(email, name, phone, company)
+            auth0AccountSyncService.createAccount(email, name, phone, company, UserRole.USER)
         ).isInstanceOf(Exception.class);
 
         // Verify: Auth0 user created
@@ -221,7 +226,7 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
     void createAccount_accountExists_noAuth0UserCreated() throws Exception {
         // Given: Create first account
         String email = "duplicate@example.com";
-        auth0AccountSyncService.createAccount(email, "First User", null, null);
+        auth0AccountSyncService.createAccount(email, "First User", null, null, UserRole.USER);
 
         // Reset mock to verify second attempt
         reset(managementAPI.users());
@@ -229,7 +234,7 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
 
         // When/Then: Attempt to create duplicate
         assertThatThrownBy(() ->
-            auth0AccountSyncService.createAccount(email, "Second User", null, null)
+            auth0AccountSyncService.createAccount(email, "Second User", null, null, UserRole.USER)
         ).isInstanceOf(Exception.class)
          .hasMessageContaining("already exists");
 
@@ -260,7 +265,8 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
                 "ratelimit@example.com",
                 "Rate Limit Test",
                 null,
-                null
+                null,
+                UserRole.USER
             )
         ).isInstanceOf(Auth0RateLimitException.class);
 
@@ -292,7 +298,8 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
                 "unavailable@example.com",
                 "Service Unavailable Test",
                 null,
-                null
+                null,
+                UserRole.USER
             )
         ).isInstanceOf(Auth0ServiceUnavailableException.class);
 
@@ -323,7 +330,7 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
         // When: Create account (should succeed despite metadata failure)
         String email = "metadata-failure@example.com";
         AccountSyncService.AccountCreationResult result =
-            auth0AccountSyncService.createAccount(email, "Metadata Test", null, null);
+            auth0AccountSyncService.createAccount(email, "Metadata Test", null, null, UserRole.USER);
 
         // Then: Account created successfully
         assertThat(result).isNotNull();
@@ -361,7 +368,7 @@ class Auth0UserCreationIntegrationTest extends AbstractIntegrationTest {
 
         // When
         AccountSyncService.AccountCreationResult result =
-            auth0AccountSyncService.createAccount(email, name, null, null);
+            auth0AccountSyncService.createAccount(email, name, null, null, UserRole.USER);
 
         // Then
         assertThat(result).isNotNull();

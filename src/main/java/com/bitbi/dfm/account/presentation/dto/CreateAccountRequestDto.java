@@ -1,7 +1,9 @@
 package com.bitbi.dfm.account.presentation.dto;
 
+import com.bitbi.dfm.auth.domain.UserRole;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -16,6 +18,7 @@ import jakarta.validation.constraints.Size;
  * - name: required, 2-100 characters
  * - phone: optional, E.164 format (7-15 digits, optional + prefix)
  * - company: optional, max 100 characters
+ * - role: required, USER or ADMIN
  *
  * User Story: US1 - Admin Creates User Account
  *
@@ -23,6 +26,7 @@ import jakarta.validation.constraints.Size;
  * @param name The user's full name
  * @param phone The user's phone number (optional, E.164 format)
  * @param company The user's company name (optional)
+ * @param role The user's role (USER or ADMIN)
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -42,6 +46,9 @@ public record CreateAccountRequestDto(
     String phone,
 
     @Size(max = 100, message = "Company must not exceed 100 characters")
-    String company
+    String company,
+
+    @NotNull(message = "Role is required")
+    UserRole role
 ) {
 }

@@ -7,6 +7,9 @@ import com.auth0.net.Request;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountAuth0LinkedEvent;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.auth.domain.Auth0UserId;
+import com.bitbi.dfm.auth.domain.UserRole;
+import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
 import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
 import org.slf4j.Logger;
@@ -59,6 +62,7 @@ public class AccountSyncService {
     private final ManagementAPI managementAPI;
     private final AccountRepository accountRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final Auth0ManagementApiClient auth0ManagementApiClient;
 
     @Value("${auth0.database-connection}")
     private String databaseConnection;
@@ -66,11 +70,13 @@ public class AccountSyncService {
     public AccountSyncService(
         ManagementAPI managementAPI,
         AccountRepository accountRepository,
-        ApplicationEventPublisher eventPublisher
+        ApplicationEventPublisher eventPublisher,
+        Auth0ManagementApiClient auth0ManagementApiClient
     ) {
         this.managementAPI = managementAPI;
         this.accountRepository = accountRepository;
         this.eventPublisher = eventPublisher;
+        this.auth0ManagementApiClient = auth0ManagementApiClient;
     }
 
     /**
@@ -79,6 +85,7 @@ public class AccountSyncService {
      * Phase 1: Create user in identity provider
      * Phase 2: Create account in PostgreSQL
      * Phase 3: Update identity provider with accountId (bidirectional mapping)
+     * Phase 4: Assign role to identity provider user (ROLE_USER or ROLE_ADMIN)
      * If Phase 2 or 3 fails: Delete identity provider user (compensating transaction)
      * </p>
      *
@@ -86,6 +93,7 @@ public class AccountSyncService {
      * @param name User's full name
      * @param phone User's phone number (optional)
      * @param company User's company name (optional)
+     * @param role User's role (USER or ADMIN)
      * @return Created account with identity provider user ID
      * @throws Auth0ServiceUnavailableException if identity provider is unavailable
      * @throws Auth0RateLimitException if rate limit exceeded
@@ -101,7 +109,8 @@ public class AccountSyncService {
         String email,
         String name,
         String phone,
-        String company
+        String company,
+        UserRole role
     ) {
         // Check if account already exists
         if (accountRepository.findByEmail(email).isPresent()) {
@@ -140,6 +149,17 @@ public class AccountSyncService {
                 // Non-critical error - account creation succeeded, metadata update failed
                 logger.warn("Failed to update Auth0 user metadata (non-critical): {}", ex.getMessage());
                 // Continue - account is usable without metadata
+            }
+
+            // PHASE 4: Assign role to Auth0 user (ROLE_USER or ROLE_ADMIN)
+            try {
+                auth0ManagementApiClient.assignRoleToUser(Auth0UserId.of(auth0UserId), role);
+                logger.info("Auth0 role assigned: userId={}, role={}", auth0UserId, role.getAuth0RoleName());
+            } catch (Exception ex) {
+                // Non-critical error - account creation succeeded, role assignment failed
+                // Role can be manually assigned later via Auth0 Dashboard
+                logger.warn("Failed to assign Auth0 role (non-critical): {} - Role can be manually assigned in Auth0 Dashboard",
+                        ex.getMessage());
             }
 
             // Publish domain event for audit logging

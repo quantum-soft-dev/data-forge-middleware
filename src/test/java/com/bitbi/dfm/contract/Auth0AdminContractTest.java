@@ -8,6 +8,7 @@ import com.auth0.net.Request;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.Auth0TokenProvider;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
+import com.bitbi.dfm.auth.domain.UserRole;
 import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
@@ -126,6 +127,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             String name = invocation.getArgument(1);
             String phone = invocation.getArgument(2);
             String company = invocation.getArgument(3);
+            UserRole role = invocation.getArgument(4);
 
             // Simulate duplicate email check (admin@dataforge.com exists in test-data.sql)
             if ("admin@dataforge.com".equals(email)) {
@@ -148,7 +150,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
                 mockAccount,
                 "TempPass123!"
             );
-        }).when(accountSyncService).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+        }).when(accountSyncService).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class), any(UserRole.class));
     }
 
     /**
@@ -167,7 +169,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             "email", "john.doe@example.com",
             "name", "John Doe",
             "phone", "+12345678901",
-            "company", "Acme Corp"
+            "company", "Acme Corp",
+            "role", "USER"
         );
 
         mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
@@ -193,7 +196,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             eq("john.doe@example.com"),
             eq("John Doe"),
             eq("+12345678901"),
-            eq("Acme Corp")
+            eq("Acme Corp"),
+            eq(UserRole.USER)
         );
     }
 
@@ -210,7 +214,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
     void createAccount_invalidEmail_returns400() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "not-an-email",
-            "name", "John Doe"
+            "name", "John Doe",
+            "role", "USER"
         );
 
         mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
@@ -223,7 +228,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             .andExpect(jsonPath("$.message").value(containsString("Email")));
 
         // Verify AccountSyncService was NOT called (validation failed before service call)
-        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class), any(UserRole.class));
     }
 
     /**
@@ -240,7 +245,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
     void createAccount_duplicateEmail_returns409() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "admin@dataforge.com", // Exists in test-data.sql
-            "name", "Duplicate User"
+            "name", "Duplicate User",
+            "role", "USER"
         );
 
         mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
@@ -257,7 +263,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             eq("admin@dataforge.com"),
             eq("Duplicate User"),
             isNull(),  // phone is null
-            isNull()   // company is null
+            isNull(),  // company is null
+            eq(UserRole.USER)
         );
     }
 
@@ -273,7 +280,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
     @DisplayName("TC04: Create account with Auth0 - missing required fields returns 400")
     void createAccount_missingRequiredFields_returns400() throws Exception {
         Map<String, Object> requestBody = Map.of(
-            "email", "test@example.com"
+            "email", "test@example.com",
+            "role", "USER"
             // Missing 'name' field
         );
 
@@ -287,7 +295,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             .andExpect(jsonPath("$.message").value(containsString("Name")));
 
         // Verify AccountSyncService was NOT called (validation failed - missing required fields)
-        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class), any(UserRole.class));
     }
 
     /**
@@ -303,7 +311,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
     void createAccount_unauthenticated_returns401() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com",
-            "name", "Test User"
+            "name", "Test User",
+            "role", "USER"
         );
 
         mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
@@ -312,7 +321,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             .andExpect(status().isUnauthorized());
 
         // Verify AccountSyncService was NOT called (no authentication)
-        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class), any(UserRole.class));
     }
 
     /**
@@ -328,7 +337,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
     void createAccount_nonAdmin_returns403() throws Exception {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com",
-            "name", "Test User"
+            "name", "Test User",
+            "role", "USER"
         );
 
         mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
@@ -338,7 +348,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             .andExpect(status().isForbidden());
 
         // Verify AccountSyncService was NOT called (authorization failed - not admin)
-        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class), any(UserRole.class));
     }
 
     /**
@@ -355,7 +365,8 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
         Map<String, Object> requestBody = Map.of(
             "email", "test@example.com",
             "name", "Test User",
-            "phone", "invalid-phone"
+            "phone", "invalid-phone",
+            "role", "USER"
         );
 
         mockMvc.perform(post(ApiRoutes.ACCOUNTS_CREATE)
@@ -368,7 +379,7 @@ class Auth0AdminContractTest extends BaseIntegrationTest {
             .andExpect(jsonPath("$.message").value(containsString("Phone")));
 
         // Verify AccountSyncService was NOT called (validation failed - invalid phone format)
-        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class));
+        verify(accountSyncService, never()).createAccount(anyString(), anyString(), nullable(String.class), nullable(String.class), any(UserRole.class));
     }
 
     // ==================== User Story 2: Lock/Unlock Accounts ====================

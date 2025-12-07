@@ -620,7 +620,8 @@ public class AccountAdminController {
                 request.email(),
                 request.name(),
                 request.phone(),
-                request.company()
+                request.company(),
+                request.role()
         );
 
         // Convert to response DTO with temporary password

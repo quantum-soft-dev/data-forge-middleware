@@ -9,6 +9,8 @@ import com.auth0.net.Request;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountAuth0LinkedEvent;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.auth.domain.UserRole;
+import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import com.bitbi.dfm.shared.exception.Auth0RateLimitException;
 import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,6 +75,9 @@ class AccountSyncServiceTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    @Mock
+    private Auth0ManagementApiClient auth0ManagementApiClient;
+
     @Captor
     private ArgumentCaptor<Account> accountCaptor;
 
@@ -83,7 +88,7 @@ class AccountSyncServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AccountSyncService(managementAPI, accountRepository, eventPublisher);
+        service = new AccountSyncService(managementAPI, accountRepository, eventPublisher, auth0ManagementApiClient);
         ReflectionTestUtils.setField(service, "databaseConnection", "Username-Password-Authentication");
 
         // Setup mock chain for ManagementAPI
@@ -120,7 +125,7 @@ class AccountSyncServiceTest {
         });
 
         // When
-        var result = service.createAccount(email, name, phone, company);
+        var result = service.createAccount(email, name, phone, company, UserRole.USER);
 
         // Then
         assertThat(result).isNotNull();
@@ -175,7 +180,7 @@ class AccountSyncServiceTest {
         when(deleteUserRequest.execute()).thenReturn(new MockResponse<>(null));
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccount(email, name, null, null))
+        assertThatThrownBy(() -> service.createAccount(email, name, null, null, UserRole.USER))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Database connection failed");
 
@@ -196,7 +201,7 @@ class AccountSyncServiceTest {
         when(accountRepository.findByEmail(email)).thenReturn(Optional.of(existingAccount));
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null))
+        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null, UserRole.USER))
                 .isInstanceOf(AccountService.AccountAlreadyExistsException.class)
                 .hasMessageContaining("Account with email " + email + " already exists");
 
@@ -218,7 +223,7 @@ class AccountSyncServiceTest {
         when(createUserRequest.execute()).thenThrow(rateLimitException);
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null))
+        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null, UserRole.USER))
                 .isInstanceOf(Auth0RateLimitException.class)
                 .hasMessageContaining("Auth0 Management API rate limit exceeded");
     }
@@ -237,7 +242,7 @@ class AccountSyncServiceTest {
         when(createUserRequest.execute()).thenThrow(serviceException);
 
         // When / Then
-        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null))
+        assertThatThrownBy(() -> service.createAccount(email, "John Doe", null, null, UserRole.USER))
                 .isInstanceOf(Auth0ServiceUnavailableException.class)
                 .hasMessageContaining("Auth0 Management API unavailable");
     }
@@ -266,7 +271,7 @@ class AccountSyncServiceTest {
         when(updateUserRequest.execute()).thenThrow(new APIException("Metadata update failed", 500, null));
 
         // When
-        var result = service.createAccount(email, "John Doe", null, null);
+        var result = service.createAccount(email, "John Doe", null, null, UserRole.USER);
 
         // Then - should succeed despite metadata update failure
         assertThat(result).isNotNull();

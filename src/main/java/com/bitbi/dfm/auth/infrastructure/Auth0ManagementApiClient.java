@@ -1,19 +1,25 @@
 package com.bitbi.dfm.auth.infrastructure;
 
 import com.auth0.client.mgmt.ManagementAPI;
+import com.auth0.client.mgmt.filter.RolesFilter;
 import com.auth0.client.mgmt.filter.UserFilter;
 import com.auth0.exception.Auth0Exception;
+import com.auth0.json.mgmt.roles.Role;
+import com.auth0.json.mgmt.roles.RolesPage;
 import com.auth0.json.mgmt.tickets.PasswordChangeTicket;
 import com.auth0.json.mgmt.users.User;
 import com.bitbi.dfm.auth.application.Auth0TokenProvider;
 import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.auth.domain.Auth0UserId;
+import com.bitbi.dfm.auth.domain.UserRole;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Infrastructure wrapper for Auth0 Management API SDK.
@@ -61,6 +67,12 @@ public class Auth0ManagementApiClient {
      * Password change ticket expiry time in seconds (24 hours).
      */
     private static final int PASSWORD_TICKET_TTL_SECONDS = 86400; // 24 hours
+
+    /**
+     * Cache for Auth0 role IDs (role name -> role ID).
+     * Populated lazily on first role assignment to avoid API calls if roles are never used.
+     */
+    private final Map<String, String> roleIdCache = new ConcurrentHashMap<>();
 
     public Auth0ManagementApiClient(Auth0Properties properties, Auth0TokenProvider tokenProvider) {
         this.properties = properties;
@@ -355,5 +367,83 @@ public class Auth0ManagementApiClient {
             logger.error("Failed to delete Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
             throw e;
         }
+    }
+
+    /**
+     * Assign a role to a user in Auth0.
+     * <p>
+     * Looks up the role ID by name (cached after first lookup) and assigns it to the user.
+     * The role must already exist in Auth0 Dashboard under "User Management" → "Roles".
+     * </p>
+     *
+     * @param userId Auth0 user ID
+     * @param role   UserRole to assign (USER or ADMIN)
+     * @throws Auth0Exception if role assignment fails or role not found
+     */
+    public void assignRoleToUser(Auth0UserId userId, UserRole role) throws Auth0Exception {
+        String roleName = role.getAuth0RoleName();
+        logger.info("Assigning role to Auth0 user: userId={}, role={}", userId, roleName);
+
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+
+            // Get role ID (from cache or lookup)
+            String roleId = getRoleId(mgmt, roleName);
+
+            // Assign role to user
+            mgmt.users().addRoles(userId.value(), Collections.singletonList(roleId)).execute();
+
+            logger.info("Role assigned successfully: userId={}, role={}", userId, roleName);
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to assign role to Auth0 user: userId={}, role={}, error={}",
+                    userId, roleName, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Get role ID by role name (cached).
+     * <p>
+     * Looks up the role ID from Auth0 and caches it for subsequent calls.
+     * </p>
+     *
+     * @param mgmt     ManagementAPI instance
+     * @param roleName Auth0 role name (e.g., "ROLE_USER")
+     * @return Auth0 role ID
+     * @throws Auth0Exception if role not found or lookup fails
+     */
+    private String getRoleId(ManagementAPI mgmt, String roleName) throws Auth0Exception {
+        // Check cache first
+        String cachedRoleId = roleIdCache.get(roleName);
+        if (cachedRoleId != null) {
+            logger.debug("Using cached role ID for {}: {}", roleName, cachedRoleId);
+            return cachedRoleId;
+        }
+
+        // Lookup role by name
+        logger.debug("Looking up role ID for: {}", roleName);
+
+        RolesFilter filter = new RolesFilter().withName(roleName);
+        RolesPage rolesPage = mgmt.roles().list(filter).execute().getBody();
+
+        if (rolesPage == null || rolesPage.getItems() == null || rolesPage.getItems().isEmpty()) {
+            throw new Auth0Exception("Role not found in Auth0: " + roleName);
+        }
+
+        // Find exact match (filter returns partial matches)
+        Role foundRole = rolesPage.getItems().stream()
+                .filter(r -> roleName.equals(r.getName()))
+                .findFirst()
+                .orElseThrow(() -> new Auth0Exception("Role not found in Auth0: " + roleName));
+
+        String roleId = foundRole.getId();
+
+        // Cache for future use
+        roleIdCache.put(roleName, roleId);
+        logger.info("Cached role ID: {} -> {}", roleName, roleId);
+
+        return roleId;
     }
 }

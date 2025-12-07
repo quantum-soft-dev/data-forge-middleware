@@ -3,6 +3,7 @@ package com.bitbi.dfm.config;
 import com.auth0.client.mgmt.ManagementAPI;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.account.domain.AccountRepository;
+import com.bitbi.dfm.auth.infrastructure.Auth0ManagementApiClient;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
@@ -41,6 +42,7 @@ public class Auth0TestConfig {
      * @param managementAPI Mocked Auth0 Management API
      * @param accountRepository Real account repository
      * @param eventPublisher Real event publisher
+     * @param auth0ManagementApiClient Mocked Auth0 Management API client
      * @return AccountSyncService instance for testing
      */
     @Bean
@@ -48,8 +50,9 @@ public class Auth0TestConfig {
     public AccountSyncService accountSyncService(
         ManagementAPI managementAPI,
         AccountRepository accountRepository,
-        ApplicationEventPublisher eventPublisher
+        ApplicationEventPublisher eventPublisher,
+        Auth0ManagementApiClient auth0ManagementApiClient
     ) {
-        return new AccountSyncService(managementAPI, accountRepository, eventPublisher);
+        return new AccountSyncService(managementAPI, accountRepository, eventPublisher, auth0ManagementApiClient);
     }
 }
