@@ -3,6 +3,7 @@ package com.bitbi.dfm.auth.infrastructure;
 import com.auth0.client.mgmt.ManagementAPI;
 import com.auth0.client.mgmt.filter.RolesFilter;
 import com.auth0.client.mgmt.filter.UserFilter;
+import com.auth0.exception.APIException;
 import com.auth0.exception.Auth0Exception;
 import com.auth0.json.mgmt.roles.Role;
 import com.auth0.json.mgmt.roles.RolesPage;
@@ -20,6 +21,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Infrastructure wrapper for Auth0 Management API SDK.
@@ -41,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <h3>Error Handling:</h3>
  * <ul>
  *   <li>Auth0Exception: Wrapped and rethrown with context</li>
+ *   <li>401 Unauthorized: Token refreshed and request retried once</li>
  *   <li>429 Rate Limit: Logged with retry recommendation</li>
  *   <li>4xx Client Errors: Invalid requests logged</li>
  *   <li>5xx Server Errors: Auth0 service issues logged</li>
@@ -81,6 +84,74 @@ public class Auth0ManagementApiClient {
     }
 
     /**
+     * Functional interface for Auth0 API operations that can throw Auth0Exception.
+     */
+    @FunctionalInterface
+    private interface Auth0Operation<T> {
+        T execute(ManagementAPI mgmt) throws Auth0Exception;
+    }
+
+    /**
+     * Execute an Auth0 API operation with automatic retry on token expiration.
+     * <p>
+     * If the operation fails with 401 Unauthorized, the token is refreshed
+     * and the operation is retried once.
+     * </p>
+     *
+     * @param operation   the Auth0 API operation to execute
+     * @param operationName name of the operation for logging
+     * @param <T>         return type of the operation
+     * @return result of the operation
+     * @throws Auth0Exception if operation fails after retry
+     */
+    private <T> T executeWithRetry(Auth0Operation<T> operation, String operationName) throws Auth0Exception {
+        try {
+            String accessToken = tokenProvider.getAccessToken();
+            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+            return operation.execute(mgmt);
+        } catch (APIException e) {
+            if (isTokenExpiredError(e)) {
+                logger.warn("Auth0 token expired during {}, refreshing and retrying...", operationName);
+                tokenProvider.refreshToken();
+                String newAccessToken = tokenProvider.getAccessToken();
+                ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), newAccessToken).build();
+                return operation.execute(mgmt);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Execute an Auth0 API operation (void) with automatic retry on token expiration.
+     */
+    private void executeWithRetryVoid(VoidAuth0Operation operation, String operationName) throws Auth0Exception {
+        executeWithRetry(mgmt -> {
+            operation.execute(mgmt);
+            return null;
+        }, operationName);
+    }
+
+    /**
+     * Functional interface for void Auth0 API operations.
+     */
+    @FunctionalInterface
+    private interface VoidAuth0Operation {
+        void execute(ManagementAPI mgmt) throws Auth0Exception;
+    }
+
+    /**
+     * Check if the exception indicates an expired or invalid token.
+     */
+    private boolean isTokenExpiredError(APIException e) {
+        int statusCode = e.getStatusCode();
+        String errorCode = e.getError();
+        // 401 Unauthorized or specific token error codes
+        return statusCode == 401
+                || "invalid_token".equalsIgnoreCase(errorCode)
+                || "expired_token".equalsIgnoreCase(errorCode);
+    }
+
+    /**
      * Create a new user in Auth0 database connection.
      * <p>
      * The user will be created with email verification disabled and blocked=false.
@@ -98,28 +169,27 @@ public class Auth0ManagementApiClient {
         logger.info("Creating Auth0 user: email={}, name={}, accountId={}", email, name, accountId);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+            return executeWithRetry(mgmt -> {
+                User user = new User(DATABASE_CONNECTION);
+                user.setEmail(email);
+                user.setName(name);
+                user.setEmailVerified(false); // User must verify email via password reset link
+                user.setBlocked(false);
 
-            User user = new User(DATABASE_CONNECTION);
-            user.setEmail(email);
-            user.setName(name);
-            user.setEmailVerified(false); // User must verify email via password reset link
-            user.setBlocked(false);
+                // Store accountId in app_metadata for JWT claims (Auth0 Action will read this)
+                user.setAppMetadata(Map.of("accountId", accountId));
 
-            // Store accountId in app_metadata for JWT claims (Auth0 Action will read this)
-            user.setAppMetadata(Map.of("accountId", accountId));
+                User createdUser = mgmt.users().create(user).execute().getBody();
 
-            User createdUser = mgmt.users().create(user).execute().getBody();
+                if (createdUser == null || createdUser.getId() == null) {
+                    throw new Auth0Exception("User creation returned null response");
+                }
 
-            if (createdUser == null || createdUser.getId() == null) {
-                throw new Auth0Exception("User creation returned null response");
-            }
+                Auth0UserId userId = Auth0UserId.of(createdUser.getId());
+                logger.info("Auth0 user created successfully: userId={}, email={}", userId, email);
 
-            Auth0UserId userId = Auth0UserId.of(createdUser.getId());
-            logger.info("Auth0 user created successfully: userId={}, email={}", userId, email);
-
-            return userId;
+                return userId;
+            }, "createUser");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to create Auth0 user: email={}, error={}", email, e.getMessage(), e);
@@ -160,30 +230,29 @@ public class Auth0ManagementApiClient {
         logger.info("Generating password reset link for userId={}, resultUrl={}", userId, resultUrl);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+            return executeWithRetry(mgmt -> {
+                PasswordChangeTicket ticket = new PasswordChangeTicket(userId.value());
+                ticket.setTTLSeconds(PASSWORD_TICKET_TTL_SECONDS);
 
-            PasswordChangeTicket ticket = new PasswordChangeTicket(userId.value());
-            ticket.setTTLSeconds(PASSWORD_TICKET_TTL_SECONDS);
+                // Set result URL if provided (redirect after password change)
+                if (resultUrl != null && !resultUrl.isBlank()) {
+                    ticket.setResultUrl(resultUrl);
+                }
 
-            // Set result URL if provided (redirect after password change)
-            if (resultUrl != null && !resultUrl.isBlank()) {
-                ticket.setResultUrl(resultUrl);
-            }
+                PasswordChangeTicket createdTicket = mgmt.tickets()
+                        .requestPasswordChange(ticket)
+                        .execute()
+                        .getBody();
 
-            PasswordChangeTicket createdTicket = mgmt.tickets()
-                    .requestPasswordChange(ticket)
-                    .execute()
-                    .getBody();
+                if (createdTicket == null || createdTicket.getTicket() == null) {
+                    throw new Auth0Exception("Password change ticket generation returned null");
+                }
 
-            if (createdTicket == null || createdTicket.getTicket() == null) {
-                throw new Auth0Exception("Password change ticket generation returned null");
-            }
+                String ticketUrl = createdTicket.getTicket();
+                logger.info("Password reset link generated: userId={}, expiresIn=24h", userId);
 
-            String ticketUrl = createdTicket.getTicket();
-            logger.info("Password reset link generated: userId={}, expiresIn=24h", userId);
-
-            return ticketUrl;
+                return ticketUrl;
+            }, "generatePasswordResetLink");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to generate password reset link: userId={}, error={}", userId, e.getMessage(), e);
@@ -204,15 +273,12 @@ public class Auth0ManagementApiClient {
         logger.info("Blocking Auth0 user: userId={}", userId);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
-
-            User user = new User();
-            user.setBlocked(true);
-
-            mgmt.users().update(userId.value(), user).execute();
-
-            logger.info("Auth0 user blocked successfully: userId={}", userId);
+            executeWithRetryVoid(mgmt -> {
+                User user = new User();
+                user.setBlocked(true);
+                mgmt.users().update(userId.value(), user).execute();
+                logger.info("Auth0 user blocked successfully: userId={}", userId);
+            }, "blockUser");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to block Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
@@ -233,15 +299,12 @@ public class Auth0ManagementApiClient {
         logger.info("Unblocking Auth0 user: userId={}", userId);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
-
-            User user = new User();
-            user.setBlocked(false);
-
-            mgmt.users().update(userId.value(), user).execute();
-
-            logger.info("Auth0 user unblocked successfully: userId={}", userId);
+            executeWithRetryVoid(mgmt -> {
+                User user = new User();
+                user.setBlocked(false);
+                mgmt.users().update(userId.value(), user).execute();
+                logger.info("Auth0 user unblocked successfully: userId={}", userId);
+            }, "unblockUser");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to unblock Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
@@ -260,16 +323,15 @@ public class Auth0ManagementApiClient {
         logger.debug("Fetching Auth0 user: userId={}", userId);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+            return executeWithRetry(mgmt -> {
+                User user = mgmt.users().get(userId.value(), null).execute().getBody();
 
-            User user = mgmt.users().get(userId.value(), null).execute().getBody();
+                if (user == null) {
+                    throw new Auth0Exception("User not found: " + userId);
+                }
 
-            if (user == null) {
-                throw new Auth0Exception("User not found: " + userId);
-            }
-
-            return user;
+                return user;
+            }, "getUser");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to fetch Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
@@ -291,19 +353,18 @@ public class Auth0ManagementApiClient {
         logger.debug("Searching Auth0 users by email: email={}", email);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+            return executeWithRetry(mgmt -> {
+                // Lucene query: email:"user@example.com"
+                UserFilter filter = new UserFilter()
+                        .withQuery("email:\"" + email + "\"")
+                        .withSearchEngine("v3");
 
-            // Lucene query: email:"user@example.com"
-            UserFilter filter = new UserFilter()
-                    .withQuery("email:\"" + email + "\"")
-                    .withSearchEngine("v3");
+                List<User> users = mgmt.users().list(filter).execute().getBody().getItems();
 
-            List<User> users = mgmt.users().list(filter).execute().getBody().getItems();
+                logger.debug("Found {} Auth0 users with email: {}", users.size(), email);
 
-            logger.debug("Found {} Auth0 users with email: {}", users.size(), email);
-
-            return users;
+                return users;
+            }, "getUsersByEmail");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to search Auth0 users: email={}, error={}", email, e.getMessage(), e);
@@ -326,15 +387,12 @@ public class Auth0ManagementApiClient {
         logger.info("Updating Auth0 user metadata: userId={}, metadata={}", userId, appMetadata);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
-
-            User user = new User();
-            user.setAppMetadata(appMetadata);
-
-            mgmt.users().update(userId.value(), user).execute();
-
-            logger.info("Auth0 user metadata updated successfully: userId={}", userId);
+            executeWithRetryVoid(mgmt -> {
+                User user = new User();
+                user.setAppMetadata(appMetadata);
+                mgmt.users().update(userId.value(), user).execute();
+                logger.info("Auth0 user metadata updated successfully: userId={}", userId);
+            }, "updateUserMetadata");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to update Auth0 user metadata: userId={}, error={}", userId, e.getMessage(), e);
@@ -356,12 +414,10 @@ public class Auth0ManagementApiClient {
         logger.info("Deleting Auth0 user: userId={}", userId);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
-
-            mgmt.users().delete(userId.value()).execute();
-
-            logger.info("Auth0 user deleted successfully: userId={}", userId);
+            executeWithRetryVoid(mgmt -> {
+                mgmt.users().delete(userId.value()).execute();
+                logger.info("Auth0 user deleted successfully: userId={}", userId);
+            }, "deleteUser");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to delete Auth0 user: userId={}, error={}", userId, e.getMessage(), e);
@@ -385,16 +441,15 @@ public class Auth0ManagementApiClient {
         logger.info("Assigning role to Auth0 user: userId={}, role={}", userId, roleName);
 
         try {
-            String accessToken = tokenProvider.getAccessToken();
-            ManagementAPI mgmt = ManagementAPI.newBuilder(properties.domain(), accessToken).build();
+            executeWithRetryVoid(mgmt -> {
+                // Get role ID (from cache or lookup)
+                String roleId = getRoleId(mgmt, roleName);
 
-            // Get role ID (from cache or lookup)
-            String roleId = getRoleId(mgmt, roleName);
+                // Assign role to user
+                mgmt.users().addRoles(userId.value(), Collections.singletonList(roleId)).execute();
 
-            // Assign role to user
-            mgmt.users().addRoles(userId.value(), Collections.singletonList(roleId)).execute();
-
-            logger.info("Role assigned successfully: userId={}, role={}", userId, roleName);
+                logger.info("Role assigned successfully: userId={}, role={}", userId, roleName);
+            }, "assignRoleToUser");
 
         } catch (Auth0Exception e) {
             logger.error("Failed to assign role to Auth0 user: userId={}, role={}, error={}",
