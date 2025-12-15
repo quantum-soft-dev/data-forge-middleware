@@ -14,6 +14,7 @@
 export type BatchStatus =
   | 'IN_PROGRESS'
   | 'COMPLETED'
+  | 'COMPLETED_WITH_WARNINGS'
   | 'NOT_COMPLETED'
   | 'FAILED'
   | 'CANCELLED';

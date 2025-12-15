@@ -112,6 +112,7 @@ export function BatchListView({
         >
           <option value="all">All Status</option>
           <option value="COMPLETED">Completed</option>
+          <option value="COMPLETED_WITH_WARNINGS">Completed with Warnings</option>
           <option value="IN_PROGRESS">In Progress</option>
           <option value="FAILED">Failed</option>
         </select>
@@ -191,12 +192,14 @@ export function BatchListView({
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                         batch.status === 'COMPLETED'
                           ? 'bg-green-100 text-green-800'
+                          : batch.status === 'COMPLETED_WITH_WARNINGS'
+                          ? 'bg-yellow-100 text-yellow-800'
                           : batch.status === 'IN_PROGRESS'
                           ? 'bg-blue-100 text-blue-800'
                           : 'bg-red-100 text-red-800'
                       }`}
                     >
-                      {batch.status}
+                      {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : batch.status}
                     </span>
                   </div>
                   <div className="mt-0.5 text-xs text-gray-500">
