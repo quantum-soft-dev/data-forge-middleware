@@ -26,6 +26,16 @@ class BatchStatusTest {
     }
 
     @Test
+    @DisplayName("Should allow valid transition from IN_PROGRESS to COMPLETED_WITH_WARNINGS")
+    void shouldAllowTransitionToCompletedWithWarnings() {
+        // Given
+        BatchStatus status = BatchStatus.IN_PROGRESS;
+
+        // When/Then - should not throw
+        status.validateTransition(BatchStatus.COMPLETED_WITH_WARNINGS);
+    }
+
+    @Test
     @DisplayName("Should allow valid transition from IN_PROGRESS to NOT_COMPLETED")
     void shouldAllowTransitionToNotCompleted() {
         // Given
@@ -116,10 +126,23 @@ class BatchStatusTest {
     }
 
     @Test
+    @DisplayName("Should reject transition from COMPLETED_WITH_WARNINGS to any state")
+    void shouldRejectTransitionFromCompletedWithWarnings() {
+        // Given
+        BatchStatus status = BatchStatus.COMPLETED_WITH_WARNINGS;
+
+        // When/Then
+        assertThatThrownBy(() -> status.validateTransition(BatchStatus.IN_PROGRESS))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot transition from terminal status COMPLETED_WITH_WARNINGS");
+    }
+
+    @Test
     @DisplayName("Should correctly identify terminal states")
     void shouldIdentifyTerminalStates() {
         // Terminal states
         assertThat(BatchStatus.COMPLETED.isTerminal()).isTrue();
+        assertThat(BatchStatus.COMPLETED_WITH_WARNINGS.isTerminal()).isTrue();
         assertThat(BatchStatus.FAILED.isTerminal()).isTrue();
         assertThat(BatchStatus.CANCELLED.isTerminal()).isTrue();
         assertThat(BatchStatus.NOT_COMPLETED.isTerminal()).isTrue();
@@ -136,6 +159,7 @@ class BatchStatusTest {
 
         // Reject uploads in terminal states
         assertThat(BatchStatus.COMPLETED.allowsFileUpload()).isFalse();
+        assertThat(BatchStatus.COMPLETED_WITH_WARNINGS.allowsFileUpload()).isFalse();
         assertThat(BatchStatus.FAILED.allowsFileUpload()).isFalse();
         assertThat(BatchStatus.CANCELLED.allowsFileUpload()).isFalse();
         assertThat(BatchStatus.NOT_COMPLETED.allowsFileUpload()).isFalse();

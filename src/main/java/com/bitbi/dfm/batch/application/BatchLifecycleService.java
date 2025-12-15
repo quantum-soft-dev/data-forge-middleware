@@ -146,6 +146,35 @@ public class BatchLifecycleService {
     }
 
     /**
+     * Complete batch with warnings.
+     * <p>
+     * Marks batch as completed but with non-critical warnings.
+     * Validates batch is IN_PROGRESS before completion.
+     * </p>
+     *
+     * @param batchId batch identifier
+     * @return completed batch with warnings
+     * @throws BatchNotFoundException         if batch not found
+     * @throws InvalidBatchStatusException if batch is not IN_PROGRESS
+     */
+    public Batch completeBatchWithWarnings(UUID batchId) {
+        logger.info("Completing batch with warnings: batchId={}", batchId);
+
+        Batch batch = getBatch(batchId);
+        validateStatus(batch, BatchStatus.IN_PROGRESS, "complete with warnings");
+
+        batch.completeWithWarnings();
+        Batch saved = batchRepository.save(batch);
+
+        // Publish domain event (same as regular complete)
+        BatchCompletedEvent event = new BatchCompletedEvent(batchId, batch.getUploadedFilesCount(), batch.getTotalSize());
+        eventPublisher.publishEvent(event);
+
+        logger.info("Batch completed with warnings: batchId={}", batchId);
+        return saved;
+    }
+
+    /**
      * Fail batch with error.
      * <p>
      * Validates batch is IN_PROGRESS before failing.

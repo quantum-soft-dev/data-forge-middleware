@@ -22,6 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *   <li>POST /api/v1/device/batches/start - Start new batch</li>
  *   <li>POST /api/v1/device/batches/{id}/complete - Complete batch</li>
+ *   <li>POST /api/v1/device/batches/{id}/complete-with-warnings - Complete batch with warnings</li>
  *   <li>POST /api/v1/device/batches/{id}/fail - Fail batch</li>
  *   <li>POST /api/v1/device/batches/{id}/cancel - Cancel batch</li>
  *   <li>GET /api/v1/device/batches/{id} - Get batch details</li>
@@ -262,6 +263,51 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String completedBatchId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // COMPLETED batch
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, completedBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"));
+    }
+
+    /**
+     * TC23: Complete batch with warnings should return 200 OK with COMPLETED_WITH_WARNINGS status.
+     * <p>
+     * <b>Given</b>: An IN_PROGRESS batch owned by the authenticated site<br>
+     * <b>When</b>: POST /api/v1/device/batches/{id}/complete-with-warnings<br>
+     * <b>Then</b>: 200 OK with batch status=COMPLETED_WITH_WARNINGS, hasErrors=false
+     * </p>
+     */
+    @Test
+    @DisplayName("TC23: Should complete batch with warnings and return COMPLETED_WITH_WARNINGS status")
+    void shouldCompleteBatchWithWarningsAndReturnCorrectStatus() throws Exception {
+        String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test data
+
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, batchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(batchId))
+                .andExpect(jsonPath("$.status").value("COMPLETED_WITH_WARNINGS"))
+                .andExpect(jsonPath("$.hasErrors").value(false))
+                .andExpect(jsonPath("$.completedAt").exists());
+    }
+
+    /**
+     * TC24: Complete already completed batch with warnings should return 400 Bad Request.
+     * <p>
+     * <b>Given</b>: A batch that is already COMPLETED<br>
+     * <b>When</b>: POST /api/v1/device/batches/{id}/complete-with-warnings<br>
+     * <b>Then</b>: 400 Bad Request (invalid status transition)
+     * </p>
+     */
+    @Test
+    @DisplayName("TC24: Should return 400 when completing with warnings on already completed batch")
+    void shouldReturn400WhenCompletingWithWarningsOnAlreadyCompletedBatch() throws Exception {
+        String completedBatchId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // COMPLETED batch
+
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, completedBatchId)
                         .header("Authorization", "Bearer " + jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isBadRequest())

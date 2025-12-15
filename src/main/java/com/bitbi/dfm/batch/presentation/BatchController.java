@@ -140,6 +140,55 @@ public class BatchController {
     }
 
     /**
+     * Complete batch with warnings.
+     * <p>
+     * POST /api/v1/batch/{id}/complete-with-warnings
+     * </p>
+     *
+     * @param batchId batch identifier
+     * @return completed batch response with warnings status
+     */
+    @PostMapping("/{id}/complete-with-warnings")
+    public ResponseEntity<?> completeBatchWithWarnings(
+            @PathVariable("id") UUID batchId) {
+
+        try {
+            logger.info("Completing batch with warnings: batchId={}", batchId);
+
+            // Get batch first to verify ownership
+            Batch batch = batchLifecycleService.getBatch(batchId);
+
+            // Verify site ownership
+            authorizationHelper.verifySiteOwnership(batch.getSiteId());
+
+            batch = batchLifecycleService.completeBatchWithWarnings(batchId);
+
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
+            return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Unauthorized batch completion with warnings: batchId={}, {}", batchId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
+
+        } catch (BatchLifecycleService.BatchNotFoundException e) {
+            logger.warn("Batch not found: {}", batchId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
+
+        } catch (BatchLifecycleService.InvalidBatchStatusException e) {
+            logger.warn("Invalid batch status: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
+
+        } catch (Exception e) {
+            logger.error("Error completing batch with warnings: batchId={}", batchId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to complete batch with warnings"));
+        }
+    }
+
+    /**
      * Fail batch with error.
      * <p>
      * POST /api/v1/batch/{id}/fail

@@ -102,4 +102,66 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.batchId").exists());
     }
+
+    @Test
+    @DisplayName("Should complete batch with warnings and transition to COMPLETED_WITH_WARNINGS status")
+    void shouldCompleteBatchWithWarningsAndTransitionToCorrectStatus() throws Exception {
+        // Given: Batch with uploaded files
+        // When: POST /api/v1/device/batches/{id}/complete-with-warnings
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, IN_PROGRESS_MOCK_BATCH_ID)
+                        .header("Authorization", generateTestToken()))
+
+                // Then: Batch completed with warnings (200 OK with BatchResponseDto)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.batchId").value(IN_PROGRESS_MOCK_BATCH_ID))
+                .andExpect(jsonPath("$.status").value("COMPLETED_WITH_WARNINGS"))
+                .andExpect(jsonPath("$.hasErrors").value(false))
+                .andExpect(jsonPath("$.completedAt").exists())
+                .andExpect(jsonPath("$.uploadedFilesCount").isNumber())
+                .andExpect(jsonPath("$.totalSize").isNumber());
+    }
+
+    @Test
+    @DisplayName("Should prevent file upload after batch completed with warnings")
+    void shouldPreventFileUploadAfterBatchCompletedWithWarnings() throws Exception {
+        // Given: Batch completed with warnings
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, IN_PROGRESS_MOCK_BATCH_ID)
+                        .header("Authorization", generateTestToken()))
+                .andExpect(status().isOk());
+
+        // When: Attempt to upload file
+        MockMultipartFile file = new MockMultipartFile(
+                "files", "late-file.csv.gz", "application/gzip",
+                "late content".getBytes()
+        );
+
+        mockMvc.perform(multipart(ApiRoutes.DEVICE_FILES_UPLOAD, IN_PROGRESS_MOCK_BATCH_ID)
+                        .file(file)
+                        .header("Authorization", generateTestToken()))
+
+                // Then: 409 Conflict (batch is already completed with warnings)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("Conflict"))
+                .andExpect(jsonPath("$.message").value("Cannot upload files to batch with status: COMPLETED_WITH_WARNINGS"));
+    }
+
+    @Test
+    @DisplayName("Should allow new batch after completion with warnings")
+    void shouldAllowNewBatchAfterCompletionWithWarnings() throws Exception {
+        // Given: Previous batch completed with warnings
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, IN_PROGRESS_MOCK_BATCH_ID)
+                        .header("Authorization", generateTestToken()))
+                .andExpect(status().isOk());
+
+        // When: Start new batch
+        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
+                        .header("Authorization", generateTestToken()))
+
+                // Then: Success (201 Created with BatchResponseDto)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.batchId").exists());
+    }
 }

@@ -198,7 +198,7 @@ aws --endpoint-url=http://localhost:4566 s3 mb s3://dataforge-uploads
 ### DTO Records (Added 2025-10-09 - FR-001, FR-002, FR-003)
 All endpoints now return structured DTO records instead of Map<String, Object>:
 
-- **BatchResponseDto**: id, batchId, siteId, status, s3Path, uploadedFilesCount, totalSize, hasErrors, startedAt, completedAt
+- **BatchResponseDto**: id, batchId, siteId, status (IN_PROGRESS, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, CANCELLED, NOT_COMPLETED), s3Path, uploadedFilesCount, totalSize, hasErrors, startedAt, completedAt
 - **ErrorLogResponseDto**: id, batchId, severity, message, source, metadata, occurredAt
 - **FileUploadResponseDto**: id, batchId, filename, s3Key, fileSize, checksum, uploadedAt
 - **AccountResponseDto**: id, email, name, isActive, createdAt, maxConcurrentBatches
