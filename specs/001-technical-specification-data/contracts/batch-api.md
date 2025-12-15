@@ -186,6 +186,62 @@
 
 ---
 
+## POST /api/v1/batch/{batchId}/complete-with-warnings
+
+**Summary**: Mark batch as completed but with non-critical warnings
+
+**Request**:
+- **Headers**:
+  - `Authorization: Bearer {jwt_token}` (required)
+- **Path Parameters**:
+  - `batchId` (UUID, required): Batch identifier
+- **Body**: None
+
+**Responses**:
+
+### 200 OK - Batch completed with warnings
+```json
+{
+  "batchId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "COMPLETED_WITH_WARNINGS",
+  "completedAt": "2025-10-06T10:45:00Z",
+  "uploadedFilesCount": 15,
+  "totalSize": 45678900,
+  "hasErrors": false
+}
+```
+
+### 400 Bad Request - Batch already completed
+```json
+{
+  "timestamp": "2025-10-06T10:30:00Z",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Batch is already completed",
+  "path": "/api/v1/batch/{batchId}/complete-with-warnings"
+}
+```
+
+### 401 Unauthorized - Batch does not belong to site
+```json
+{
+  "timestamp": "2025-10-06T10:30:00Z",
+  "status": 401,
+  "error": "Unauthorized",
+  "message": "Batch does not belong to this site",
+  "path": "/api/v1/batch/{batchId}/complete-with-warnings"
+}
+```
+
+**Business Rules**:
+- Batch must be in IN_PROGRESS status
+- Batch must belong to authenticated site
+- After completion, no more file uploads allowed
+- Transition to COMPLETED_WITH_WARNINGS status
+- `hasErrors` remains `false` (warnings ≠ errors)
+
+---
+
 ## POST /api/v1/batch/{batchId}/fail
 
 **Summary**: Mark batch as failed due to critical error
@@ -327,6 +383,35 @@
     responses:
       '200':
         description: Batch completed successfully
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchCompleteResponse'
+      '400':
+        $ref: '#/components/responses/BadRequest'
+      '401':
+        $ref: '#/components/responses/Unauthorized'
+      '404':
+        $ref: '#/components/responses/NotFound'
+
+/api/v1/batch/{batchId}/complete-with-warnings:
+  post:
+    summary: Complete batch with warnings
+    operationId: completeBatchWithWarnings
+    tags:
+      - Batch
+    security:
+      - bearerAuth: []
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      '200':
+        description: Batch completed with warnings
         content:
           application/json:
             schema:

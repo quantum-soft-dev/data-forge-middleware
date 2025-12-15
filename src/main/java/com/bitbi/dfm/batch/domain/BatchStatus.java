@@ -8,13 +8,14 @@ package com.bitbi.dfm.batch.domain;
  *
  * <h3>State Transitions:</h3>
  * <pre>
- * IN_PROGRESS → COMPLETED     (client calls /complete)
- * IN_PROGRESS → FAILED         (client calls /fail)
- * IN_PROGRESS → CANCELLED      (client calls /cancel)
- * IN_PROGRESS → NOT_COMPLETED  (timeout scheduler)
+ * IN_PROGRESS → COMPLETED               (client calls /complete)
+ * IN_PROGRESS → COMPLETED_WITH_WARNINGS (client calls /complete-with-warnings)
+ * IN_PROGRESS → FAILED                  (client calls /fail)
+ * IN_PROGRESS → CANCELLED               (client calls /cancel)
+ * IN_PROGRESS → NOT_COMPLETED           (timeout scheduler)
  * </pre>
  *
- * <p>Terminal states (COMPLETED, FAILED, CANCELLED, NOT_COMPLETED) are immutable.</p>
+ * <p>Terminal states (COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, CANCELLED, NOT_COMPLETED) are immutable.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -31,6 +32,12 @@ public enum BatchStatus {
      * Terminal state - no further uploads or transitions allowed.
      */
     COMPLETED,
+
+    /**
+     * Successfully finished but with non-critical warnings.
+     * Terminal state - files uploaded successfully but had issues.
+     */
+    COMPLETED_WITH_WARNINGS,
 
     /**
      * Expired via timeout without explicit completion.
@@ -100,6 +107,7 @@ public enum BatchStatus {
         // Explicit state machine validation for IN_PROGRESS
         if (this == IN_PROGRESS) {
             boolean isValidTransition = targetStatus == COMPLETED ||
+                                       targetStatus == COMPLETED_WITH_WARNINGS ||
                                        targetStatus == NOT_COMPLETED ||
                                        targetStatus == FAILED ||
                                        targetStatus == CANCELLED;
@@ -107,7 +115,7 @@ public enum BatchStatus {
             if (!isValidTransition) {
                 throw new IllegalStateException(
                         String.format("Invalid transition from %s to %s. " +
-                                     "Allowed: COMPLETED, NOT_COMPLETED, FAILED, CANCELLED",
+                                     "Allowed: COMPLETED, COMPLETED_WITH_WARNINGS, NOT_COMPLETED, FAILED, CANCELLED",
                                      this, targetStatus)
                 );
             }

@@ -134,18 +134,20 @@ CREATE INDEX idx_sites_is_active ON sites(is_active);
 **Enum: BatchStatus**
 - `IN_PROGRESS` - Active upload session (only one per site allowed)
 - `COMPLETED` - Successfully finished by client
+- `COMPLETED_WITH_WARNINGS` - Successfully finished but with non-critical warnings
 - `NOT_COMPLETED` - Expired via timeout without explicit completion
 - `FAILED` - Marked as failed by client due to critical error
 - `CANCELLED` - Cancelled by client
 
 **State Transitions** (enforced by domain logic):
 ```
-IN_PROGRESS → COMPLETED   (client calls /complete)
-IN_PROGRESS → FAILED      (client calls /fail)
-IN_PROGRESS → CANCELLED   (client calls /cancel)
-IN_PROGRESS → NOT_COMPLETED (timeout scheduler)
+IN_PROGRESS → COMPLETED               (client calls /complete)
+IN_PROGRESS → COMPLETED_WITH_WARNINGS (client calls /complete-with-warnings)
+IN_PROGRESS → FAILED                  (client calls /fail)
+IN_PROGRESS → CANCELLED               (client calls /cancel)
+IN_PROGRESS → NOT_COMPLETED           (timeout scheduler)
 ```
-- No transitions allowed FROM terminal states (COMPLETED, FAILED, CANCELLED, NOT_COMPLETED)
+- No transitions allowed FROM terminal states (COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, CANCELLED, NOT_COMPLETED)
 - File uploads only allowed IN `IN_PROGRESS` status
 
 **Relationships**:
@@ -174,7 +176,7 @@ CREATE TABLE batches (
     started_at TIMESTAMP NOT NULL,
     completed_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT chk_batch_status CHECK (status IN ('IN_PROGRESS', 'COMPLETED', 'NOT_COMPLETED', 'FAILED', 'CANCELLED'))
+    CONSTRAINT chk_batch_status CHECK (status IN ('IN_PROGRESS', 'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'NOT_COMPLETED', 'FAILED', 'CANCELLED'))
 );
 
 CREATE INDEX idx_batches_site_id ON batches(site_id);

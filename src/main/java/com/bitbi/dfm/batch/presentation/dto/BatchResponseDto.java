@@ -19,7 +19,7 @@ import java.util.UUID;
  * @param id Unique batch identifier
  * @param batchId Alias for id (backward compatibility)
  * @param siteId Site that owns this batch
- * @param status Current batch status (IN_PROGRESS, COMPLETED, FAILED, CANCELLED, NOT_COMPLETED)
+ * @param status Current batch status (IN_PROGRESS, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, CANCELLED, NOT_COMPLETED)
  * @param s3Path S3 path prefix for uploaded files
  * @param uploadedFilesCount Number of files uploaded to this batch
  * @param totalSize Total size of all uploaded files in bytes

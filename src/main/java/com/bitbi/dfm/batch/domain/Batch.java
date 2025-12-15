@@ -113,6 +113,12 @@ public class Batch {
         this.completedAt = LocalDateTime.now();
     }
 
+    public void completeWithWarnings() {
+        status.validateTransition(BatchStatus.COMPLETED_WITH_WARNINGS);
+        this.status = BatchStatus.COMPLETED_WITH_WARNINGS;
+        this.completedAt = LocalDateTime.now();
+    }
+
     public void fail() {
         status.validateTransition(BatchStatus.FAILED);
         this.status = BatchStatus.FAILED;
