@@ -9,8 +9,9 @@
  */
 
 import { useState, useMemo } from 'react';
-import { CheckCircle, XCircle, Loader2, AlertCircle, Filter } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, AlertCircle, Filter, RefreshCw } from 'lucide-react';
 import type { BatchSummary } from '@/entities/batch/model/types';
+import type { Site } from '@/entities/site/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 
 interface BatchListViewProps {
@@ -30,6 +31,12 @@ interface BatchListViewProps {
   onBatchClick?: (batchId: string) => void;
   /** Callback when "View errors" button is clicked (T108 - Phase 7) */
   onViewErrors?: (batchId: string) => void;
+  /** Available sites for filtering */
+  sites?: Site[];
+  /** Callback to refresh the batch list */
+  onRefresh?: () => void;
+  /** Is data being refreshed */
+  isRefreshing?: boolean;
 }
 
 /**
@@ -44,13 +51,22 @@ export function BatchListView({
   error,
   onBatchClick,
   onViewErrors,
+  sites,
+  onRefresh,
+  isRefreshing,
 }: BatchListViewProps) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<string>('all');
+  const [siteFilter, setSiteFilter] = useState<string>('all');
 
   // Filter batches
   const filteredBatches = useMemo(() => {
     let filtered = batches;
+
+    // Filter by site
+    if (siteFilter !== 'all') {
+      filtered = filtered.filter(batch => batch.siteId === siteFilter);
+    }
 
     // Filter by status
     if (statusFilter !== 'all') {
@@ -80,7 +96,7 @@ export function BatchListView({
     }
 
     return filtered;
-  }, [batches, statusFilter, dateFilter]);
+  }, [batches, siteFilter, statusFilter, dateFilter]);
   // Loading state
   if (isLoading) {
     return (
@@ -105,6 +121,23 @@ export function BatchListView({
       {/* Filters */}
       <div className="flex gap-3 items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
         <Filter className="h-4 w-4 text-gray-500" />
+
+        {/* Site filter */}
+        {sites && sites.length > 0 && (
+          <select
+            value={siteFilter}
+            onChange={(e) => setSiteFilter(e.target.value)}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="all">All Sites</option>
+            {sites.map((site) => (
+              <option key={site.id} value={site.id}>
+                {site.name}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -126,15 +159,32 @@ export function BatchListView({
           <option value="30days">Last 30 days</option>
           <option value="90days">Last 90 days</option>
         </select>
-        {(statusFilter !== 'all' || dateFilter !== 'all') && (
+        {(statusFilter !== 'all' || dateFilter !== 'all' || siteFilter !== 'all') && (
           <button
             onClick={() => {
               setStatusFilter('all');
               setDateFilter('all');
+              setSiteFilter('all');
             }}
             className="text-sm text-blue-600 hover:text-blue-800"
           >
             Clear filters
+          </button>
+        )}
+
+        {/* Spacer to push refresh button to the right */}
+        <div className="flex-1" />
+
+        {/* Refresh button */}
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh batch list"
+          >
+            <RefreshCw className={`h-4 w-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
+            Refresh
           </button>
         )}
       </div>
@@ -174,12 +224,14 @@ export function BatchListView({
                 }
               }}
             >
-              {/* Status indicator */}
+              {/* Status indicator - based on batch status, not hasErrors */}
               <div className="flex items-center space-x-3 flex-1">
-                {batch.hasErrors ? (
-                  <XCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
-                ) : (
+                {batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS' ? (
                   <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
+                ) : batch.status === 'IN_PROGRESS' ? (
+                  <Loader2 className="h-5 w-5 text-blue-500 animate-spin flex-shrink-0" />
+                ) : (
+                  <XCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
                 )}
 
                 {/* Batch info */}

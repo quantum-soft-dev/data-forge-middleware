@@ -19,7 +19,6 @@ describe('BatchListView', () => {
       id: '123e4567-e89b-12d3-a456-426614174000',
       siteId: '123e4567-e89b-12d3-a456-426614174001',
       status: 'COMPLETED',
-      s3Path: 's3://bucket/path',
       uploadedFilesCount: 5,
       totalSize: 1024000,
       hasErrors: false,
@@ -29,8 +28,7 @@ describe('BatchListView', () => {
     {
       id: '123e4567-e89b-12d3-a456-426614174002',
       siteId: '123e4567-e89b-12d3-a456-426614174001',
-      status: 'COMPLETED',
-      s3Path: 's3://bucket/path2',
+      status: 'FAILED',
       uploadedFilesCount: 3,
       totalSize: 512000,
       hasErrors: true,
@@ -41,12 +39,21 @@ describe('BatchListView', () => {
       id: '123e4567-e89b-12d3-a456-426614174003',
       siteId: '123e4567-e89b-12d3-a456-426614174001',
       status: 'IN_PROGRESS',
-      s3Path: 's3://bucket/path3',
       uploadedFilesCount: 2,
       totalSize: 256000,
       hasErrors: false,
       startedAt: '2025-11-01T08:00:00Z',
       completedAt: null,
+    },
+    {
+      id: '123e4567-e89b-12d3-a456-426614174004',
+      siteId: '123e4567-e89b-12d3-a456-426614174002',
+      status: 'COMPLETED_WITH_WARNINGS',
+      uploadedFilesCount: 4,
+      totalSize: 768000,
+      hasErrors: false,
+      startedAt: '2025-11-01T07:00:00Z',
+      completedAt: '2025-11-01T07:10:00Z',
     },
   ];
 
@@ -183,11 +190,11 @@ describe('BatchListView', () => {
         />
       );
 
-      const completedBadges = screen.getAllByText('COMPLETED');
-      expect(completedBadges).toHaveLength(2);
-
-      const inProgressBadge = screen.getByText('IN_PROGRESS');
-      expect(inProgressBadge).toBeInTheDocument();
+      // mockBatches has: 1 COMPLETED, 1 FAILED, 1 IN_PROGRESS, 1 COMPLETED_WITH_WARNINGS
+      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+      expect(screen.getByText('FAILED')).toBeInTheDocument();
+      expect(screen.getByText('IN_PROGRESS')).toBeInTheDocument();
+      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
     });
 
     it('should display file size in human-readable format', () => {
@@ -218,8 +225,9 @@ describe('BatchListView', () => {
       );
 
       // Should show "Completed:" for finished batches
+      // mockBatches has 3 with completedAt: COMPLETED, FAILED, COMPLETED_WITH_WARNINGS
       const completedLabels = screen.getAllByText(/completed:/i);
-      expect(completedLabels).toHaveLength(2); // Two batches have completedAt
+      expect(completedLabels).toHaveLength(3);
     });
 
     it('should not display completed timestamp for in-progress batches', () => {
@@ -262,12 +270,13 @@ describe('BatchListView', () => {
       expect(checkCircle).toBeInTheDocument();
     });
 
-    it('should display red X for batches with errors', () => {
-      const errorBatch: BatchSummary[] = [mockBatches[1]]; // hasErrors: true
+    it('should display red X for FAILED status', () => {
+      // Icon is based on status, not hasErrors
+      const failedBatch: BatchSummary[] = [mockBatches[1]]; // status: 'FAILED'
 
       const { container } = render(
         <BatchListView
-          batches={errorBatch}
+          batches={failedBatch}
           isLoading={false}
           hasNextPage={false}
           isFetchingNextPage={false}
@@ -275,9 +284,46 @@ describe('BatchListView', () => {
         />
       );
 
-      // XCircle icon should be present
+      // XCircle icon should be present for FAILED status
       const xCircle = container.querySelector('.text-red-500');
       expect(xCircle).toBeInTheDocument();
+    });
+
+    it('should display green checkmark for COMPLETED_WITH_WARNINGS status', () => {
+      const warningsBatch: BatchSummary[] = [mockBatches[3]]; // status: 'COMPLETED_WITH_WARNINGS'
+
+      const { container } = render(
+        <BatchListView
+          batches={warningsBatch}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      // CheckCircle icon should be present for COMPLETED_WITH_WARNINGS status
+      const checkCircle = container.querySelector('.text-green-500');
+      expect(checkCircle).toBeInTheDocument();
+    });
+
+    it('should display blue spinner for IN_PROGRESS status', () => {
+      const inProgressBatch: BatchSummary[] = [mockBatches[2]]; // status: 'IN_PROGRESS'
+
+      const { container } = render(
+        <BatchListView
+          batches={inProgressBatch}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      // Loader2 icon should be present for IN_PROGRESS status
+      const loader = container.querySelector('[class*="lucide-loader"]');
+      expect(loader).toBeInTheDocument();
+      expect(loader).toHaveClass('text-blue-500', 'animate-spin');
     });
 
     it('should apply correct badge color based on status', () => {
@@ -292,16 +338,24 @@ describe('BatchListView', () => {
       );
 
       // COMPLETED status should have green badge
-      const completedBadges = screen.getAllByText('COMPLETED');
-      completedBadges.forEach((badge) => {
-        expect(badge).toHaveClass('bg-green-100');
-        expect(badge).toHaveClass('text-green-800');
-      });
+      const completedBadge = screen.getByText('COMPLETED');
+      expect(completedBadge).toHaveClass('bg-green-100');
+      expect(completedBadge).toHaveClass('text-green-800');
+
+      // FAILED status should have red badge
+      const failedBadge = screen.getByText('FAILED');
+      expect(failedBadge).toHaveClass('bg-red-100');
+      expect(failedBadge).toHaveClass('text-red-800');
 
       // IN_PROGRESS status should have blue badge
       const inProgressBadge = screen.getByText('IN_PROGRESS');
       expect(inProgressBadge).toHaveClass('bg-blue-100');
       expect(inProgressBadge).toHaveClass('text-blue-800');
+
+      // COMPLETED_WITH_WARNINGS status should have yellow badge
+      const warningsBadge = screen.getByText('Completed (Warnings)');
+      expect(warningsBadge).toHaveClass('bg-yellow-100');
+      expect(warningsBadge).toHaveClass('text-yellow-800');
     });
   });
 
@@ -524,6 +578,190 @@ describe('BatchListView', () => {
 
       // Should display normal batch list, not error
       expect(screen.getByText(/5 files/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('Site Filter', () => {
+    const mockSites = [
+      { id: '123e4567-e89b-12d3-a456-426614174001', accountId: 'acc-1', domain: 'site1.com', name: 'Site 1', isActive: true, createdAt: '2025-01-01' },
+      { id: '123e4567-e89b-12d3-a456-426614174002', accountId: 'acc-1', domain: 'site2.com', name: 'Site 2', isActive: true, createdAt: '2025-01-01' },
+    ];
+
+    it('should render site filter dropdown when sites provided', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          sites={mockSites}
+        />
+      );
+
+      expect(screen.getByText('All Sites')).toBeInTheDocument();
+      expect(screen.getByText('Site 1')).toBeInTheDocument();
+      expect(screen.getByText('Site 2')).toBeInTheDocument();
+    });
+
+    it('should not render site filter when no sites provided', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      expect(screen.queryByText('All Sites')).not.toBeInTheDocument();
+    });
+
+    it('should filter batches by site when site selected', async () => {
+      const user = userEvent.setup();
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          sites={mockSites}
+        />
+      );
+
+      // Initially should show all 4 batches - check by counting status badges
+      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+      expect(screen.getByText('FAILED')).toBeInTheDocument();
+      expect(screen.getByText('IN_PROGRESS')).toBeInTheDocument();
+      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+
+      // Select Site 2 (has only mockBatches[3])
+      const siteSelect = screen.getByDisplayValue('All Sites');
+      await user.selectOptions(siteSelect, '123e4567-e89b-12d3-a456-426614174002');
+
+      // Should only show the batch from Site 2 (COMPLETED_WITH_WARNINGS)
+      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+      // Other batches should not be visible
+      expect(screen.queryByText('COMPLETED')).not.toBeInTheDocument();
+      expect(screen.queryByText('FAILED')).not.toBeInTheDocument();
+      expect(screen.queryByText('IN_PROGRESS')).not.toBeInTheDocument();
+    });
+
+    it('should include site filter in clear filters', async () => {
+      const user = userEvent.setup();
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          sites={mockSites}
+        />
+      );
+
+      // Select a site filter
+      const siteSelect = screen.getByDisplayValue('All Sites');
+      await user.selectOptions(siteSelect, '123e4567-e89b-12d3-a456-426614174002');
+
+      // Clear filters button should appear
+      const clearButton = screen.getByText('Clear filters');
+      expect(clearButton).toBeInTheDocument();
+
+      // Click clear filters
+      await user.click(clearButton);
+
+      // Site filter should be reset to 'All Sites'
+      expect(screen.getByDisplayValue('All Sites')).toBeInTheDocument();
+    });
+  });
+
+  describe('Refresh Button', () => {
+    it('should render refresh button when onRefresh provided', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          onRefresh={vi.fn()}
+        />
+      );
+
+      expect(screen.getByRole('button', { name: /refresh/i })).toBeInTheDocument();
+    });
+
+    it('should not render refresh button when onRefresh not provided', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      expect(screen.queryByRole('button', { name: /refresh/i })).not.toBeInTheDocument();
+    });
+
+    it('should call onRefresh when refresh button clicked', async () => {
+      const user = userEvent.setup();
+      const onRefresh = vi.fn();
+
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          onRefresh={onRefresh}
+        />
+      );
+
+      const refreshButton = screen.getByRole('button', { name: /refresh/i });
+      await user.click(refreshButton);
+
+      expect(onRefresh).toHaveBeenCalledOnce();
+    });
+
+    it('should disable refresh button when isRefreshing is true', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          onRefresh={vi.fn()}
+          isRefreshing={true}
+        />
+      );
+
+      const refreshButton = screen.getByRole('button', { name: /refresh/i });
+      expect(refreshButton).toBeDisabled();
+    });
+
+    it('should show spinning icon when isRefreshing is true', () => {
+      const { container } = render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+          onRefresh={vi.fn()}
+          isRefreshing={true}
+        />
+      );
+
+      // RefreshCw icon should have animate-spin class when refreshing
+      const refreshIcon = container.querySelector('.lucide-refresh-cw');
+      expect(refreshIcon).toHaveClass('animate-spin');
     });
   });
 });

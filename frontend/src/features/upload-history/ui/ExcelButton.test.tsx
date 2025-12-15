@@ -126,6 +126,19 @@ describe('ExcelButton', () => {
       expect(button).not.toBeDisabled();
     });
 
+    it('should be enabled when batch is COMPLETED_WITH_WARNINGS and files selected', () => {
+      renderWithProviders(
+        <ExcelButton
+          batchId="batch-123"
+          batchStatus="COMPLETED_WITH_WARNINGS"
+          selectedFileIds={['file-001']}
+        />
+      );
+
+      const button = screen.getByRole('button', { name: /create excel/i });
+      expect(button).not.toBeDisabled();
+    });
+
     it('should be disabled during export', () => {
       vi.spyOn(useExcelExportHook, 'useExcelExport').mockReturnValue(
         createMockMutation({ isPending: true }) as ReturnType<typeof useExcelExportHook.useExcelExport>

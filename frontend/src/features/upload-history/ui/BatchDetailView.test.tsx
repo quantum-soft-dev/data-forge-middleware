@@ -222,21 +222,58 @@ describe('BatchDetailView', () => {
       expect(screen.queryByText(/completed at/i)).not.toBeInTheDocument();
     });
 
-    it('should display error indicator when batch has errors', () => {
-      const batchWithErrors = { ...mockBatch, hasErrors: true };
+    it('should display error indicator for FAILED status', () => {
+      // Icon is based on status, not hasErrors
+      const failedBatch = { ...mockBatch, status: 'FAILED' as const };
 
       renderWithQueryClient(
         <BatchDetailView
-          batch={batchWithErrors}
+          batch={failedBatch}
           isLoading={false}
           error={null}
         />
       );
 
-      // Check for XCircle icon (error indicator) instead of text
+      // Check for XCircle icon (error indicator) based on FAILED status
       const errorIcon = document.querySelector('.lucide-circle-x');
       expect(errorIcon).toBeInTheDocument();
       expect(errorIcon).toHaveClass('text-red-500');
+    });
+
+    it('should display success indicator for COMPLETED_WITH_WARNINGS status', () => {
+      const batchWithWarnings = { ...mockBatch, status: 'COMPLETED_WITH_WARNINGS' as const };
+
+      renderWithQueryClient(
+        <BatchDetailView
+          batch={batchWithWarnings}
+          isLoading={false}
+          error={null}
+        />
+      );
+
+      // Check for CheckCircle icon (success indicator) based on COMPLETED_WITH_WARNINGS status
+      // lucide-react uses class like 'lucide-circle-check-big' for CheckCircle
+      const successIcon = document.querySelector('[class*="lucide-circle-check"]');
+      expect(successIcon).toBeInTheDocument();
+      expect(successIcon).toHaveClass('text-green-500');
+    });
+
+    it('should display loading indicator for IN_PROGRESS status', () => {
+      const inProgressBatch = { ...mockBatch, status: 'IN_PROGRESS' as const, completedAt: null };
+
+      renderWithQueryClient(
+        <BatchDetailView
+          batch={inProgressBatch}
+          isLoading={false}
+          error={null}
+        />
+      );
+
+      // Check for Loader2 icon (loading indicator) based on IN_PROGRESS status
+      // lucide-react uses class like 'lucide-loader-2' or 'lucide-loader'
+      const loadingIcon = document.querySelector('[class*="lucide-loader"]');
+      expect(loadingIcon).toBeInTheDocument();
+      expect(loadingIcon).toHaveClass('text-blue-500', 'animate-spin');
     });
   });
 

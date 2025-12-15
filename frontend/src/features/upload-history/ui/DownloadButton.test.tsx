@@ -126,6 +126,19 @@ describe('DownloadButton', () => {
       expect(button).not.toBeDisabled();
     });
 
+    it('should be enabled when batch is COMPLETED_WITH_WARNINGS and files selected', () => {
+      renderWithProviders(
+        <DownloadButton
+          batchId="batch-123"
+          batchStatus="COMPLETED_WITH_WARNINGS"
+          selectedFileIds={['file-001']}
+        />
+      );
+
+      const button = screen.getByRole('button', { name: /download/i });
+      expect(button).not.toBeDisabled();
+    });
+
     it('should be disabled during download', () => {
       vi.spyOn(useFileDownloadHook, 'useFileDownload').mockReturnValue(
         createMockMutation({ isPending: true }) as ReturnType<typeof useFileDownloadHook.useFileDownload>

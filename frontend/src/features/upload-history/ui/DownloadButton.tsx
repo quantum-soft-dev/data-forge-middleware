@@ -3,7 +3,7 @@
  *
  * Provides unified download functionality for both single files (presigned URLs)
  * and multiple files (ZIP archives). Disabled when no files selected or batch
- * is not COMPLETED.
+ * is not in a completed status (COMPLETED or COMPLETED_WITH_WARNINGS).
  *
  * Feature: 008-upload-history-user (User Story 3)
  */
@@ -30,7 +30,7 @@ interface DownloadButtonProps {
  * T076: Download button with conditional ZIP/single file logic
  *
  * Behavior:
- * - Disabled when no files selected or batch status is not COMPLETED
+ * - Disabled when no files selected or batch status is not completed (COMPLETED/COMPLETED_WITH_WARNINGS)
  * - Single file: Downloads directly via presigned S3 URL (15-minute expiry)
  * - Multiple files: Downloads as ZIP archive (streamed from backend)
  *
@@ -53,10 +53,11 @@ export function DownloadButton({
 }: DownloadButtonProps) {
   const { mutate: download, isPending } = useFileDownload();
 
-  // Calculate button state
+  // Calculate button state - enabled if files selected (any completed status allows download)
+  const isCompletedStatus = batchStatus === 'COMPLETED' || batchStatus === 'COMPLETED_WITH_WARNINGS';
   const isDisabled =
     selectedFileIds.length === 0 ||
-    batchStatus !== 'COMPLETED' ||
+    !isCompletedStatus ||
     isPending;
 
   console.log('[DownloadButton] Props:', {

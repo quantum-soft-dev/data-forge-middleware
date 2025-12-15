@@ -7,7 +7,9 @@
  * Feature: 008-upload-history-user (User Story 2)
  */
 
+import { useMemo } from 'react';
 import { useBatchDetails } from '@/entities/batch/api/queries';
+import { useSites } from '@/features/site-crud/model/queries';
 import { BatchDetailView } from '@/features/upload-history/ui/BatchDetailView';
 
 interface BatchDetailWidgetProps {
@@ -22,10 +24,19 @@ interface BatchDetailWidgetProps {
  */
 export function BatchDetailWidget({ batchId, onBack }: BatchDetailWidgetProps) {
   const { data: batch, isLoading, error } = useBatchDetails(batchId);
+  const { data: sites } = useSites();
+
+  // Create site lookup map for displaying site name
+  const siteName = useMemo(() => {
+    if (!batch?.siteId || !sites) return undefined;
+    const site = sites.find((s) => s.id === batch.siteId);
+    return site?.name;
+  }, [batch?.siteId, sites]);
 
   return (
     <BatchDetailView
       batch={batch}
+      siteName={siteName}
       isLoading={isLoading}
       error={error?.message ?? null}
       onBack={onBack}

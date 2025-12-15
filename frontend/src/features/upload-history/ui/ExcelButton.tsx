@@ -3,7 +3,8 @@
  *
  * Provides Excel generation functionality from selected CSV files.
  * Each CSV becomes a separate sheet in the Excel workbook.
- * Disabled when no files selected or batch is not COMPLETED.
+ * Disabled when no files selected or batch is not in a completed status
+ * (COMPLETED or COMPLETED_WITH_WARNINGS).
  *
  * Feature: 008-upload-history-user (User Story 4)
  */
@@ -30,7 +31,7 @@ interface ExcelButtonProps {
  * T098: Excel export button with disabled state for incomplete batches
  *
  * Behavior:
- * - Disabled when no files selected or batch status is not COMPLETED
+ * - Disabled when no files selected or batch status is not completed (COMPLETED/COMPLETED_WITH_WARNINGS)
  * - Converts CSV files to Excel workbook (.xlsx)
  * - Each CSV file becomes a separate sheet (max 31 chars, deduplicated names)
  * - Handles .csv.gz decompression and encoding detection (UTF-8/Windows-1252)
@@ -58,10 +59,11 @@ export function ExcelButton({
 
   const MAX_FILES_FOR_EXCEL = 20;
 
-  // Calculate button state
+  // Calculate button state - enabled if files selected (any completed status allows export)
+  const isCompletedStatus = batchStatus === 'COMPLETED' || batchStatus === 'COMPLETED_WITH_WARNINGS';
   const isDisabled =
     selectedFileIds.length === 0 ||
-    batchStatus !== 'COMPLETED' ||
+    !isCompletedStatus ||
     isPending;
 
   const isTooManyFiles = selectedFileIds.length > MAX_FILES_FOR_EXCEL;

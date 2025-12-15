@@ -22,6 +22,8 @@ import { useBatchErrors } from '@/entities/batch/api/queries';
 interface BatchDetailViewProps {
   /** Batch details with file list */
   batch?: BatchDetail;
+  /** Site name for display (resolved from siteId) */
+  siteName?: string;
   /** Is data loading */
   isLoading: boolean;
   /** Error message if any */
@@ -37,6 +39,7 @@ interface BatchDetailViewProps {
  */
 export function BatchDetailView({
   batch,
+  siteName,
   isLoading,
   error,
   onBack,
@@ -121,10 +124,13 @@ export function BatchDetailView({
         <div className="flex items-start justify-between">
           {/* Status and basic info */}
           <div className="flex items-center space-x-4">
-            {batch.hasErrors ? (
-              <XCircle className="h-8 w-8 text-red-500 flex-shrink-0" />
-            ) : (
+            {/* Icon based on batch status, not hasErrors */}
+            {batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS' ? (
               <CheckCircle className="h-8 w-8 text-green-500 flex-shrink-0" />
+            ) : batch.status === 'IN_PROGRESS' ? (
+              <Loader2 className="h-8 w-8 text-blue-500 animate-spin flex-shrink-0" />
+            ) : (
+              <XCircle className="h-8 w-8 text-red-500 flex-shrink-0" />
             )}
             <div>
               <h2 className="text-xl font-semibold text-gray-900">
@@ -153,7 +159,15 @@ export function BatchDetailView({
         </div>
 
         {/* Metadata grid */}
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {/* Site name */}
+          <div>
+            <dt className="text-sm font-medium text-gray-500">Site</dt>
+            <dd className="mt-1 text-sm text-gray-900">
+              {siteName || 'Unknown site'}
+            </dd>
+          </div>
+
           <div>
             <dt className="text-sm font-medium text-gray-500">Started At</dt>
             <dd className="mt-1 text-sm text-gray-900">
