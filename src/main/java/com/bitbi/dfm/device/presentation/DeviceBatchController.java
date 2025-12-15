@@ -221,6 +221,91 @@ public class DeviceBatchController {
     }
 
     /**
+     * Complete batch with warnings.
+     * <p>
+     * Marks an IN_PROGRESS batch as COMPLETED_WITH_WARNINGS. Use this when the batch
+     * completes but with non-critical warnings (e.g., data quality issues that don't
+     * prevent processing).
+     * </p>
+     * <p>
+     * Key differences from regular completion:
+     * <ul>
+     *   <li>Status set to COMPLETED_WITH_WARNINGS instead of COMPLETED</li>
+     *   <li>hasErrors remains false (warnings ≠ errors)</li>
+     *   <li>Data is still considered valid for processing</li>
+     * </ul>
+     * </p>
+     *
+     * @param batchId Batch identifier (path variable)
+     * @return 200 OK with updated batch details, or error response
+     */
+    @PostMapping("/{id}/complete-with-warnings")
+    @Operation(
+            summary = "Complete batch with warnings",
+            description = "Marks an IN_PROGRESS batch as COMPLETED_WITH_WARNINGS. " +
+                    "Use this when the batch completes successfully but with non-critical warnings. " +
+                    "hasErrors remains false (warnings are not errors)."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Batch completed with warnings",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BatchResponseDto.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request - Invalid batch status transition",
+                    content = @Content(mediaType = "application/json")
+            ),
+            @ApiResponse(
+                    responseCode = "403",
+                    description = "Forbidden - Batch not owned by authenticated site",
+                    content = @Content(mediaType = "application/json")
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found - Batch does not exist",
+                    content = @Content(mediaType = "application/json")
+            )
+    })
+    public ResponseEntity<?> completeBatchWithWarnings(@PathVariable("id") UUID batchId) {
+        try {
+            logger.info("Device API: Completing batch with warnings - batchId={}", batchId);
+
+            // Get batch first to verify ownership
+            Batch batch = batchLifecycleService.getBatch(batchId);
+
+            // Verify site ownership via JWT claims
+            authorizationHelper.verifySiteOwnership(batch.getSiteId());
+
+            // Delegate to service layer
+            batch = batchLifecycleService.completeBatchWithWarnings(batchId);
+
+            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
+            return ResponseEntity.ok(response);
+
+        } catch (AuthorizationHelper.UnauthorizedException e) {
+            logger.warn("Device API: Unauthorized batch completion with warnings - batchId={}, {}", batchId, e.getMessage());
+            return DeviceControllerHelper.handleUnauthorizedException(e);
+
+        } catch (BatchLifecycleService.BatchNotFoundException e) {
+            logger.warn("Device API: Batch not found - batchId={}", batchId);
+            return DeviceControllerHelper.handleBatchNotFoundException(e);
+
+        } catch (BatchLifecycleService.InvalidBatchStatusException e) {
+            logger.warn("Device API: Invalid batch status - {}", e.getMessage());
+            return DeviceControllerHelper.handleInvalidBatchStatusException(e);
+
+        } catch (Exception e) {
+            logger.error("Device API: Error completing batch with warnings - batchId={}", batchId, e);
+            return DeviceControllerHelper.handleInternalServerError("Failed to complete batch with warnings");
+        }
+    }
+
+    /**
      * Fail batch due to error.
      * <p>
      * Marks an IN_PROGRESS batch as FAILED. Use this when an unrecoverable error

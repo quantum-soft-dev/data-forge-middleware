@@ -75,6 +75,17 @@ public final class ApiRoutes {
     public static final String DEVICE_BATCHES_COMPLETE = DEVICE_BATCHES + "/{id}/complete";
 
     /**
+     * Complete batch with warnings endpoint.
+     * <p>
+     * Method: POST<br>
+     * Path Variable: {id} - Batch ID<br>
+     * Authentication: Custom JWT<br>
+     * Returns: BatchResponseDto with COMPLETED_WITH_WARNINGS status
+     * </p>
+     */
+    public static final String DEVICE_BATCHES_COMPLETE_WITH_WARNINGS = DEVICE_BATCHES + "/{id}/complete-with-warnings";
+
+    /**
      * Mark batch as failed endpoint.
      * <p>
      * Method: POST<br>
