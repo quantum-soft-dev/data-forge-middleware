@@ -87,7 +87,7 @@ describe('DownloadButton', () => {
       expect(button).toBeDisabled();
     });
 
-    it('should be disabled when batch is IN_PROGRESS', () => {
+    it('should be enabled when batch is IN_PROGRESS and files selected', () => {
       renderWithProviders(
         <DownloadButton
           batchId="batch-123"
@@ -97,10 +97,10 @@ describe('DownloadButton', () => {
       );
 
       const button = screen.getByRole('button', { name: /download/i });
-      expect(button).toBeDisabled();
+      expect(button).not.toBeDisabled();
     });
 
-    it('should be disabled when batch is FAILED', () => {
+    it('should be enabled when batch is FAILED and files selected', () => {
       renderWithProviders(
         <DownloadButton
           batchId="batch-123"
@@ -110,7 +110,7 @@ describe('DownloadButton', () => {
       );
 
       const button = screen.getByRole('button', { name: /download/i });
-      expect(button).toBeDisabled();
+      expect(button).not.toBeDisabled();
     });
 
     it('should be enabled when batch is COMPLETED and files selected', () => {
@@ -395,12 +395,13 @@ describe('DownloadButton', () => {
   describe('Batch Status Validation', () => {
     const testCases = [
       { status: 'COMPLETED', shouldBeEnabled: true },
-      { status: 'IN_PROGRESS', shouldBeEnabled: false },
-      { status: 'FAILED', shouldBeEnabled: false },
+      { status: 'IN_PROGRESS', shouldBeEnabled: true },
+      { status: 'FAILED', shouldBeEnabled: true },
+      { status: 'COMPLETED_WITH_WARNINGS', shouldBeEnabled: true },
     ];
 
     testCases.forEach(({ status, shouldBeEnabled }) => {
-      it(`should ${shouldBeEnabled ? 'enable' : 'disable'} button when batch status is ${status}`, () => {
+      it(`should ${shouldBeEnabled ? 'enable' : 'disable'} button when batch status is ${status} and files selected`, () => {
         renderWithProviders(
           <DownloadButton
             batchId="batch-123"

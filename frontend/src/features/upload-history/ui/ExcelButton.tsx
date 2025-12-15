@@ -59,12 +59,8 @@ export function ExcelButton({
 
   const MAX_FILES_FOR_EXCEL = 20;
 
-  // Calculate button state - enabled if files selected (any completed status allows export)
-  const isCompletedStatus = batchStatus === 'COMPLETED' || batchStatus === 'COMPLETED_WITH_WARNINGS';
-  const isDisabled =
-    selectedFileIds.length === 0 ||
-    !isCompletedStatus ||
-    isPending;
+  // Calculate button state - enabled if files selected (regardless of batch status)
+  const isDisabled = selectedFileIds.length === 0 || isPending;
 
   const isTooManyFiles = selectedFileIds.length > MAX_FILES_FOR_EXCEL;
 
@@ -106,7 +102,7 @@ export function ExcelButton({
   };
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="relative">
       <Button
         onClick={handleExport}
         disabled={isDisabled}
@@ -126,7 +122,7 @@ export function ExcelButton({
         )}
       </Button>
       {isTooManyFiles && (
-        <p className="text-xs text-destructive">
+        <p className="absolute top-full left-0 mt-1 text-xs text-destructive whitespace-nowrap">
           Max {MAX_FILES_FOR_EXCEL} files allowed. Selected: {selectedFileIds.length}
         </p>
       )}

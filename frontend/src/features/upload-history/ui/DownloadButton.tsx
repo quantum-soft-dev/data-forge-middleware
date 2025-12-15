@@ -53,12 +53,8 @@ export function DownloadButton({
 }: DownloadButtonProps) {
   const { mutate: download, isPending } = useFileDownload();
 
-  // Calculate button state - enabled if files selected (any completed status allows download)
-  const isCompletedStatus = batchStatus === 'COMPLETED' || batchStatus === 'COMPLETED_WITH_WARNINGS';
-  const isDisabled =
-    selectedFileIds.length === 0 ||
-    !isCompletedStatus ||
-    isPending;
+  // Calculate button state - enabled if files selected (regardless of batch status)
+  const isDisabled = selectedFileIds.length === 0 || isPending;
 
   console.log('[DownloadButton] Props:', {
     batchId,
