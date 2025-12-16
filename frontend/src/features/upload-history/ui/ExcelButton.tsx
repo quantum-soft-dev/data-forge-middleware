@@ -51,7 +51,7 @@ interface ExcelButtonProps {
 export function ExcelButton({
   batchId,
   selectedFileIds,
-  batchStatus,
+  batchStatus: _batchStatus,
   excelFilename,
   children,
 }: ExcelButtonProps) {
