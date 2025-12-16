@@ -88,30 +88,30 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Validation Service
 
-- [ ] T022 [US2] Create PluginDataValidator service in src/main/java/com/bitbi/dfm/plugin/application/PluginDataValidator.java (JSON Schema validation with caching, throws PluginDataValidationException)
+- [x] T022 [US2] Create PluginDataValidator service in src/main/java/com/bitbi/dfm/plugin/application/PluginDataValidator.java (JSON Schema validation with caching, throws PluginDataValidationException)
 
 ### DTOs
 
-- [ ] T023 [P] [US2] Create ActivatePluginRequestDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/ActivatePluginRequestDto.java (@NotNull pluginData Map)
-- [ ] T024 [P] [US2] Create PluginActivationResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginActivationResponseDto.java (pluginId, pluginName, accountId, isActive, activatedAt, lastUsedAt)
+- [x] T023 [P] [US2] Create ActivatePluginRequestDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/ActivatePluginRequestDto.java (@NotNull pluginData Map)
+- [x] T024 [P] [US2] Create PluginActivationResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginActivationResponseDto.java (pluginId, pluginName, accountId, isActive, activatedAt, lastUsedAt)
 
 ### Application Service
 
-- [ ] T025 [US2] Create PluginActivationService in src/main/java/com/bitbi/dfm/plugin/application/PluginActivationService.java (activate method with upsert logic per FR-005, calls plugin.onActivate hook per FR-006)
+- [x] T025 [US2] Create PluginActivationService in src/main/java/com/bitbi/dfm/plugin/application/PluginActivationService.java (activate method with upsert logic per FR-005, calls plugin.onActivate hook per FR-006)
 
 ### Domain Exceptions
 
-- [ ] T026 [P] [US2] Create PluginNotFoundException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotFoundException.java
-- [ ] T027 [P] [US2] Create PluginDataValidationException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginDataValidationException.java
-- [ ] T028 [P] [US2] Create PluginNotEnabledException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotEnabledException.java
+- [x] T026 [P] [US2] Create PluginNotFoundException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotFoundException.java
+- [x] T027 [P] [US2] Create PluginDataValidationException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginDataValidationException.java
+- [x] T028 [P] [US2] Create PluginNotEnabledException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotEnabledException.java
 
 ### Controller
 
-- [ ] T029 [US2] Create PluginController in src/main/java/com/bitbi/dfm/plugin/presentation/PluginController.java (POST /api/v1/plugins/{pluginId}/activate endpoint, returns 201/200 based on create/update)
+- [x] T029 [US2] Create PluginController in src/main/java/com/bitbi/dfm/plugin/presentation/PluginController.java (POST /api/v1/plugins/{pluginId}/activate endpoint, returns 201/200 based on create/update)
 
 ### Exception Handling
 
-- [ ] T030 [US2] Add plugin exception handlers to GlobalExceptionHandler.java (PluginNotFoundException -> 404, PluginDataValidationException -> 400, PluginNotEnabledException -> 404)
+- [x] T030 [US2] Add plugin exception handlers to GlobalExceptionHandler.java (PluginNotFoundException -> 404, PluginDataValidationException -> 400, PluginNotEnabledException -> 404)
 
 **Checkpoint**: Plugin activation API is functional. Users can activate plugins via POST /api/v1/plugins/{pluginId}/activate
 

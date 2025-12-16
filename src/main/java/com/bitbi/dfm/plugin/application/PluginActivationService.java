@@ -1,0 +1,163 @@
+package com.bitbi.dfm.plugin.application;
+
+import com.bitbi.dfm.plugin.domain.AccountPlugin;
+import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
+import com.bitbi.dfm.plugin.domain.Plugin;
+import com.bitbi.dfm.plugin.domain.PluginConfig;
+import com.bitbi.dfm.plugin.domain.PluginConfigRepository;
+import com.bitbi.dfm.plugin.domain.PluginRegistry;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * Application service for plugin activation and deactivation operations.
+ *
+ * <p>Handles the activation workflow per FR-005 (upsert behavior) and FR-006 (lifecycle hooks):
+ * <ul>
+ *   <li>New activation: Creates AccountPlugin record, calls plugin.onActivate()</li>
+ *   <li>Update (already active): Updates pluginData, calls plugin.onActivate()</li>
+ *   <li>Reactivation (was inactive): Reactivates with new data, calls plugin.onActivate()</li>
+ * </ul>
+ */
+@Service
+@Transactional
+public class PluginActivationService {
+
+    private static final Logger logger = LoggerFactory.getLogger(PluginActivationService.class);
+
+    private final PluginRegistry pluginRegistry;
+    private final PluginConfigRepository pluginConfigRepository;
+    private final AccountPluginRepository accountPluginRepository;
+    private final PluginDataValidator pluginDataValidator;
+
+    public PluginActivationService(
+            PluginRegistry pluginRegistry,
+            PluginConfigRepository pluginConfigRepository,
+            AccountPluginRepository accountPluginRepository,
+            PluginDataValidator pluginDataValidator) {
+        this.pluginRegistry = pluginRegistry;
+        this.pluginConfigRepository = pluginConfigRepository;
+        this.accountPluginRepository = accountPluginRepository;
+        this.pluginDataValidator = pluginDataValidator;
+    }
+
+    /**
+     * Activates a plugin for an account.
+     *
+     * <p>Implements upsert behavior per FR-005:
+     * <ul>
+     *   <li>If not activated: Creates new activation record</li>
+     *   <li>If already active: Updates pluginData and timestamps</li>
+     *   <li>If deactivated: Reactivates with new pluginData</li>
+     * </ul>
+     *
+     * @param accountId the account to activate the plugin for
+     * @param pluginId the plugin identifier
+     * @param pluginData plugin-specific data (validated against schema)
+     * @return result containing the activation record and whether it was newly created
+     */
+    public ActivationResult activate(UUID accountId, String pluginId, Map<String, Object> pluginData) {
+        logger.info("Activating plugin {} for account {}", pluginId, accountId);
+
+        // 1. Verify plugin is registered in code
+        Plugin plugin = pluginRegistry.findById(pluginId)
+            .orElseThrow(() -> {
+                logger.warn("Plugin not found in registry: {}", pluginId);
+                return new PluginNotFoundException(pluginId);
+            });
+
+        // 2. Verify plugin is configured and enabled in database
+        PluginConfig pluginConfig = pluginConfigRepository.findByPluginId(pluginId)
+            .orElseThrow(() -> {
+                logger.warn("Plugin not found in database: {}", pluginId);
+                return new PluginNotFoundException(pluginId, "Plugin is not configured: " + pluginId);
+            });
+
+        if (!pluginConfig.isEnabled()) {
+            logger.warn("Plugin is disabled: {}", pluginId);
+            throw new PluginNotEnabledException(pluginId);
+        }
+
+        // 3. Validate pluginData against schema (FR-004)
+        pluginDataValidator.validate(pluginId, pluginData);
+
+        // 4. Check for existing activation (upsert behavior per FR-005)
+        Optional<AccountPlugin> existingActivation = accountPluginRepository
+            .findByAccountIdAndPluginId(accountId, pluginId);
+
+        AccountPlugin accountPlugin;
+        boolean isNewActivation;
+
+        if (existingActivation.isPresent()) {
+            accountPlugin = existingActivation.get();
+            if (accountPlugin.isActive()) {
+                // Already active - update data
+                logger.debug("Updating existing active plugin {} for account {}", pluginId, accountId);
+                accountPlugin.updatePluginData(pluginData);
+                isNewActivation = false;
+            } else {
+                // Was deactivated - reactivate
+                logger.debug("Reactivating plugin {} for account {}", pluginId, accountId);
+                accountPlugin.reactivate(pluginData);
+                isNewActivation = false;
+            }
+        } else {
+            // New activation
+            logger.debug("Creating new activation for plugin {} for account {}", pluginId, accountId);
+            accountPlugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            isNewActivation = true;
+        }
+
+        // 5. Save activation record
+        accountPlugin = accountPluginRepository.save(accountPlugin);
+
+        // 6. Call lifecycle hook (FR-006)
+        try {
+            plugin.onActivate(accountPlugin);
+            logger.debug("Plugin {} onActivate hook completed for account {}", pluginId, accountId);
+        } catch (Exception e) {
+            // Log but don't fail the activation - hook failures are non-critical
+            logger.warn("Plugin {} onActivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
+        }
+
+        logger.info("Plugin {} {} for account {}", pluginId,
+            isNewActivation ? "activated" : "updated", accountId);
+
+        return new ActivationResult(accountPlugin, pluginConfig.getDisplayName(), isNewActivation);
+    }
+
+    /**
+     * Gets the display name for a plugin.
+     *
+     * @param pluginId the plugin identifier
+     * @return the display name
+     */
+    public String getPluginDisplayName(String pluginId) {
+        return pluginConfigRepository.findByPluginId(pluginId)
+            .map(PluginConfig::getDisplayName)
+            .orElseGet(() -> pluginRegistry.findById(pluginId)
+                .map(Plugin::getName)
+                .orElse(pluginId));
+    }
+
+    /**
+     * Result of an activation operation.
+     *
+     * @param accountPlugin the activation record
+     * @param pluginDisplayName the human-readable plugin name
+     * @param isNewActivation true if this was a new activation, false if update/reactivation
+     */
+    public record ActivationResult(
+        AccountPlugin accountPlugin,
+        String pluginDisplayName,
+        boolean isNewActivation
+    ) {}
+}

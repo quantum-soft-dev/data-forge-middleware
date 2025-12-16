@@ -556,6 +556,66 @@ public final class ApiRoutes {
      */
     public static final String COMPARISONS_SUMMARY_DOWNLOAD = COMPARISONS + "/{id}/summary/download";
 
+    // ==================== Plugins API ====================
+
+    /**
+     * Base path for plugin management endpoints.
+     * <p>
+     * Plugin API uses OAuth2 authentication and requires accountId claim.
+     * </p>
+     */
+    public static final String PLUGINS = ADMIN_API_BASE + "/plugins";
+
+    /**
+     * Activate plugin endpoint.
+     * <p>
+     * Method: POST<br>
+     * Path Variable: {pluginId} - Plugin identifier<br>
+     * Authentication: OAuth2 (requires accountId claim)<br>
+     * Request Body: ActivatePluginRequestDto<br>
+     * Returns: PluginActivationResponseDto (201 Created or 200 OK)
+     * </p>
+     */
+    public static final String PLUGINS_ACTIVATE = PLUGINS + "/{pluginId}/activate";
+
+    /**
+     * Deactivate plugin endpoint.
+     * <p>
+     * Method: DELETE<br>
+     * Path Variable: {pluginId} - Plugin identifier<br>
+     * Authentication: OAuth2 (requires accountId claim)<br>
+     * Returns: 204 No Content
+     * </p>
+     */
+    public static final String PLUGINS_DEACTIVATE = PLUGINS + "/{pluginId}/deactivate";
+
+    /**
+     * Base path for user's plugin integrations.
+     * <p>
+     * Requires: Authenticated user (Auth0 OAuth2 with accountId claim)
+     * </p>
+     */
+    public static final String ACCOUNT_PLUGINS = ADMIN_API_BASE + "/account/plugins";
+
+    /**
+     * Base path for plugin admin endpoints.
+     * <p>
+     * Requires: ROLE_ADMIN (Auth0)
+     * </p>
+     */
+    public static final String PLUGINS_ADMIN = ADMIN_API_BASE + "/admin/plugins";
+
+    /**
+     * Plugin audit logs endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: OAuth2 (ROLE_ADMIN)<br>
+     * Query Params: pluginId, accountId, actionType, success, from, to, page, size<br>
+     * Returns: PluginAuditLogPageResponseDto
+     * </p>
+     */
+    public static final String PLUGINS_ADMIN_AUDIT = PLUGINS_ADMIN + "/audit";
+
     // Private constructor to prevent instantiation
     private ApiRoutes() {
         throw new UnsupportedOperationException("Utility class - do not instantiate");
