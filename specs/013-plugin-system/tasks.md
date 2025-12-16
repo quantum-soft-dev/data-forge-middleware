@@ -41,38 +41,38 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Domain Layer
 
-- [ ] T005 [P] Create PluginEventType enum in src/main/java/com/bitbi/dfm/plugin/domain/PluginEventType.java (BATCH_COMPLETED, BATCH_FAILED, BATCH_EXPIRED, FILE_UPLOADED)
-- [ ] T006 [P] Create PluginActionType enum in src/main/java/com/bitbi/dfm/plugin/domain/PluginActionType.java (ACTIVATE, DEACTIVATE, REACTIVATE, EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT)
-- [ ] T007 [P] Create PluginEvent value object in src/main/java/com/bitbi/dfm/plugin/domain/PluginEvent.java (eventId, type, accountId, resourceId, metadata, occurredAt)
-- [ ] T008 [P] Create Plugin interface in src/main/java/com/bitbi/dfm/plugin/domain/Plugin.java (getId, getName, getVersion, getSupportedEvents, getSchemaJson, execute, onActivate, onDeactivate)
-- [ ] T009 Create PluginConfig entity in src/main/java/com/bitbi/dfm/plugin/domain/PluginConfig.java (depends on T005 for event types)
-- [ ] T010 Create AccountPlugin entity in src/main/java/com/bitbi/dfm/plugin/domain/AccountPlugin.java (depends on T005, includes activate/deactivate/reactivate/recordUsage methods)
-- [ ] T011 Create PluginAuditLog entity in src/main/java/com/bitbi/dfm/plugin/domain/PluginAuditLog.java (depends on T006)
+- [x] T005 [P] Create PluginEventType enum in src/main/java/com/bitbi/dfm/plugin/domain/PluginEventType.java (BATCH_COMPLETED, BATCH_FAILED, BATCH_EXPIRED, FILE_UPLOADED)
+- [x] T006 [P] Create PluginActionType enum in src/main/java/com/bitbi/dfm/plugin/domain/PluginActionType.java (ACTIVATE, DEACTIVATE, REACTIVATE, EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT)
+- [x] T007 [P] Create PluginEvent value object in src/main/java/com/bitbi/dfm/plugin/domain/PluginEvent.java (eventId, type, accountId, resourceId, metadata, occurredAt)
+- [x] T008 [P] Create Plugin interface in src/main/java/com/bitbi/dfm/plugin/domain/Plugin.java (getId, getName, getVersion, getSupportedEvents, getSchemaJson, execute, onActivate, onDeactivate)
+- [x] T009 Create PluginConfig entity in src/main/java/com/bitbi/dfm/plugin/domain/PluginConfig.java (depends on T005 for event types)
+- [x] T010 Create AccountPlugin entity in src/main/java/com/bitbi/dfm/plugin/domain/AccountPlugin.java (depends on T005, includes activate/deactivate/reactivate/recordUsage methods)
+- [x] T011 Create PluginAuditLog entity in src/main/java/com/bitbi/dfm/plugin/domain/PluginAuditLog.java (depends on T006)
 
 ### Repository Interfaces
 
-- [ ] T012 [P] Create PluginConfigRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/PluginConfigRepository.java
-- [ ] T013 [P] Create AccountPluginRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/AccountPluginRepository.java
-- [ ] T014 [P] Create PluginAuditLogRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/PluginAuditLogRepository.java
+- [x] T012 [P] Create PluginConfigRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/PluginConfigRepository.java
+- [x] T013 [P] Create AccountPluginRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/AccountPluginRepository.java
+- [x] T014 [P] Create PluginAuditLogRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/PluginAuditLogRepository.java
 
 ### Infrastructure Layer
 
-- [ ] T015 [P] Create JpaPluginConfigRepository in src/main/java/com/bitbi/dfm/plugin/infrastructure/persistence/JpaPluginConfigRepository.java
-- [ ] T016 [P] Create JpaAccountPluginRepository in src/main/java/com/bitbi/dfm/plugin/infrastructure/persistence/JpaAccountPluginRepository.java (with findByAccountIdAndPluginId, findActiveByAccountId)
-- [ ] T017 [P] Create JpaPluginAuditLogRepository in src/main/java/com/bitbi/dfm/plugin/infrastructure/persistence/JpaPluginAuditLogRepository.java
+- [x] T015 [P] Create JpaPluginConfigRepository in src/main/java/com/bitbi/dfm/plugin/infrastructure/persistence/JpaPluginConfigRepository.java
+- [x] T016 [P] Create JpaAccountPluginRepository in src/main/java/com/bitbi/dfm/plugin/infrastructure/persistence/JpaAccountPluginRepository.java (with findByAccountIdAndPluginId, findActiveByAccountId)
+- [x] T017 [P] Create JpaPluginAuditLogRepository in src/main/java/com/bitbi/dfm/plugin/infrastructure/persistence/JpaPluginAuditLogRepository.java
 
 ### Plugin Registry
 
-- [ ] T018 Create PluginRegistry component in src/main/java/com/bitbi/dfm/plugin/domain/PluginRegistry.java (depends on T008, collects List<Plugin> via constructor injection)
-- [ ] T019 Create PluginStartupValidator in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginStartupValidator.java (ApplicationRunner, validates plugins have DB configs, <100ms per SC-005)
+- [x] T018 Create PluginRegistry component in src/main/java/com/bitbi/dfm/plugin/domain/PluginRegistry.java (depends on T008, collects List<Plugin> via constructor injection)
+- [x] T019 Create PluginStartupValidator in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginStartupValidator.java (ApplicationRunner, validates plugins have DB configs, <100ms per SC-005)
 
 ### Async Configuration
 
-- [ ] T020 Create PluginAsyncConfiguration in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginAsyncConfiguration.java (ThreadPoolTaskExecutor bean "pluginExecutor", 5 core, 10 max, 50 queue)
+- [x] T020 Create PluginAsyncConfiguration in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginAsyncConfiguration.java (ThreadPoolTaskExecutor bean "pluginExecutor", 5 core, 10 max, 50 queue)
 
 ### Security Configuration
 
-- [ ] T021 Add plugin API filter chain to SecurityConfiguration.java (@Order(3), /api/v1/plugins/**, oauth2ResourceServer with jwtAuthenticationConverter)
+- [x] T021 Add plugin API filter chain to SecurityConfiguration.java (@Order(3), /api/v1/plugins/**, oauth2ResourceServer with jwtAuthenticationConverter)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
