@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/013-plugin-system/`
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/plugin-api.yaml
 
-**Tests**: Tests are NOT explicitly requested in the specification. Test tasks are omitted per task generation rules.
+**Tests**: Test tasks included per Testing Strategy in plan.md (JUnit 5 + Mockito for unit, MockMvc for contract, Testcontainers for integration).
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
@@ -113,7 +113,15 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 - [x] T030 [US2] Add plugin exception handlers to GlobalExceptionHandler.java (PluginNotFoundException -> 404, PluginDataValidationException -> 400, PluginNotEnabledException -> 404)
 
-**Checkpoint**: Plugin activation API is functional. Users can activate plugins via POST /api/v1/plugins/{pluginId}/activate
+### Tests for User Story 2
+
+- [ ] T031 [P] [US2] Create PluginDataValidatorTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginDataValidatorTest.java (valid/invalid tenantId, schema caching)
+- [ ] T032 [P] [US2] Create PluginActivationServiceTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginActivationServiceTest.java (activate calls onActivate, exceptions)
+- [ ] T033 [P] [US2] Create AccountPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/AccountPluginTest.java (activate/deactivate/reactivate methods)
+- [ ] T034 [US2] Create PluginActivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginActivationContractTest.java (POST activate → 201/200/400/404)
+- [ ] T035 [US2] Create PluginActivationIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginActivationIntegrationTest.java (Testcontainers, full activation flow)
+
+**Checkpoint**: Plugin activation API is functional and tested. Users can activate plugins via POST /api/v1/plugins/{pluginId}/activate
 
 ---
 
@@ -127,14 +135,18 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Bit BI Plugin Implementation
 
-- [x] T031 [US1] Create BitBiPlugin in src/main/java/com/bitbi/dfm/plugin/application/BitBiPlugin.java (@Component, implements Plugin interface, BATCH_COMPLETED event, tenantId schema)
+- [x] T036 [US1] Create BitBiPlugin in src/main/java/com/bitbi/dfm/plugin/application/BitBiPlugin.java (@Component, implements Plugin interface, BATCH_COMPLETED event, tenantId schema)
 
 ### Configuration
 
-- [x] T032 [US1] Add Bit BI plugin configuration to application.yml (plugins.bitbi.enabled, plugins.bitbi.client-id placeholders)
-- [x] T033 [US1] Add Bit BI seed data to V18 migration (INSERT INTO plugin_configs for bit-bi) [Note: Already in V8__create_plugin_tables.sql]
+- [x] T037 [US1] Add Bit BI plugin configuration to application.yml (plugins.bitbi.enabled, plugins.bitbi.client-id placeholders)
+- [x] T038 [US1] Add Bit BI seed data to V18 migration (INSERT INTO plugin_configs for bit-bi) [Note: Already in V8__create_plugin_tables.sql]
 
-**Checkpoint**: Bit BI plugin is registered and can be activated. OAuth flow completes successfully.
+### Tests for User Story 1
+
+- [ ] T039 [US1] Create BitBiPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/BitBiPluginTest.java (plugin ID, supported events, schema validation, onActivate)
+
+**Checkpoint**: Bit BI plugin is registered, can be activated, and is tested. OAuth flow completes successfully.
 
 ---
 
@@ -146,19 +158,23 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Application Service Extension
 
-- [ ] T034 [US3] Add deactivate method to PluginActivationService in src/main/java/com/bitbi/dfm/plugin/application/PluginActivationService.java (sets is_active=false, deactivated_at, calls plugin.onDeactivate hook)
+- [x] T040 [US3] Add deactivate method to PluginActivationService in src/main/java/com/bitbi/dfm/plugin/application/PluginActivationService.java (sets is_active=false, deactivated_at, calls plugin.onDeactivate hook)
 
 ### Domain Exception
 
-- [ ] T035 [P] [US3] Create PluginNotActivatedException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotActivatedException.java
+- [x] T041 [P] [US3] Create PluginNotActivatedException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotActivatedException.java
 
 ### Controller Extension
 
-- [ ] T036 [US3] Add DELETE /api/v1/plugins/{pluginId}/deactivate endpoint to PluginController.java (returns 204 on success)
+- [x] T042 [US3] Add DELETE /api/v1/plugins/{pluginId}/deactivate endpoint to PluginController.java (returns 204 on success)
 
 ### Exception Handling
 
-- [ ] T037 [US3] Add PluginNotActivatedException handler to GlobalExceptionHandler.java (-> 403 Forbidden)
+- [x] T043 [US3] Add PluginNotActivatedException handler to GlobalExceptionHandler.java (-> 403 Forbidden)
+
+### Tests for User Story 3
+
+- [ ] T044 [US3] Create PluginDeactivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginDeactivationContractTest.java (DELETE deactivate → 204/403/404)
 
 **Checkpoint**: Users can deactivate plugin integrations. Deactivated plugins no longer receive events.
 
@@ -172,16 +188,20 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### DTO
 
-- [ ] T038 [P] [US4] Create AccountPluginSummaryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginSummaryDto.java (pluginId, pluginName, isActive, activatedAt, deactivatedAt, lastUsedAt - NO pluginData per FR-012)
-- [ ] T039 [P] [US4] Create AccountPluginListResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginListResponseDto.java (PageResponseDto wrapper)
+- [ ] T045 [P] [US4] Create AccountPluginSummaryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginSummaryDto.java (pluginId, pluginName, isActive, activatedAt, deactivatedAt, lastUsedAt - NO pluginData per FR-012)
+- [ ] T046 [P] [US4] Create AccountPluginListResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginListResponseDto.java (PageResponseDto wrapper)
 
 ### Query Service
 
-- [ ] T040 [US4] Create PluginQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginQueryService.java (listAccountPlugins with pagination, includeInactive filter)
+- [ ] T047 [US4] Create PluginQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginQueryService.java (listAccountPlugins with pagination, includeInactive filter)
 
 ### Controller
 
-- [ ] T041 [US4] Create AccountPluginsController in src/main/java/com/bitbi/dfm/plugin/presentation/AccountPluginsController.java (GET /api/v1/account/plugins endpoint)
+- [ ] T048 [US4] Create AccountPluginsController in src/main/java/com/bitbi/dfm/plugin/presentation/AccountPluginsController.java (GET /api/v1/account/plugins endpoint)
+
+### Tests for User Story 4
+
+- [ ] T049 [US4] Create AccountPluginsContractTest in src/test/java/com/bitbi/dfm/plugin/contract/AccountPluginsContractTest.java (GET list → 200, includeInactive filter, empty list)
 
 **Checkpoint**: Users can view their active plugin integrations without exposing sensitive plugin data.
 
@@ -195,19 +215,24 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Event Extension
 
-- [ ] T042 [US5] Extend BatchCompletedEvent in src/main/java/com/bitbi/dfm/shared/domain/events/BatchCompletedEvent.java to include accountId field (nullable for backward compatibility)
+- [ ] T050 [US5] Extend BatchCompletedEvent in src/main/java/com/bitbi/dfm/shared/domain/events/BatchCompletedEvent.java to include accountId field (nullable for backward compatibility)
 
 ### Event Listener
 
-- [ ] T043 [US5] Create BatchEventListener in src/main/java/com/bitbi/dfm/plugin/infrastructure/events/BatchEventListener.java (@EventListener for BatchCompletedEvent, creates PluginEvent, calls dispatcher)
+- [ ] T051 [US5] Create BatchEventListener in src/main/java/com/bitbi/dfm/plugin/infrastructure/events/BatchEventListener.java (@EventListener for BatchCompletedEvent, creates PluginEvent, calls dispatcher)
 
 ### Event Dispatcher
 
-- [ ] T044 [US5] Create PluginEventDispatcher in src/main/java/com/bitbi/dfm/plugin/application/PluginEventDispatcher.java (async dispatch with 30s timeout per FR-008, isolated failures, updates last_used_at per FR-018)
+- [ ] T052 [US5] Create PluginEventDispatcher in src/main/java/com/bitbi/dfm/plugin/application/PluginEventDispatcher.java (async dispatch with 30s timeout per FR-008, isolated failures, updates last_used_at per FR-018)
 
 ### Batch Service Integration
 
-- [ ] T045 [US5] Update BatchLifecycleService to include accountId in BatchCompletedEvent (existing file modification)
+- [ ] T053 [US5] Update BatchLifecycleService to include accountId in BatchCompletedEvent (existing file modification)
+
+### Tests for User Story 5
+
+- [ ] T054 [P] [US5] Create PluginEventDispatcherTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginEventDispatcherTest.java (dispatch to subscribed, timeout, isolated failures)
+- [ ] T055 [US5] Create PluginEventDispatchIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginEventDispatchIntegrationTest.java (Testcontainers, event triggers plugin, deactivated skipped)
 
 **Checkpoint**: Batch completion events are dispatched to subscribed plugins within 500ms (SC-003).
 
@@ -221,37 +246,42 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Audit Service
 
-- [ ] T046 [US6] Create PluginAuditService in src/main/java/com/bitbi/dfm/plugin/application/PluginAuditService.java (logActivation, logDeactivation, logEventDispatch, logEventFailure methods)
+- [ ] T056 [US6] Create PluginAuditService in src/main/java/com/bitbi/dfm/plugin/application/PluginAuditService.java (logActivation, logDeactivation, logEventDispatch, logEventFailure methods)
 
 ### Audit Filter
 
-- [ ] T047 [US6] Create PluginAuditFilter in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginAuditFilter.java (OncePerRequestFilter, ContentCachingRequestWrapper, SHA-256 hashing per FR-014)
+- [ ] T057 [US6] Create PluginAuditFilter in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginAuditFilter.java (OncePerRequestFilter, ContentCachingRequestWrapper, SHA-256 hashing per FR-014)
 
 ### Integration with Activation Service
 
-- [ ] T048 [US6] Integrate PluginAuditService calls into PluginActivationService.java (log activate/deactivate/reactivate actions)
+- [ ] T058 [US6] Integrate PluginAuditService calls into PluginActivationService.java (log activate/deactivate/reactivate actions)
 
 ### Integration with Event Dispatcher
 
-- [ ] T049 [US6] Integrate PluginAuditService calls into PluginEventDispatcher.java (log EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT)
+- [ ] T059 [US6] Integrate PluginAuditService calls into PluginEventDispatcher.java (log EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT)
 
 ### Admin DTOs
 
-- [ ] T050 [P] [US6] Create PluginAuditLogEntryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogEntryDto.java
-- [ ] T051 [P] [US6] Create PluginAuditLogPageResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogPageResponseDto.java
-- [ ] T052 [P] [US6] Create PluginConfigResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginConfigResponseDto.java
+- [ ] T060 [P] [US6] Create PluginAuditLogEntryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogEntryDto.java
+- [ ] T061 [P] [US6] Create PluginAuditLogPageResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogPageResponseDto.java
+- [ ] T062 [P] [US6] Create PluginConfigResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginConfigResponseDto.java
 
 ### Admin Controller
 
-- [ ] T053 [US6] Create PluginAdminController in src/main/java/com/bitbi/dfm/plugin/presentation/PluginAdminController.java (GET /api/v1/admin/plugins, GET /api/v1/admin/plugins/audit with filters)
+- [ ] T063 [US6] Create PluginAdminController in src/main/java/com/bitbi/dfm/plugin/presentation/PluginAdminController.java (GET /api/v1/admin/plugins, GET /api/v1/admin/plugins/audit with filters)
 
 ### Admin Query Service
 
-- [ ] T054 [US6] Create PluginAdminQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginAdminQueryService.java (listRegisteredPlugins, queryAuditLogs with filters)
+- [ ] T064 [US6] Create PluginAdminQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginAdminQueryService.java (listRegisteredPlugins, queryAuditLogs with filters)
 
 ### Security Configuration
 
-- [ ] T055 [US6] Add admin plugin routes to SecurityConfiguration.java (/api/v1/admin/plugins/** requires ROLE_ADMIN)
+- [ ] T065 [US6] Add admin plugin routes to SecurityConfiguration.java (/api/v1/admin/plugins/** requires ROLE_ADMIN)
+
+### Tests for User Story 6
+
+- [ ] T066 [US6] Create PluginAdminContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginAdminContractTest.java (GET plugins/audit → 200, filters, 403 unauthorized)
+- [ ] T067 [US6] Create PluginAuditIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginAuditIntegrationTest.java (Testcontainers, audit entries created)
 
 **Checkpoint**: Administrators can query audit logs and diagnose plugin issues within 5 minutes (SC-007).
 
@@ -261,10 +291,10 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 **Purpose**: Final improvements and validation
 
-- [ ] T056 [P] Add MDC context logging (pluginId, accountId) to PluginActivationService and PluginEventDispatcher
-- [ ] T057 [P] Add Micrometer metrics (plugin.activation.duration, plugin.event.dispatch.duration, plugin.event.dispatch.count)
-- [ ] T058 Run quickstart.md validation scenarios
-- [ ] T059 Verify all performance criteria met (SC-002: activation <200ms, SC-003: dispatch <500ms, SC-005: startup <100ms)
+- [ ] T068 [P] Add MDC context logging (pluginId, accountId) to PluginActivationService and PluginEventDispatcher
+- [ ] T069 [P] Add Micrometer metrics (plugin.activation.duration, plugin.event.dispatch.duration, plugin.event.dispatch.count)
+- [ ] T070 Run quickstart.md validation scenarios
+- [ ] T071 Verify all performance criteria met (SC-002: activation <200ms, SC-003: dispatch <500ms, SC-005: startup <100ms)
 
 ---
 
@@ -272,11 +302,11 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies - can start immediately
-- **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
-- **User Story 2 (Phase 3)**: Depends on Foundational phase - Activation API
-- **User Story 1 (Phase 4)**: Depends on US2 completion - OAuth flow uses activation endpoint
-- **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1
+- **Setup (Phase 1)**: No dependencies - can start immediately ✅ COMPLETE
+- **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories ✅ COMPLETE
+- **User Story 2 (Phase 3)**: Depends on Foundational phase - Activation API ✅ IMPLEMENTATION COMPLETE, Tests pending
+- **User Story 1 (Phase 4)**: Depends on US2 completion - OAuth flow uses activation endpoint ✅ IMPLEMENTATION COMPLETE, Tests pending
+- **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1 ✅ IMPLEMENTATION COMPLETE, Tests pending
 - **User Story 4 (Phase 6)**: Depends on Foundational phase - can run parallel to other stories
 - **User Story 5 (Phase 7)**: Depends on Foundational phase - can run parallel to other stories
 - **User Story 6 (Phase 8)**: Depends on US2, US3, US5 for meaningful audit data
@@ -285,33 +315,33 @@ This project uses single-project structure with existing DDD package-by-layered-
 ### User Story Dependencies
 
 ```
-Phase 1: Setup
+Phase 1: Setup ✅
     │
     ▼
-Phase 2: Foundational
+Phase 2: Foundational ✅
     │
     ├───────────────────────────────────────────┐
     │                                           │
     ▼                                           │
-Phase 3: US2 (Activate) ──────┐                │
-    │                         │                │
-    ▼                         │                │
-Phase 4: US1 (OAuth+BitBI)    │                │
-    │                         │                │
-    │                         ▼                ▼
-    │                    Phase 5: US3     Phase 6: US4
-    │                    (Deactivate)     (List Plugins)
-    │                         │                │
-    │                         ▼                │
-    │                    Phase 7: US5          │
-    │                    (Events)              │
-    │                         │                │
-    └────────────────────────┼────────────────┘
-                             │
-                             ▼
+Phase 3: US2 (Activate) ✅ ────┐                │
+    │                          │                │
+    ▼                          │                │
+Phase 4: US1 (OAuth+BitBI) ✅  │                │
+    │                          │                │
+    │                          ▼                ▼
+    │                    Phase 5: US3 ✅   Phase 6: US4
+    │                    (Deactivate)      (List Plugins)
+    │                          │                │
+    │                          ▼                │
+    │                    Phase 7: US5           │
+    │                    (Events)               │
+    │                          │                │
+    └─────────────────────────┼────────────────┘
+                              │
+                              ▼
                     Phase 8: US6 (Admin Audit)
-                             │
-                             ▼
+                              │
+                              ▼
                     Phase 9: Polish
 ```
 
@@ -321,79 +351,53 @@ Phase 4: US1 (OAuth+BitBI)    │                │
 - Repositories before services
 - Services before controllers
 - Controllers depend on services, DTOs, and exception handlers
+- Tests can run in parallel where marked [P]
 
 ### Parallel Opportunities
 
-- All Setup tasks marked [P] can run in parallel (T002, T003, T004)
-- All Foundational enums/value objects marked [P] can run in parallel (T005, T006, T007, T008)
-- All repository interfaces marked [P] can run in parallel (T012, T013, T014)
-- All JPA repositories marked [P] can run in parallel (T015, T016, T017)
+- All Setup tasks marked [P] can run in parallel (T002, T003, T004) ✅
+- All Foundational enums/value objects marked [P] can run in parallel (T005, T006, T007, T008) ✅
+- All repository interfaces marked [P] can run in parallel (T012, T013, T014) ✅
+- All JPA repositories marked [P] can run in parallel (T015, T016, T017) ✅
+- Test tasks marked [P] can run in parallel within each phase
 - DTOs within each story marked [P] can run in parallel
-- Once Foundational phase completes:
-  - US3, US4, US5 can run in parallel (different files, independent features)
-  - US2 must complete before US1 (OAuth flow depends on activation endpoint)
 
 ---
 
-## Parallel Example: Foundational Phase
+## Test Summary
 
-```bash
-# Launch all enums/value objects together:
-Task: "Create PluginEventType enum in src/main/java/com/bitbi/dfm/plugin/domain/PluginEventType.java"
-Task: "Create PluginActionType enum in src/main/java/com/bitbi/dfm/plugin/domain/PluginActionType.java"
-Task: "Create PluginEvent value object in src/main/java/com/bitbi/dfm/plugin/domain/PluginEvent.java"
-Task: "Create Plugin interface in src/main/java/com/bitbi/dfm/plugin/domain/Plugin.java"
+| User Story | Contract Tests | Unit Tests | Integration Tests |
+|------------|---------------|------------|-------------------|
+| US2 (Activate) | T034 | T031, T032, T033 | T035 |
+| US1 (Bit BI) | - | T039 | - |
+| US3 (Deactivate) | T044 | - | - |
+| US4 (List) | T049 | - | - |
+| US5 (Events) | - | T054 | T055 |
+| US6 (Admin) | T066 | - | T067 |
 
-# Launch all repository interfaces together:
-Task: "Create PluginConfigRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/PluginConfigRepository.java"
-Task: "Create AccountPluginRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/AccountPluginRepository.java"
-Task: "Create PluginAuditLogRepository interface in src/main/java/com/bitbi/dfm/plugin/domain/PluginAuditLogRepository.java"
-```
-
----
-
-## Parallel Example: User Story 2 (Activation)
-
-```bash
-# Launch all DTOs together:
-Task: "Create ActivatePluginRequestDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/ActivatePluginRequestDto.java"
-Task: "Create PluginActivationResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginActivationResponseDto.java"
-
-# Launch all exceptions together:
-Task: "Create PluginNotFoundException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotFoundException.java"
-Task: "Create PluginDataValidationException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginDataValidationException.java"
-Task: "Create PluginNotEnabledException in src/main/java/com/bitbi/dfm/plugin/domain/exception/PluginNotEnabledException.java"
-```
+**Total**: 4 Contract Tests, 5 Unit Tests, 3 Integration Tests = **12 Test Tasks**
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (User Stories 1 + 2)
+### MVP First (User Stories 1 + 2) ✅ IMPLEMENTATION COMPLETE
 
-1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational (CRITICAL - blocks all stories)
-3. Complete Phase 3: User Story 2 (Activation API)
-4. Complete Phase 4: User Story 1 (Bit BI Plugin + OAuth)
-5. **STOP and VALIDATE**: Test OAuth flow end-to-end
+1. ✅ Complete Phase 1: Setup
+2. ✅ Complete Phase 2: Foundational (CRITICAL - blocks all stories)
+3. ✅ Complete Phase 3: User Story 2 Implementation (Activation API)
+4. ✅ Complete Phase 4: User Story 1 Implementation (Bit BI Plugin + OAuth)
+5. ⏳ **CURRENT**: Add tests for US2 + US1
 6. Deploy/demo if ready
 
 ### Incremental Delivery
 
-1. Complete Setup + Foundational -> Foundation ready
-2. Add US2 (Activate) -> Test activation API -> Deploy/Demo (MVP Milestone 1)
-3. Add US1 (BitBI) -> Test OAuth flow -> Deploy/Demo (MVP Milestone 2)
-4. Add US3 (Deactivate) + US4 (List) + US5 (Events) -> Test independently -> Deploy/Demo
-5. Add US6 (Admin Audit) -> Test admin features -> Deploy/Demo
-6. Complete Polish phase -> Final release
-
-### Parallel Team Strategy
-
-With multiple developers after Foundational phase:
-- Developer A: User Story 2 -> User Story 1
-- Developer B: User Story 3 + User Story 4
-- Developer C: User Story 5
-- Developer D: User Story 6 (waits for US2, US3, US5 for meaningful data)
+1. ✅ Complete Setup + Foundational → Foundation ready
+2. ✅ Add US2 (Activate) → ⏳ Test activation API → Deploy/Demo (MVP Milestone 1)
+3. ✅ Add US1 (BitBI) → ⏳ Test OAuth flow → Deploy/Demo (MVP Milestone 2)
+4. ✅ Add US3 (Deactivate) → ⏳ Test → US4 (List) + US5 (Events) → Test → Deploy/Demo
+5. Add US6 (Admin Audit) → Test admin features → Deploy/Demo
+6. Complete Polish phase → Final release
 
 ---
 
@@ -404,5 +408,5 @@ With multiple developers after Foundational phase:
 - Each user story should be independently completable and testable
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
-- Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
-- Tests not included as they were not explicitly requested in the specification
+- ✅ marks completed tasks (Phases 1-5 implementation complete)
+- ⏳ marks current focus (adding tests for completed implementations)

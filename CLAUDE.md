@@ -13,6 +13,7 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - Memory (Auth0 SDK handles token storage securely) (012-key-caching-logic)
 - Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types) (013-plugin-system)
 - PostgreSQL 16 (new tables: `plugin_configs`, `account_plugins`, `plugin_audit_logs` - partitioned) (013-plugin-system)
+- Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4) (013-plugin-system)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
@@ -654,4 +655,5 @@ auth0:
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes
+- 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4)
 - 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types)

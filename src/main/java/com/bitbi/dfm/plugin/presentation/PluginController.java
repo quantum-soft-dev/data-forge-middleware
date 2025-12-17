@@ -155,4 +155,63 @@ public class PluginController {
 
         return ResponseEntity.status(status).body(response);
     }
+
+    /**
+     * Deactivates a plugin for the authenticated account.
+     *
+     * <p>Sets the plugin activation to inactive status. The activation record
+     * is preserved for audit purposes but the plugin will no longer receive events.</p>
+     *
+     * @param pluginId the plugin identifier (1-64 chars, alphanumeric + hyphen)
+     * @return 204 No Content on success
+     */
+    @DeleteMapping("/{pluginId}/deactivate")
+    @Operation(
+        summary = "Deactivate a plugin",
+        description = """
+            Deactivates a plugin for the authenticated account.
+
+            **Behavior:**
+            - Sets is_active=false and records deactivated_at timestamp
+            - Plugin will no longer receive events for this account
+            - Activation record is preserved for audit purposes
+
+            **Lifecycle Hook (FR-006):**
+            - Calls plugin.onDeactivate() after successful deactivation
+            """
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "204",
+            description = "Plugin deactivated successfully"
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Not authenticated"
+        ),
+        @ApiResponse(
+            responseCode = "403",
+            description = "Plugin not activated for this account"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Plugin not found"
+        )
+    })
+    public ResponseEntity<Void> deactivatePlugin(
+            @Parameter(description = "Plugin identifier", example = "bit-bi")
+            @PathVariable
+            @Size(min = 1, max = 64, message = "Plugin ID must be 1-64 characters")
+            @Pattern(regexp = "^[a-z0-9-]+$", message = "Plugin ID must be lowercase alphanumeric with hyphens")
+            String pluginId) {
+
+        UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+        log.info("Deactivating plugin {} for account {}", pluginId, accountId);
+
+        pluginActivationService.deactivate(accountId, pluginId);
+
+        log.debug("Plugin {} deactivation complete for account {}", pluginId, accountId);
+
+        return ResponseEntity.noContent().build();
+    }
 }

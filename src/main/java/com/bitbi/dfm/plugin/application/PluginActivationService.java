@@ -6,6 +6,7 @@ import com.bitbi.dfm.plugin.domain.Plugin;
 import com.bitbi.dfm.plugin.domain.PluginConfig;
 import com.bitbi.dfm.plugin.domain.PluginConfigRepository;
 import com.bitbi.dfm.plugin.domain.PluginRegistry;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import org.slf4j.Logger;
@@ -132,6 +133,60 @@ public class PluginActivationService {
             isNewActivation ? "activated" : "updated", accountId);
 
         return new ActivationResult(accountPlugin, pluginConfig.getDisplayName(), isNewActivation);
+    }
+
+    /**
+     * Deactivates a plugin for an account.
+     *
+     * <p>Sets is_active=false, records deactivated_at timestamp, and calls
+     * the plugin's onDeactivate() lifecycle hook per FR-006.</p>
+     *
+     * @param accountId the account to deactivate the plugin for
+     * @param pluginId the plugin identifier
+     * @throws PluginNotFoundException if plugin is not registered
+     * @throws PluginNotActivatedException if plugin is not active for this account
+     */
+    public void deactivate(UUID accountId, String pluginId) {
+        logger.info("Deactivating plugin {} for account {}", pluginId, accountId);
+
+        // 1. Verify plugin is registered in code
+        Plugin plugin = pluginRegistry.findById(pluginId)
+            .orElseThrow(() -> {
+                logger.warn("Plugin not found in registry: {}", pluginId);
+                return new PluginNotFoundException(pluginId);
+            });
+
+        // 2. Find existing activation
+        AccountPlugin accountPlugin = accountPluginRepository
+            .findByAccountIdAndPluginId(accountId, pluginId)
+            .orElseThrow(() -> {
+                logger.warn("No activation found for plugin {} account {}", pluginId, accountId);
+                return new PluginNotActivatedException(pluginId, accountId);
+            });
+
+        // 3. Check if already deactivated
+        if (!accountPlugin.isActive()) {
+            logger.warn("Plugin {} already deactivated for account {}", pluginId, accountId);
+            throw new PluginNotActivatedException(pluginId, accountId,
+                "Plugin '" + pluginId + "' is already deactivated for account " + accountId);
+        }
+
+        // 4. Deactivate the plugin
+        accountPlugin.deactivate();
+
+        // 5. Save the deactivated record
+        accountPluginRepository.save(accountPlugin);
+
+        // 6. Call lifecycle hook (FR-006)
+        try {
+            plugin.onDeactivate(accountPlugin);
+            logger.debug("Plugin {} onDeactivate hook completed for account {}", pluginId, accountId);
+        } catch (Exception e) {
+            // Log but don't fail the deactivation - hook failures are non-critical
+            logger.warn("Plugin {} onDeactivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
+        }
+
+        logger.info("Plugin {} deactivated for account {}", pluginId, accountId);
     }
 
     /**

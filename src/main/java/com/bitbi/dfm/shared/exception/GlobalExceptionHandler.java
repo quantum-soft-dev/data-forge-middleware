@@ -3,6 +3,7 @@ package com.bitbi.dfm.shared.exception;
 import com.bitbi.dfm.account.application.AccountService;
 // import com.bitbi.dfm.account.application.KeycloakAccountSyncService; // DEPRECATED: Removed for Auth0 migration
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
@@ -1006,6 +1007,32 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle PluginNotActivatedException (403 Forbidden).
+     * <p>
+     * Thrown when attempting to deactivate a plugin that is not active for the account.
+     * Returns 403 Forbidden as the operation is not permitted.
+     * </p>
+     * User Story: US3 - Deactivate a Plugin Integration
+     */
+    @ExceptionHandler(PluginNotActivatedException.class)
+    public ResponseEntity<ErrorResponseDto> handlePluginNotActivated(
+            PluginNotActivatedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Plugin not activated: {} for account {}", ex.getPluginId(), ex.getAccountId());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
     }
 
     /**
