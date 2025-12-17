@@ -127,12 +127,12 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Bit BI Plugin Implementation
 
-- [ ] T031 [US1] Create BitBiPlugin in src/main/java/com/bitbi/dfm/plugin/application/BitBiPlugin.java (@Component, implements Plugin interface, BATCH_COMPLETED event, tenantId schema)
+- [x] T031 [US1] Create BitBiPlugin in src/main/java/com/bitbi/dfm/plugin/application/BitBiPlugin.java (@Component, implements Plugin interface, BATCH_COMPLETED event, tenantId schema)
 
 ### Configuration
 
-- [ ] T032 [US1] Add Bit BI plugin configuration to application.yml (plugins.bitbi.enabled, plugins.bitbi.client-id placeholders)
-- [ ] T033 [US1] Add Bit BI seed data to V18 migration (INSERT INTO plugin_configs for bit-bi)
+- [x] T032 [US1] Add Bit BI plugin configuration to application.yml (plugins.bitbi.enabled, plugins.bitbi.client-id placeholders)
+- [x] T033 [US1] Add Bit BI seed data to V18 migration (INSERT INTO plugin_configs for bit-bi) [Note: Already in V8__create_plugin_tables.sql]
 
 **Checkpoint**: Bit BI plugin is registered and can be activated. OAuth flow completes successfully.
 
