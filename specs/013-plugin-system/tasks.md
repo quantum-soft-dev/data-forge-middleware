@@ -115,10 +115,10 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Tests for User Story 2
 
-- [ ] T031 [P] [US2] Create PluginDataValidatorTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginDataValidatorTest.java (valid/invalid tenantId, schema caching)
-- [ ] T032 [P] [US2] Create PluginActivationServiceTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginActivationServiceTest.java (activate calls onActivate, exceptions)
-- [ ] T033 [P] [US2] Create AccountPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/AccountPluginTest.java (activate/deactivate/reactivate methods)
-- [ ] T034 [US2] Create PluginActivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginActivationContractTest.java (POST activate → 201/200/400/404)
+- [x] T031 [P] [US2] Create PluginDataValidatorTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginDataValidatorTest.java (valid/invalid tenantId, schema caching)
+- [x] T032 [P] [US2] Create PluginActivationServiceTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginActivationServiceTest.java (activate calls onActivate, exceptions)
+- [x] T033 [P] [US2] Create AccountPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/AccountPluginTest.java (activate/deactivate/reactivate methods)
+- [x] T034 [US2] Create PluginActivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginActivationContractTest.java (POST activate → 201/200/400/404)
 - [ ] T035 [US2] Create PluginActivationIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginActivationIntegrationTest.java (Testcontainers, full activation flow)
 
 **Checkpoint**: Plugin activation API is functional and tested. Users can activate plugins via POST /api/v1/plugins/{pluginId}/activate
@@ -144,7 +144,7 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Tests for User Story 1
 
-- [ ] T039 [US1] Create BitBiPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/BitBiPluginTest.java (plugin ID, supported events, schema validation, onActivate)
+- [x] T039 [US1] Create BitBiPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/BitBiPluginTest.java (plugin ID, supported events, schema validation, onActivate)
 
 **Checkpoint**: Bit BI plugin is registered, can be activated, and is tested. OAuth flow completes successfully.
 
@@ -174,7 +174,7 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Tests for User Story 3
 
-- [ ] T044 [US3] Create PluginDeactivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginDeactivationContractTest.java (DELETE deactivate → 204/403/404)
+- [x] T044 [US3] Create PluginDeactivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginDeactivationContractTest.java (DELETE deactivate → 204/403/404)
 
 **Checkpoint**: Users can deactivate plugin integrations. Deactivated plugins no longer receive events.
 
