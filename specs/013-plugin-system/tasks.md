@@ -188,20 +188,20 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### DTO
 
-- [ ] T045 [P] [US4] Create AccountPluginSummaryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginSummaryDto.java (pluginId, pluginName, isActive, activatedAt, deactivatedAt, lastUsedAt - NO pluginData per FR-012)
-- [ ] T046 [P] [US4] Create AccountPluginListResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginListResponseDto.java (PageResponseDto wrapper)
+- [x] T045 [P] [US4] Create AccountPluginSummaryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginSummaryDto.java (pluginId, pluginName, isActive, activatedAt, deactivatedAt, lastUsedAt - NO pluginData per FR-012)
+- [x] T046 [P] [US4] Create AccountPluginListResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/AccountPluginListResponseDto.java (PageResponseDto wrapper)
 
 ### Query Service
 
-- [ ] T047 [US4] Create PluginQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginQueryService.java (listAccountPlugins with pagination, includeInactive filter)
+- [x] T047 [US4] Create PluginQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginQueryService.java (listAccountPlugins with pagination, includeInactive filter)
 
 ### Controller
 
-- [ ] T048 [US4] Create AccountPluginsController in src/main/java/com/bitbi/dfm/plugin/presentation/AccountPluginsController.java (GET /api/v1/account/plugins endpoint)
+- [x] T048 [US4] Create AccountPluginsController in src/main/java/com/bitbi/dfm/plugin/presentation/AccountPluginsController.java (GET /api/v1/account/plugins endpoint)
 
 ### Tests for User Story 4
 
-- [ ] T049 [US4] Create AccountPluginsContractTest in src/test/java/com/bitbi/dfm/plugin/contract/AccountPluginsContractTest.java (GET list → 200, includeInactive filter, empty list)
+- [x] T049 [US4] Create AccountPluginsContractTest in src/test/java/com/bitbi/dfm/plugin/contract/AccountPluginsContractTest.java (GET list → 200, includeInactive filter, empty list)
 
 **Checkpoint**: Users can view their active plugin integrations without exposing sensitive plugin data.
 
@@ -307,7 +307,7 @@ This project uses single-project structure with existing DDD package-by-layered-
 - **User Story 2 (Phase 3)**: Depends on Foundational phase - Activation API ✅ IMPLEMENTATION COMPLETE, Tests pending
 - **User Story 1 (Phase 4)**: Depends on US2 completion - OAuth flow uses activation endpoint ✅ IMPLEMENTATION COMPLETE, Tests pending
 - **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1 ✅ IMPLEMENTATION COMPLETE, Tests pending
-- **User Story 4 (Phase 6)**: Depends on Foundational phase - can run parallel to other stories
+- **User Story 4 (Phase 6)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
 - **User Story 5 (Phase 7)**: Depends on Foundational phase - can run parallel to other stories
 - **User Story 6 (Phase 8)**: Depends on US2, US3, US5 for meaningful audit data
 - **Polish (Phase 9)**: Depends on all user stories being complete
@@ -329,19 +329,19 @@ Phase 3: US2 (Activate) ✅ ────┐                │
 Phase 4: US1 (OAuth+BitBI) ✅  │                │
     │                          │                │
     │                          ▼                ▼
-    │                    Phase 5: US3 ✅   Phase 6: US4
+    │                    Phase 5: US3 ✅   Phase 6: US4 ✅
     │                    (Deactivate)      (List Plugins)
     │                          │                │
     │                          ▼                │
     │                    Phase 7: US5           │
     │                    (Events)               │
     │                          │                │
-    └─────────────────────────┼────────────────┘
-                              │
-                              ▼
+    └──────────────────────────┼────────────────┘
+                               │
+                               ▼
                     Phase 8: US6 (Admin Audit)
-                              │
-                              ▼
+                               │
+                               ▼
                     Phase 9: Polish
 ```
 
