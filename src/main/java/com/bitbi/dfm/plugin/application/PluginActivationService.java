@@ -11,6 +11,7 @@ import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,16 +39,19 @@ public class PluginActivationService {
     private final PluginConfigRepository pluginConfigRepository;
     private final AccountPluginRepository accountPluginRepository;
     private final PluginDataValidator pluginDataValidator;
+    private final PluginAuditService pluginAuditService;
 
     public PluginActivationService(
             PluginRegistry pluginRegistry,
             PluginConfigRepository pluginConfigRepository,
             AccountPluginRepository accountPluginRepository,
-            PluginDataValidator pluginDataValidator) {
+            PluginDataValidator pluginDataValidator,
+            PluginAuditService pluginAuditService) {
         this.pluginRegistry = pluginRegistry;
         this.pluginConfigRepository = pluginConfigRepository;
         this.accountPluginRepository = accountPluginRepository;
         this.pluginDataValidator = pluginDataValidator;
+        this.pluginAuditService = pluginAuditService;
     }
 
     /**
@@ -66,7 +70,21 @@ public class PluginActivationService {
      * @return result containing the activation record and whether it was newly created
      */
     public ActivationResult activate(UUID accountId, String pluginId, Map<String, Object> pluginData) {
+        return activate(accountId, pluginId, pluginData, null);
+    }
+
+    /**
+     * Activates a plugin for an account with optional client ID for audit logging.
+     *
+     * @param accountId the account to activate the plugin for
+     * @param pluginId the plugin identifier
+     * @param pluginData plugin-specific data (validated against schema)
+     * @param clientId the OAuth client ID for audit logging (optional)
+     * @return result containing the activation record and whether it was newly created
+     */
+    public ActivationResult activate(UUID accountId, String pluginId, Map<String, Object> pluginData, @Nullable String clientId) {
         logger.info("Activating plugin {} for account {}", pluginId, accountId);
+        long startTime = System.currentTimeMillis();
 
         // 1. Verify plugin is registered in code
         Plugin plugin = pluginRegistry.findById(pluginId)
@@ -132,6 +150,14 @@ public class PluginActivationService {
         logger.info("Plugin {} {} for account {}", pluginId,
             isNewActivation ? "activated" : "updated", accountId);
 
+        // 7. Log audit entry (async, non-blocking)
+        long duration = System.currentTimeMillis() - startTime;
+        if (isNewActivation) {
+            pluginAuditService.logActivation(pluginId, accountId, clientId, duration);
+        } else {
+            pluginAuditService.logReactivation(pluginId, accountId, clientId, duration);
+        }
+
         return new ActivationResult(accountPlugin, pluginConfig.getDisplayName(), isNewActivation);
     }
 
@@ -147,7 +173,21 @@ public class PluginActivationService {
      * @throws PluginNotActivatedException if plugin is not active for this account
      */
     public void deactivate(UUID accountId, String pluginId) {
+        deactivate(accountId, pluginId, null);
+    }
+
+    /**
+     * Deactivates a plugin for an account with optional client ID for audit logging.
+     *
+     * @param accountId the account to deactivate the plugin for
+     * @param pluginId the plugin identifier
+     * @param clientId the OAuth client ID for audit logging (optional)
+     * @throws PluginNotFoundException if plugin is not registered
+     * @throws PluginNotActivatedException if plugin is not active for this account
+     */
+    public void deactivate(UUID accountId, String pluginId, @Nullable String clientId) {
         logger.info("Deactivating plugin {} for account {}", pluginId, accountId);
+        long startTime = System.currentTimeMillis();
 
         // 1. Verify plugin is registered in code
         Plugin plugin = pluginRegistry.findById(pluginId)
@@ -187,6 +227,10 @@ public class PluginActivationService {
         }
 
         logger.info("Plugin {} deactivated for account {}", pluginId, accountId);
+
+        // 7. Log audit entry (async, non-blocking)
+        long duration = System.currentTimeMillis() - startTime;
+        pluginAuditService.logDeactivation(pluginId, accountId, clientId, duration);
     }
 
     /**

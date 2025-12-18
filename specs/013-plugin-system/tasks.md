@@ -246,42 +246,42 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Audit Service
 
-- [ ] T056 [US6] Create PluginAuditService in src/main/java/com/bitbi/dfm/plugin/application/PluginAuditService.java (logActivation, logDeactivation, logEventDispatch, logEventFailure methods)
+- [x] T056 [US6] Create PluginAuditService in src/main/java/com/bitbi/dfm/plugin/application/PluginAuditService.java (logActivation, logDeactivation, logEventDispatch, logEventFailure methods)
 
 ### Audit Filter
 
-- [ ] T057 [US6] Create PluginAuditFilter in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginAuditFilter.java (OncePerRequestFilter, ContentCachingRequestWrapper, SHA-256 hashing per FR-014)
+- [x] T057 [US6] Create PluginAuditFilter in src/main/java/com/bitbi/dfm/plugin/infrastructure/PluginAuditFilter.java (OncePerRequestFilter, ContentCachingRequestWrapper, SHA-256 hashing per FR-014)
 
 ### Integration with Activation Service
 
-- [ ] T058 [US6] Integrate PluginAuditService calls into PluginActivationService.java (log activate/deactivate/reactivate actions)
+- [x] T058 [US6] Integrate PluginAuditService calls into PluginActivationService.java (log activate/deactivate/reactivate actions)
 
 ### Integration with Event Dispatcher
 
-- [ ] T059 [US6] Integrate PluginAuditService calls into PluginEventDispatcher.java (log EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT)
+- [x] T059 [US6] Integrate PluginAuditService calls into PluginEventDispatcher.java (log EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT)
 
 ### Admin DTOs
 
-- [ ] T060 [P] [US6] Create PluginAuditLogEntryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogEntryDto.java
-- [ ] T061 [P] [US6] Create PluginAuditLogPageResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogPageResponseDto.java
-- [ ] T062 [P] [US6] Create PluginConfigResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginConfigResponseDto.java
+- [x] T060 [P] [US6] Create PluginAuditLogEntryDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogEntryDto.java
+- [x] T061 [P] [US6] Create PluginAuditLogPageResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginAuditLogPageResponseDto.java
+- [x] T062 [P] [US6] Create PluginConfigResponseDto in src/main/java/com/bitbi/dfm/plugin/presentation/dto/PluginConfigResponseDto.java
 
 ### Admin Controller
 
-- [ ] T063 [US6] Create PluginAdminController in src/main/java/com/bitbi/dfm/plugin/presentation/PluginAdminController.java (GET /api/v1/admin/plugins, GET /api/v1/admin/plugins/audit with filters)
+- [x] T063 [US6] Create PluginAdminController in src/main/java/com/bitbi/dfm/plugin/presentation/PluginAdminController.java (GET /api/v1/admin/plugins, GET /api/v1/admin/plugins/audit with filters)
 
 ### Admin Query Service
 
-- [ ] T064 [US6] Create PluginAdminQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginAdminQueryService.java (listRegisteredPlugins, queryAuditLogs with filters)
+- [x] T064 [US6] Create PluginAdminQueryService in src/main/java/com/bitbi/dfm/plugin/application/PluginAdminQueryService.java (listRegisteredPlugins, queryAuditLogs with filters)
 
 ### Security Configuration
 
-- [ ] T065 [US6] Add admin plugin routes to SecurityConfiguration.java (/api/v1/admin/plugins/** requires ROLE_ADMIN)
+- [x] T065 [US6] Add admin plugin routes to SecurityConfiguration.java (/api/v1/admin/plugins/** requires ROLE_ADMIN)
 
 ### Tests for User Story 6
 
-- [ ] T066 [US6] Create PluginAdminContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginAdminContractTest.java (GET plugins/audit → 200, filters, 403 unauthorized)
-- [ ] T067 [US6] Create PluginAuditIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginAuditIntegrationTest.java (Testcontainers, audit entries created)
+- [x] T066 [US6] Create PluginAdminContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginAdminContractTest.java (GET plugins/audit → 200, filters, 403 unauthorized)
+- [x] T067 [US6] Create PluginAuditIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginAuditIntegrationTest.java (Testcontainers, audit entries created)
 
 **Checkpoint**: Administrators can query audit logs and diagnose plugin issues within 5 minutes (SC-007).
 
@@ -309,7 +309,7 @@ This project uses single-project structure with existing DDD package-by-layered-
 - **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1 ✅ IMPLEMENTATION COMPLETE, Tests pending
 - **User Story 4 (Phase 6)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
 - **User Story 5 (Phase 7)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
-- **User Story 6 (Phase 8)**: Depends on US2, US3, US5 for meaningful audit data
+- **User Story 6 (Phase 8)**: Depends on US2, US3, US5 for meaningful audit data ✅ COMPLETE
 - **Polish (Phase 9)**: Depends on all user stories being complete
 
 ### User Story Dependencies
@@ -339,7 +339,7 @@ Phase 4: US1 (OAuth+BitBI) ✅  │                │
     └──────────────────────────┼────────────────┘
                                │
                                ▼
-                    Phase 8: US6 (Admin Audit)
+                    Phase 8: US6 ✅ (Admin Audit)
                                │
                                ▼
                     Phase 9: Polish

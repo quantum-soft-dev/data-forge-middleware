@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.unit;
 
+import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginEventDispatcher;
 import com.bitbi.dfm.plugin.domain.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +40,9 @@ class PluginEventDispatcherTest {
     @Mock
     private AccountPluginRepository accountPluginRepository;
 
+    @Mock
+    private PluginAuditService pluginAuditService;
+
     private PluginEventDispatcher dispatcher;
 
     // Direct executor for synchronous test execution
@@ -49,7 +53,7 @@ class PluginEventDispatcherTest {
 
     @BeforeEach
     void setUp() {
-        dispatcher = new PluginEventDispatcher(pluginRegistry, accountPluginRepository, syncExecutor);
+        dispatcher = new PluginEventDispatcher(pluginRegistry, accountPluginRepository, syncExecutor, pluginAuditService);
     }
 
     @Nested

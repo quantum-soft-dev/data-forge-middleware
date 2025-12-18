@@ -33,14 +33,17 @@ public class PluginEventDispatcher {
     private final PluginRegistry pluginRegistry;
     private final AccountPluginRepository accountPluginRepository;
     private final Executor pluginExecutor;
+    private final PluginAuditService pluginAuditService;
 
     public PluginEventDispatcher(
             PluginRegistry pluginRegistry,
             AccountPluginRepository accountPluginRepository,
-            Executor pluginExecutor) {
+            Executor pluginExecutor,
+            PluginAuditService pluginAuditService) {
         this.pluginRegistry = pluginRegistry;
         this.accountPluginRepository = accountPluginRepository;
         this.pluginExecutor = pluginExecutor;
+        this.pluginAuditService = pluginAuditService;
     }
 
     /**
@@ -141,17 +144,26 @@ public class PluginEventDispatcher {
             // Update last_used_at on successful dispatch (FR-018)
             updateLastUsedAt(accountPlugin);
 
+            // Log successful event dispatch (async, non-blocking)
+            pluginAuditService.logEventDispatch(pluginId, event.accountId(), duration);
+
         } catch (TimeoutException e) {
             long duration = System.currentTimeMillis() - startTime;
             log.error("Plugin {} timed out after {}ms (limit: {}s) for event {}",
                     pluginId, duration, PLUGIN_TIMEOUT_SECONDS, event.type());
             future.cancel(true); // Attempt to cancel the task
 
+            // Log timeout (async, non-blocking)
+            pluginAuditService.logEventTimeout(pluginId, event.accountId(), duration);
+
         } catch (ExecutionException e) {
             long duration = System.currentTimeMillis() - startTime;
             Throwable cause = e.getCause();
             log.error("Plugin {} failed after {}ms: {} - {}",
                     pluginId, duration, cause.getClass().getSimpleName(), cause.getMessage());
+
+            // Log failure (async, non-blocking)
+            pluginAuditService.logEventFailure(pluginId, event.accountId(), cause.getMessage(), duration);
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

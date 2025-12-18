@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.unit;
 
 import com.bitbi.dfm.plugin.application.PluginActivationService;
 import com.bitbi.dfm.plugin.application.PluginActivationService.ActivationResult;
+import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginDataValidator;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
@@ -62,6 +63,9 @@ class PluginActivationServiceTest {
     private PluginDataValidator pluginDataValidator;
 
     @Mock
+    private PluginAuditService pluginAuditService;
+
+    @Mock
     private Plugin mockPlugin;
 
     @Mock
@@ -82,7 +86,8 @@ class PluginActivationServiceTest {
             pluginRegistry,
             pluginConfigRepository,
             accountPluginRepository,
-            pluginDataValidator
+            pluginDataValidator,
+            pluginAuditService
         );
 
         accountId = UUID.randomUUID();
