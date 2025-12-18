@@ -215,24 +215,24 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 ### Event Extension
 
-- [ ] T050 [US5] Extend BatchCompletedEvent in src/main/java/com/bitbi/dfm/shared/domain/events/BatchCompletedEvent.java to include accountId field (nullable for backward compatibility)
+- [x] T050 [US5] Extend BatchCompletedEvent in src/main/java/com/bitbi/dfm/shared/domain/events/BatchCompletedEvent.java to include accountId field (nullable for backward compatibility)
 
 ### Event Listener
 
-- [ ] T051 [US5] Create BatchEventListener in src/main/java/com/bitbi/dfm/plugin/infrastructure/events/BatchEventListener.java (@EventListener for BatchCompletedEvent, creates PluginEvent, calls dispatcher)
+- [x] T051 [US5] Create BatchEventListener in src/main/java/com/bitbi/dfm/plugin/infrastructure/events/BatchEventListener.java (@EventListener for BatchCompletedEvent, creates PluginEvent, calls dispatcher)
 
 ### Event Dispatcher
 
-- [ ] T052 [US5] Create PluginEventDispatcher in src/main/java/com/bitbi/dfm/plugin/application/PluginEventDispatcher.java (async dispatch with 30s timeout per FR-008, isolated failures, updates last_used_at per FR-018)
+- [x] T052 [US5] Create PluginEventDispatcher in src/main/java/com/bitbi/dfm/plugin/application/PluginEventDispatcher.java (async dispatch with 30s timeout per FR-008, isolated failures, updates last_used_at per FR-018)
 
 ### Batch Service Integration
 
-- [ ] T053 [US5] Update BatchLifecycleService to include accountId in BatchCompletedEvent (existing file modification)
+- [x] T053 [US5] Update BatchLifecycleService to include accountId in BatchCompletedEvent (existing file modification)
 
 ### Tests for User Story 5
 
-- [ ] T054 [P] [US5] Create PluginEventDispatcherTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginEventDispatcherTest.java (dispatch to subscribed, timeout, isolated failures)
-- [ ] T055 [US5] Create PluginEventDispatchIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginEventDispatchIntegrationTest.java (Testcontainers, event triggers plugin, deactivated skipped)
+- [x] T054 [P] [US5] Create PluginEventDispatcherTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginEventDispatcherTest.java (dispatch to subscribed, timeout, isolated failures)
+- [x] T055 [US5] Create PluginEventDispatchIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginEventDispatchIntegrationTest.java (Testcontainers, event triggers plugin, deactivated skipped)
 
 **Checkpoint**: Batch completion events are dispatched to subscribed plugins within 500ms (SC-003).
 
@@ -308,7 +308,7 @@ This project uses single-project structure with existing DDD package-by-layered-
 - **User Story 1 (Phase 4)**: Depends on US2 completion - OAuth flow uses activation endpoint ✅ IMPLEMENTATION COMPLETE, Tests pending
 - **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1 ✅ IMPLEMENTATION COMPLETE, Tests pending
 - **User Story 4 (Phase 6)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
-- **User Story 5 (Phase 7)**: Depends on Foundational phase - can run parallel to other stories
+- **User Story 5 (Phase 7)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
 - **User Story 6 (Phase 8)**: Depends on US2, US3, US5 for meaningful audit data
 - **Polish (Phase 9)**: Depends on all user stories being complete
 
@@ -333,7 +333,7 @@ Phase 4: US1 (OAuth+BitBI) ✅  │                │
     │                    (Deactivate)      (List Plugins)
     │                          │                │
     │                          ▼                │
-    │                    Phase 7: US5           │
+    │                    Phase 7: US5 ✅        │
     │                    (Events)               │
     │                          │                │
     └──────────────────────────┼────────────────┘
