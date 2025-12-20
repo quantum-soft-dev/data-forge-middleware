@@ -105,3 +105,8 @@ export const COMPARISONS_SUMMARY = (id: number) => `${COMPARISONS}/${id}/summary
 export const COMPARISONS_BY_BATCH = (batchId: string) => `${COMPARISONS}/by-batch/${batchId}`;
 export const COMPARISONS_DOWNLOAD = (id: number) => `${COMPARISONS}/${id}/download`;
 export const COMPARISONS_SUMMARY_DOWNLOAD = (id: number) => `${COMPARISONS}/${id}/summary/download`;
+
+// Plugin Administration (Admin)
+export const ADMIN_PLUGINS = `${ADMIN_API_BASE}/admin/plugins`;
+export const ADMIN_PLUGINS_AUDIT = `${ADMIN_PLUGINS}/audit`;
+export const ADMIN_PLUGINS_AUDIT_BY_PLUGIN = (pluginId: string) => `${ADMIN_PLUGINS}/${pluginId}/audit`;

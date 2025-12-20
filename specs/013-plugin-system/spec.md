@@ -201,5 +201,42 @@ A DFM administrator needs to monitor plugin usage and troubleshoot issues. They 
 - Plugin marketplace or self-service partner registration
 - Integration API for reading batch/file data (separate feature)
 - Webhook callbacks to third-party endpoints (future enhancement)
-- UI for managing plugins (v1 is API/configuration only)
+- User-facing UI for managing plugins (end-users activate/deactivate via API from third-party applications)
 - Multiple authentication methods per plugin (OAuth2 only for v1)
+
+## Admin UI Requirements (Added 2025-12-20)
+
+The following Admin UI features have been implemented for monitoring and viewing plugin system data:
+
+### Admin Plugin Dashboard
+
+**Route**: `/admin/plugins` (requires ROLE_ADMIN)
+
+**Features**:
+1. **Registered Plugins View**:
+   - Grid display of all registered plugins
+   - Plugin status badge (Enabled/Disabled)
+   - Plugin ID, display name, version
+   - Supported events tags
+   - Creation timestamp (relative)
+   - Click to view plugin-specific audit logs
+
+2. **Audit Logs View**:
+   - Paginated table of all plugin operations
+   - Filterable by: Plugin ID, Account ID, Action Type, Success/Failed, Date Range
+   - Columns: Time, Plugin, Action, Status, Account, Duration, HTTP Status, Error, IP Address
+   - Action type badges with semantic colors (ACTIVATE=green, DEACTIVATE=yellow, EVENT_FAILED=red, etc.)
+
+### Frontend Implementation
+
+**Architecture**: Feature-Sliced Design (FSD)
+
+**Components**:
+- `entities/plugin/` - Types, query keys, status badges
+- `features/plugin-admin/` - API client, TanStack Query hooks, UI components
+- `widgets/plugin-admin/` - Container widgets (PluginListWidget, AuditLogWidget)
+- `pages/admin/plugins/` - PluginsAdminPage with tabs
+
+**API Integration**:
+- `GET /api/v1/admin/plugins` - List registered plugins
+- `GET /api/v1/admin/plugins/audit` - Query audit logs with filters

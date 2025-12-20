@@ -15,6 +15,7 @@ const BatchDetailPage = lazy(() => import('@/pages/upload-history/BatchDetailPag
 const ComparisonPage = lazy(() => import('@/pages/comparison/ComparisonPage').then(m => ({ default: m.ComparisonPage })))
 const ComparisonListPage = lazy(() => import('@/pages/comparison/ComparisonListPage').then(m => ({ default: m.ComparisonListPage })))
 const ComparisonDetailPage = lazy(() => import('@/pages/comparison/ComparisonDetailPage'))
+const PluginsAdminPage = lazy(() => import('@/pages/admin/plugins/PluginsAdminPage'))
 
 // Root route
 const rootRoute = createRootRoute({
@@ -76,6 +77,12 @@ const userSitesRoute = createRoute({
   component: () => <AuthenticationGuard component={UserSitesPage} />,
 })
 
+const pluginsAdminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/plugins',
+  component: () => <AuthenticationGuard component={PluginsAdminPage} />,
+})
+
 // User routes - protected with UserOnlyGuard (redirects admins to /admin/users)
 const siteManagementRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -121,6 +128,7 @@ const routeTree = rootRoute.addChildren([
   createAccountRoute,
   accountDetailsRoute,
   userSitesRoute,
+  pluginsAdminRoute,
   siteManagementRoute,
   uploadHistoryRoute,
   batchDetailRoute,
