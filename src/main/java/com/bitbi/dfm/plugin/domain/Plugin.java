@@ -52,6 +52,14 @@ public interface Plugin {
      * Called asynchronously with a 30-second timeout per FR-008.
      * Exceptions are caught and logged but do not propagate to other plugins.
      *
+     * <p><b>Important:</b> Plugin implementations MUST periodically check
+     * {@link Thread#interrupted()} and terminate gracefully if interrupted.
+     * When a plugin exceeds the timeout, the framework attempts to interrupt the
+     * execution thread via {@link java.util.concurrent.Future#cancel(boolean)},
+     * but this only works if the plugin code respects interruption signals.
+     * Long-running operations should check for interruption and throw
+     * {@link InterruptedException} or return early when detected.</p>
+     *
      * @param event the event to process
      * @param accountPlugin the activation record for this account-plugin pair
      */

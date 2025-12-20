@@ -20,6 +20,9 @@ DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE 
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM sites WHERE domain LIKE '%.example.com';
+-- Clean up plugin-related data (FK to accounts or referencing account)
+DELETE FROM plugin_audit_logs WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
+DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 
 -- Test accounts
@@ -32,6 +35,10 @@ VALUES ('0199bab1-fad2-bf76-c478-eae1f61e1c17', 'test-account-2@example.com', 'T
 
 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
 VALUES ('0199bab2-3cbd-cc95-a989-57ba51d258c8', 'inactive@example.com', 'Inactive Account', false, '2025-09-26 00:00:00', CURRENT_TIMESTAMP);
+
+-- Plugin system test account (used by PluginActivationIntegrationTest, PluginAuditIntegrationTest, etc.)
+INSERT INTO accounts (id, email, name, is_active, created_at, updated_at, identity_provider_user_id)
+VALUES ('0199baac-f851-7ed9-5963-00dbaf07b233', 'plugin-test@example.com', 'Plugin Test Account', true, '2025-12-01 00:00:00', CURRENT_TIMESTAMP, 'auth0|plugintest123456');
 
 -- Test sites (with BCrypt hashed client_secret_hash)
 -- NOTE: After migration V7, column renamed from client_secret to client_secret_hash

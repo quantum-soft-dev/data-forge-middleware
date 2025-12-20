@@ -66,14 +66,11 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
     class ActivationAuditLogging {
 
         @Test
-        @DisplayName("Should create audit entry for new activation")
+        @DisplayName("Should create audit entry via audit service")
         @Transactional
-        void shouldCreateAuditEntryForNewActivation() {
-            // Given
-            Map<String, Object> pluginData = Map.of("tenantId", "tenant-audit-test-1");
-
-            // When
-            pluginActivationService.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData, CLIENT_ID);
+        void shouldCreateAuditEntryViaAuditService() {
+            // Given / When - call audit service directly (HTTP filter handles real requests)
+            pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 100L);
 
             // Then - wait for async audit log to be created
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
@@ -94,31 +91,11 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should create audit entry for reactivation")
+        @DisplayName("Should create audit entry for reactivation via audit service")
         @Transactional
-        void shouldCreateAuditEntryForReactivation() {
-            // Given - activate, deactivate, then reactivate
-            Map<String, Object> pluginData = Map.of("tenantId", "tenant-reactivate-test");
-            pluginActivationService.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData, CLIENT_ID);
-
-            // Wait for first audit log
-            await().atMost(2, TimeUnit.SECONDS).until(() -> {
-                Page<PluginAuditLog> logs = auditLogRepository.findByPluginId(PLUGIN_ID, PageRequest.of(0, 10));
-                return !logs.isEmpty();
-            });
-
-            pluginActivationService.deactivate(TEST_ACCOUNT_ID, PLUGIN_ID, CLIENT_ID);
-
-            // Wait for deactivation audit log
-            await().atMost(2, TimeUnit.SECONDS).until(() -> {
-                Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
-                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.DEACTIVATE, null, null, null,
-                        PageRequest.of(0, 10));
-                return !logs.isEmpty();
-            });
-
-            // When - reactivate
-            pluginActivationService.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData, CLIENT_ID);
+        void shouldCreateAuditEntryForReactivationViaAuditService() {
+            // Given / When - call audit service directly
+            pluginAuditService.logReactivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 50L);
 
             // Then - verify REACTIVATE audit entry
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
@@ -139,23 +116,11 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
     class DeactivationAuditLogging {
 
         @Test
-        @DisplayName("Should create audit entry for deactivation")
+        @DisplayName("Should create audit entry for deactivation via audit service")
         @Transactional
-        void shouldCreateAuditEntryForDeactivation() {
-            // Given - activate first
-            Map<String, Object> pluginData = Map.of("tenantId", "tenant-deactivate-test");
-            pluginActivationService.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData, CLIENT_ID);
-
-            // Wait for activation audit log
-            await().atMost(2, TimeUnit.SECONDS).until(() -> {
-                Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
-                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.ACTIVATE, null, null, null,
-                        PageRequest.of(0, 10));
-                return !logs.isEmpty();
-            });
-
-            // When - deactivate
-            pluginActivationService.deactivate(TEST_ACCOUNT_ID, PLUGIN_ID, CLIENT_ID);
+        void shouldCreateAuditEntryForDeactivationViaAuditService() {
+            // Given / When - call audit service directly
+            pluginAuditService.logDeactivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 75L);
 
             // Then - verify DEACTIVATE audit entry
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {

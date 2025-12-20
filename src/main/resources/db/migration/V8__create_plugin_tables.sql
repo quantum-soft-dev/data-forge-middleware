@@ -66,7 +66,13 @@ COMMENT ON COLUMN account_plugins.last_used_at IS 'Timestamp of last event recei
 -- =============================================================================
 -- Seed data for Bit BI plugin
 -- =============================================================================
--- Note: client_id will be updated with actual Auth0 client_id in production
+-- IMPORTANT: The client_id below is a PLACEHOLDER that MUST be updated for production.
+-- Production Setup:
+--   1. Create an Auth0 Machine-to-Machine application for the Bit BI plugin
+--   2. Run the following SQL to update the client_id:
+--      UPDATE plugin_configs SET client_id = 'YOUR_AUTH0_CLIENT_ID' WHERE plugin_id = 'bit-bi';
+--   3. Configure the corresponding client_secret in application.yml or environment variables
+-- The placeholder value allows the application to start in development mode.
 INSERT INTO plugin_configs (plugin_id, client_id, display_name, is_enabled, config, created_at, updated_at)
 VALUES (
     'bit-bi',

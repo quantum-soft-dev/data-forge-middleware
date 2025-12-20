@@ -44,7 +44,6 @@ public class PluginActivationService {
     private final PluginConfigRepository pluginConfigRepository;
     private final AccountPluginRepository accountPluginRepository;
     private final PluginDataValidator pluginDataValidator;
-    private final PluginAuditService pluginAuditService;
     private final MeterRegistry meterRegistry;
 
     // Metrics
@@ -58,13 +57,11 @@ public class PluginActivationService {
             PluginConfigRepository pluginConfigRepository,
             AccountPluginRepository accountPluginRepository,
             PluginDataValidator pluginDataValidator,
-            PluginAuditService pluginAuditService,
             MeterRegistry meterRegistry) {
         this.pluginRegistry = pluginRegistry;
         this.pluginConfigRepository = pluginConfigRepository;
         this.accountPluginRepository = accountPluginRepository;
         this.pluginDataValidator = pluginDataValidator;
-        this.pluginAuditService = pluginAuditService;
         this.meterRegistry = meterRegistry;
 
         // Initialize metrics
@@ -183,15 +180,9 @@ public class PluginActivationService {
             logger.info("Plugin {} {} for account {}", pluginId,
                 isNewActivation ? "activated" : "updated", accountId);
 
-            // 7. Log audit entry (async, non-blocking)
+            // 7. Record metrics
+            // Note: Audit logging is handled by PluginAuditFilter for HTTP requests
             long duration = System.currentTimeMillis() - startTime;
-            if (isNewActivation) {
-                pluginAuditService.logActivation(pluginId, accountId, clientId, duration);
-            } else {
-                pluginAuditService.logReactivation(pluginId, accountId, clientId, duration);
-            }
-
-            // 8. Record metrics
             activationTimer.record(duration, TimeUnit.MILLISECONDS);
             activationCounter.increment();
 
@@ -275,11 +266,9 @@ public class PluginActivationService {
 
             logger.info("Plugin {} deactivated for account {}", pluginId, accountId);
 
-            // 7. Log audit entry (async, non-blocking)
+            // 7. Record metrics
+            // Note: Audit logging is handled by PluginAuditFilter for HTTP requests
             long duration = System.currentTimeMillis() - startTime;
-            pluginAuditService.logDeactivation(pluginId, accountId, clientId, duration);
-
-            // 8. Record metrics
             deactivationTimer.record(duration, TimeUnit.MILLISECONDS);
             deactivationCounter.increment();
         } finally {

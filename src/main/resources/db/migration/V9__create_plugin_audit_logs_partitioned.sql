@@ -72,6 +72,9 @@ CREATE INDEX idx_plugin_audit_logs_occurred_at ON plugin_audit_logs(occurred_at 
 CREATE INDEX idx_plugin_audit_logs_action_type ON plugin_audit_logs(action_type);
 CREATE INDEX idx_plugin_audit_logs_success ON plugin_audit_logs(success) WHERE success = false;
 
+-- Composite index for filtered queries (per PR review recommendation)
+CREATE INDEX idx_plugin_audit_logs_filters ON plugin_audit_logs(plugin_id, account_id, action_type, success, occurred_at DESC);
+
 -- =============================================================================
 -- Function to create future partitions (can be called by scheduled job)
 -- =============================================================================
