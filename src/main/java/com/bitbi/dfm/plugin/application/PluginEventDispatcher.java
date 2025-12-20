@@ -1,8 +1,12 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.*;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,16 +38,43 @@ public class PluginEventDispatcher {
     private final AccountPluginRepository accountPluginRepository;
     private final Executor pluginExecutor;
     private final PluginAuditService pluginAuditService;
+    private final MeterRegistry meterRegistry;
+
+    // Metrics
+    private final Timer eventDispatchTimer;
+    private final Counter eventDispatchCount;
+    private final Counter eventDispatchSuccessCount;
+    private final Counter eventDispatchFailureCount;
+    private final Counter eventDispatchTimeoutCount;
 
     public PluginEventDispatcher(
             PluginRegistry pluginRegistry,
             AccountPluginRepository accountPluginRepository,
             Executor pluginExecutor,
-            PluginAuditService pluginAuditService) {
+            PluginAuditService pluginAuditService,
+            MeterRegistry meterRegistry) {
         this.pluginRegistry = pluginRegistry;
         this.accountPluginRepository = accountPluginRepository;
         this.pluginExecutor = pluginExecutor;
         this.pluginAuditService = pluginAuditService;
+        this.meterRegistry = meterRegistry;
+
+        // Initialize metrics
+        this.eventDispatchTimer = Timer.builder("plugin.event.dispatch.duration")
+                .description("Time taken to dispatch event to a plugin")
+                .register(meterRegistry);
+        this.eventDispatchCount = Counter.builder("plugin.event.dispatch.count")
+                .description("Total number of event dispatches")
+                .register(meterRegistry);
+        this.eventDispatchSuccessCount = Counter.builder("plugin.event.dispatch.success")
+                .description("Number of successful event dispatches")
+                .register(meterRegistry);
+        this.eventDispatchFailureCount = Counter.builder("plugin.event.dispatch.failure")
+                .description("Number of failed event dispatches")
+                .register(meterRegistry);
+        this.eventDispatchTimeoutCount = Counter.builder("plugin.event.dispatch.timeout")
+                .description("Number of timed out event dispatches")
+                .register(meterRegistry);
     }
 
     /**
@@ -95,19 +126,31 @@ public class PluginEventDispatcher {
     private void dispatchToPlugin(PluginEvent event, Plugin plugin) {
         String pluginId = plugin.getId();
 
-        // Check if account has an active activation for this plugin
-        AccountPlugin accountPlugin = accountPluginRepository
-                .findByAccountIdAndPluginId(event.accountId(), pluginId)
-                .orElse(null);
+        // Set MDC context for structured logging
+        MDC.put("pluginId", pluginId);
+        MDC.put("accountId", event.accountId().toString());
+        MDC.put("eventType", event.type().name());
 
-        if (accountPlugin == null || !accountPlugin.isActive()) {
-            log.debug("Skipping plugin {} - no active activation for account {}",
-                    pluginId, event.accountId());
-            return;
+        try {
+            // Check if account has an active activation for this plugin
+            AccountPlugin accountPlugin = accountPluginRepository
+                    .findByAccountIdAndPluginId(event.accountId(), pluginId)
+                    .orElse(null);
+
+            if (accountPlugin == null || !accountPlugin.isActive()) {
+                log.debug("Skipping plugin {} - no active activation for account {}",
+                        pluginId, event.accountId());
+                return;
+            }
+
+            // Execute plugin with timeout (FR-008)
+            executeWithTimeout(event, plugin, accountPlugin);
+        } finally {
+            // Clear MDC context
+            MDC.remove("pluginId");
+            MDC.remove("accountId");
+            MDC.remove("eventType");
         }
-
-        // Execute plugin with timeout (FR-008)
-        executeWithTimeout(event, plugin, accountPlugin);
     }
 
     /**
@@ -121,6 +164,9 @@ public class PluginEventDispatcher {
     private void executeWithTimeout(PluginEvent event, Plugin plugin, AccountPlugin accountPlugin) {
         String pluginId = plugin.getId();
         long startTime = System.currentTimeMillis();
+
+        // Increment total dispatch count
+        eventDispatchCount.increment();
 
         CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
             try {
@@ -147,6 +193,10 @@ public class PluginEventDispatcher {
             // Log successful event dispatch (async, non-blocking)
             pluginAuditService.logEventDispatch(pluginId, event.accountId(), duration);
 
+            // Record metrics for successful dispatch
+            eventDispatchTimer.record(duration, TimeUnit.MILLISECONDS);
+            eventDispatchSuccessCount.increment();
+
         } catch (TimeoutException e) {
             long duration = System.currentTimeMillis() - startTime;
             log.error("Plugin {} timed out after {}ms (limit: {}s) for event {}",
@@ -156,6 +206,10 @@ public class PluginEventDispatcher {
             // Log timeout (async, non-blocking)
             pluginAuditService.logEventTimeout(pluginId, event.accountId(), duration);
 
+            // Record timeout metrics
+            eventDispatchTimer.record(duration, TimeUnit.MILLISECONDS);
+            eventDispatchTimeoutCount.increment();
+
         } catch (ExecutionException e) {
             long duration = System.currentTimeMillis() - startTime;
             Throwable cause = e.getCause();
@@ -164,6 +218,10 @@ public class PluginEventDispatcher {
 
             // Log failure (async, non-blocking)
             pluginAuditService.logEventFailure(pluginId, event.accountId(), cause.getMessage(), duration);
+
+            // Record failure metrics
+            eventDispatchTimer.record(duration, TimeUnit.MILLISECONDS);
+            eventDispatchFailureCount.increment();
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

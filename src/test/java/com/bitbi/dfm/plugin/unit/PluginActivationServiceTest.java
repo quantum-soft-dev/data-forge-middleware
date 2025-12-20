@@ -13,6 +13,7 @@ import com.bitbi.dfm.plugin.domain.PluginRegistry;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -87,7 +88,8 @@ class PluginActivationServiceTest {
             pluginConfigRepository,
             accountPluginRepository,
             pluginDataValidator,
-            pluginAuditService
+            pluginAuditService,
+            new SimpleMeterRegistry()
         );
 
         accountId = UUID.randomUUID();

@@ -119,7 +119,7 @@ This project uses single-project structure with existing DDD package-by-layered-
 - [x] T032 [P] [US2] Create PluginActivationServiceTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/PluginActivationServiceTest.java (activate calls onActivate, exceptions)
 - [x] T033 [P] [US2] Create AccountPluginTest unit test in src/test/java/com/bitbi/dfm/plugin/unit/AccountPluginTest.java (activate/deactivate/reactivate methods)
 - [x] T034 [US2] Create PluginActivationContractTest in src/test/java/com/bitbi/dfm/plugin/contract/PluginActivationContractTest.java (POST activate → 201/200/400/404)
-- [ ] T035 [US2] Create PluginActivationIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginActivationIntegrationTest.java (Testcontainers, full activation flow)
+- [x] T035 [US2] Create PluginActivationIntegrationTest in src/test/java/com/bitbi/dfm/plugin/integration/PluginActivationIntegrationTest.java (Testcontainers, full activation flow)
 
 **Checkpoint**: Plugin activation API is functional and tested. Users can activate plugins via POST /api/v1/plugins/{pluginId}/activate
 
@@ -291,10 +291,10 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 **Purpose**: Final improvements and validation
 
-- [ ] T068 [P] Add MDC context logging (pluginId, accountId) to PluginActivationService and PluginEventDispatcher
-- [ ] T069 [P] Add Micrometer metrics (plugin.activation.duration, plugin.event.dispatch.duration, plugin.event.dispatch.count)
-- [ ] T070 Run quickstart.md validation scenarios
-- [ ] T071 Verify all performance criteria met (SC-002: activation <200ms, SC-003: dispatch <500ms, SC-005: startup <100ms)
+- [x] T068 [P] Add MDC context logging (pluginId, accountId) to PluginActivationService and PluginEventDispatcher
+- [x] T069 [P] Add Micrometer metrics (plugin.activation.duration, plugin.event.dispatch.duration, plugin.event.dispatch.count)
+- [x] T070 Run quickstart.md validation scenarios
+- [x] T071 Verify all performance criteria met (SC-002: activation <200ms, SC-003: dispatch <500ms, SC-005: startup <100ms)
 
 ---
 
@@ -304,13 +304,13 @@ This project uses single-project structure with existing DDD package-by-layered-
 
 - **Setup (Phase 1)**: No dependencies - can start immediately ✅ COMPLETE
 - **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories ✅ COMPLETE
-- **User Story 2 (Phase 3)**: Depends on Foundational phase - Activation API ✅ IMPLEMENTATION COMPLETE, Tests pending
-- **User Story 1 (Phase 4)**: Depends on US2 completion - OAuth flow uses activation endpoint ✅ IMPLEMENTATION COMPLETE, Tests pending
-- **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1 ✅ IMPLEMENTATION COMPLETE, Tests pending
+- **User Story 2 (Phase 3)**: Depends on Foundational phase - Activation API ✅ COMPLETE
+- **User Story 1 (Phase 4)**: Depends on US2 completion - OAuth flow uses activation endpoint ✅ COMPLETE
+- **User Story 3 (Phase 5)**: Depends on Foundational phase - can run parallel to US2/US1 ✅ COMPLETE
 - **User Story 4 (Phase 6)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
 - **User Story 5 (Phase 7)**: Depends on Foundational phase - can run parallel to other stories ✅ COMPLETE
 - **User Story 6 (Phase 8)**: Depends on US2, US3, US5 for meaningful audit data ✅ COMPLETE
-- **Polish (Phase 9)**: Depends on all user stories being complete
+- **Polish (Phase 9)**: Depends on all user stories being complete ✅ COMPLETE
 
 ### User Story Dependencies
 
@@ -342,7 +342,7 @@ Phase 4: US1 (OAuth+BitBI) ✅  │                │
                     Phase 8: US6 ✅ (Admin Audit)
                                │
                                ▼
-                    Phase 9: Polish
+                    Phase 9: Polish ✅
 ```
 
 ### Within Each User Story
@@ -381,23 +381,23 @@ Phase 4: US1 (OAuth+BitBI) ✅  │                │
 
 ## Implementation Strategy
 
-### MVP First (User Stories 1 + 2) ✅ IMPLEMENTATION COMPLETE
+### MVP First (User Stories 1 + 2) ✅ COMPLETE
 
 1. ✅ Complete Phase 1: Setup
 2. ✅ Complete Phase 2: Foundational (CRITICAL - blocks all stories)
 3. ✅ Complete Phase 3: User Story 2 Implementation (Activation API)
 4. ✅ Complete Phase 4: User Story 1 Implementation (Bit BI Plugin + OAuth)
-5. ⏳ **CURRENT**: Add tests for US2 + US1
-6. Deploy/demo if ready
+5. ✅ Add tests for US2 + US1
+6. ✅ Deploy/demo ready
 
 ### Incremental Delivery
 
 1. ✅ Complete Setup + Foundational → Foundation ready
-2. ✅ Add US2 (Activate) → ⏳ Test activation API → Deploy/Demo (MVP Milestone 1)
-3. ✅ Add US1 (BitBI) → ⏳ Test OAuth flow → Deploy/Demo (MVP Milestone 2)
-4. ✅ Add US3 (Deactivate) → ⏳ Test → US4 (List) + US5 (Events) → Test → Deploy/Demo
-5. Add US6 (Admin Audit) → Test admin features → Deploy/Demo
-6. Complete Polish phase → Final release
+2. ✅ Add US2 (Activate) → ✅ Test activation API → Deploy/Demo (MVP Milestone 1)
+3. ✅ Add US1 (BitBI) → ✅ Test OAuth flow → Deploy/Demo (MVP Milestone 2)
+4. ✅ Add US3 (Deactivate) → ✅ Test → US4 (List) + US5 (Events) → Test → Deploy/Demo
+5. ✅ Add US6 (Admin Audit) → ✅ Test admin features → Deploy/Demo
+6. ✅ Complete Polish phase → Final release
 
 ---
 
@@ -408,5 +408,60 @@ Phase 4: US1 (OAuth+BitBI) ✅  │                │
 - Each user story should be independently completable and testable
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
-- ✅ marks completed tasks (Phases 1-5 implementation complete)
-- ⏳ marks current focus (adding tests for completed implementations)
+- ✅ marks completed tasks (All phases complete)
+
+---
+
+## Phase 10: Admin UI (Added 2025-12-20)
+
+**Purpose**: Frontend admin interface for viewing plugins and audit logs
+
+### API Routes
+
+- [x] T072 [P] Add ADMIN_PLUGINS routes to frontend/src/shared/api/apiRoutes.ts
+
+### Entity Layer
+
+- [x] T073 [P] Create plugin types in frontend/src/entities/plugin/model/types.ts (PluginConfig, PluginAuditLogEntry, AuditLogFilters)
+- [x] T074 [P] Create query key factory in frontend/src/entities/plugin/api/keys.ts
+- [x] T075 [P] Create PluginStatusBadge component in frontend/src/entities/plugin/ui/PluginStatusBadge.tsx
+- [x] T076 [P] Create ActionTypeBadge component in frontend/src/entities/plugin/ui/ActionTypeBadge.tsx
+- [x] T077 [P] Create barrel export frontend/src/entities/plugin/index.ts
+
+### Feature Layer
+
+- [x] T078 [P] Create API client in frontend/src/features/plugin-admin/api/pluginAdminApi.ts
+- [x] T079 [P] Create TanStack Query hooks in frontend/src/features/plugin-admin/api/pluginQueries.ts
+- [x] T080 [P] Create PluginListView component in frontend/src/features/plugin-admin/ui/PluginListView.tsx
+- [x] T081 [P] Create AuditLogFilters component in frontend/src/features/plugin-admin/ui/AuditLogFilters.tsx
+- [x] T082 [P] Create AuditLogTable component in frontend/src/features/plugin-admin/ui/AuditLogTable.tsx
+- [x] T083 [P] Create barrel export frontend/src/features/plugin-admin/index.ts
+
+### Widget Layer
+
+- [x] T084 [P] Create PluginListWidget in frontend/src/widgets/plugin-admin/PluginListWidget.tsx
+- [x] T085 [P] Create AuditLogWidget in frontend/src/widgets/plugin-admin/AuditLogWidget.tsx
+
+### Page and Routing
+
+- [x] T086 Create PluginsAdminPage in frontend/src/pages/admin/plugins/PluginsAdminPage.tsx
+- [x] T087 Add /admin/plugins route to frontend/src/app/router.tsx
+- [x] T088 Add "Plugins" link to Header for admin users in frontend/src/widgets/header/Header.tsx
+
+### Documentation
+
+- [x] T089 [P] Update specs/013-plugin-system/spec.md with Admin UI Requirements section
+- [x] T090 [P] Update specs/013-plugin-system/tasks.md with Phase 10 tasks
+
+**Checkpoint**: Admin can view registered plugins and audit logs via /admin/plugins
+
+---
+
+## Implementation Complete
+
+All phases of the Plugin System & Bit BI OAuth Integration feature have been implemented:
+- Phase 1-8: Core backend implementation and testing
+- Phase 9: Polish & Cross-Cutting Concerns (MDC logging, Micrometer metrics, validation)
+- Phase 10: Admin UI for viewing plugins and audit logs
+
+The feature is ready for deployment.

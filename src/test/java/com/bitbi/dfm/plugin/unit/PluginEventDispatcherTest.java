@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.unit;
 import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginEventDispatcher;
 import com.bitbi.dfm.plugin.domain.*;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -53,7 +54,13 @@ class PluginEventDispatcherTest {
 
     @BeforeEach
     void setUp() {
-        dispatcher = new PluginEventDispatcher(pluginRegistry, accountPluginRepository, syncExecutor, pluginAuditService);
+        dispatcher = new PluginEventDispatcher(
+            pluginRegistry,
+            accountPluginRepository,
+            syncExecutor,
+            pluginAuditService,
+            new SimpleMeterRegistry()
+        );
     }
 
     @Nested

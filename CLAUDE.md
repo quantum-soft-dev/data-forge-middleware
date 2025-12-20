@@ -655,5 +655,6 @@ auth0:
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes
+- 013-plugin-system: Added Admin UI for plugin administration at `/admin/plugins` with registered plugins list and audit logs with filtering
 - 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4)
 - 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types)
