@@ -9,7 +9,7 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.jdbc.Sql;
-import org.springframework.transaction.annotation.Transactional;
+// Note: @Transactional removed - async event dispatch requires committed transactions
 
 import java.util.Map;
 import java.util.UUID;
@@ -57,7 +57,6 @@ class PluginEventDispatchIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should dispatch BatchCompletedEvent to subscribed plugins")
-        @Transactional
         void shouldDispatchBatchCompletedEventToSubscribedPlugins() throws InterruptedException {
             // Given - Activate bit-bi plugin for test account
             AccountPlugin activation = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi",
@@ -83,7 +82,6 @@ class PluginEventDispatchIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should skip deactivated plugin")
-        @Transactional
         void shouldSkipDeactivatedPlugin() throws InterruptedException {
             // Given - Activate and then deactivate plugin
             AccountPlugin activation = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi",

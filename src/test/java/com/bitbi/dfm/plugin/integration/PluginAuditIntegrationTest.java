@@ -11,7 +11,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.test.context.jdbc.Sql;
 // Note: @Transactional removed from tests - async audit logging requires committed transactions
 
@@ -273,10 +272,10 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
                 return logs.getTotalElements() >= 2;
             });
 
-            // When
+            // When - native query already orders by occurred_at DESC
             Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
                     PLUGIN_ID, null, null, null, null, null,
-                    PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "occurredAt")));
+                    PageRequest.of(0, 10));
 
             // Then
             assertThat(logs.getContent().size()).isGreaterThanOrEqualTo(2);
