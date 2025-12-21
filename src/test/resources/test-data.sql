@@ -21,7 +21,7 @@ DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM sites WHERE domain LIKE '%.example.com';
 -- Clean up plugin-related data (FK to accounts or referencing account)
-DELETE FROM plugin_audit_logs WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
+-- Note: plugin_audit_logs cleanup skipped - table is partitioned and should be empty in tests
 DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 

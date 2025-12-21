@@ -21,7 +21,7 @@ CREATE TABLE plugin_audit_logs (
     ip_address VARCHAR(45),
     user_agent VARCHAR(512),
     duration_ms BIGINT,
-    occurred_at TIMESTAMP NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
 
     PRIMARY KEY (id, occurred_at),
 

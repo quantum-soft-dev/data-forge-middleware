@@ -13,7 +13,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.test.context.jdbc.Sql;
-import org.springframework.transaction.annotation.Transactional;
+// Note: @Transactional removed from tests - async audit logging requires committed transactions
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -67,7 +67,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should create audit entry via audit service")
-        @Transactional
         void shouldCreateAuditEntryViaAuditService() {
             // Given / When - call audit service directly (HTTP filter handles real requests)
             pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 100L);
@@ -92,7 +91,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should create audit entry for reactivation via audit service")
-        @Transactional
         void shouldCreateAuditEntryForReactivationViaAuditService() {
             // Given / When - call audit service directly
             pluginAuditService.logReactivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 50L);
@@ -117,7 +115,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should create audit entry for deactivation via audit service")
-        @Transactional
         void shouldCreateAuditEntryForDeactivationViaAuditService() {
             // Given / When - call audit service directly
             pluginAuditService.logDeactivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 75L);
@@ -144,7 +141,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should create audit entry for successful event dispatch")
-        @Transactional
         void shouldCreateAuditEntryForSuccessfulEventDispatch() {
             // Given - activate plugin for test account
             Map<String, Object> pluginData = Map.of("tenantId", "tenant-event-test");
@@ -185,7 +181,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should filter audit logs by date range")
-        @Transactional
         void shouldFilterByDateRange() {
             // Given - create audit entry via service
             pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 100L);
@@ -214,7 +209,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should filter audit logs by success status")
-        @Transactional
         void shouldFilterBySuccessStatus() {
             // Given - create success and failure entries
             pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 50L);
@@ -241,7 +235,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should filter audit logs by action type")
-        @Transactional
         void shouldFilterByActionType() {
             // Given - create entries with different action types
             pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 50L);
@@ -267,7 +260,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should return audit logs in descending order by occurredAt")
-        @Transactional
         void shouldReturnLogsInDescendingOrder() {
             // Given - create multiple entries
             pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 50L);
@@ -302,7 +294,6 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should count audit logs by action type and date range")
-        @Transactional
         void shouldCountByActionTypeAndDateRange() {
             // Given - create multiple activation entries
             pluginAuditService.logActivation(PLUGIN_ID, TEST_ACCOUNT_ID, CLIENT_ID, 50L);
