@@ -228,6 +228,7 @@ export function BatchDetailView({
             {/* Spec 009: Compare files button */}
             <CompareButton
               batchId={batch.id}
+              siteId={batch.siteId}
               selectedFileIds={selectedFileIds}
               batchStatus={batch.status}
             />

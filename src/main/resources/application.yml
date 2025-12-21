@@ -131,6 +131,19 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
 
+# Plugin Configuration
+plugin:
+  execution:
+    # Plugin execution timeout in seconds (default: 30s per FR-008)
+    timeout-seconds: ${PLUGIN_TIMEOUT_SECONDS:30}
+
+plugins:
+  bitbi:
+    # Enable/disable Bit BI plugin registration (default: true)
+    enabled: ${PLUGIN_BITBI_ENABLED:true}
+    # Auth0 client ID for Bit BI application (for client verification)
+    client-id: ${PLUGIN_BITBI_CLIENT_ID:BITBI_CLIENT_ID_PLACEHOLDER}
+
 # OpenAPI Configuration
 springdoc:
   api-docs:

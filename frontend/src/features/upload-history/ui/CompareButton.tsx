@@ -15,6 +15,8 @@ import { CompareFilesModal } from './CompareFilesModal';
 interface CompareButtonProps {
   /** Current batch ID to compare from */
   batchId: string;
+  /** Site ID for filtering target batches (only same-site comparisons) */
+  siteId: string;
   /** Selected file IDs (optional - can select in comparison page) */
   selectedFileIds: string[];
   /** Batch status (not used - any batch with files can be compared) */
@@ -24,7 +26,7 @@ interface CompareButtonProps {
 /**
  * Button to initiate file comparison from batch detail page
  */
-export function CompareButton({ batchId, selectedFileIds }: CompareButtonProps) {
+export function CompareButton({ batchId, siteId, selectedFileIds }: CompareButtonProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Disabled only if no files selected
@@ -52,6 +54,7 @@ export function CompareButton({ batchId, selectedFileIds }: CompareButtonProps) 
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         currentBatchId={batchId}
+        currentSiteId={siteId}
         selectedFileIds={selectedFileIds}
       />
     </>

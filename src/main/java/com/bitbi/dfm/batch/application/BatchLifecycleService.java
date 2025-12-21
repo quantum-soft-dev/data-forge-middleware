@@ -137,8 +137,13 @@ public class BatchLifecycleService {
         batch.complete();
         Batch saved = batchRepository.save(batch);
 
-        // Publish domain event
-        BatchCompletedEvent event = new BatchCompletedEvent(batchId, batch.getUploadedFilesCount(), batch.getTotalSize());
+        // Publish domain event with accountId for plugin dispatch
+        BatchCompletedEvent event = new BatchCompletedEvent(
+                batchId,
+                batch.getAccountId(),
+                batch.getUploadedFilesCount(),
+                batch.getTotalSize()
+        );
         eventPublisher.publishEvent(event);
 
         logger.info("Batch completed successfully: batchId={}", batchId);
@@ -166,8 +171,13 @@ public class BatchLifecycleService {
         batch.completeWithWarnings();
         Batch saved = batchRepository.save(batch);
 
-        // Publish domain event (same as regular complete)
-        BatchCompletedEvent event = new BatchCompletedEvent(batchId, batch.getUploadedFilesCount(), batch.getTotalSize());
+        // Publish domain event with accountId for plugin dispatch (same as regular complete)
+        BatchCompletedEvent event = new BatchCompletedEvent(
+                batchId,
+                batch.getAccountId(),
+                batch.getUploadedFilesCount(),
+                batch.getTotalSize()
+        );
         eventPublisher.publishEvent(event);
 
         logger.info("Batch completed with warnings: batchId={}", batchId);
@@ -246,8 +256,8 @@ public class BatchLifecycleService {
         batch.markAsNotCompleted();
         Batch saved = batchRepository.save(batch);
 
-        // Publish domain event
-        BatchExpiredEvent event = new BatchExpiredEvent(batchId);
+        // Publish domain event with accountId for plugin dispatch
+        BatchExpiredEvent event = new BatchExpiredEvent(batchId, batch.getAccountId());
         eventPublisher.publishEvent(event);
 
         logger.info("Batch marked as NOT_COMPLETED: batchId={}", batchId);

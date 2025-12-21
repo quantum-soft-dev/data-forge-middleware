@@ -1,0 +1,578 @@
+openapi: 3.0.3
+info:
+  title: Data Forge Middleware - Plugin API
+  description: |
+    API for managing plugin integrations in Data Forge Middleware.
+
+    ## Authentication
+    All endpoints require OAuth2 Bearer token authentication via Auth0.
+    The token must contain:
+    - `accountId` claim - identifies the DFM account (from Auth0 app_metadata)
+    - `azp` claim - identifies the calling application (plugin client)
+
+    ## Authorization
+    - User must have an active DFM account
+    - Plugin must be registered and enabled in DFM
+    - For activation: Plugin's `client_id` must match token's `azp` claim
+  version: 1.0.0
+  contact:
+    name: Data Forge Team
+    email: support@bitbi.io
+
+servers:
+  - url: https://api.dataforge.com
+    description: Production
+  - url: https://dev.dataforge.com
+    description: Development
+
+security:
+  - oauth2:
+      - plugins:read
+      - plugins:write
+
+tags:
+  - name: Plugin Activation
+    description: Activate and deactivate plugins for accounts
+  - name: Plugin Management
+    description: View and manage plugin integrations
+
+paths:
+  /api/v1/plugins/{pluginId}/activate:
+    post:
+      tags:
+        - Plugin Activation
+      summary: Activate a plugin for the authenticated account
+      description: |
+        Activates a plugin for the account identified by the `accountId` JWT claim.
+
+        **Upsert Behavior (FR-005)**:
+        - If plugin is not activated: Creates new activation record
+        - If plugin is already active: Updates `plugin_data` and timestamps
+        - If plugin was deactivated: Reactivates with new `plugin_data`
+
+        **Validation (FR-004)**:
+        - `pluginData` is validated against the plugin's JSON Schema
+        - Returns 400 if validation fails
+
+        **Lifecycle Hook (FR-006)**:
+        - Calls `plugin.onActivate()` after successful activation
+      operationId: activatePlugin
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          description: Unique plugin identifier (e.g., "bit-bi")
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: '^[a-z0-9-]+$'
+          example: bit-bi
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivatePluginRequest'
+            examples:
+              bitBi:
+                summary: Bit BI activation
+                value:
+                  pluginData:
+                    tenantId: "tenant-123"
+      responses:
+        '201':
+          description: Plugin activated successfully (new activation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginActivationResponse'
+        '200':
+          description: Plugin updated successfully (existing activation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginActivationResponse'
+        '400':
+          description: Validation error (invalid plugin data schema)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-12-16T10:30:00Z"
+                status: 400
+                error: "Validation Error"
+                message: "Plugin data validation failed: tenantId is required"
+                path: "/api/v1/plugins/bit-bi/activate"
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account not found for JWT accountId claim
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-12-16T10:30:00Z"
+                status: 403
+                error: "Forbidden"
+                message: "No DFM account found for this user"
+                path: "/api/v1/plugins/bit-bi/activate"
+        '404':
+          description: Plugin not found or not enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-12-16T10:30:00Z"
+                status: 404
+                error: "Not Found"
+                message: "Plugin not found: unknown-plugin"
+                path: "/api/v1/plugins/unknown-plugin/activate"
+
+  /api/v1/plugins/{pluginId}/deactivate:
+    delete:
+      tags:
+        - Plugin Activation
+      summary: Deactivate a plugin for the authenticated account
+      description: |
+        Deactivates a plugin for the account identified by the `accountId` JWT claim.
+
+        **Soft Delete (FR-009)**:
+        - Sets `is_active = false` and `deactivated_at = NOW()`
+        - Does NOT delete the record (can be reactivated later)
+
+        **Post-Deactivation (FR-010)**:
+        - Plugin will no longer receive events
+        - Subsequent API calls from the plugin return 403
+
+        **Lifecycle Hook (FR-006)**:
+        - Calls `plugin.onDeactivate()` after successful deactivation
+      operationId: deactivatePlugin
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          description: Unique plugin identifier
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: '^[a-z0-9-]+$'
+          example: bit-bi
+      responses:
+        '204':
+          description: Plugin deactivated successfully
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account not found or plugin not activated for this account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Plugin not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/account/plugins:
+    get:
+      tags:
+        - Plugin Management
+      summary: List active plugin integrations for the authenticated account
+      description: |
+        Returns a paginated list of all active plugin integrations for the
+        authenticated account (FR-011).
+
+        **Security (FR-012)**:
+        - Plugin-specific data (tenantId, etc.) is NOT exposed
+        - Only metadata (name, activation date, last used) is returned
+      operationId: listAccountPlugins
+      parameters:
+        - name: page
+          in: query
+          description: Page number (0-indexed)
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          description: Page size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: includeInactive
+          in: query
+          description: Include deactivated plugins in results
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: List of plugin integrations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountPluginListResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/plugins:
+    get:
+      tags:
+        - Plugin Management
+      summary: List all registered plugins (Admin only)
+      description: |
+        Returns all registered plugins in the system. Requires ROLE_ADMIN.
+      operationId: listRegisteredPlugins
+      security:
+        - oauth2:
+            - admin
+      responses:
+        '200':
+          description: List of registered plugins
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginConfigResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized (requires ROLE_ADMIN)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/plugins/audit:
+    get:
+      tags:
+        - Plugin Management
+      summary: Query plugin audit logs (Admin only)
+      description: |
+        Returns plugin audit logs with filtering options (FR-013, US6).
+        Requires ROLE_ADMIN.
+
+        **Privacy (FR-014)**:
+        - Request bodies are stored as SHA-256 hashes, not plaintext
+        - `requestBodyHash` can be used to verify suspected payloads
+      operationId: queryPluginAuditLogs
+      security:
+        - oauth2:
+            - admin
+      parameters:
+        - name: pluginId
+          in: query
+          description: Filter by plugin ID
+          schema:
+            type: string
+        - name: accountId
+          in: query
+          description: Filter by account ID
+          schema:
+            type: string
+            format: uuid
+        - name: actionType
+          in: query
+          description: Filter by action type
+          schema:
+            type: string
+            enum: [ACTIVATE, DEACTIVATE, REACTIVATE, EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT]
+        - name: success
+          in: query
+          description: Filter by success status
+          schema:
+            type: boolean
+        - name: from
+          in: query
+          description: Start of date range (inclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: End of date range (exclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Paginated audit log entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PluginAuditLogPageResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized (requires ROLE_ADMIN)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: Auth0 OAuth2 authentication
+      flows:
+        authorizationCode:
+          authorizationUrl: https://{auth0-domain}/authorize
+          tokenUrl: https://{auth0-domain}/oauth/token
+          scopes:
+            plugins:read: Read plugin information
+            plugins:write: Activate/deactivate plugins
+            admin: Administrative access
+
+  schemas:
+    ActivatePluginRequest:
+      type: object
+      required:
+        - pluginData
+      properties:
+        pluginData:
+          type: object
+          description: |
+            Plugin-specific data. Schema varies by plugin.
+            Example for Bit BI: `{ "tenantId": "tenant-123" }`
+          additionalProperties: true
+      example:
+        pluginData:
+          tenantId: "tenant-123"
+
+    PluginActivationResponse:
+      type: object
+      required:
+        - pluginId
+        - pluginName
+        - accountId
+        - isActive
+        - activatedAt
+      properties:
+        pluginId:
+          type: string
+          description: Unique plugin identifier
+          example: "bit-bi"
+        pluginName:
+          type: string
+          description: Human-readable plugin name
+          example: "Bit BI"
+        accountId:
+          type: string
+          format: uuid
+          description: Account the plugin is activated for
+        isActive:
+          type: boolean
+          description: Current activation status
+          example: true
+        activatedAt:
+          type: string
+          format: date-time
+          description: When the plugin was first activated
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the plugin last received an event
+
+    AccountPluginListResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountPluginSummary'
+        page:
+          type: integer
+          description: Current page number
+        size:
+          type: integer
+          description: Page size
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of elements
+        totalPages:
+          type: integer
+          description: Total number of pages
+
+    AccountPluginSummary:
+      type: object
+      required:
+        - pluginId
+        - pluginName
+        - isActive
+        - activatedAt
+      properties:
+        pluginId:
+          type: string
+          example: "bit-bi"
+        pluginName:
+          type: string
+          example: "Bit BI"
+        isActive:
+          type: boolean
+        activatedAt:
+          type: string
+          format: date-time
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+      description: |
+        Note: Plugin-specific data (e.g., tenantId) is NOT included for security (FR-012)
+
+    PluginConfigResponse:
+      type: object
+      properties:
+        pluginId:
+          type: string
+        displayName:
+          type: string
+        version:
+          type: string
+        isEnabled:
+          type: boolean
+        supportedEvents:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    PluginAuditLogPageResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginAuditLogEntry'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    PluginAuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        pluginId:
+          type: string
+        accountId:
+          type: string
+          format: uuid
+          nullable: true
+        clientId:
+          type: string
+          nullable: true
+        actionType:
+          type: string
+          enum: [ACTIVATE, DEACTIVATE, REACTIVATE, EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT]
+        requestBodyHash:
+          type: string
+          nullable: true
+          description: SHA-256 hash of request body (base64 encoded)
+        requestBodySize:
+          type: integer
+          nullable: true
+        responseStatus:
+          type: integer
+          nullable: true
+        success:
+          type: boolean
+        errorMessage:
+          type: string
+          nullable: true
+        ipAddress:
+          type: string
+          nullable: true
+        durationMs:
+          type: integer
+          format: int64
+          nullable: true
+        occurredAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string

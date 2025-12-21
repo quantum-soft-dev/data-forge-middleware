@@ -11,6 +11,9 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - N/A (refactoring only - no schema changes) (010-api-unification-goal)
 - TypeScript 5.6 (React 19.2) + @auth0/auth0-react 2.8.0, Axios, TanStack Query v5 (012-key-caching-logic)
 - Memory (Auth0 SDK handles token storage securely) (012-key-caching-logic)
+- Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types) (013-plugin-system)
+- PostgreSQL 16 (new tables: `plugin_configs`, `account_plugins`, `plugin_audit_logs` - partitioned) (013-plugin-system)
+- Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4) (013-plugin-system)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
@@ -650,3 +653,8 @@ auth0:
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
+
+## Recent Changes
+- 013-plugin-system: Added Admin UI for plugin administration at `/admin/plugins` with registered plugins list and audit logs with filtering
+- 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4)
+- 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types)

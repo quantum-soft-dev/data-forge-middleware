@@ -2,6 +2,10 @@ package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
 // import com.bitbi.dfm.account.application.KeycloakAccountSyncService; // DEPRECATED: Removed for Auth0 migration
+import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -924,6 +928,111 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+
+    // ==================== Plugin Exceptions ====================
+
+    /**
+     * Handle PluginNotFoundException (404 Not Found).
+     * <p>
+     * Thrown when a plugin is not found in the registry or database.
+     * </p>
+     * User Story: US2 - Activate a Plugin for an Account
+     */
+    @ExceptionHandler(PluginNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handlePluginNotFound(
+            PluginNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Plugin not found: {}", ex.getPluginId());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle PluginDataValidationException (400 Bad Request).
+     * <p>
+     * Thrown when plugin data fails JSON Schema validation.
+     * </p>
+     * User Story: US2 - Activate a Plugin for an Account
+     * Functional Requirement: FR-004 - Validate pluginData against JSON Schema
+     */
+    @ExceptionHandler(PluginDataValidationException.class)
+    public ResponseEntity<ErrorResponseDto> handlePluginDataValidation(
+            PluginDataValidationException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Plugin data validation failed for {}: {}", ex.getPluginId(), ex.getValidationErrors());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Validation Error",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle PluginNotEnabledException (404 Not Found).
+     * <p>
+     * Thrown when a plugin exists but is not enabled.
+     * Returns 404 because the plugin is effectively unavailable for activation.
+     * </p>
+     * User Story: US2 - Activate a Plugin for an Account
+     */
+    @ExceptionHandler(PluginNotEnabledException.class)
+    public ResponseEntity<ErrorResponseDto> handlePluginNotEnabled(
+            PluginNotEnabledException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Plugin not enabled: {}", ex.getPluginId());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle PluginNotActivatedException (403 Forbidden).
+     * <p>
+     * Thrown when attempting to deactivate a plugin that is not active for the account.
+     * Returns 403 Forbidden as the operation is not permitted.
+     * </p>
+     * User Story: US3 - Deactivate a Plugin Integration
+     */
+    @ExceptionHandler(PluginNotActivatedException.class)
+    public ResponseEntity<ErrorResponseDto> handlePluginNotActivated(
+            PluginNotActivatedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Plugin not activated: {} for account {}", ex.getPluginId(), ex.getAccountId());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
     }
 
     /**

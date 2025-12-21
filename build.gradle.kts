@@ -90,6 +90,10 @@ dependencies {
     // Hypersistence Utils for JSONB support
     implementation("io.hypersistence:hypersistence-utils-hibernate-63:3.9.0")
 
+    // Plugin System Dependencies
+    // JSON Schema validation for plugin data
+    implementation("com.networknt:json-schema-validator:1.5.4")
+
     // Lombok
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")

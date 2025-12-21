@@ -82,6 +82,19 @@ export function Header() {
               </Link>
             )}
 
+            {/* Plugins - only visible for ADMIN role */}
+            {isAdmin && (
+              <Link
+                to="/admin/plugins"
+                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                activeProps={{
+                  className: 'text-sm font-medium text-primary hover:text-primary',
+                }}
+              >
+                Plugins
+              </Link>
+            )}
+
             {/* Current User Info */}
             <div className="flex items-center gap-2 ml-4 border-l border-gray-300 pl-4 text-sm text-gray-600">
               <User className="h-4 w-4" />
