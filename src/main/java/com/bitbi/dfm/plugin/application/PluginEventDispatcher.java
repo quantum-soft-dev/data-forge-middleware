@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.*;
+import com.bitbi.dfm.plugin.infrastructure.PluginProperties;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -31,13 +32,13 @@ import java.util.concurrent.*;
 public class PluginEventDispatcher {
 
     private static final Logger log = LoggerFactory.getLogger(PluginEventDispatcher.class);
-    private static final int PLUGIN_TIMEOUT_SECONDS = 30;
 
     private final PluginRegistry pluginRegistry;
     private final AccountPluginRepository accountPluginRepository;
     private final Executor pluginExecutionExecutor;
     private final PluginAuditService pluginAuditService;
     private final PluginUsageService pluginUsageService;
+    private final PluginProperties pluginProperties;
     private final MeterRegistry meterRegistry;
 
     // Metrics
@@ -54,12 +55,14 @@ public class PluginEventDispatcher {
             Executor pluginExecutionExecutor,
             PluginAuditService pluginAuditService,
             PluginUsageService pluginUsageService,
+            PluginProperties pluginProperties,
             MeterRegistry meterRegistry) {
         this.pluginRegistry = pluginRegistry;
         this.accountPluginRepository = accountPluginRepository;
         this.pluginExecutionExecutor = pluginExecutionExecutor;
         this.pluginAuditService = pluginAuditService;
         this.pluginUsageService = pluginUsageService;
+        this.pluginProperties = pluginProperties;
         this.meterRegistry = meterRegistry;
 
         // Initialize metrics
@@ -186,7 +189,8 @@ public class PluginEventDispatcher {
 
         try {
             // Wait for plugin execution with timeout (FR-008)
-            future.get(PLUGIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            int timeoutSeconds = pluginProperties.getTimeoutSeconds();
+            future.get(timeoutSeconds, TimeUnit.SECONDS);
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("Plugin {} executed successfully in {}ms for event {}",
@@ -205,7 +209,7 @@ public class PluginEventDispatcher {
         } catch (TimeoutException e) {
             long duration = System.currentTimeMillis() - startTime;
             log.error("Plugin {} timed out after {}ms (limit: {}s) for event {}",
-                    pluginId, duration, PLUGIN_TIMEOUT_SECONDS, event.type());
+                    pluginId, duration, pluginProperties.getTimeoutSeconds(), event.type());
             future.cancel(true); // Attempt to cancel the task
 
             // Log timeout (async, non-blocking)

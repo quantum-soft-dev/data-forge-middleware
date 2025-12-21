@@ -48,6 +48,7 @@ public class AccountPlugin {
 
     @Type(JsonBinaryType.class)
     @Column(name = "plugin_data", columnDefinition = "jsonb", nullable = false)
+    @Getter(lombok.AccessLevel.NONE) // Custom getter returns immutable copy
     private Map<String, Object> pluginData;
 
     @Column(name = "is_active", nullable = false)
@@ -100,12 +101,19 @@ public class AccountPlugin {
 
     /**
      * Reactivates a previously deactivated plugin.
-     * Updates plugin_data and clears deactivation timestamp.
+     * Merges new plugin_data with existing data and clears deactivation timestamp.
      *
-     * @param newPluginData new plugin-specific data
+     * <p>Merge semantics (prevents data loss):
+     * <ul>
+     *   <li>New keys are added</li>
+     *   <li>Existing keys are updated with new values</li>
+     *   <li>Keys not in newPluginData are preserved</li>
+     * </ul>
+     *
+     * @param newPluginData new plugin-specific data to merge
      */
     public void reactivate(Map<String, Object> newPluginData) {
-        this.pluginData = newPluginData != null ? new HashMap<>(newPluginData) : new HashMap<>();
+        mergePluginData(newPluginData);
         this.active = true;
         this.deactivatedAt = null;
         this.updatedAt = Instant.now();
@@ -114,11 +122,48 @@ public class AccountPlugin {
     /**
      * Updates plugin data for an already active plugin (upsert behavior).
      *
-     * @param newPluginData new plugin-specific data
+     * <p>Merge semantics (prevents data loss):
+     * <ul>
+     *   <li>New keys are added</li>
+     *   <li>Existing keys are updated with new values</li>
+     *   <li>Keys not in newPluginData are preserved</li>
+     * </ul>
+     *
+     * @param newPluginData new plugin-specific data to merge
      */
     public void updatePluginData(Map<String, Object> newPluginData) {
-        this.pluginData = newPluginData != null ? new HashMap<>(newPluginData) : new HashMap<>();
+        mergePluginData(newPluginData);
         this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Merges new plugin data into existing data.
+     * Preserves existing keys not present in the new data.
+     *
+     * @param newPluginData data to merge (can be null)
+     */
+    private void mergePluginData(Map<String, Object> newPluginData) {
+        if (newPluginData == null || newPluginData.isEmpty()) {
+            return; // Nothing to merge, preserve existing data
+        }
+        if (this.pluginData == null) {
+            this.pluginData = new HashMap<>();
+        }
+        // Merge: new values overwrite existing, but missing keys are preserved
+        this.pluginData.putAll(newPluginData);
+    }
+
+    /**
+     * Returns an immutable copy of the plugin data.
+     * Prevents external mutation of internal state.
+     *
+     * @return unmodifiable view of plugin data
+     */
+    public Map<String, Object> getPluginData() {
+        if (this.pluginData == null) {
+            return Map.of();
+        }
+        return Map.copyOf(this.pluginData);
     }
 
     /**

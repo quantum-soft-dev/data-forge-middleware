@@ -15,6 +15,7 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -165,8 +166,33 @@ public class PluginActivationService {
                 isNewActivation = true;
             }
 
-            // 5. Save activation record
-            accountPlugin = accountPluginRepository.save(accountPlugin);
+            // 5. Save activation record with race condition handling
+            try {
+                accountPlugin = accountPluginRepository.save(accountPlugin);
+            } catch (DataIntegrityViolationException e) {
+                // Race condition: another request created the activation between find and save
+                // Retry by fetching the existing record and updating it
+                logger.info("Race condition detected for plugin {} / account {} - retrying with existing record",
+                        pluginId, accountId);
+
+                AccountPlugin existingPlugin = accountPluginRepository
+                        .findByAccountIdAndPluginId(accountId, pluginId)
+                        .orElseThrow(() -> {
+                            // Should not happen - constraint violation implies record exists
+                            logger.error("Unexpected state: DataIntegrityViolation but no record found for {} / {}",
+                                    pluginId, accountId);
+                            return e;
+                        });
+
+                // Update the existing record with merge semantics
+                if (existingPlugin.isActive()) {
+                    existingPlugin.updatePluginData(pluginData);
+                } else {
+                    existingPlugin.reactivate(pluginData);
+                }
+                accountPlugin = accountPluginRepository.save(existingPlugin);
+                isNewActivation = false;
+            }
 
             // 6. Call lifecycle hook (FR-006)
             try {

@@ -60,6 +60,18 @@ public class PluginAuditFilter extends OncePerRequestFilter {
 
     private static final String AUTH0_ACCOUNT_ID_CLAIM = "https://api.dataforge.com/accountId";
 
+    /**
+     * Maximum request body size to read for hashing (1MB).
+     * Prevents memory exhaustion from malicious large payloads.
+     */
+    private static final int MAX_REQUEST_BODY_SIZE = 1024 * 1024; // 1MB
+
+    /**
+     * Maximum plugin ID length (matches DB column size).
+     * Prevents issues from excessively long plugin IDs.
+     */
+    private static final int MAX_PLUGIN_ID_LENGTH = 64;
+
     private final PluginAuditLogRepository auditLogRepository;
 
     public PluginAuditFilter(PluginAuditLogRepository auditLogRepository) {
@@ -84,6 +96,13 @@ public class PluginAuditFilter extends OncePerRequestFilter {
         String pluginId = matcher.group(1);
         String action = matcher.group(2);
         String method = request.getMethod();
+
+        // Validate plugin ID length (prevents issues with excessively long IDs)
+        if (pluginId.length() > MAX_PLUGIN_ID_LENGTH) {
+            log.warn("Plugin ID exceeds maximum length: {} (max: {})", pluginId.length(), MAX_PLUGIN_ID_LENGTH);
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         // Validate HTTP method matches action
         if (!isValidMethodForAction(method, action)) {
@@ -138,8 +157,15 @@ public class PluginAuditFilter extends OncePerRequestFilter {
             // Add request body hash (SHA-256) - NEVER store plaintext (FR-014)
             byte[] requestBody = request.getContentAsByteArray();
             if (requestBody != null && requestBody.length > 0) {
-                String hash = computeSha256Hash(requestBody);
-                auditLog.withRequestBodyHash(hash, requestBody.length);
+                // Check size limit to prevent memory issues
+                if (requestBody.length > MAX_REQUEST_BODY_SIZE) {
+                    log.warn("Request body exceeds maximum size for hashing: {} bytes (max: {})",
+                            requestBody.length, MAX_REQUEST_BODY_SIZE);
+                    auditLog.withRequestBodyHash("BODY_TOO_LARGE", requestBody.length);
+                } else {
+                    String hash = computeSha256Hash(requestBody);
+                    auditLog.withRequestBodyHash(hash, requestBody.length);
+                }
             }
 
             // Add metadata

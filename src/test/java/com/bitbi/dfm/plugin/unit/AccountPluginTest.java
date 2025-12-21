@@ -267,8 +267,8 @@ class AccountPluginTest {
         }
 
         @Test
-        @DisplayName("should handle null pluginData")
-        void shouldHandleNullPluginData() {
+        @DisplayName("should preserve existing pluginData when null is passed (merge semantics)")
+        void shouldPreserveExistingPluginDataWhenNullIsPassed() {
             // Given
             AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
             plugin.deactivate();
@@ -276,8 +276,10 @@ class AccountPluginTest {
             // When
             plugin.reactivate(null);
 
-            // Then
-            assertThat(plugin.getPluginData()).isNotNull().isEmpty();
+            // Then - merge semantics: null preserves existing data
+            assertThat(plugin.getPluginData())
+                .isNotNull()
+                .containsEntry("tenantId", "tenant-123");
         }
     }
 
@@ -330,16 +332,18 @@ class AccountPluginTest {
         }
 
         @Test
-        @DisplayName("should handle null pluginData")
-        void shouldHandleNullPluginData() {
+        @DisplayName("should preserve existing pluginData when null is passed (merge semantics)")
+        void shouldPreserveExistingPluginDataWhenNullIsPassed() {
             // Given
             AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
 
             // When
             plugin.updatePluginData(null);
 
-            // Then
-            assertThat(plugin.getPluginData()).isNotNull().isEmpty();
+            // Then - merge semantics: null preserves existing data
+            assertThat(plugin.getPluginData())
+                .isNotNull()
+                .containsEntry("tenantId", "tenant-123");
         }
 
         @Test

@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.unit;
 import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginEventDispatcher;
 import com.bitbi.dfm.plugin.application.PluginUsageService;
+import com.bitbi.dfm.plugin.infrastructure.PluginProperties;
 import com.bitbi.dfm.plugin.domain.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +49,8 @@ class PluginEventDispatcherTest {
     @Mock
     private PluginUsageService pluginUsageService;
 
+    private PluginProperties pluginProperties;
+
     private PluginEventDispatcher dispatcher;
 
     // Direct executor for synchronous test execution
@@ -58,12 +61,16 @@ class PluginEventDispatcherTest {
 
     @BeforeEach
     void setUp() {
+        pluginProperties = new PluginProperties();
+        pluginProperties.setTimeoutSeconds(30); // Default timeout for tests
+
         dispatcher = new PluginEventDispatcher(
             pluginRegistry,
             accountPluginRepository,
             syncExecutor,
             pluginAuditService,
             pluginUsageService,
+            pluginProperties,
             new SimpleMeterRegistry()
         );
     }
