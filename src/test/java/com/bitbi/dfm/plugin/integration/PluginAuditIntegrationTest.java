@@ -74,7 +74,7 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
             // Then - wait for async audit log to be created
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
-                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.ACTIVATE, null,
+                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.ACTIVATE.name(), null,
                         Instant.now().minus(1, ChronoUnit.HOURS), null,
                         PageRequest.of(0, 10));
 
@@ -98,7 +98,7 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
             // Then - verify REACTIVATE audit entry
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
-                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.REACTIVATE, null, null, null,
+                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.REACTIVATE.name(), null, null, null,
                         PageRequest.of(0, 10));
 
                 assertThat(logs.getContent()).isNotEmpty();
@@ -122,7 +122,7 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
             // Then - verify DEACTIVATE audit entry
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
-                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.DEACTIVATE, null, null, null,
+                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.DEACTIVATE.name(), null, null, null,
                         PageRequest.of(0, 10));
 
                 assertThat(logs.getContent()).isNotEmpty();
@@ -161,7 +161,7 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
             // Then - verify EVENT_DISPATCHED audit entry
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 Page<PluginAuditLog> logs = auditLogRepository.findByFilters(
-                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.EVENT_DISPATCHED, null, null, null,
+                        PLUGIN_ID, TEST_ACCOUNT_ID, PluginActionType.EVENT_DISPATCHED.name(), null, null, null,
                         PageRequest.of(0, 10));
 
                 assertThat(logs.getContent()).isNotEmpty();
@@ -248,7 +248,7 @@ class PluginAuditIntegrationTest extends AbstractIntegrationTest {
 
             // When - query only EVENT_DISPATCHED
             Page<PluginAuditLog> eventLogs = auditLogRepository.findByFilters(
-                    PLUGIN_ID, null, PluginActionType.EVENT_DISPATCHED, null, null, null,
+                    PLUGIN_ID, null, PluginActionType.EVENT_DISPATCHED.name(), null, null, null,
                     PageRequest.of(0, 10));
 
             // Then

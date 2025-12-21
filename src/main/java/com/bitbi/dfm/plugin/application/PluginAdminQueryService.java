@@ -103,8 +103,9 @@ public class PluginAdminQueryService {
         log.debug("Querying audit logs: pluginId={}, accountId={}, actionType={}, success={}, from={}, to={}",
                 pluginId, accountId, actionType, success, from, to);
 
+        String actionTypeStr = actionType != null ? actionType.name() : null;
         Page<PluginAuditLog> auditLogs = auditLogRepository.findByFilters(
-                pluginId, accountId, actionType, success, from, to, pageable);
+                pluginId, accountId, actionTypeStr, success, from, to, pageable);
 
         return auditLogs.map(PluginAuditLogEntryDto::fromEntity);
     }

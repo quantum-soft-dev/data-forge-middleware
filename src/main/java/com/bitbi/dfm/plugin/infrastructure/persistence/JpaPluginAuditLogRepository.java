@@ -20,20 +20,20 @@ import java.util.UUID;
 public interface JpaPluginAuditLogRepository extends JpaRepository<PluginAuditLog, Long>, PluginAuditLogRepository {
 
     @Override
-    @Query("""
-        SELECT pal FROM PluginAuditLog pal
-        WHERE (:pluginId IS NULL OR pal.pluginId = :pluginId)
-        AND (:accountId IS NULL OR pal.accountId = :accountId)
-        AND (:actionType IS NULL OR pal.actionType = :actionType)
-        AND (:success IS NULL OR pal.success = :success)
-        AND (:from IS NULL OR pal.occurredAt >= :from)
-        AND (:to IS NULL OR pal.occurredAt < :to)
-        ORDER BY pal.occurredAt DESC
-        """)
+    @Query(value = """
+        SELECT * FROM plugin_audit_logs pal
+        WHERE (CAST(:pluginId AS VARCHAR) IS NULL OR pal.plugin_id = :pluginId)
+        AND (CAST(:accountId AS UUID) IS NULL OR pal.account_id = :accountId)
+        AND (CAST(:actionType AS VARCHAR) IS NULL OR pal.action_type = :actionType)
+        AND (CAST(:success AS BOOLEAN) IS NULL OR pal.success = :success)
+        AND (CAST(:from AS TIMESTAMPTZ) IS NULL OR pal.occurred_at >= :from)
+        AND (CAST(:to AS TIMESTAMPTZ) IS NULL OR pal.occurred_at < :to)
+        ORDER BY pal.occurred_at DESC
+        """, nativeQuery = true)
     Page<PluginAuditLog> findByFilters(
             @Param("pluginId") String pluginId,
             @Param("accountId") UUID accountId,
-            @Param("actionType") PluginActionType actionType,
+            @Param("actionType") String actionType,
             @Param("success") Boolean success,
             @Param("from") Instant from,
             @Param("to") Instant to,

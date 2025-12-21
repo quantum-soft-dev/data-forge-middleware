@@ -22,7 +22,7 @@ public interface PluginAuditLogRepository {
      * Finds audit logs with optional filters.
      * @param pluginId filter by plugin ID (null for all)
      * @param accountId filter by account ID (null for all)
-     * @param actionType filter by action type (null for all)
+     * @param actionType filter by action type as string (null for all)
      * @param success filter by success status (null for all)
      * @param from start of date range (inclusive, null for no start)
      * @param to end of date range (exclusive, null for no end)
@@ -32,7 +32,7 @@ public interface PluginAuditLogRepository {
     Page<PluginAuditLog> findByFilters(
             String pluginId,
             UUID accountId,
-            PluginActionType actionType,
+            String actionType,
             Boolean success,
             Instant from,
             Instant to,
