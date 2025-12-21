@@ -8,7 +8,7 @@
  * Phase 7: Added "View errors" button for batches with errors (T108)
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { CheckCircle, XCircle, Loader2, AlertCircle, Filter, RefreshCw } from 'lucide-react';
 import type { BatchSummary } from '@/entities/batch/model/types';
 import type { Site } from '@/entities/site/model/types';
@@ -33,6 +33,8 @@ interface BatchListViewProps {
   onViewErrors?: (batchId: string) => void;
   /** Available sites for filtering */
   sites?: Site[];
+  /** Site ID to name lookup map for displaying site names */
+  siteLookup?: Map<string, string>;
   /** Callback to refresh the batch list */
   onRefresh?: () => void;
   /** Is data being refreshed */
@@ -52,12 +54,16 @@ export function BatchListView({
   onBatchClick,
   onViewErrors,
   sites,
+  siteLookup,
   onRefresh,
   isRefreshing,
 }: BatchListViewProps) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<string>('all');
   const [siteFilter, setSiteFilter] = useState<string>('all');
+
+  // Check if any filter is active
+  const isFilterActive = statusFilter !== 'all' || dateFilter !== 'all' || siteFilter !== 'all';
 
   // Filter batches
   const filteredBatches = useMemo(() => {
@@ -97,6 +103,17 @@ export function BatchListView({
 
     return filtered;
   }, [batches, siteFilter, statusFilter, dateFilter]);
+
+  // Auto-load more pages when filters are active and results are sparse
+  // This fixes the issue where filtered results show "No matches" when more pages may have matches
+  useEffect(() => {
+    const needsMoreData = filteredBatches.length < 10 && hasNextPage && !isFetchingNextPage && !isLoading;
+
+    if (isFilterActive && needsMoreData) {
+      onLoadMore();
+    }
+  }, [filteredBatches.length, hasNextPage, isFetchingNextPage, isLoading, isFilterActive, onLoadMore]);
+
   // Loading state
   if (isLoading) {
     return (
@@ -192,16 +209,30 @@ export function BatchListView({
       {/* Empty/filtered state */}
       {filteredBatches.length === 0 && (
         <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-          <p className="text-gray-600">
-            {batches.length === 0
-              ? 'No upload history found.'
-              : 'No batches match your filters.'}
-          </p>
-          <p className="mt-2 text-sm text-gray-500">
-            {batches.length === 0
-              ? 'Upload sessions will appear here after you start uploading files.'
-              : 'Try adjusting your filters to see more results.'}
-          </p>
+          {isFetchingNextPage && isFilterActive ? (
+            <>
+              <Loader2 className="h-6 w-6 animate-spin text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-600">Loading more batches...</p>
+              <p className="mt-2 text-sm text-gray-500">
+                Searching for batches matching your filters.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-gray-600">
+                {batches.length === 0
+                  ? 'No upload history found.'
+                  : 'No batches match your filters.'}
+              </p>
+              <p className="mt-2 text-sm text-gray-500">
+                {batches.length === 0
+                  ? 'Upload sessions will appear here after you start uploading files.'
+                  : hasNextPage
+                    ? 'More batches are available. Click "Load More" below or adjust your filters.'
+                    : 'Try adjusting your filters to see more results.'}
+              </p>
+            </>
+          )}
         </div>
       )}
 
@@ -255,6 +286,9 @@ export function BatchListView({
                     </span>
                   </div>
                   <div className="mt-0.5 text-xs text-gray-500">
+                    {siteLookup?.get(batch.siteId) && (
+                      <span className="font-medium">{siteLookup.get(batch.siteId)} • </span>
+                    )}
                     {batch.uploadedFilesCount} files • {formatBytes(batch.totalSize)}
                   </div>
                 </div>

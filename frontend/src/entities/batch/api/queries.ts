@@ -72,6 +72,13 @@ export function useBatchHistory(limit: number = 20) {
 
     // Refetch on window focus for fresh data
     refetchOnWindowFocus: true,
+
+    // Poll every 2 seconds if any batch is IN_PROGRESS (auto-refresh during uploads)
+    refetchInterval: (query) => {
+      const allBatches = query.state.data?.pages.flatMap(page => page.items) ?? [];
+      const hasInProgress = allBatches.some(batch => batch.status === 'IN_PROGRESS');
+      return hasInProgress ? 2000 : false;
+    },
   });
 }
 
@@ -107,17 +114,23 @@ export function useBatchDetails(batchId: string) {
     // Fetch function
     queryFn: () => getBatchDetails(batchId),
 
-    // Stale time: 30 minutes (matches backend cache for COMPLETED batches)
-    staleTime: 30 * 60 * 1000,
+    // Stale time: short for IN_PROGRESS, 30 minutes for completed batches
+    staleTime: (query) => query.state.data?.status === 'IN_PROGRESS' ? 0 : 30 * 60 * 1000,
 
     // Cache time: 1 hour
     gcTime: 60 * 60 * 1000,
 
-    // Don't refetch on window focus (batch details are relatively static)
-    refetchOnWindowFocus: false,
+    // Refetch on window focus only for IN_PROGRESS batches
+    refetchOnWindowFocus: (query) => query.state.data?.status === 'IN_PROGRESS',
 
     // Enable query only if batchId is provided
     enabled: Boolean(batchId),
+
+    // Poll every 1 second while batch is IN_PROGRESS (auto-refresh during upload)
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data?.status === 'IN_PROGRESS' ? 1000 : false;
+    },
   });
 }
 

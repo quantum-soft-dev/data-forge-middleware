@@ -7,7 +7,7 @@
  * Feature: 008-upload-history-user (User Story 1)
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useBatchHistory } from '@/entities/batch/api/queries';
 import { useSites } from '@/features/site-crud/model/queries';
@@ -32,6 +32,12 @@ export function BatchListWidget() {
 
   // Flatten all pages into single array
   const batches = data?.pages.flatMap((page) => page.items) ?? [];
+
+  // Create site ID to name lookup map for displaying site names
+  const siteLookup = useMemo(() => {
+    if (!sites) return new Map<string, string>();
+    return new Map(sites.map(site => [site.id, site.name]));
+  }, [sites]);
 
   /**
    * T057: Navigate to batch detail page
@@ -62,6 +68,7 @@ export function BatchListWidget() {
       error={error?.message ?? null}
       onBatchClick={handleBatchClick}
       sites={sites}
+      siteLookup={siteLookup}
       onRefresh={handleRefresh}
       isRefreshing={isRefreshing}
     />

@@ -200,3 +200,33 @@ Users need to consolidate multiple CSV files into a single Excel workbook for ea
 - Retry logic for individual failed file uploads within a batch
 - Upload history analytics or statistics dashboard
 - Archive or cleanup of old uploads
+
+## UI Behavior (Implementation Notes)
+
+### Auto-Refresh Behavior
+
+**Batch Detail View (IN_PROGRESS)**:
+- When viewing batch details while upload is in progress (status=IN_PROGRESS), the UI automatically polls every 1 second
+- Polling stops automatically when batch status changes to COMPLETED, FAILED, or COMPLETED_WITH_WARNINGS
+- staleTime is set to 0 for IN_PROGRESS batches to ensure fresh data
+- refetchOnWindowFocus enabled only for IN_PROGRESS batches
+
+**Batch List View (IN_PROGRESS)**:
+- When any batch in the list has status=IN_PROGRESS, the batch list auto-refreshes every 2 seconds
+- Polling stops when all visible batches are in a terminal state (COMPLETED, FAILED, etc.)
+
+### Site Name Display
+- Upload history list displays the site name alongside batch metadata (date, file count, size)
+- Site names are resolved via a frontend lookup map created from the user's sites list
+- Display format: "{Site Name} • {file count} files • {total size}"
+
+### Same-Site Batch Comparison
+- When comparing files between batches, only batches from the same site are shown as comparison targets
+- This ensures logical comparisons between related upload sessions
+- Empty state message updated: "No other batches from the same site available for comparison"
+
+### Filter Auto-Loading
+- When filters are active (status, date range, or site) and filtered results contain fewer than 10 items:
+  - If more pages exist (hasNextPage=true), the UI automatically fetches additional pages
+  - This continues until either 10+ matching items are found or all pages are exhausted
+- Improved empty state shows loading indicator when fetching more pages to find filter matches

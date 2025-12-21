@@ -45,6 +45,8 @@ interface CompareFilesModalProps {
   onClose: () => void;
   /** Current batch ID (source) */
   currentBatchId: string;
+  /** Current site ID for filtering (only show same-site batches) */
+  currentSiteId: string;
   /** Selected file IDs to compare */
   selectedFileIds: string[];
 }
@@ -56,6 +58,7 @@ export function CompareFilesModal({
   isOpen,
   onClose,
   currentBatchId,
+  currentSiteId,
   selectedFileIds,
 }: CompareFilesModalProps) {
   const [selectedTargetBatchId, setSelectedTargetBatchId] = useState<string>('');
@@ -95,9 +98,11 @@ export function CompareFilesModal({
     });
   };
 
-  // Filter out current batch from available batches
+  // Filter batches: exclude current batch and only show same-site batches
   const allBatches = batchesData?.pages.flatMap(page => page.items) ?? [];
-  const availableBatches = allBatches.filter((batch) => batch.id !== currentBatchId);
+  const availableBatches = allBatches.filter(
+    (batch) => batch.id !== currentBatchId && batch.siteId === currentSiteId
+  );
 
   // Find selected batch for display
   const selectedBatch = availableBatches.find((batch) => batch.id === selectedTargetBatchId);
@@ -120,7 +125,7 @@ export function CompareFilesModal({
             </div>
           ) : availableBatches.length === 0 ? (
             <div className="py-8 text-center">
-              <p className="text-sm text-muted-foreground">No other batches available for comparison.</p>
+              <p className="text-sm text-muted-foreground">No other batches from the same site available for comparison.</p>
             </div>
           ) : (
             <>
