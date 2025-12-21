@@ -36,7 +36,7 @@ public class PluginEventDispatcher {
 
     private final PluginRegistry pluginRegistry;
     private final AccountPluginRepository accountPluginRepository;
-    private final Executor pluginExecutor;
+    private final Executor pluginExecutionExecutor;
     private final PluginAuditService pluginAuditService;
     private final MeterRegistry meterRegistry;
 
@@ -50,12 +50,13 @@ public class PluginEventDispatcher {
     public PluginEventDispatcher(
             PluginRegistry pluginRegistry,
             AccountPluginRepository accountPluginRepository,
-            Executor pluginExecutor,
+            @org.springframework.beans.factory.annotation.Qualifier("pluginExecutionExecutor")
+            Executor pluginExecutionExecutor,
             PluginAuditService pluginAuditService,
             MeterRegistry meterRegistry) {
         this.pluginRegistry = pluginRegistry;
         this.accountPluginRepository = accountPluginRepository;
-        this.pluginExecutor = pluginExecutor;
+        this.pluginExecutionExecutor = pluginExecutionExecutor;
         this.pluginAuditService = pluginAuditService;
         this.meterRegistry = meterRegistry;
 
@@ -168,6 +169,8 @@ public class PluginEventDispatcher {
         // Increment total dispatch count
         eventDispatchCount.increment();
 
+        // Use separate executor to prevent thread starvation
+        // (dispatch threads wait on execution, so they must use different pools)
         CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
             try {
                 log.debug("Executing plugin {}: eventType={}, accountId={}",
@@ -177,7 +180,7 @@ public class PluginEventDispatcher {
                 log.error("Plugin {} execution failed: {}", pluginId, e.getMessage(), e);
                 throw new PluginExecutionException(pluginId, e);
             }
-        }, pluginExecutor);
+        }, pluginExecutionExecutor);
 
         try {
             // Wait for plugin execution with timeout (FR-008)
