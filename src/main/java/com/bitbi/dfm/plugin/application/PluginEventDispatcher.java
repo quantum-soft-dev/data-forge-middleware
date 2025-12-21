@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.concurrent.*;
@@ -38,6 +37,7 @@ public class PluginEventDispatcher {
     private final AccountPluginRepository accountPluginRepository;
     private final Executor pluginExecutionExecutor;
     private final PluginAuditService pluginAuditService;
+    private final PluginUsageService pluginUsageService;
     private final MeterRegistry meterRegistry;
 
     // Metrics
@@ -53,11 +53,13 @@ public class PluginEventDispatcher {
             @org.springframework.beans.factory.annotation.Qualifier("pluginExecutionExecutor")
             Executor pluginExecutionExecutor,
             PluginAuditService pluginAuditService,
+            PluginUsageService pluginUsageService,
             MeterRegistry meterRegistry) {
         this.pluginRegistry = pluginRegistry;
         this.accountPluginRepository = accountPluginRepository;
         this.pluginExecutionExecutor = pluginExecutionExecutor;
         this.pluginAuditService = pluginAuditService;
+        this.pluginUsageService = pluginUsageService;
         this.meterRegistry = meterRegistry;
 
         // Initialize metrics
@@ -191,7 +193,7 @@ public class PluginEventDispatcher {
                     pluginId, duration, event.type());
 
             // Update last_used_at on successful dispatch (FR-018)
-            updateLastUsedAt(accountPlugin);
+            pluginUsageService.updateLastUsedAt(accountPlugin);
 
             // Log successful event dispatch (async, non-blocking)
             pluginAuditService.logEventDispatch(pluginId, event.accountId(), duration);
@@ -229,26 +231,6 @@ public class PluginEventDispatcher {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("Plugin {} execution interrupted for event {}", pluginId, event.type());
-        }
-    }
-
-    /**
-     * Updates the last_used_at timestamp for the account-plugin activation.
-     * Called after successful event dispatch (FR-018).
-     *
-     * @param accountPlugin the activation to update
-     */
-    @Transactional
-    protected void updateLastUsedAt(AccountPlugin accountPlugin) {
-        try {
-            accountPlugin.recordUsage();
-            accountPluginRepository.save(accountPlugin);
-            log.debug("Updated last_used_at for plugin {} / account {}",
-                    accountPlugin.getPluginId(), accountPlugin.getAccountId());
-        } catch (Exception e) {
-            // Don't fail the dispatch if we can't update the timestamp
-            log.warn("Failed to update last_used_at for plugin {} / account {}: {}",
-                    accountPlugin.getPluginId(), accountPlugin.getAccountId(), e.getMessage());
         }
     }
 

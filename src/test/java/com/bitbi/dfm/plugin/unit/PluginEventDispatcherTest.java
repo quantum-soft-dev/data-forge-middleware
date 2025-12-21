@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.unit;
 
 import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginEventDispatcher;
+import com.bitbi.dfm.plugin.application.PluginUsageService;
 import com.bitbi.dfm.plugin.domain.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,6 +45,9 @@ class PluginEventDispatcherTest {
     @Mock
     private PluginAuditService pluginAuditService;
 
+    @Mock
+    private PluginUsageService pluginUsageService;
+
     private PluginEventDispatcher dispatcher;
 
     // Direct executor for synchronous test execution
@@ -59,6 +63,7 @@ class PluginEventDispatcherTest {
             accountPluginRepository,
             syncExecutor,
             pluginAuditService,
+            pluginUsageService,
             new SimpleMeterRegistry()
         );
     }
@@ -89,7 +94,7 @@ class PluginEventDispatcherTest {
 
             // Then
             assertThat(pluginExecuted.get()).isTrue();
-            verify(accountPluginRepository).save(accountPlugin); // last_used_at update
+            verify(pluginUsageService).updateLastUsedAt(accountPlugin); // last_used_at update
         }
 
         @Test
@@ -112,7 +117,7 @@ class PluginEventDispatcherTest {
 
             // Then
             assertThat(pluginExecuted.get()).isFalse();
-            verify(accountPluginRepository, never()).save(any());
+            verify(pluginUsageService, never()).updateLastUsedAt(any());
         }
 
         @Test
@@ -138,7 +143,7 @@ class PluginEventDispatcherTest {
 
             // Then
             assertThat(pluginExecuted.get()).isFalse();
-            verify(accountPluginRepository, never()).save(any());
+            verify(pluginUsageService, never()).updateLastUsedAt(any());
         }
 
         @Test
@@ -241,7 +246,6 @@ class PluginEventDispatcherTest {
                 (e, ap) -> {});
 
             AccountPlugin accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi", Map.of("tenantId", "test"));
-            assertThat(accountPlugin.getLastUsedAt()).isNull(); // Initially null
 
             when(pluginRegistry.findBySupportedEvent(PluginEventType.BATCH_COMPLETED))
                 .thenReturn(List.of(mockPlugin));
@@ -251,9 +255,8 @@ class PluginEventDispatcherTest {
             // When
             dispatcher.dispatch(event);
 
-            // Then
-            verify(accountPluginRepository).save(accountPlugin);
-            assertThat(accountPlugin.getLastUsedAt()).isNotNull();
+            // Then - verify service was called to update last_used_at
+            verify(pluginUsageService).updateLastUsedAt(accountPlugin);
         }
     }
 
