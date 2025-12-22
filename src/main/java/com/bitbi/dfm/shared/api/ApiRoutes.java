@@ -616,6 +616,40 @@ public final class ApiRoutes {
      */
     public static final String PLUGINS_ADMIN_AUDIT = PLUGINS_ADMIN + "/audit";
 
+    // ==================== Bit BI Plugin API ====================
+
+    /**
+     * Base path for Bit BI Plugin API endpoints.
+     * <p>
+     * This API uses Plugin API Key authentication via X-Plugin-Api-Key header.
+     * These endpoints are consumed by Bit BI to retrieve SQL changes.
+     * </p>
+     */
+    public static final String BITBI_PLUGIN_API = ADMIN_API_BASE + "/plugins/bit-bi";
+
+    /**
+     * Get SQL changes for a site endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: Plugin API Key (X-Plugin-Api-Key header)<br>
+     * Query Params: siteId (UUID, required), since (ISO8601 timestamp, required)<br>
+     * Content-Type: text/plain<br>
+     * Returns: Concatenated SQL statements or empty body
+     * </p>
+     */
+    public static final String BITBI_SQL_CHANGES = BITBI_PLUGIN_API + "/sql-changes";
+
+    /**
+     * List sites for account endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: Plugin API Key (X-Plugin-Api-Key header)<br>
+     * Content-Type: application/json<br>
+     * Returns: SiteListResponseDto
+     * </p>
+     */
+    public static final String BITBI_SITES = BITBI_PLUGIN_API + "/sites";
+
     // Private constructor to prevent instantiation
     private ApiRoutes() {
         throw new UnsupportedOperationException("Utility class - do not instantiate");

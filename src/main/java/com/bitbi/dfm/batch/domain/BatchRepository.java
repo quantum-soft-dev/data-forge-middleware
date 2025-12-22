@@ -47,4 +47,14 @@ public interface BatchRepository {
     Page<Batch> findAll(Pageable pageable);
 
     boolean existsById(UUID id);
+
+    /**
+     * Finds the most recent completed batch for a site, excluding a specific batch.
+     * Used by SQL generation to find the previous batch for comparison.
+     *
+     * @param siteId The site ID to find batches for
+     * @param excludeBatchId The batch ID to exclude (typically the current batch)
+     * @return Optional containing the most recent completed batch
+     */
+    Optional<Batch> findPreviousBatchForSite(UUID siteId, UUID excludeBatchId);
 }

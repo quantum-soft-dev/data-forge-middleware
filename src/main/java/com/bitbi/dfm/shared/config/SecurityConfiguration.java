@@ -2,6 +2,7 @@ package com.bitbi.dfm.shared.config;
 
 import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 import com.bitbi.dfm.shared.auth.AuthenticationAuditLogger;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -64,14 +65,17 @@ import java.util.stream.Collectors;
 public class SecurityConfiguration {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter;
     private final AuthenticationAuditLogger authenticationAuditLogger;
     private final Auth0Properties auth0Properties;
 
     public SecurityConfiguration(
             JwtAuthenticationFilter jwtAuthenticationFilter,
+            PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter,
             AuthenticationAuditLogger authenticationAuditLogger,
             Auth0Properties auth0Properties) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.pluginApiKeyAuthenticationFilter = pluginApiKeyAuthenticationFilter;
         this.authenticationAuditLogger = authenticationAuditLogger;
         this.auth0Properties = auth0Properties;
     }
@@ -149,10 +153,47 @@ public class SecurityConfiguration {
     }
 
     /**
+     * Bit BI Plugin API filter chain.
+     * <p>
+     * <b>Order 3</b>: Third priority - evaluated AFTER legacy JWT filter chain<br>
+     * <b>Matches</b>: /api/v1/plugins/bit-bi/**<br>
+     * <b>Authentication</b>: Plugin API Key (X-Plugin-Api-Key header)
+     * </p>
+     * <p>
+     * This filter chain handles the Bit BI Plugin API endpoints which use
+     * a custom API Key authentication mechanism instead of OAuth2 or JWT.
+     * API Keys are generated during plugin activation and stored in account_plugins.plugin_data.
+     * </p>
+     *
+     * @since 5.0.0 (Plugin SQL Generation)
+     * @see PluginApiKeyAuthenticationFilter
+     */
+    @Bean
+    @Order(3)
+    public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/plugins/bit-bi/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(pluginApiKeyAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
+                    response.sendError(401, "Unauthorized - Plugin API Key authentication required");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
      * UI/Admin API filter chain (NEW unified structure).
      * <p>
-     * <b>Order 3</b>: Third priority - evaluated AFTER Device API filter chain<br>
-     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/**)<br>
+     * <b>Order 4</b>: Fourth priority - evaluated AFTER Bit BI Plugin API filter chain<br>
+     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/** and /api/v1/plugins/bit-bi/**)<br>
      * <b>Authentication</b>: Keycloak OAuth2 Resource Server only
      * </p>
      * <p>
@@ -174,7 +215,7 @@ public class SecurityConfiguration {
      * @since 4.0.0 (API Unification)
      */
     @Bean
-    @Order(3)
+    @Order(4)
     public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/v1/**")
@@ -182,6 +223,7 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
+                .requestMatchers("/api/v1/plugins/bit-bi/**").denyAll() // Explicitly deny (already handled by Order 3)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
@@ -218,10 +260,10 @@ public class SecurityConfiguration {
      * migration period. Will return 410 Gone after migration via DeprecatedEndpointFilter.
      * </p>
      *
-     * @deprecated Use {@link #adminApiFilterChain(HttpSecurity)} instead (Order 3)
+     * @deprecated Use {@link #adminApiFilterChain(HttpSecurity)} instead (Order 4)
      */
     @Bean
-    @Order(4)
+    @Order(5)
     @Deprecated(since = "4.0.0", forRemoval = true)
     public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
         http
@@ -247,7 +289,7 @@ public class SecurityConfiguration {
     /**
      * Legacy user filter chain for authenticated user endpoints.
      * <p>
-     * <b>Order 5</b>: Fifth priority<br>
+     * <b>Order 6</b>: Sixth priority<br>
      * <b>Matches</b>: /api/sites/**, /api/account/**, /api/user/**<br>
      * <b>Authentication</b>: Keycloak OAuth2 Resource Server (any authenticated user)
      * </p>
@@ -260,7 +302,7 @@ public class SecurityConfiguration {
      * @deprecated Legacy paths - user endpoints migrated to /api/v1/history/**
      */
     @Bean
-    @Order(5)
+    @Order(6)
     @Deprecated(since = "4.0.0", forRemoval = true)
     public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
         http
@@ -286,7 +328,7 @@ public class SecurityConfiguration {
     /**
      * Default filter chain for public and remaining endpoints.
      * <p>
-     * <b>Order 6</b>: Lowest priority (catches all remaining requests)<br>
+     * <b>Order 7</b>: Lowest priority (catches all remaining requests)<br>
      * <b>Public access</b>:
      * </p>
      * <ul>
@@ -300,7 +342,7 @@ public class SecurityConfiguration {
      * </p>
      */
     @Bean
-    @Order(6)
+    @Order(7)
     public SecurityFilterChain defaultFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())

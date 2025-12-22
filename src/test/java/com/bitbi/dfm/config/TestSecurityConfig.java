@@ -22,6 +22,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -73,6 +74,9 @@ public class TestSecurityConfig {
 
     @Autowired(required = false)
     private TokenService tokenService;
+
+    @Autowired(required = false)
+    private PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter;
 
     /**
      * Mock Auth0 ManagementAPI bean for tests.
@@ -269,14 +273,41 @@ public class TestSecurityConfig {
     }
 
     /**
-     * UI/Admin API filter chain (NEW unified structure).
+     * Bit BI Plugin API filter chain.
      * <p>
-     * Order 3: Third priority - matches /api/v1/** (excluding /api/v1/device/**).
-     * Auth0 OAuth2 Resource Server only.
+     * Order 3: Third priority - matches /api/v1/plugins/bit-bi/**.
+     * Plugin API Key authentication via PluginApiKeyAuthenticationFilter.
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(3)
+    public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/plugins/bit-bi/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(pluginApiKeyAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.sendError(401, "Unauthorized - Plugin API Key authentication required");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
+     * UI/Admin API filter chain (NEW unified structure).
+     * <p>
+     * Order 4: Fourth priority - matches /api/v1/** (excluding /api/v1/device/** and /api/v1/plugins/bit-bi/**).
+     * Auth0 OAuth2 Resource Server only.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(4)
     public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/v1/**")
@@ -284,6 +315,7 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (handled by Order 1)
+                .requestMatchers("/api/v1/plugins/bit-bi/**").denyAll() // Explicitly deny (handled by Order 3)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
@@ -304,12 +336,12 @@ public class TestSecurityConfig {
     /**
      * Legacy Auth0 filter chain for old admin endpoints.
      * <p>
-     * Order 4: Fourth priority - matches /api/admin/** (deprecated).
+     * Order 5: Fifth priority - matches /api/admin/** (deprecated).
      * Auth0 OAuth2 Resource Server only - ROLE_ADMIN required.
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(4)
+    @org.springframework.core.annotation.Order(5)
     public SecurityFilterChain legacyAuth0FilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/admin/**")
@@ -330,12 +362,12 @@ public class TestSecurityConfig {
     /**
      * Legacy user filter chain for authenticated user endpoints.
      * <p>
-     * Order 5: Fifth priority - matches /api/sites**, /api/account/**, /api/user/** (deprecated).
+     * Order 6: Sixth priority - matches /api/sites**, /api/account/**, /api/user/** (deprecated).
      * OAuth2 Resource Server - any authenticated user allowed.
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(5)
+    @org.springframework.core.annotation.Order(6)
     public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
@@ -356,12 +388,12 @@ public class TestSecurityConfig {
     /**
      * Default security filter chain for remaining endpoints.
      * <p>
-     * Order 6: Lowest priority - catches all remaining requests.
+     * Order 7: Lowest priority - catches all remaining requests.
      * Allows public access to actuator, swagger, and auth token endpoints.
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(6)
+    @org.springframework.core.annotation.Order(7)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())

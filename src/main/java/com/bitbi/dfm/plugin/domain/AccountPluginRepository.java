@@ -72,4 +72,21 @@ public interface AccountPluginRepository {
      * @param accountPlugin the activation to delete
      */
     void delete(AccountPlugin accountPlugin);
+
+    /**
+     * Finds an account plugin by ID.
+     * @param id the account plugin ID
+     * @return the activation record if found
+     */
+    Optional<AccountPlugin> findById(Long id);
+
+    /**
+     * Finds an active account plugin by plugin ID and API key.
+     * Uses JSONB containment query for performance.
+     *
+     * @param pluginId the plugin identifier
+     * @param apiKey the API key value
+     * @return the activation record if found and active
+     */
+    Optional<AccountPlugin> findByPluginIdAndApiKey(String pluginId, String apiKey);
 }

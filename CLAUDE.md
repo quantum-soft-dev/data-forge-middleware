@@ -14,6 +14,8 @@ Auto-generated from all feature plans. Last updated: 2025-11-02
 - Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types) (013-plugin-system)
 - PostgreSQL 16 (new tables: `plugin_configs`, `account_plugins`, `plugin_audit_logs` - partitioned) (013-plugin-system)
 - Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4) (013-plugin-system)
+- Java 21 (LTS) with Spring Boot 3.5.6 + Spring Boot 3.5.6, Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (ApplicationEventPublisher), Hypersistence Utils (JSONB), Apache Commons CSV 1.12.0, java-diff-utils 4.12, ICU4J 76.1 (001-plugin-sql-generation)
+- PostgreSQL 16 (new table: `plugin_sql_generations`), AWS S3 (SQL file storage at `plugins/bit-bi/{accountId}/{siteName}/{datetime}.sql`) (001-plugin-sql-generation)
 
 ### Backend Stack
 - **Java 21** (LTS) with modern language features
@@ -655,6 +657,6 @@ auth0:
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes
+- 001-plugin-sql-generation: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Boot 3.5.6, Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (ApplicationEventPublisher), Hypersistence Utils (JSONB), Apache Commons CSV 1.12.0, java-diff-utils 4.12, ICU4J 76.1
 - 013-plugin-system: Added Admin UI for plugin administration at `/admin/plugins` with registered plugins list and audit logs with filtering
 - 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4)
-- 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types)

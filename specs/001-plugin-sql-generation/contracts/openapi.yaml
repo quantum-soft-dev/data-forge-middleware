@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: Bit BI Plugin API
+  description: |
+    Plugin API for Bit BI integration with Data Forge Middleware.
+    Provides access to SQL changes generated from batch upload diffs.
+  version: 1.0.0
+  contact:
+    name: Data Forge Team
+
+servers:
+  - url: /api/v1/plugins/bit-bi
+    description: Plugin API base path
+
+security:
+  - PluginApiKey: []
+
+tags:
+  - name: SQL Changes
+    description: Retrieve SQL changes from batch comparisons
+  - name: Sites
+    description: List available sites for the account
+
+paths:
+  /sql-changes:
+    get:
+      tags:
+        - SQL Changes
+      summary: Retrieve SQL changes for a site
+      description: |
+        Returns all SQL changes (INSERT, UPDATE, DELETE statements) for a specific site
+        after a given date. Multiple SQL files are concatenated in chronological order.
+      operationId: getSqlChanges
+      parameters:
+        - name: siteId
+          in: query
+          required: true
+          description: UUID of the site to retrieve changes for
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: since
+          in: query
+          required: true
+          description: ISO8601 timestamp. Returns changes after this date.
+          schema:
+            type: string
+            format: date-time
+          example: "2025-01-01T00:00:00Z"
+      responses:
+        '200':
+          description: SQL changes retrieved successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: Concatenated SQL statements
+              example: |
+                INSERT INTO customers (id, name, email) VALUES ('1', 'John Doe', 'john@example.com');
+                --- END OF COMMAND "customers.csv:2" ---
+                UPDATE orders SET status = 'shipped' WHERE id = '42' AND customer_id = '1';
+                --- END OF COMMAND "orders.csv:15" ---
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-12-22T10:00:00Z"
+                status: 400
+                error: "Bad Request"
+                message: "Invalid date format for 'since' parameter"
+                path: "/api/v1/plugins/bit-bi/sql-changes"
+        '401':
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-12-22T10:00:00Z"
+                status: 401
+                error: "Unauthorized"
+                message: "Invalid or missing API key"
+                path: "/api/v1/plugins/bit-bi/sql-changes"
+        '403':
+          description: Site does not belong to account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2025-12-22T10:00:00Z"
+                status: 403
+                error: "Forbidden"
+                message: "Site does not belong to your account"
+                path: "/api/v1/plugins/bit-bi/sql-changes"
+
+  /sites:
+    get:
+      tags:
+        - Sites
+      summary: List available sites
+      description: Returns a list of all sites belonging to the account associated with the API key.
+      operationId: listSites
+      responses:
+        '200':
+          description: Sites retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteListResponse'
+              example:
+                sites:
+                  - id: "550e8400-e29b-41d4-a716-446655440000"
+                    domain: "example.com"
+                    displayName: "Example Site"
+                  - id: "660f9500-f39c-52e5-b827-557766551111"
+                    domain: "shop.example.com"
+                    displayName: "Example Shop"
+        '401':
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    PluginApiKey:
+      type: apiKey
+      in: header
+      name: X-Plugin-Api-Key
+      description: |
+        Plugin API Key generated during Bit BI plugin activation.
+        Format: `plk_` followed by 32 alphanumeric characters.
+        Example: `plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6`
+
+  schemas:
+    SiteListResponse:
+      type: object
+      required:
+        - sites
+      properties:
+        sites:
+          type: array
+          items:
+            $ref: '#/components/schemas/Site'
+
+    Site:
+      type: object
+      required:
+        - id
+        - domain
+        - displayName
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique site identifier
+        domain:
+          type: string
+          description: Site domain name
+          example: "example.com"
+        displayName:
+          type: string
+          description: Human-readable site name
+          example: "Example Site"
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Error timestamp in ISO8601 format
+        status:
+          type: integer
+          description: HTTP status code
+        error:
+          type: string
+          description: HTTP error name
+        message:
+          type: string
+          description: Detailed error message
+        path:
+          type: string
+          description: Request path that caused the error

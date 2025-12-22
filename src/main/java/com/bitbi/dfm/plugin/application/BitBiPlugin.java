@@ -6,10 +6,13 @@ import com.bitbi.dfm.plugin.domain.PluginEvent;
 import com.bitbi.dfm.plugin.domain.PluginEventType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Bit BI plugin implementation.
@@ -21,7 +24,8 @@ import java.util.Set;
  * <p>Plugin Data Schema (validated via JSON Schema):
  * <pre>
  * {
- *   "tenantId": "string (1-64 chars, alphanumeric with hyphens/underscores)"
+ *   "tenantId": "string (1-64 chars, alphanumeric with hyphens/underscores)",
+ *   "apiKey": "string (optional, system-generated, format: plk_[a-zA-Z0-9]{32})"
  * }
  * </pre>
  *
@@ -43,9 +47,31 @@ public class BitBiPlugin implements Plugin {
     public static final String PLUGIN_NAME = "Bit BI";
     public static final String PLUGIN_VERSION = "1.0.0";
 
+    private SqlGenerationService sqlGenerationService;
+    private PluginApiKeyService pluginApiKeyService;
+
+    /**
+     * Inject SqlGenerationService lazily to avoid circular dependency.
+     */
+    @Autowired
+    @Lazy
+    public void setSqlGenerationService(SqlGenerationService sqlGenerationService) {
+        this.sqlGenerationService = sqlGenerationService;
+    }
+
+    /**
+     * Inject PluginApiKeyService lazily to avoid circular dependency.
+     */
+    @Autowired
+    @Lazy
+    public void setPluginApiKeyService(PluginApiKeyService pluginApiKeyService) {
+        this.pluginApiKeyService = pluginApiKeyService;
+    }
+
     /**
      * JSON Schema for validating Bit BI plugin data.
      * Requires tenantId field with specific format constraints.
+     * apiKey is optional and system-generated on activation.
      */
     private static final String SCHEMA_JSON = """
         {
@@ -59,6 +85,13 @@ public class BitBiPlugin implements Plugin {
               "maxLength": 64,
               "pattern": "^[a-zA-Z0-9-_]+$",
               "description": "Bit BI tenant identifier"
+            },
+            "apiKey": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^plk_[a-zA-Z0-9]{32}$",
+              "description": "Plugin API Key (system-generated on activation)"
             }
           },
           "additionalProperties": false
@@ -93,11 +126,8 @@ public class BitBiPlugin implements Plugin {
     /**
      * Executes the plugin logic when a batch completion event is received.
      *
-     * <p>For Bit BI, this will notify the Bit BI service about the completed batch
-     * using the tenantId from the activation record.</p>
-     *
-     * <p>Note: In v1, this is a no-op placeholder. Actual Bit BI API integration
-     * will be implemented when Bit BI provides their webhook endpoint.</p>
+     * <p>For Bit BI, this generates SQL files from CSV diffs between batches
+     * and stores them in S3 for later retrieval via the Plugin API.</p>
      *
      * @param event the batch completion event
      * @param accountPlugin the activation record containing tenantId
@@ -111,24 +141,27 @@ public class BitBiPlugin implements Plugin {
             event.type().getEventName(),
             event.resourceId());
 
-        // TODO: Implement actual Bit BI webhook notification
-        // This will be implemented when Bit BI provides their webhook endpoint
-        // For now, just log the event for validation
-
         if (event.type() == PluginEventType.BATCH_COMPLETED) {
-            log.debug("Batch {} completed for tenant {}. Files: {}, Size: {}",
-                event.resourceId(),
-                tenantId,
-                event.metadata().get("uploadedFilesCount"),
-                event.metadata().get("totalSize"));
+            UUID batchId = event.resourceId();
+
+            log.info("Triggering SQL generation for batch {} (tenant: {})",
+                batchId, tenantId);
+
+            try {
+                sqlGenerationService.generateSqlForBatch(batchId, accountPlugin.getId());
+            } catch (Exception e) {
+                log.error("SQL generation failed for batch {} (tenant: {}): {}",
+                    batchId, tenantId, e.getMessage(), e);
+                // Don't rethrow - SQL generation failure shouldn't fail the event processing
+            }
         }
     }
 
     /**
      * Called when Bit BI plugin is activated for an account.
      *
-     * <p>Logs the activation for audit purposes. In the future, this could
-     * notify Bit BI about the new connection.</p>
+     * <p>Generates and stores an API Key for Plugin API authentication.
+     * The API Key is stored in plugin_data and can be retrieved via the admin API.</p>
      *
      * @param accountPlugin the activation record
      */
@@ -139,7 +172,15 @@ public class BitBiPlugin implements Plugin {
             accountPlugin.getAccountId(),
             tenantId);
 
-        // TODO: Optionally notify Bit BI about the new connection
+        // Generate API Key for Plugin API authentication
+        try {
+            var apiKey = pluginApiKeyService.generateApiKey(accountPlugin.getId());
+            log.info("Generated API Key for account {}: {}", accountPlugin.getAccountId(), apiKey);
+        } catch (Exception e) {
+            log.error("Failed to generate API Key for account {}: {}",
+                accountPlugin.getAccountId(), e.getMessage(), e);
+            // Don't fail activation if API key generation fails
+        }
     }
 
     /**

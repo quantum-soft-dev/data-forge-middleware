@@ -92,11 +92,11 @@ public class TestContainersManager {
                 .withCommand("redis-server", "--requirepass", "test_password");
 
         // Initialize LocalStack container
+        // Using LocalStack 3.x which is compatible with Testcontainers 1.20+
         localStackContainer = new LocalStackContainer(
-                DockerImageName.parse("localstack/localstack:0.11.2")
+                DockerImageName.parse("localstack/localstack:3.8")
         )
                 .withServices(LocalStackContainer.Service.S3)
-                .withExposedPorts(4566)
                 .withStartupTimeout(Duration.ofMinutes(2));
 
         try {

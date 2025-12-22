@@ -206,4 +206,26 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         WHERE b.id = :batchId
         """)
     Optional<Batch> findByIdWithFiles(UUID batchId);
+
+    /**
+     * Finds the most recent completed batch for a site, excluding a specific batch.
+     * Used by SQL generation to find the previous batch for comparison.
+     * <p>
+     * Only considers COMPLETED or COMPLETED_WITH_WARNINGS batches as valid previous batches.
+     * </p>
+     *
+     * @param siteId The site ID to find batches for
+     * @param excludeBatchId The batch ID to exclude (typically the current batch)
+     * @return Optional containing the most recent completed batch
+     */
+    @Query("""
+        SELECT b
+        FROM Batch b
+        WHERE b.siteId = :siteId
+          AND b.id <> :excludeBatchId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+        ORDER BY b.completedAt DESC
+        LIMIT 1
+        """)
+    Optional<Batch> findPreviousBatchForSite(UUID siteId, UUID excludeBatchId);
 }
