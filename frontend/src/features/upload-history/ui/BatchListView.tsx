@@ -59,11 +59,11 @@ export function BatchListView({
   isRefreshing,
 }: BatchListViewProps) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [dateFilter, setDateFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<string>('7days'); // Default to last 7 days
   const [siteFilter, setSiteFilter] = useState<string>('all');
 
-  // Check if any filter is active
-  const isFilterActive = statusFilter !== 'all' || dateFilter !== 'all' || siteFilter !== 'all';
+  // Check if any filter is active (7days is the default, so not considered "active" for UI purposes)
+  const isFilterActive = statusFilter !== 'all' || dateFilter !== '7days' || siteFilter !== 'all';
 
   // Filter batches
   const filteredBatches = useMemo(() => {
@@ -176,11 +176,11 @@ export function BatchListView({
           <option value="30days">Last 30 days</option>
           <option value="90days">Last 90 days</option>
         </select>
-        {(statusFilter !== 'all' || dateFilter !== 'all' || siteFilter !== 'all') && (
+        {isFilterActive && (
           <button
             onClick={() => {
               setStatusFilter('all');
-              setDateFilter('all');
+              setDateFilter('7days'); // Reset to default (7 days)
               setSiteFilter('all');
             }}
             className="text-sm text-blue-600 hover:text-blue-800"

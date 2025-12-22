@@ -100,8 +100,13 @@ export function CompareFilesModal({
 
   // Filter batches: exclude current batch and only show same-site batches
   const allBatches = batchesData?.pages.flatMap(page => page.items) ?? [];
+
+  // Debug: Log siteId comparison
+  console.log('[CompareFilesModal] currentSiteId:', currentSiteId, 'type:', typeof currentSiteId);
+  console.log('[CompareFilesModal] allBatches siteIds:', allBatches.map(b => ({ id: b.id, siteId: b.siteId, type: typeof b.siteId })));
+
   const availableBatches = allBatches.filter(
-    (batch) => batch.id !== currentBatchId && batch.siteId === currentSiteId
+    (batch) => batch.id !== currentBatchId && String(batch.siteId) === String(currentSiteId)
   );
 
   // Find selected batch for display
