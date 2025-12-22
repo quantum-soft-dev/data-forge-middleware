@@ -16,4 +16,8 @@ export const pluginKeys = {
     [...pluginKeys.auditLogs(), filters] as const,
   auditLogByPlugin: (pluginId: string, page: number, size: number) =>
     [...pluginKeys.auditLogs(), 'plugin', pluginId, { page, size }] as const,
+  // Account plugins (user-facing)
+  accountPlugins: () => [...pluginKeys.all, 'account'] as const,
+  accountPluginList: (includeInactive: boolean) =>
+    [...pluginKeys.accountPlugins(), { includeInactive }] as const,
 }

@@ -654,9 +654,91 @@ auth0:
 - [ ] Multi-part upload for large files (>5GB)
 
 <!-- MANUAL ADDITIONS START -->
+
+### My Plugins Dashboard Widget (Added 2025-12-22)
+
+**Feature**: User-facing plugin management widget on the Dashboard allowing users to view, activate, and deactivate plugins.
+
+#### User Capabilities
+- View list of activated plugins with status (active/inactive)
+- View available plugins that can be activated
+- Activate new plugins with required configuration (e.g., tenantId for Bit BI)
+- Deactivate plugins that are no longer needed
+- See last used timestamp for each plugin
+
+#### Frontend Structure (Feature-Sliced Design)
+```
+frontend/src/
+├── features/my-plugins/
+│   ├── api/
+│   │   ├── myPluginsApi.ts           # API client functions
+│   │   ├── myPluginsQueries.ts       # useAccountPluginsQuery, useAvailablePluginsQuery
+│   │   ├── myPluginsMutations.ts     # useActivatePluginMutation, useDeactivatePluginMutation
+│   │   └── __tests__/                # 14 tests
+│   ├── model/
+│   │   └── types.ts                  # AccountPluginSummary, ActivatePluginRequest, etc.
+│   ├── ui/
+│   │   ├── PluginCard.tsx            # Individual plugin card with status and actions
+│   │   ├── PluginList.tsx            # Grid of plugin cards with loading/error states
+│   │   ├── PluginActivationDialog.tsx # Dialog for plugin activation with form
+│   │   └── __tests__/                # 44 tests
+│   └── index.ts
+├── widgets/my-plugins/
+│   ├── MyPluginsWidget.tsx           # Container widget for Dashboard
+│   ├── index.ts
+│   └── __tests__/                    # 10 tests
+└── pages/dashboard/
+    └── DashboardPage.tsx             # Integrates MyPluginsWidget
+```
+
+#### API Endpoints Used
+| Operation | Endpoint | Method |
+|-----------|----------|--------|
+| List user's plugins | `GET /api/v1/account/plugins` | Query |
+| List available plugins | `GET /api/v1/admin/plugins` | Query |
+| Activate plugin | `POST /api/v1/plugins/{pluginId}/activate` | Mutation |
+| Deactivate plugin | `DELETE /api/v1/plugins/{pluginId}/deactivate` | Mutation |
+
+#### API Routes (Frontend)
+```typescript
+// frontend/src/shared/api/apiRoutes.ts
+export const ACCOUNT_PLUGINS = `${ADMIN_API_BASE}/account/plugins`;
+export const PLUGINS = `${ADMIN_API_BASE}/plugins`;
+export const PLUGINS_ACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/activate`;
+export const PLUGINS_DEACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/deactivate`;
+```
+
+#### Query Keys (TanStack Query)
+```typescript
+// frontend/src/entities/plugin/api/keys.ts
+pluginKeys = {
+  // ... existing keys ...
+  accountPlugins: () => [...pluginKeys.all, 'account'] as const,
+  accountPluginList: (includeInactive: boolean) =>
+    [...pluginKeys.accountPlugins(), { includeInactive }] as const,
+}
+```
+
+#### Test Coverage
+- **API layer**: 14 tests (queries + mutations)
+- **UI components**: 44 tests (PluginCard, PluginList, PluginActivationDialog)
+- **Widget**: 10 tests (MyPluginsWidget integration)
+- **Total**: 68 tests
+
+#### Plugin-Specific Configuration
+Bit BI plugin requires `tenantId` in the pluginData:
+```typescript
+interface BitBiPluginData {
+  tenantId: string;
+}
+```
+
+The PluginActivationDialog detects the plugin type and shows appropriate form fields.
+
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes
 - 001-plugin-sql-generation: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Boot 3.5.6, Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (ApplicationEventPublisher), Hypersistence Utils (JSONB), Apache Commons CSV 1.12.0, java-diff-utils 4.12, ICU4J 76.1
 - 013-plugin-system: Added Admin UI for plugin administration at `/admin/plugins` with registered plugins list and audit logs with filtering
 - 013-plugin-system: Added Java 21 (LTS) with Spring Boot 3.5.6 + Spring Security 6 (OAuth2 Resource Server + Auth0), Spring Data JPA, Spring Events (`ApplicationEventPublisher`), Hypersistence Utils (JSONB types), json-schema-validator (1.5.4)
+- 013-plugin-system: Added My Plugins Dashboard widget for user-facing plugin management with activation/deactivation capabilities

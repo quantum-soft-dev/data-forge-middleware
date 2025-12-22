@@ -110,3 +110,11 @@ export const COMPARISONS_SUMMARY_DOWNLOAD = (id: number) => `${COMPARISONS}/${id
 export const ADMIN_PLUGINS = `${ADMIN_API_BASE}/admin/plugins`;
 export const ADMIN_PLUGINS_AUDIT = `${ADMIN_PLUGINS}/audit`;
 export const ADMIN_PLUGINS_AUDIT_BY_PLUGIN = (pluginId: string) => `${ADMIN_PLUGINS}/${pluginId}/audit`;
+
+// Account Plugins (User-facing)
+export const ACCOUNT_PLUGINS = `${ADMIN_API_BASE}/account/plugins`;
+
+// Plugin Activation
+export const PLUGINS = `${ADMIN_API_BASE}/plugins`;
+export const PLUGINS_ACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/activate`;
+export const PLUGINS_DEACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/deactivate`;

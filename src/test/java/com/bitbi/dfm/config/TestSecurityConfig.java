@@ -275,15 +275,20 @@ public class TestSecurityConfig {
     /**
      * Bit BI Plugin API filter chain.
      * <p>
-     * Order 3: Third priority - matches /api/v1/plugins/bit-bi/**.
+     * Order 3: Third priority - matches specific Bit BI Plugin API endpoints.
      * Plugin API Key authentication via PluginApiKeyAuthenticationFilter.
+     * </p>
+     * <p>
+     * IMPORTANT: Only specific Bit BI API endpoints use Plugin API Key auth.
+     * The /api/v1/plugins/bit-bi/activate and /api/v1/plugins/bit-bi/deactivate
+     * endpoints use OAuth2 (handled by Order 4 filter chain).
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/plugins/bit-bi/**")
+            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -315,11 +320,14 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/**").denyAll() // Explicitly deny (handled by Order 3)
+                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites").denyAll() // Explicitly deny (handled by Order 3)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/errors/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/admin/plugins/**").hasRole("ADMIN") // Plugin admin endpoints
+                .requestMatchers("/api/v1/plugins/**").authenticated() // Plugin activation endpoints (any authenticated user)
+                .requestMatchers("/api/v1/account/plugins/**").authenticated() // Account plugins list
                 .requestMatchers("/api/v1/history/**").authenticated() // Any authenticated user
                 .requestMatchers("/api/v1/comparisons/**").authenticated() // Any authenticated user
                 .anyRequest().authenticated()

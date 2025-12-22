@@ -7,11 +7,13 @@
  * Features:
  * - Navigation header with Dashboard/Accounts links
  * - 4 chart widgets in responsive grid
+ * - My Plugins widget for plugin management
  * - Logout button in header
  */
 
 import { Header } from '@/widgets/header/Header'
 import { DashboardCharts } from '@/widgets/dashboard-charts'
+import { MyPluginsWidget } from '@/widgets/my-plugins'
 
 export default function DashboardPage() {
   return (
@@ -25,6 +27,9 @@ export default function DashboardPage() {
           </p>
         </div>
         <DashboardCharts />
+        <div className="mt-8">
+          <MyPluginsWidget />
+        </div>
       </main>
     </div>
   )

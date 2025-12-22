@@ -156,13 +156,18 @@ public class SecurityConfiguration {
      * Bit BI Plugin API filter chain.
      * <p>
      * <b>Order 3</b>: Third priority - evaluated AFTER legacy JWT filter chain<br>
-     * <b>Matches</b>: /api/v1/plugins/bit-bi/**<br>
+     * <b>Matches</b>: /api/v1/plugins/bit-bi/sql-changes, /api/v1/plugins/bit-bi/sites<br>
      * <b>Authentication</b>: Plugin API Key (X-Plugin-Api-Key header)
      * </p>
      * <p>
      * This filter chain handles the Bit BI Plugin API endpoints which use
      * a custom API Key authentication mechanism instead of OAuth2 or JWT.
      * API Keys are generated during plugin activation and stored in account_plugins.plugin_data.
+     * </p>
+     * <p>
+     * <b>IMPORTANT:</b> Only specific Bit BI API endpoints use Plugin API Key auth.
+     * The /api/v1/plugins/bit-bi/activate and /api/v1/plugins/bit-bi/deactivate
+     * endpoints use OAuth2 (handled by Order 4 filter chain).
      * </p>
      *
      * @since 5.0.0 (Plugin SQL Generation)
@@ -172,7 +177,7 @@ public class SecurityConfiguration {
     @Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/plugins/bit-bi/**")
+            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -223,7 +228,7 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/**").denyAll() // Explicitly deny (already handled by Order 3)
+                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites").denyAll() // Explicitly deny (already handled by Order 3)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")

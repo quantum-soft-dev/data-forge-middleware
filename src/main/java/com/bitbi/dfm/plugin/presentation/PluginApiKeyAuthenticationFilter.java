@@ -42,7 +42,16 @@ public class PluginApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(PluginApiKeyAuthenticationFilter.class);
     private static final String API_KEY_HEADER = "X-Plugin-Api-Key";
-    private static final String PLUGIN_API_PATH = "/api/v1/plugins/bit-bi";
+
+    /**
+     * Paths that require Plugin API Key authentication.
+     * These are the Bit BI Plugin API endpoints consumed by external clients.
+     * Note: /api/v1/plugins/bit-bi/activate and /deactivate use OAuth2 instead.
+     */
+    private static final String[] PLUGIN_API_PATHS = {
+        "/api/v1/plugins/bit-bi/sql-changes",
+        "/api/v1/plugins/bit-bi/sites"
+    };
 
     private final PluginApiKeyService pluginApiKeyService;
     private final ObjectMapper objectMapper;
@@ -57,7 +66,13 @@ public class PluginApiKeyAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !path.startsWith(PLUGIN_API_PATH);
+        // Only apply this filter to specific Bit BI Plugin API endpoints
+        for (String pluginApiPath : PLUGIN_API_PATHS) {
+            if (path.equals(pluginApiPath) || path.startsWith(pluginApiPath + "/") || path.startsWith(pluginApiPath + "?")) {
+                return false; // Do filter (apply authentication)
+            }
+        }
+        return true; // Skip filter for all other paths
     }
 
     @Override
