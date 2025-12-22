@@ -7,7 +7,7 @@
  * Feature: 009-markdown-user-story (User Story 1/2 integration)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useBatchHistory } from '@/entities/batch/api/queries';
 import { useCreateComparison } from '@/features/file-comparison/lib/useCreateComparison';
@@ -65,8 +65,14 @@ export function CompareFilesModal({
   const [comboboxOpen, setComboboxOpen] = useState(false);
   const navigate = useNavigate();
 
-  // Fetch available batches for comparison
-  const { data: batchesData, isLoading: isBatchesLoading } = useBatchHistory(50);
+  // Fetch available batches for comparison (use infinite query to load more if needed)
+  const {
+    data: batchesData,
+    isLoading: isBatchesLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useBatchHistory(50);
 
   // Create comparison mutation
   const createComparisonMutation = useCreateComparison({
@@ -101,13 +107,20 @@ export function CompareFilesModal({
   // Filter batches: exclude current batch and only show same-site batches
   const allBatches = batchesData?.pages.flatMap(page => page.items) ?? [];
 
-  // Debug: Log siteId comparison
-  console.log('[CompareFilesModal] currentSiteId:', currentSiteId, 'type:', typeof currentSiteId);
-  console.log('[CompareFilesModal] allBatches siteIds:', allBatches.map(b => ({ id: b.id, siteId: b.siteId, type: typeof b.siteId })));
-
   const availableBatches = allBatches.filter(
     (batch) => batch.id !== currentBatchId && String(batch.siteId) === String(currentSiteId)
   );
+
+  // Auto-load more pages when same-site batches are sparse
+  // This fixes the issue where the first 50 batches may not include enough same-site batches
+  useEffect(() => {
+    // Only auto-load when modal is open and we need more same-site batches
+    const needsMoreBatches = isOpen && availableBatches.length < 5 && hasNextPage && !isFetchingNextPage && !isBatchesLoading;
+
+    if (needsMoreBatches) {
+      fetchNextPage();
+    }
+  }, [isOpen, availableBatches.length, hasNextPage, isFetchingNextPage, isBatchesLoading, fetchNextPage]);
 
   // Find selected batch for display
   const selectedBatch = availableBatches.find((batch) => batch.id === selectedTargetBatchId);
@@ -130,7 +143,14 @@ export function CompareFilesModal({
             </div>
           ) : availableBatches.length === 0 ? (
             <div className="py-8 text-center">
-              <p className="text-sm text-muted-foreground">No other batches from the same site available for comparison.</p>
+              {isFetchingNextPage ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Searching for batches from the same site...</p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">No other batches from the same site available for comparison.</p>
+              )}
             </div>
           ) : (
             <>
