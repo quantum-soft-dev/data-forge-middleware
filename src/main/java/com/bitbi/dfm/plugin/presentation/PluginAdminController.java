@@ -153,7 +153,8 @@ public class PluginAdminController {
         // Enforce maximum page size
         int effectiveSize = Math.min(size, 100);
 
-        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "occurredAt"));
+        // Use unsorted because native SQL query already has ORDER BY clause
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.unsorted());
 
         Page<PluginAuditLogEntryDto> auditLogs = pluginAdminQueryService.queryAuditLogs(
                 pluginId, accountId, actionType, success, from, to, pageable);
