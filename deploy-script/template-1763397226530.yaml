@@ -690,7 +690,7 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
-      Cpu: '4096'
+      Cpu: '2048'
       Memory: '4096'
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
@@ -756,6 +756,8 @@ Resources:
               Value: !Sub 'https://${Auth0Domain}/api/v2/'
             - Name: AUTH0_CLAIMS_NAMESPACE
               Value: !Ref Auth0ClaimsNamespace
+            - Name: PLUGIN_BITBI_CLIENT_ID
+              Value: vlyrbKacW1kdcF5srxVYe99wN2UrmZKH
           Secrets:
             - Name: DB_USERNAME
               ValueFrom: !Sub '${AppDBCredentialsSecret}:username::'
