@@ -13,7 +13,16 @@ import userEvent from '@testing-library/user-event';
 import { BatchListView } from './BatchListView';
 import type { BatchSummary } from '@/entities/batch/model/types';
 
+// Helper to generate ISO date string relative to now
+const daysAgo = (days: number, hoursOffset = 0): string => {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  date.setHours(date.getHours() - hoursOffset);
+  return date.toISOString();
+};
+
 describe('BatchListView', () => {
+  // Use dynamic dates within last 7 days to pass default date filter
   const mockBatches: BatchSummary[] = [
     {
       id: '123e4567-e89b-12d3-a456-426614174000',
@@ -22,8 +31,8 @@ describe('BatchListView', () => {
       uploadedFilesCount: 5,
       totalSize: 1024000,
       hasErrors: false,
-      startedAt: '2025-11-01T10:00:00Z',
-      completedAt: '2025-11-01T10:05:00Z',
+      startedAt: daysAgo(1, 0), // 1 day ago
+      completedAt: daysAgo(1, -1), // 1 day ago + 1 hour
     },
     {
       id: '123e4567-e89b-12d3-a456-426614174002',
@@ -32,8 +41,8 @@ describe('BatchListView', () => {
       uploadedFilesCount: 3,
       totalSize: 512000,
       hasErrors: true,
-      startedAt: '2025-11-01T09:00:00Z',
-      completedAt: '2025-11-01T09:05:00Z',
+      startedAt: daysAgo(2, 0), // 2 days ago
+      completedAt: daysAgo(2, -1), // 2 days ago + 1 hour
     },
     {
       id: '123e4567-e89b-12d3-a456-426614174003',
@@ -42,7 +51,7 @@ describe('BatchListView', () => {
       uploadedFilesCount: 2,
       totalSize: 256000,
       hasErrors: false,
-      startedAt: '2025-11-01T08:00:00Z',
+      startedAt: daysAgo(0, 2), // today, 2 hours ago
       completedAt: null,
     },
     {
@@ -52,8 +61,8 @@ describe('BatchListView', () => {
       uploadedFilesCount: 4,
       totalSize: 768000,
       hasErrors: false,
-      startedAt: '2025-11-01T07:00:00Z',
-      completedAt: '2025-11-01T07:10:00Z',
+      startedAt: daysAgo(3, 0), // 3 days ago
+      completedAt: daysAgo(3, -1), // 3 days ago + 1 hour
     },
   ];
 
