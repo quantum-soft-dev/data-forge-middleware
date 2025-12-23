@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.presentation;
 
+import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.application.SqlChangesQueryService;
 import com.bitbi.dfm.plugin.presentation.dto.SiteDto;
 import com.bitbi.dfm.plugin.presentation.dto.SiteListResponseDto;
@@ -16,6 +17,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -51,9 +54,13 @@ public class BitBiPluginApiController {
     private static final Logger log = LoggerFactory.getLogger(BitBiPluginApiController.class);
 
     private final SqlChangesQueryService sqlChangesQueryService;
+    private final PluginRateLimiterService rateLimiterService;
 
-    public BitBiPluginApiController(SqlChangesQueryService sqlChangesQueryService) {
+    public BitBiPluginApiController(
+            SqlChangesQueryService sqlChangesQueryService,
+            PluginRateLimiterService rateLimiterService) {
         this.sqlChangesQueryService = sqlChangesQueryService;
+        this.rateLimiterService = rateLimiterService;
     }
 
     /**
@@ -76,7 +83,8 @@ public class BitBiPluginApiController {
         @ApiResponse(responseCode = "200", description = "SQL changes retrieved successfully"),
         @ApiResponse(responseCode = "400", description = "Invalid request parameters"),
         @ApiResponse(responseCode = "401", description = "Invalid or missing API key"),
-        @ApiResponse(responseCode = "403", description = "Site does not belong to account")
+        @ApiResponse(responseCode = "403", description = "Site does not belong to account"),
+        @ApiResponse(responseCode = "429", description = "Rate limit exceeded")
     })
     public ResponseEntity<String> getSqlChanges(
             @Parameter(description = "UUID of the site to retrieve changes for", required = true)
@@ -86,6 +94,14 @@ public class BitBiPluginApiController {
             Authentication authentication) {
 
         UUID accountId = extractAccountId(authentication);
+
+        // Check rate limit
+        if (!rateLimiterService.tryConsume(accountId)) {
+            long retryAfter = rateLimiterService.getRetryAfterSeconds(accountId);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfter))
+                    .body("Rate limit exceeded. Please retry after " + retryAfter + " seconds.");
+        }
 
         // Set MDC context for structured logging
         MDC.put("accountId", accountId.toString());
@@ -134,11 +150,20 @@ public class BitBiPluginApiController {
             description = "Sites retrieved successfully",
             content = @Content(schema = @Schema(implementation = SiteListResponseDto.class))
         ),
-        @ApiResponse(responseCode = "401", description = "Invalid or missing API key")
+        @ApiResponse(responseCode = "401", description = "Invalid or missing API key"),
+        @ApiResponse(responseCode = "429", description = "Rate limit exceeded")
     })
     public ResponseEntity<SiteListResponseDto> listSites(Authentication authentication) {
 
         UUID accountId = extractAccountId(authentication);
+
+        // Check rate limit
+        if (!rateLimiterService.tryConsume(accountId)) {
+            long retryAfter = rateLimiterService.getRetryAfterSeconds(accountId);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfter))
+                    .build();
+        }
 
         // Set MDC context for structured logging
         MDC.put("accountId", accountId.toString());

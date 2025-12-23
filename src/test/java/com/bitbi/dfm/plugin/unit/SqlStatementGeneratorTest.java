@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for SqlStatementGenerator.
@@ -512,6 +513,143 @@ class SqlStatementGeneratorTest {
 
             // Then
             assertThat(sql).contains("VALUES (1, 0.75)");
+        }
+    }
+
+    @Nested
+    @DisplayName("SQL Injection Prevention")
+    class SqlInjectionPrevention {
+
+        @Test
+        @DisplayName("should reject table name with SQL injection attempt")
+        void shouldRejectTableNameWithSqlInjection() {
+            // Given - malicious table name
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When / Then
+            assertThatThrownBy(() -> generator.generate(diff, "users; DROP TABLE users; --", Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("contains invalid characters");
+        }
+
+        @Test
+        @DisplayName("should reject column name with SQL injection attempt")
+        void shouldRejectColumnNameWithSqlInjection() {
+            // Given - malicious column name
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            values.put("name'; DROP TABLE users; --", "evil");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When / Then
+            assertThatThrownBy(() -> generator.generate(diff, "users", Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("contains invalid characters");
+        }
+
+        @Test
+        @DisplayName("should reject table name with special characters")
+        void shouldRejectTableNameWithSpecialCharacters() {
+            // Given
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When / Then
+            assertThatThrownBy(() -> generator.generate(diff, "table-name", Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("contains invalid characters");
+        }
+
+        @Test
+        @DisplayName("should reject table name starting with number")
+        void shouldRejectTableNameStartingWithNumber() {
+            // Given
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When / Then
+            assertThatThrownBy(() -> generator.generate(diff, "123table", Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("contains invalid characters");
+        }
+
+        @Test
+        @DisplayName("should accept valid table name with underscores")
+        void shouldAcceptValidTableNameWithUnderscores() {
+            // Given
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When
+            String sql = generator.generate(diff, "my_table_name", Map.of());
+
+            // Then
+            assertThat(sql).contains("INSERT INTO my_table_name");
+        }
+
+        @Test
+        @DisplayName("should accept table name starting with underscore")
+        void shouldAcceptTableNameStartingWithUnderscore() {
+            // Given
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When
+            String sql = generator.generate(diff, "_temp_table", Map.of());
+
+            // Then
+            assertThat(sql).contains("INSERT INTO _temp_table");
+        }
+
+        @Test
+        @DisplayName("should properly escape SQL injection in values")
+        void shouldProperlyEscapeSqlInjectionInValues() {
+            // Given - malicious value (should be escaped, not rejected)
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            values.put("name", "John'; DROP TABLE users; --");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When
+            String sql = generator.generate(diff, "users", Map.of());
+
+            // Then - value should be escaped with doubled single quotes
+            assertThat(sql).contains("'John''; DROP TABLE users; --'");
+            assertThat(sql).doesNotContain("John'; DROP");
+        }
+
+        @Test
+        @DisplayName("should reject null table name")
+        void shouldRejectNullTableName() {
+            // Given
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When / Then
+            assertThatThrownBy(() -> generator.generate(diff, null, Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot be null or empty");
+        }
+
+        @Test
+        @DisplayName("should reject empty table name")
+        void shouldRejectEmptyTableName() {
+            // Given
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("id", "1");
+            CsvRowDiff diff = CsvRowDiff.added(2, values);
+
+            // When / Then
+            assertThatThrownBy(() -> generator.generate(diff, "", Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot be null or empty");
         }
     }
 }

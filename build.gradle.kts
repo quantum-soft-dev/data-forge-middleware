@@ -92,6 +92,8 @@ dependencies {
     // Plugin System Dependencies
     // JSON Schema validation for plugin data
     implementation("com.networknt:json-schema-validator:1.5.4")
+    // Rate limiting for Plugin API
+    implementation("com.bucket4j:bucket4j-core:8.10.1")
 
     // Lombok
     compileOnly("org.projectlombok:lombok")

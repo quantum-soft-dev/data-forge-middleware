@@ -228,4 +228,27 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         LIMIT 1
         """)
     Optional<Batch> findPreviousBatchForSite(UUID siteId, UUID excludeBatchId);
+
+    /**
+     * Finds the previous batch for a site with uploaded files eagerly loaded.
+     * <p>
+     * Uses LEFT JOIN FETCH to avoid N+1 query problem.
+     * Only considers COMPLETED or COMPLETED_WITH_WARNINGS batches.
+     * </p>
+     *
+     * @param siteId The site ID to find batches for
+     * @param excludeBatchId The batch ID to exclude (typically the current batch)
+     * @return Optional containing the previous batch with files
+     */
+    @Query("""
+        SELECT b
+        FROM Batch b
+        LEFT JOIN FETCH b.uploadedFiles
+        WHERE b.siteId = :siteId
+          AND b.id <> :excludeBatchId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+        ORDER BY b.completedAt DESC
+        LIMIT 1
+        """)
+    Optional<Batch> findPreviousBatchForSiteWithFiles(UUID siteId, UUID excludeBatchId);
 }

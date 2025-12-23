@@ -2,9 +2,12 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -14,6 +17,20 @@ import java.util.stream.Collectors;
 @Service
 public class CsvDiffService {
 
+    private static final Logger log = LoggerFactory.getLogger(CsvDiffService.class);
+
+    /**
+     * Pattern for valid CSV column names.
+     * Allows letters, digits, underscores, spaces, and common punctuation.
+     * Maximum length 128 characters.
+     */
+    private static final Pattern VALID_COLUMN_NAME = Pattern.compile("^[\\p{L}\\p{N}_\\- .,()]{1,128}$");
+
+    /**
+     * Maximum allowed number of columns to prevent memory issues.
+     */
+    private static final int MAX_COLUMNS = 500;
+
     /**
      * Compares two lists of CSV rows and returns the differences.
      * Uses first column as row identity key for modification detection.
@@ -22,12 +39,17 @@ public class CsvDiffService {
      * @param currentRows Rows from the current batch
      * @param columnTypes Map of column name to DBF type (for type-aware comparison)
      * @return List of row differences (added, modified, deleted)
+     * @throws InvalidCsvHeaderException if column headers are invalid
      */
     public List<CsvRowDiff> compare(
             List<Map<String, String>> previousRows,
             List<Map<String, String>> currentRows,
             Map<String, DbfColumnType> columnTypes
     ) {
+        // Validate CSV headers before processing
+        validateHeaders(currentRows);
+        validateHeaders(previousRows);
+
         List<CsvRowDiff> diffs = new ArrayList<>();
 
         // Get identity column (first column) if available
@@ -169,5 +191,79 @@ public class CsvDiffService {
             .sorted(Map.Entry.comparingByKey())
             .map(e -> e.getKey() + "=" + (e.getValue() == null ? "\0NULL\0" : e.getValue()))
             .collect(Collectors.joining("|"));
+    }
+
+    /**
+     * Validates CSV headers for security and sanity.
+     * Checks:
+     * - Column count limit
+     * - Column name format (no SQL injection vectors)
+     * - No empty column names
+     *
+     * @param rows CSV rows to validate headers from
+     * @throws InvalidCsvHeaderException if headers are invalid
+     */
+    private void validateHeaders(List<Map<String, String>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return; // Empty is valid
+        }
+
+        Map<String, String> firstRow = rows.get(0);
+        if (firstRow == null || firstRow.isEmpty()) {
+            return; // Empty row is valid
+        }
+
+        Set<String> columns = firstRow.keySet();
+
+        // Check column count
+        if (columns.size() > MAX_COLUMNS) {
+            log.error("CSV has too many columns: count={}, max={}",
+                    columns.size(), MAX_COLUMNS);
+            throw new InvalidCsvHeaderException(
+                    "CSV file has " + columns.size() + " columns, exceeding limit of " + MAX_COLUMNS);
+        }
+
+        // Validate each column name
+        List<String> invalidColumns = new ArrayList<>();
+        for (String column : columns) {
+            if (column == null || column.trim().isEmpty()) {
+                invalidColumns.add("<empty>");
+                continue;
+            }
+
+            if (!VALID_COLUMN_NAME.matcher(column).matches()) {
+                invalidColumns.add(sanitizeForLogging(column));
+            }
+        }
+
+        if (!invalidColumns.isEmpty()) {
+            log.error("CSV has invalid column names: columns={}",
+                    String.join(", ", invalidColumns));
+            throw new InvalidCsvHeaderException(
+                    "CSV file has " + invalidColumns.size() + " invalid column name(s). " +
+                    "Column names must contain only letters, numbers, underscores, spaces, and common punctuation.");
+        }
+    }
+
+    /**
+     * Sanitizes a string for safe logging (prevents log injection).
+     */
+    private String sanitizeForLogging(String value) {
+        if (value == null) {
+            return "<null>";
+        }
+        // Truncate and escape control characters
+        String truncated = value.length() > 50 ? value.substring(0, 50) + "..." : value;
+        return truncated.replaceAll("[\\r\\n\\t]", " ")
+                        .replaceAll("[^\\p{Print}]", "?");
+    }
+
+    /**
+     * Exception thrown when CSV headers are invalid.
+     */
+    public static class InvalidCsvHeaderException extends RuntimeException {
+        public InvalidCsvHeaderException(String message) {
+            super(message);
+        }
     }
 }

@@ -14,6 +14,7 @@
 import { Header } from '@/widgets/header/Header'
 import { DashboardCharts } from '@/widgets/dashboard-charts'
 import { MyPluginsWidget } from '@/widgets/my-plugins'
+import { WidgetErrorBoundary } from '@/shared/ui/WidgetErrorBoundary'
 
 export default function DashboardPage() {
   return (
@@ -28,7 +29,9 @@ export default function DashboardPage() {
         </div>
         <DashboardCharts />
         <div className="mt-8">
-          <MyPluginsWidget />
+          <WidgetErrorBoundary widgetName="My Plugins">
+            <MyPluginsWidget />
+          </WidgetErrorBoundary>
         </div>
       </main>
     </div>

@@ -5,7 +5,7 @@
  * Shows activated and available plugins with activation/deactivation actions.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Plug } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/ui/card'
 import {
@@ -39,14 +39,22 @@ export function MyPluginsWidget() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedPlugin, setSelectedPlugin] = useState<AvailablePlugin | null>(null)
 
-  // Track pending plugin IDs
-  const pendingPluginIds = new Set<string>()
-  if (activatePluginMutation.isPending && activatePluginMutation.variables) {
-    pendingPluginIds.add(activatePluginMutation.variables.pluginId)
-  }
-  if (deactivatePluginMutation.isPending && deactivatePluginMutation.variables) {
-    pendingPluginIds.add(deactivatePluginMutation.variables)
-  }
+  // Track pending plugin IDs with useMemo to prevent unnecessary re-renders
+  const pendingPluginIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (activatePluginMutation.isPending && activatePluginMutation.variables) {
+      ids.add(activatePluginMutation.variables.pluginId)
+    }
+    if (deactivatePluginMutation.isPending && deactivatePluginMutation.variables) {
+      ids.add(deactivatePluginMutation.variables)
+    }
+    return ids
+  }, [
+    activatePluginMutation.isPending,
+    activatePluginMutation.variables,
+    deactivatePluginMutation.isPending,
+    deactivatePluginMutation.variables,
+  ])
 
   // Handlers
   const handleActivateClick = useCallback((pluginId: string) => {

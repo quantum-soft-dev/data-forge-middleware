@@ -128,6 +128,29 @@ public class S3SqlFileStorageService {
     }
 
     /**
+     * Deletes a SQL file from S3.
+     * Used to clean up orphaned files when database save fails.
+     *
+     * @param s3Key The S3 key to delete
+     */
+    public void deleteFile(String s3Key) {
+        log.debug("Deleting SQL file from S3: bucket={}, key={}", bucketName, s3Key);
+
+        try {
+            DeleteObjectRequest request = DeleteObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .build();
+
+            s3Client.deleteObject(request);
+            log.info("Successfully deleted SQL file: key={}", s3Key);
+
+        } catch (S3Exception e) {
+            throw new SqlFileStorageException("Failed to delete SQL file from S3: " + s3Key, e);
+        }
+    }
+
+    /**
      * Generates S3 key for SQL file.
      * Format: plugins/bit-bi/{accountId}/{siteName}/{datetime}.sql
      */
