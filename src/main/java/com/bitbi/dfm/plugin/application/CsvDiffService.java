@@ -13,6 +13,37 @@ import java.util.stream.Collectors;
 /**
  * Service for comparing CSV files and generating row-level diffs.
  * Used to detect added, modified, and deleted rows between batch uploads.
+ *
+ * <h2>Row Identity Detection</h2>
+ * <p>
+ * <strong>IMPORTANT:</strong> This service uses the <b>first column</b> of the CSV
+ * as the row identity key for detecting modifications vs additions/deletions.
+ * </p>
+ *
+ * <h3>Assumptions</h3>
+ * <ul>
+ *   <li>The first column contains a unique identifier (e.g., id, sku, email)</li>
+ *   <li>The first column values are stable between batches</li>
+ *   <li>Column order remains consistent between batches</li>
+ * </ul>
+ *
+ * <h3>Limitations</h3>
+ * <ul>
+ *   <li>If the first column is NOT unique (e.g., country, category), incorrect
+ *       UPDATE/DELETE statements may be generated</li>
+ *   <li>If a row exists with the same key in both batches but different values,
+ *       it will be detected as MODIFIED</li>
+ *   <li>Rows without a key value fall back to full row comparison (slower)</li>
+ * </ul>
+ *
+ * <h3>Recommendations for CSV Structure</h3>
+ * <ul>
+ *   <li>Place the unique identifier column (id, primary key) as the first column</li>
+ *   <li>Ensure identifier values are immutable and unique within the file</li>
+ *   <li>Use consistent column ordering across all batch uploads</li>
+ * </ul>
+ *
+ * @see CsvRowDiff
  */
 @Service
 public class CsvDiffService {

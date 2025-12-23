@@ -28,12 +28,23 @@ import java.util.UUID;
  *   <li>Validate site ownership</li>
  * </ul>
  *
+ * <p><strong>Pagination:</strong> To prevent OOM with large result sets,
+ * results are limited to {@link #MAX_SQL_GENERATIONS} records. Clients
+ * should use appropriate 'since' timestamps to fetch data incrementally.</p>
+ *
  * @see com.bitbi.dfm.plugin.presentation.BitBiPluginApiController
  */
 @Service
 public class SqlChangesQueryService {
 
     private static final Logger log = LoggerFactory.getLogger(SqlChangesQueryService.class);
+
+    /**
+     * Maximum number of SQL generation records to return in a single request.
+     * Prevents OOM when concatenating large numbers of SQL files.
+     * If more records exist, a warning comment is prepended to the response.
+     */
+    private static final int MAX_SQL_GENERATIONS = 100;
 
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final S3SqlFileStorageService s3SqlFileStorageService;
@@ -89,8 +100,24 @@ public class SqlChangesQueryService {
                 return "";
             }
 
+            // Check if results exceed limit
+            boolean truncated = generations.size() > MAX_SQL_GENERATIONS;
+            if (truncated) {
+                log.warn("SQL changes result truncated: total={}, limit={}, siteId={}",
+                        generations.size(), MAX_SQL_GENERATIONS, siteId);
+                generations = generations.subList(0, MAX_SQL_GENERATIONS);
+            }
+
             // Concatenate SQL content from S3
             StringBuilder sqlContent = new StringBuilder();
+
+            // Add truncation warning if needed
+            if (truncated) {
+                sqlContent.append("-- WARNING: Results truncated. ")
+                        .append("Only first ").append(MAX_SQL_GENERATIONS)
+                        .append(" batches returned. Use a more recent 'since' parameter.\n\n");
+            }
+
             for (PluginSqlGeneration generation : generations) {
                 String content = s3SqlFileStorageService.getSqlFileContent(generation.getS3Key());
                 sqlContent.append(content);
@@ -99,12 +126,13 @@ public class SqlChangesQueryService {
                 }
             }
 
-            log.info("Retrieved {} SQL generation(s) for siteId={} since={}",
-                    generations.size(), siteId, since);
+            log.info("Retrieved {} SQL generation(s) for siteId={} since={}, truncated={}",
+                    generations.size(), siteId, since, truncated);
 
             meterRegistry.counter("plugin.api.sql.changes.retrieved",
                     "siteId", siteId.toString(),
-                    "count", String.valueOf(generations.size())).increment();
+                    "count", String.valueOf(generations.size()),
+                    "truncated", String.valueOf(truncated)).increment();
 
             return sqlContent.toString();
 

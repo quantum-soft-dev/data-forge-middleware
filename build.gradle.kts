@@ -94,6 +94,8 @@ dependencies {
     implementation("com.networknt:json-schema-validator:1.5.4")
     // Rate limiting for Plugin API
     implementation("com.bucket4j:bucket4j-core:8.10.1")
+    // Caffeine cache for rate limiter (prevents memory leak)
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
     // Lombok
     compileOnly("org.projectlombok:lombok")

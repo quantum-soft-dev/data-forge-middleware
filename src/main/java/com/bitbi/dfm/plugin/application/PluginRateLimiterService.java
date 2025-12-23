@@ -1,5 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.Refill;
@@ -9,15 +11,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Rate limiting service for Plugin API endpoints.
  * <p>
  * Implements per-account rate limiting using Token Bucket algorithm (Bucket4j).
  * Default limit: 100 requests per minute per account.
+ * </p>
+ * <p>
+ * Uses Caffeine cache with 1-hour TTL to prevent memory leaks from
+ * accumulating buckets for inactive/deleted accounts.
  * </p>
  * <p>
  * Security: Prevents API abuse and DoS attacks by limiting request rate.
@@ -34,14 +38,34 @@ public class PluginRateLimiterService {
     private static final int DEFAULT_REQUESTS_PER_MINUTE = 100;
 
     /**
-     * Cache of rate limit buckets per account ID
+     * TTL for bucket cache entries (1 hour).
+     * Buckets for inactive accounts are automatically evicted after this duration.
      */
-    private final Map<UUID, Bucket> buckets = new ConcurrentHashMap<>();
+    private static final Duration BUCKET_TTL = Duration.ofHours(1);
+
+    /**
+     * Maximum number of cached buckets to prevent unbounded growth.
+     */
+    private static final int MAX_CACHED_BUCKETS = 10_000;
+
+    /**
+     * Cache of rate limit buckets per account ID.
+     * Uses Caffeine with TTL and size limits to prevent memory leaks.
+     */
+    private final Cache<UUID, Bucket> buckets;
 
     private final MeterRegistry meterRegistry;
 
     public PluginRateLimiterService(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
+        this.buckets = Caffeine.newBuilder()
+                .expireAfterAccess(BUCKET_TTL)
+                .maximumSize(MAX_CACHED_BUCKETS)
+                .recordStats()
+                .build();
+
+        // Register cache metrics
+        meterRegistry.gauge("plugin.api.rate.limiter.cache.size", buckets, Cache::estimatedSize);
     }
 
     /**
@@ -52,7 +76,7 @@ public class PluginRateLimiterService {
      * @return true if request is allowed, false if rate limited
      */
     public boolean tryConsume(UUID accountId) {
-        Bucket bucket = buckets.computeIfAbsent(accountId, this::createBucket);
+        Bucket bucket = buckets.get(accountId, this::createBucket);
         boolean allowed = bucket.tryConsume(1);
 
         if (allowed) {
@@ -72,7 +96,7 @@ public class PluginRateLimiterService {
      * @return Estimated time in seconds until next token is available
      */
     public long getRetryAfterSeconds(UUID accountId) {
-        Bucket bucket = buckets.get(accountId);
+        Bucket bucket = buckets.getIfPresent(accountId);
         if (bucket == null) {
             return 0;
         }
@@ -105,13 +129,20 @@ public class PluginRateLimiterService {
      * @param accountId The account ID to reset
      */
     public void resetBucket(UUID accountId) {
-        buckets.remove(accountId);
+        buckets.invalidate(accountId);
     }
 
     /**
      * Gets the current bucket count (for monitoring).
      */
-    public int getBucketCount() {
-        return buckets.size();
+    public long getBucketCount() {
+        return buckets.estimatedSize();
+    }
+
+    /**
+     * Invalidates all cached buckets (useful for testing).
+     */
+    public void invalidateAll() {
+        buckets.invalidateAll();
     }
 }

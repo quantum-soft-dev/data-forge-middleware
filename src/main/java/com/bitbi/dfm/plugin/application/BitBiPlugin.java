@@ -175,7 +175,10 @@ public class BitBiPlugin implements Plugin {
         // Generate API Key for Plugin API authentication
         try {
             var apiKey = pluginApiKeyService.generateApiKey(accountPlugin.getId());
-            log.info("Generated API Key for account {}: {}", accountPlugin.getAccountId(), apiKey);
+            // Log only first 12 chars of API key for security (plk_ + 8 chars)
+            String keyValue = apiKey.value();
+            String truncatedKey = keyValue.length() > 12 ? keyValue.substring(0, 12) + "..." : keyValue;
+            log.info("Generated API Key for account {}: {}", accountPlugin.getAccountId(), truncatedKey);
         } catch (Exception e) {
             log.error("Failed to generate API Key for account {}: {}",
                 accountPlugin.getAccountId(), e.getMessage(), e);
