@@ -16,8 +16,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
@@ -129,6 +131,58 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle MissingServletRequestParameterException (400 Bad Request).
+     * <p>
+     * This handler is triggered when a required @RequestParam is missing.
+     * </p>
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponseDto> handleMissingServletRequestParameter(
+            MissingServletRequestParameterException ex,
+            HttpServletRequest request) {
+
+        String errorMessage = String.format("Required parameter '%s' is missing", ex.getParameterName());
+        logger.warn("Missing request parameter: {}", errorMessage);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle MethodArgumentTypeMismatchException (400 Bad Request).
+     * <p>
+     * This handler is triggered when a @RequestParam or @PathVariable value
+     * cannot be converted to the expected type (e.g., invalid UUID format).
+     * </p>
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponseDto> handleMethodArgumentTypeMismatch(
+            MethodArgumentTypeMismatchException ex,
+            HttpServletRequest request) {
+
+        String errorMessage = String.format("Invalid value for parameter '%s': %s",
+                ex.getName(), ex.getValue());
+        logger.warn("Type mismatch for parameter: {}", errorMessage);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                errorMessage,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle AccessDeniedException (403 Forbidden).
      */
     @ExceptionHandler(AccessDeniedException.class)
@@ -137,6 +191,31 @@ public class GlobalExceptionHandler {
             HttpServletRequest request) {
 
         logger.warn("Access denied: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Forbidden",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle SecurityException (403 Forbidden).
+     * <p>
+     * Thrown when a resource access is denied due to ownership/authorization issues.
+     * Used by Plugin API when a site doesn't belong to the authenticated account.
+     * </p>
+     */
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<ErrorResponseDto> handleSecurityException(
+            SecurityException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Security exception: {}", ex.getMessage());
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),

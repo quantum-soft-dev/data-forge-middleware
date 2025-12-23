@@ -26,7 +26,6 @@ repositories {
     mavenCentral()
 }
 
-extra["testcontainersVersion"] = "1.20.2"
 extra["awsSdkVersion"] = "2.28.11"
 
 dependencies {
@@ -93,6 +92,10 @@ dependencies {
     // Plugin System Dependencies
     // JSON Schema validation for plugin data
     implementation("com.networknt:json-schema-validator:1.5.4")
+    // Rate limiting for Plugin API
+    implementation("com.bucket4j:bucket4j-core:8.10.1")
+    // Caffeine cache for rate limiter (prevents memory leak)
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
     // Lombok
     compileOnly("org.projectlombok:lombok")
@@ -101,12 +104,13 @@ dependencies {
     // Test Dependencies
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
-    testImplementation(platform("org.testcontainers:testcontainers-bom:${property("testcontainersVersion")}"))
-    testImplementation("org.testcontainers:testcontainers")
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("org.testcontainers:postgresql")
-    testImplementation("org.testcontainers:localstack")
+    // Testcontainers 2.0.3 for Docker Desktop 29.x compatibility
+    testImplementation("org.testcontainers:testcontainers:2.0.3")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.3")
+    testImplementation("org.testcontainers:testcontainers-postgresql:2.0.3")
+    testImplementation("org.testcontainers:testcontainers-localstack:2.0.3")
     testImplementation("org.awaitility:awaitility:4.2.2")
+    // Docker 29.x compatibility handled by Testcontainers 2.0.2+
 }
 
 

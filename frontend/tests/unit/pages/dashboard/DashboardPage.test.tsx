@@ -25,6 +25,11 @@ vi.mock('@/widgets/header/Header', () => ({
   Header: () => <header data-testid="header">Header</header>,
 }))
 
+// Mock MyPluginsWidget to avoid React Query dependency
+vi.mock('@/widgets/my-plugins', () => ({
+  MyPluginsWidget: () => <div data-testid="my-plugins-widget">My Plugins</div>,
+}))
+
 describe('DashboardPage', () => {
   it('should render the page', () => {
     render(<DashboardPage />)
@@ -47,5 +52,11 @@ describe('DashboardPage', () => {
     render(<DashboardPage />)
     expect(screen.getByTestId('dashboard-charts')).toBeInTheDocument()
     expect(screen.getByText('Charts')).toBeInTheDocument()
+  })
+
+  it('should render my plugins widget', () => {
+    render(<DashboardPage />)
+    expect(screen.getByTestId('my-plugins-widget')).toBeInTheDocument()
+    expect(screen.getByText('My Plugins')).toBeInTheDocument()
   })
 })

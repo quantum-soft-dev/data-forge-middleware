@@ -1,0 +1,418 @@
+package com.bitbi.dfm.plugin.application;
+
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.plugin.domain.*;
+import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.upload.domain.UploadedFile;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.zip.GZIPInputStream;
+
+/**
+ * Service orchestrating SQL file generation from CSV batch comparisons.
+ * Compares CSV files between consecutive batches and generates SQL statements.
+ * <p>
+ * Performance considerations:
+ * <ul>
+ *   <li>Uses JOIN FETCH to prevent N+1 queries when loading batch files</li>
+ *   <li>Limits batch size to prevent memory issues</li>
+ *   <li>S3 operations run outside transactions to avoid connection starvation</li>
+ * </ul>
+ * </p>
+ */
+@Service
+public class SqlGenerationService {
+
+    private static final Logger log = LoggerFactory.getLogger(SqlGenerationService.class);
+
+    /**
+     * Maximum number of CSV files allowed per batch for SQL generation.
+     * Prevents memory exhaustion from processing too many files.
+     */
+    private static final int MAX_CSV_FILES_PER_BATCH = 100;
+
+    private final BatchRepository batchRepository;
+    private final SiteRepository siteRepository;
+    private final AccountPluginRepository accountPluginRepository;
+    private final PluginSqlGenerationRepository sqlGenerationRepository;
+    private final CsvDiffService csvDiffService;
+    private final SqlStatementGenerator sqlStatementGenerator;
+    private final S3SqlFileStorageService s3SqlFileStorageService;
+    private final S3Client s3Client;
+    private final String bucketName;
+    private final MeterRegistry meterRegistry;
+
+    public SqlGenerationService(
+            BatchRepository batchRepository,
+            SiteRepository siteRepository,
+            AccountPluginRepository accountPluginRepository,
+            PluginSqlGenerationRepository sqlGenerationRepository,
+            CsvDiffService csvDiffService,
+            SqlStatementGenerator sqlStatementGenerator,
+            S3SqlFileStorageService s3SqlFileStorageService,
+            S3Client s3Client,
+            @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}") String bucketName,
+            MeterRegistry meterRegistry) {
+        this.batchRepository = batchRepository;
+        this.siteRepository = siteRepository;
+        this.accountPluginRepository = accountPluginRepository;
+        this.sqlGenerationRepository = sqlGenerationRepository;
+        this.csvDiffService = csvDiffService;
+        this.sqlStatementGenerator = sqlStatementGenerator;
+        this.s3SqlFileStorageService = s3SqlFileStorageService;
+        this.s3Client = s3Client;
+        this.bucketName = bucketName;
+        this.meterRegistry = meterRegistry;
+    }
+
+    /**
+     * Generates SQL file from batch comparison.
+     * Called when a batch completes for an account with active Bit BI plugin.
+     * <p>
+     * Transaction strategy:
+     * <ul>
+     *   <li>Phase 1: Load data (read-only transaction)</li>
+     *   <li>Phase 2: S3 operations (outside transaction to avoid connection starvation)</li>
+     *   <li>Phase 3: Save result (separate write transaction)</li>
+     * </ul>
+     * </p>
+     *
+     * @param batchId The completed batch ID
+     * @param accountPluginId The ID of the active account plugin
+     * @return Optional containing the generation record, or empty if no changes
+     */
+    public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId) {
+        Timer.Sample timer = Timer.start(meterRegistry);
+        String s3Key = null;
+
+        try {
+            // Phase 1: Load all required data (uses JOIN FETCH to prevent N+1)
+            BatchData batchData = loadBatchData(batchId);
+            if (batchData == null) {
+                return Optional.empty();
+            }
+
+            // Set MDC for structured logging
+            MDC.put("batchId", batchId.toString());
+            MDC.put("siteId", batchData.batch.getSiteId().toString());
+            MDC.put("accountId", batchData.batch.getAccountId().toString());
+
+            log.info("Starting SQL generation for batch: batchId={}", batchId);
+
+            // Phase 2: Generate SQL content (S3 reads outside transaction)
+            SqlGenerationResult result = generateSqlContent(batchData);
+            if (result == null) {
+                log.info("No changes detected between batches, skipping SQL file creation");
+                return Optional.empty();
+            }
+
+            // Phase 2b: Store SQL file in S3 (outside transaction)
+            s3Key = s3SqlFileStorageService.storeSqlFile(
+                    batchData.batch.getAccountId(),
+                    batchData.site.getDomain(),
+                    result.sqlContent
+            );
+            long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
+
+            // Phase 3: Save generation record (separate transaction)
+            long durationMs = timer.stop(meterRegistry.timer("sql.generation.duration"));
+            PluginSqlGeneration generation = saveGenerationRecord(
+                    accountPluginId,
+                    batchData,
+                    s3Key,
+                    fileSize,
+                    result.stats,
+                    durationMs
+            );
+
+            log.info("SQL generation completed: batchId={}, statements={}, duration={}ms",
+                    batchId, result.stats.total(), durationMs / 1_000_000);
+
+            // Record metrics
+            meterRegistry.counter("sql.generation.statements.inserts").increment(result.stats.inserts());
+            meterRegistry.counter("sql.generation.statements.updates").increment(result.stats.updates());
+            meterRegistry.counter("sql.generation.statements.deletes").increment(result.stats.deletes());
+
+            return Optional.of(generation);
+
+        } catch (IOException e) {
+            log.error("SQL generation failed for batch (I/O error): batchId={}", batchId, e);
+            meterRegistry.counter("sql.generation.errors").increment();
+            cleanupOrphanedS3File(s3Key);
+            throw new SqlGenerationException("Failed to read CSV files for SQL generation", e);
+        } catch (RuntimeException e) {
+            log.error("SQL generation failed for batch: batchId={}", batchId, e);
+            meterRegistry.counter("sql.generation.errors").increment();
+            cleanupOrphanedS3File(s3Key);
+            throw e;
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * Phase 1: Loads all required batch data using JOIN FETCH.
+     * Returns null if generation should be skipped.
+     */
+    @Transactional(readOnly = true)
+    protected BatchData loadBatchData(UUID batchId) {
+        // Get batch with files using JOIN FETCH (prevents N+1)
+        Batch batch = batchRepository.findByIdWithFiles(batchId)
+                .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
+
+        // Check if already generated
+        if (sqlGenerationRepository.existsBySourceBatchId(batchId)) {
+            log.warn("SQL already generated for batch: batchId={}", batchId);
+            return null;
+        }
+
+        // Get site for name
+        Site site = siteRepository.findById(batch.getSiteId())
+                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
+
+        List<UploadedFile> currentFiles = batch.getUploadedFiles();
+        if (currentFiles.isEmpty()) {
+            log.warn("No files in batch, skipping SQL generation: batchId={}", batchId);
+            return null;
+        }
+
+        // Filter to CSV files only
+        List<UploadedFile> csvFiles = currentFiles.stream()
+                .filter(f -> f.getOriginalFileName().toLowerCase().endsWith(".csv") ||
+                             f.getOriginalFileName().toLowerCase().endsWith(".csv.gz"))
+                .collect(Collectors.toList());
+
+        if (csvFiles.isEmpty()) {
+            log.warn("No CSV files in batch, skipping SQL generation: batchId={}", batchId);
+            return null;
+        }
+
+        // Check batch file limit to prevent memory issues
+        if (csvFiles.size() > MAX_CSV_FILES_PER_BATCH) {
+            log.error("Too many CSV files in batch: count={}, max={}, batchId={}",
+                    csvFiles.size(), MAX_CSV_FILES_PER_BATCH, batchId);
+            throw new IllegalArgumentException(
+                    "Batch contains " + csvFiles.size() + " CSV files, exceeding limit of " + MAX_CSV_FILES_PER_BATCH);
+        }
+
+        // Find previous batch for comparison using JOIN FETCH
+        Optional<Batch> previousBatchOpt = batchRepository
+                .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
+
+        log.debug("Previous batch for comparison: {}",
+                previousBatchOpt.map(b -> b.getId().toString()).orElse("none (first batch)"));
+
+        // Build previous files map
+        Map<String, UploadedFile> previousFilesMap = new HashMap<>();
+        if (previousBatchOpt.isPresent()) {
+            for (UploadedFile file : previousBatchOpt.get().getUploadedFiles()) {
+                previousFilesMap.put(normalizeFileName(file.getOriginalFileName()), file);
+            }
+        }
+
+        return new BatchData(batch, site, csvFiles, previousBatchOpt, previousFilesMap);
+    }
+
+    /**
+     * Phase 2: Generates SQL content by reading files from S3 and computing diffs.
+     * Runs outside transaction to avoid connection starvation during S3 I/O.
+     */
+    private SqlGenerationResult generateSqlContent(BatchData data) throws IOException {
+        StringBuilder sqlContent = new StringBuilder();
+        int totalInserts = 0;
+        int totalUpdates = 0;
+        int totalDeletes = 0;
+        int filesProcessed = 0;
+
+        for (UploadedFile currentFile : data.csvFiles) {
+            String normalizedName = normalizeFileName(currentFile.getOriginalFileName());
+            String tableName = deriveTableName(normalizedName);
+
+            log.debug("Processing CSV file: {} -> table {}", currentFile.getOriginalFileName(), tableName);
+
+            // Read current file content from S3
+            List<Map<String, String>> currentRows = readCsvFromS3(currentFile.getS3Key());
+
+            // Read previous file content (empty if first batch)
+            List<Map<String, String>> previousRows = new ArrayList<>();
+            UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
+            if (previousFile != null) {
+                previousRows = readCsvFromS3(previousFile.getS3Key());
+            }
+
+            // Generate diffs
+            List<CsvRowDiff> diffs = csvDiffService.compare(previousRows, currentRows, Map.of());
+
+            // Generate SQL statements
+            for (CsvRowDiff diff : diffs) {
+                String sql = sqlStatementGenerator.generate(diff, tableName, Map.of());
+                sqlContent.append(sql);
+
+                switch (diff.type()) {
+                    case ADDED -> totalInserts++;
+                    case MODIFIED -> totalUpdates++;
+                    case DELETED -> totalDeletes++;
+                }
+            }
+
+            filesProcessed++;
+            meterRegistry.counter("sql.generation.files.processed").increment();
+        }
+
+        // Return null if no changes detected
+        if (sqlContent.isEmpty()) {
+            return null;
+        }
+
+        return new SqlGenerationResult(
+                sqlContent.toString(),
+                new SqlGenerationStats(totalInserts, totalUpdates, totalDeletes, filesProcessed)
+        );
+    }
+
+    /**
+     * Phase 3: Saves the generation record in a separate transaction.
+     */
+    @Transactional
+    protected PluginSqlGeneration saveGenerationRecord(
+            Long accountPluginId,
+            BatchData data,
+            String s3Key,
+            long fileSize,
+            SqlGenerationStats stats,
+            long durationNanos) {
+
+        PluginSqlGeneration generation = PluginSqlGeneration.create(
+                accountPluginId,
+                data.batch.getSiteId(),
+                data.batch.getId(),
+                data.previousBatchOpt.map(Batch::getId).orElse(null),
+                s3Key,
+                fileSize,
+                stats,
+                durationNanos / 1_000_000 // Convert nanos to ms
+        );
+
+        return sqlGenerationRepository.save(generation);
+    }
+
+    /**
+     * Cleans up orphaned S3 file if database save fails.
+     */
+    private void cleanupOrphanedS3File(String s3Key) {
+        if (s3Key != null) {
+            try {
+                s3SqlFileStorageService.deleteFile(s3Key);
+                log.info("Cleaned up orphaned S3 file: {}", s3Key);
+            } catch (Exception e) {
+                log.error("Failed to cleanup orphaned S3 file: {}. Manual cleanup required.", s3Key, e);
+                meterRegistry.counter("sql.generation.orphaned.files").increment();
+            }
+        }
+    }
+
+    /**
+     * Internal record to hold batch data loaded in Phase 1.
+     */
+    private record BatchData(
+            Batch batch,
+            Site site,
+            List<UploadedFile> csvFiles,
+            Optional<Batch> previousBatchOpt,
+            Map<String, UploadedFile> previousFilesMap
+    ) {}
+
+    /**
+     * Internal record to hold SQL generation result from Phase 2.
+     */
+    private record SqlGenerationResult(
+            String sqlContent,
+            SqlGenerationStats stats
+    ) {}
+
+    /**
+     * Reads CSV content from S3 and returns rows as list of maps.
+     */
+    private List<Map<String, String>> readCsvFromS3(String s3Key) throws IOException {
+        GetObjectRequest request = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(s3Key)
+                .build();
+
+        try (ResponseInputStream<GetObjectResponse> s3Response = s3Client.getObject(request)) {
+            InputStream inputStream = s3Response;
+
+            // Handle gzipped files
+            if (s3Key.toLowerCase().endsWith(".gz")) {
+                inputStream = new GZIPInputStream(s3Response);
+            }
+
+            try (Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
+                 CSVParser parser = CSVFormat.DEFAULT.withFirstRecordAsHeader().parse(reader)) {
+
+                List<Map<String, String>> rows = new ArrayList<>();
+                for (CSVRecord record : parser) {
+                    // Use LinkedHashMap to preserve column order
+                    Map<String, String> row = new LinkedHashMap<>();
+                    for (String header : parser.getHeaderNames()) {
+                        row.put(header, record.get(header));
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * Normalizes file name for comparison (removes .gz extension).
+     */
+    private String normalizeFileName(String fileName) {
+        if (fileName.toLowerCase().endsWith(".gz")) {
+            return fileName.substring(0, fileName.length() - 3);
+        }
+        return fileName;
+    }
+
+    /**
+     * Derives table name from CSV filename.
+     * Example: customers.csv -> customers
+     */
+    private String deriveTableName(String fileName) {
+        String name = fileName;
+        if (name.toLowerCase().endsWith(".csv")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        // Sanitize: replace invalid characters with underscore
+        return name.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+    }
+
+    /**
+     * Exception thrown when SQL generation fails.
+     */
+    public static class SqlGenerationException extends RuntimeException {
+        public SqlGenerationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+}
