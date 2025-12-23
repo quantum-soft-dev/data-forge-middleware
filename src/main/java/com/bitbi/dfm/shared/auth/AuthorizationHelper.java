@@ -9,6 +9,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -167,6 +168,30 @@ public class AuthorizationHelper {
         }
 
         throw new UnauthorizedException("Invalid authentication type");
+    }
+
+    /**
+     * Get the authenticated account ID from security context as Optional.
+     * <p>
+     * Same as {@link #getAuthenticatedAccountId()} but returns Optional.empty()
+     * instead of throwing an exception when account is not found.
+     * Useful for endpoints that should gracefully handle admin users without Account records.
+     * </p>
+     *
+     * @return Optional containing account ID, or empty if not found (e.g., admin user)
+     * @throws UnauthorizedException if not authenticated
+     */
+    public Optional<UUID> getOptionalAuthenticatedAccountId() {
+        try {
+            return Optional.of(getAuthenticatedAccountId());
+        } catch (UnauthorizedException e) {
+            // Check if this is specifically an "account not found" error (admin user)
+            if (e.getMessage() != null && e.getMessage().contains("Account not found")) {
+                return Optional.empty();
+            }
+            // Re-throw other authorization errors
+            throw e;
+        }
     }
 
     /**

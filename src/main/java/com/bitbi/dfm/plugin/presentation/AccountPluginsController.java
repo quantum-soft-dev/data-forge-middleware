@@ -26,6 +26,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -119,7 +121,17 @@ public class AccountPluginsController {
             @RequestParam(defaultValue = "false")
             boolean includeInactive) {
 
-        UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+        // Use Optional to gracefully handle admin users who don't have Account records
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+
+        if (accountIdOpt.isEmpty()) {
+            // Admin user without Account - return empty list
+            log.info("Admin user without Account record - returning empty plugin list");
+            return ResponseEntity.ok(AccountPluginListResponseDto.of(
+                    List.of(), page, size, 0L, 0));
+        }
+
+        UUID accountId = accountIdOpt.get();
         log.info("Listing plugins for account {}, includeInactive={}, page={}, size={}",
                 accountId, includeInactive, page, size);
 

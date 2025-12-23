@@ -18,6 +18,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.*;
@@ -59,7 +60,9 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // Mock both methods for backward compatibility
         when(authorizationHelper.getAuthenticatedAccountId()).thenReturn(TEST_ACCOUNT_ID);
+        when(authorizationHelper.getOptionalAuthenticatedAccountId()).thenReturn(Optional.of(TEST_ACCOUNT_ID));
     }
 
     @Nested
