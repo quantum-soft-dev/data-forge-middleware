@@ -69,6 +69,19 @@ export function Header() {
               </Link>
             )}
 
+            {/* Plugins - only visible for regular users (not admins) */}
+            {!isAdmin && (
+              <Link
+                to="/account/plugins"
+                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                activeProps={{
+                  className: 'text-sm font-medium text-primary hover:text-primary',
+                }}
+              >
+                Plugins
+              </Link>
+            )}
+
             {/* User Management - only visible for ADMIN role */}
             {isAdmin && (
               <Link

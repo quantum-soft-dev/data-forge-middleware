@@ -8,7 +8,7 @@
 import { apiClient } from '@/shared/api/client'
 import {
   ACCOUNT_PLUGINS,
-  ADMIN_PLUGINS,
+  PLUGINS,
   PLUGINS_ACTIVATE,
   PLUGINS_DEACTIVATE,
 } from '@/shared/api/apiRoutes'
@@ -19,7 +19,6 @@ import type {
   PluginActivationResponse,
   AvailablePlugin,
 } from '../model/types'
-import type { PluginConfig } from '@/entities/plugin/model/types'
 
 /**
  * Fetch account's plugin integrations
@@ -47,18 +46,12 @@ export async function fetchAccountPlugins(
 }
 
 /**
- * Fetch all available plugins (admin endpoint, returns all registered plugins)
- * Used to show available plugins that user can activate.
+ * Fetch all available (enabled) plugins for activation.
+ * Uses the user-facing endpoint that doesn't require admin role.
  */
 export async function fetchAvailablePlugins(): Promise<AvailablePlugin[]> {
-  const response = await apiClient.get<PluginConfig[]>(ADMIN_PLUGINS)
-  // Map PluginConfig to AvailablePlugin (subset of fields for user view)
-  return response.data.map((config) => ({
-    pluginId: config.pluginId,
-    displayName: config.displayName,
-    version: config.version,
-    isEnabled: config.isEnabled,
-  }))
+  const response = await apiClient.get<AvailablePlugin[]>(PLUGINS)
+  return response.data
 }
 
 /**

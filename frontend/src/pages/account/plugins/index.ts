@@ -1,0 +1,1 @@
+export { MyPluginsPage } from './MyPluginsPage'

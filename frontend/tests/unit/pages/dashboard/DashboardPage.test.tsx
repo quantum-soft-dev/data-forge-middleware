@@ -25,21 +25,6 @@ vi.mock('@/widgets/header/Header', () => ({
   Header: () => <header data-testid="header">Header</header>,
 }))
 
-// Mock MyPluginsWidget to avoid React Query dependency
-vi.mock('@/widgets/my-plugins', () => ({
-  MyPluginsWidget: () => <div data-testid="my-plugins-widget">My Plugins</div>,
-}))
-
-// Mock useAuth0Roles to return ROLE_USER (so widget is shown)
-vi.mock('@/shared/lib/auth/useAuth0Roles', () => ({
-  useAuth0Roles: () => ({
-    roles: ['ROLE_USER'],
-    hasRole: (role: string) => role === 'ROLE_USER',
-    hasAnyRole: (roles: string[]) => roles.includes('ROLE_USER'),
-    hasAllRoles: (roles: string[]) => roles.every((r) => r === 'ROLE_USER'),
-  }),
-}))
-
 describe('DashboardPage', () => {
   it('should render the page', () => {
     render(<DashboardPage />)
@@ -64,17 +49,13 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Charts')).toBeInTheDocument()
   })
 
-  it('should render my plugins widget for ROLE_USER', () => {
+  it('should render page title', () => {
     render(<DashboardPage />)
-    expect(screen.getByTestId('my-plugins-widget')).toBeInTheDocument()
-    expect(screen.getByText('My Plugins')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Dashboard')
   })
 
-  it('should conditionally render my plugins based on ROLE_USER role', () => {
-    // This test verifies the component uses hasRole('ROLE_USER') check
-    // The actual role-based hiding is tested via the mock returning ROLE_USER
+  it('should render page description', () => {
     render(<DashboardPage />)
-    // Since mock returns ROLE_USER, widget should be visible
-    expect(screen.getByTestId('my-plugins-widget')).toBeInTheDocument()
+    expect(screen.getByText('Overview of subscriber metrics and growth trends')).toBeInTheDocument()
   })
 })

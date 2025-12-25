@@ -2,7 +2,9 @@ package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.PluginActivationService;
 import com.bitbi.dfm.plugin.application.PluginActivationService.ActivationResult;
+import com.bitbi.dfm.plugin.application.PluginQueryService;
 import com.bitbi.dfm.plugin.presentation.dto.ActivatePluginRequestDto;
+import com.bitbi.dfm.plugin.presentation.dto.AvailablePluginResponseDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginActivationResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
@@ -24,6 +26,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -52,13 +55,52 @@ public class PluginController {
     private static final Logger log = LoggerFactory.getLogger(PluginController.class);
 
     private final PluginActivationService pluginActivationService;
+    private final PluginQueryService pluginQueryService;
     private final AuthorizationHelper authorizationHelper;
 
     public PluginController(
             PluginActivationService pluginActivationService,
+            PluginQueryService pluginQueryService,
             AuthorizationHelper authorizationHelper) {
         this.pluginActivationService = pluginActivationService;
+        this.pluginQueryService = pluginQueryService;
         this.authorizationHelper = authorizationHelper;
+    }
+
+    /**
+     * Lists available plugins for activation.
+     *
+     * <p>Returns all enabled plugins that can be activated by users.
+     * Only public fields are returned - no sensitive data like client_id.</p>
+     *
+     * @return list of available plugins
+     */
+    @GetMapping
+    @Operation(
+        summary = "List available plugins",
+        description = "Returns all enabled plugins that can be activated by users"
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "List of available plugins",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = AvailablePluginResponseDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Not authenticated"
+        )
+    })
+    public ResponseEntity<List<AvailablePluginResponseDto>> listAvailablePlugins() {
+        log.debug("Listing available plugins");
+
+        List<AvailablePluginResponseDto> plugins = pluginQueryService.listAvailablePlugins();
+
+        log.info("Returned {} available plugins", plugins.size());
+        return ResponseEntity.ok(plugins);
     }
 
     /**

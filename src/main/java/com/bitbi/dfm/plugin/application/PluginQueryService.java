@@ -4,8 +4,10 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginConfig;
 import com.bitbi.dfm.plugin.domain.PluginConfigRepository;
+import com.bitbi.dfm.plugin.domain.PluginRegistry;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginListResponseDto;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginSummaryDto;
+import com.bitbi.dfm.plugin.presentation.dto.AvailablePluginResponseDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -38,12 +40,15 @@ public class PluginQueryService {
 
     private final AccountPluginRepository accountPluginRepository;
     private final PluginConfigRepository pluginConfigRepository;
+    private final PluginRegistry pluginRegistry;
 
     public PluginQueryService(
             AccountPluginRepository accountPluginRepository,
-            PluginConfigRepository pluginConfigRepository) {
+            PluginConfigRepository pluginConfigRepository,
+            PluginRegistry pluginRegistry) {
         this.accountPluginRepository = accountPluginRepository;
         this.pluginConfigRepository = pluginConfigRepository;
+        this.pluginRegistry = pluginRegistry;
     }
 
     /**
@@ -94,5 +99,29 @@ public class PluginQueryService {
                 accountPluginsPage.getTotalElements(),
                 accountPluginsPage.getTotalPages()
         );
+    }
+
+    /**
+     * Lists all available (enabled) plugins for activation.
+     *
+     * <p>Returns public information only - no sensitive data like client_id.
+     * Used by GET /api/v1/plugins endpoint for regular users.</p>
+     *
+     * @return list of available plugins
+     */
+    public List<AvailablePluginResponseDto> listAvailablePlugins() {
+        log.debug("Listing available plugins");
+
+        List<PluginConfig> enabledConfigs = pluginConfigRepository.findAllEnabled();
+
+        List<AvailablePluginResponseDto> result = enabledConfigs.stream()
+                .map(config -> AvailablePluginResponseDto.fromEntity(
+                        config,
+                        pluginRegistry.findById(config.getPluginId()).orElse(null)
+                ))
+                .toList();
+
+        log.debug("Found {} available plugins", result.size());
+        return result;
     }
 }

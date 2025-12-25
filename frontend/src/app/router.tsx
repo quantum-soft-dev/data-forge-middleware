@@ -16,6 +16,7 @@ const ComparisonPage = lazy(() => import('@/pages/comparison/ComparisonPage').th
 const ComparisonListPage = lazy(() => import('@/pages/comparison/ComparisonListPage').then(m => ({ default: m.ComparisonListPage })))
 const ComparisonDetailPage = lazy(() => import('@/pages/comparison/ComparisonDetailPage'))
 const PluginsAdminPage = lazy(() => import('@/pages/admin/plugins/PluginsAdminPage'))
+const MyPluginsPage = lazy(() => import('@/pages/account/plugins').then(m => ({ default: m.MyPluginsPage })))
 
 // Root route
 const rootRoute = createRootRoute({
@@ -120,6 +121,12 @@ const comparisonDetailRoute = createRoute({
   component: () => <UserOnlyGuard component={ComparisonDetailPage} />,
 })
 
+const myPluginsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/plugins',
+  component: () => <UserOnlyGuard component={MyPluginsPage} />,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -135,6 +142,7 @@ const routeTree = rootRoute.addChildren([
   comparisonListRoute,
   comparisonCreateRoute,
   comparisonDetailRoute,
+  myPluginsRoute,
 ])
 
 // Create router instance
