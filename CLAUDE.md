@@ -735,6 +735,37 @@ interface BitBiPluginData {
 
 The PluginActivationDialog detects the plugin type and shows appropriate form fields.
 
+### API Key Return Fix (Added 2025-12-27)
+
+**Issue**: Plugin activation was not returning the API key to the user. The API key was generated and stored as BCrypt hash, but the raw key was never shown to the user, making Plugin API authentication impossible.
+
+**Root Cause**: `Plugin.onActivate()` returned `void` instead of the generated API key. `PluginActivationResponseDto` lacked `apiKey` field.
+
+**Fix**: Modified activation flow to return `apiKey` in response for new activations only (not updates/re-activations for security).
+
+**Files Changed**:
+- `Plugin.java` - Changed `onActivate()` return type: `void` → `String`
+- `BitBiPlugin.java` - Return API key from `onActivate()`
+- `PluginActivationService.java` - Capture API key, add to `ActivationResult` record
+- `PluginActivationResponseDto.java` - Add `apiKey` field
+- `PluginController.java` - Pass API key to response DTO
+- `specs/001-plugin-sql-generation/spec.md` - Add FR-019, update US6 scenarios
+
+**Security**: API key returned only on new activation. Re-activating an existing plugin returns `apiKey: null`. User must deactivate and re-activate to get a new key.
+
+**Response Format**:
+```json
+{
+  "pluginId": "bit-bi",
+  "pluginName": "Bit BI",
+  "accountId": "692c4e40-...",
+  "isActive": true,
+  "activatedAt": "2025-12-27T10:30:00Z",
+  "lastUsedAt": null,
+  "apiKey": "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+}
+```
+
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes

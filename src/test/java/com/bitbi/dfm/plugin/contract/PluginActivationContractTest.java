@@ -79,7 +79,7 @@ class PluginActivationContractTest extends BaseIntegrationTest {
             // Given
             Map<String, Object> pluginData = Map.of("tenantId", "tenant-123");
             AccountPlugin accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData);
-            ActivationResult result = new ActivationResult(accountPlugin, "Bit BI", true);
+            ActivationResult result = new ActivationResult(accountPlugin, "Bit BI", true, "plk_test123456789012345678901234");
 
             when(pluginActivationService.activate(eq(TEST_ACCOUNT_ID), eq(PLUGIN_ID), any()))
                 .thenReturn(result);
@@ -97,7 +97,8 @@ class PluginActivationContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.pluginName").value("Bit BI"))
                 .andExpect(jsonPath("$.accountId").value(TEST_ACCOUNT_ID.toString()))
                 .andExpect(jsonPath("$.isActive").value(true))
-                .andExpect(jsonPath("$.activatedAt").exists());
+                .andExpect(jsonPath("$.activatedAt").exists())
+                .andExpect(jsonPath("$.apiKey").value("plk_test123456789012345678901234"));
 
             verify(pluginActivationService).activate(eq(TEST_ACCOUNT_ID), eq(PLUGIN_ID), any());
         }
@@ -108,7 +109,7 @@ class PluginActivationContractTest extends BaseIntegrationTest {
             // Given
             Map<String, Object> pluginData = Map.of("tenantId", "updated-tenant");
             AccountPlugin accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData);
-            ActivationResult result = new ActivationResult(accountPlugin, "Bit BI", false);
+            ActivationResult result = new ActivationResult(accountPlugin, "Bit BI", false, null);
 
             when(pluginActivationService.activate(eq(TEST_ACCOUNT_ID), eq(PLUGIN_ID), any()))
                 .thenReturn(result);
@@ -122,6 +123,7 @@ class PluginActivationContractTest extends BaseIntegrationTest {
                     .content(requestBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.pluginId").value(PLUGIN_ID))
+                .andExpect(jsonPath("$.apiKey").doesNotExist())
                 .andExpect(jsonPath("$.isActive").value(true));
         }
 
@@ -237,7 +239,7 @@ class PluginActivationContractTest extends BaseIntegrationTest {
             String pluginIdWithHyphens = "my-plugin-id";
             Map<String, Object> pluginData = Map.of("tenantId", "tenant-123");
             AccountPlugin accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, pluginIdWithHyphens, pluginData);
-            ActivationResult result = new ActivationResult(accountPlugin, "My Plugin", true);
+            ActivationResult result = new ActivationResult(accountPlugin, "My Plugin", true, "plk_test123456789012345678901234");
 
             when(pluginActivationService.activate(eq(TEST_ACCOUNT_ID), eq(pluginIdWithHyphens), any()))
                 .thenReturn(result);
@@ -259,8 +261,8 @@ class PluginActivationContractTest extends BaseIntegrationTest {
             // Given
             Map<String, Object> pluginData = Map.of("tenantId", "new-tenant");
             AccountPlugin accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, PLUGIN_ID, pluginData);
-            // Simulate reactivation (isNewActivation = false)
-            ActivationResult result = new ActivationResult(accountPlugin, "Bit BI", false);
+            // Simulate reactivation (isNewActivation = false, apiKey = null per FR-019)
+            ActivationResult result = new ActivationResult(accountPlugin, "Bit BI", false, null);
 
             when(pluginActivationService.activate(eq(TEST_ACCOUNT_ID), eq(PLUGIN_ID), any()))
                 .thenReturn(result);

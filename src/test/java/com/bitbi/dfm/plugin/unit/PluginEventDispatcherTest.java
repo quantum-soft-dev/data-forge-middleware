@@ -294,7 +294,7 @@ class PluginEventDispatcherTest {
             }
 
             @Override
-            public void onActivate(AccountPlugin accountPlugin) {}
+            public String onActivate(AccountPlugin accountPlugin) { return null; }
 
             @Override
             public void onDeactivate(AccountPlugin accountPlugin) {}

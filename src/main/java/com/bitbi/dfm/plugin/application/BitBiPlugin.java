@@ -158,15 +158,17 @@ public class BitBiPlugin implements Plugin {
     }
 
     /**
-     * Called when Bit BI plugin is activated for an account.
+     * Called when Bit BI plugin is activated for an account (FR-006, FR-019).
      *
      * <p>Generates and stores an API Key for Plugin API authentication.
-     * The API Key is stored in plugin_data and can be retrieved via the admin API.</p>
+     * The API Key is returned to the caller for inclusion in the activation response.
+     * This is the only time the raw API key is available - it's stored as BCrypt hash.</p>
      *
      * @param accountPlugin the activation record
+     * @return the raw API key (shown only once), or null if generation failed
      */
     @Override
-    public void onActivate(AccountPlugin accountPlugin) {
+    public String onActivate(AccountPlugin accountPlugin) {
         String tenantId = (String) accountPlugin.getPluginData().get("tenantId");
         log.info("BitBiPlugin activated for account {} with tenant {}",
             accountPlugin.getAccountId(),
@@ -175,14 +177,12 @@ public class BitBiPlugin implements Plugin {
         // Generate API Key for Plugin API authentication
         try {
             var apiKey = pluginApiKeyService.generateApiKey(accountPlugin.getId());
-            // Log only first 12 chars of API key for security (plk_ + 8 chars)
-            String keyValue = apiKey.value();
-            String truncatedKey = keyValue.length() > 12 ? keyValue.substring(0, 12) + "..." : keyValue;
-            log.info("Generated API Key for account {}: {}", accountPlugin.getAccountId(), truncatedKey);
+            log.info("Generated API Key for account {}", accountPlugin.getAccountId());
+            return apiKey.value();  // Return raw key for inclusion in response
         } catch (Exception e) {
             log.error("Failed to generate API Key for account {}: {}",
                 accountPlugin.getAccountId(), e.getMessage(), e);
-            // Don't fail activation if API key generation fails
+            return null;  // Don't fail activation if API key generation fails
         }
     }
 

@@ -189,7 +189,8 @@ public class PluginController {
 
         PluginActivationResponseDto response = PluginActivationResponseDto.fromEntity(
             result.accountPlugin(),
-            result.pluginDisplayName()
+            result.pluginDisplayName(),
+            result.apiKey()
         );
 
         HttpStatus status = result.isNewActivation() ? HttpStatus.CREATED : HttpStatus.OK;

@@ -194,14 +194,18 @@ public class PluginActivationService {
                 isNewActivation = false;
             }
 
-            // 6. Call lifecycle hook (FR-006)
+            // 6. Call lifecycle hook (FR-006, FR-019)
+            String apiKey = null;
             try {
-                plugin.onActivate(accountPlugin);
+                apiKey = plugin.onActivate(accountPlugin);
                 logger.debug("Plugin {} onActivate hook completed for account {}", pluginId, accountId);
             } catch (Exception e) {
                 // Log but don't fail the activation - hook failures are non-critical
                 logger.warn("Plugin {} onActivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
             }
+
+            // Only return API key for new activations (FR-019: security - don't expose on updates)
+            String returnApiKey = isNewActivation ? apiKey : null;
 
             logger.info("Plugin {} {} for account {}", pluginId,
                 isNewActivation ? "activated" : "updated", accountId);
@@ -212,7 +216,7 @@ public class PluginActivationService {
             activationTimer.record(duration, TimeUnit.MILLISECONDS);
             activationCounter.increment();
 
-            return new ActivationResult(accountPlugin, pluginConfig.getDisplayName(), isNewActivation);
+            return new ActivationResult(accountPlugin, pluginConfig.getDisplayName(), isNewActivation, returnApiKey);
         } finally {
             // Clear MDC context
             MDC.remove("pluginId");
@@ -324,10 +328,12 @@ public class PluginActivationService {
      * @param accountPlugin the activation record
      * @param pluginDisplayName the human-readable plugin name
      * @param isNewActivation true if this was a new activation, false if update/reactivation
+     * @param apiKey raw API key if generated (only for new activations), null otherwise
      */
     public record ActivationResult(
         AccountPlugin accountPlugin,
         String pluginDisplayName,
-        boolean isNewActivation
+        boolean isNewActivation,
+        String apiKey
     ) {}
 }

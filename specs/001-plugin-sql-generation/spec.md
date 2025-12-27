@@ -114,19 +114,23 @@ Generated SQL files are stored in AWS S3 with a structured path for organization
 
 ### User Story 6 - Plugin API Key Generation (Priority: P2)
 
-When the Bit BI plugin is activated, a Plugin API Key is generated and stored for API authentication.
+When the Bit BI plugin is activated, a Plugin API Key is generated, returned to the user, and stored (as BCrypt hash) for API authentication.
 
 **Why this priority**: Required for API authentication but can reuse existing plugin activation infrastructure.
 
-**Independent Test**: Can be tested by activating Bit BI plugin and verifying API Key is generated and stored in plugin_data.
+**Independent Test**: Can be tested by activating Bit BI plugin and verifying API Key is generated, returned in response, and stored in plugin_data.
 
 **Acceptance Scenarios**:
 
 1. **Given** a user activates the Bit BI plugin, **When** activation completes, **Then** a Plugin API Key is generated in format `plk_` + 32 alphanumeric characters.
 
-2. **Given** a Plugin API Key is generated, **When** stored, **Then** it is saved in `account_plugins.plugin_data` JSONB field alongside tenantId.
+2. **Given** a Plugin API Key is generated, **When** stored, **Then** it is saved as BCrypt hash in `account_plugins.plugin_data.apiKeyHash` field.
 
-3. **Given** an existing API Key exists, **When** plugin is re-activated, **Then** a new API Key is generated (key rotation).
+3. **Given** a new Plugin API Key is generated, **When** the activation response is sent, **Then** the raw API Key is included in the `apiKey` field of the response (shown only once).
+
+4. **Given** an existing active plugin is re-activated (update), **When** the activation response is sent, **Then** the `apiKey` field is null (existing key not exposed).
+
+5. **Given** an existing deactivated plugin is re-activated, **When** activation completes, **Then** a new API Key is generated and returned in the response.
 
 ---
 
@@ -167,6 +171,7 @@ When the Bit BI plugin is activated, a Plugin API Key is generated and stored fo
 - **FR-014**: System MUST return 401 Unauthorized for invalid or missing API Key
 - **FR-015**: System MUST return 403 Forbidden when siteId does not belong to account
 - **FR-016**: System MUST generate Plugin API Key (format: `plk_` + 32 alphanumeric) when Bit BI plugin is activated
+- **FR-019**: System MUST return the raw API Key in the activation response for new activations only (not updates)
 
 #### Data Storage
 
