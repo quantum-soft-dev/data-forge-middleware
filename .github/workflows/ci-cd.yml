@@ -42,7 +42,7 @@ jobs:
           fi
 
   # Job 1: Build and Test (always runs)
-  test:
+  backend-test:
     runs-on: ubuntu-latest
     needs: setup
 
