@@ -252,6 +252,34 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Nested
+    @DisplayName("Table Name Derivation")
+    class TableNameDerivation {
+
+        @Test
+        @DisplayName("Should handle CSV filenames starting with digits by prefixing with underscore")
+        void shouldHandleCsvFilenamesStartingWithDigits() throws Exception {
+            // Given - CSV file with name starting with digit (like 77nsfsfira.csv)
+            Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "77nsfsfira.csv",
+                    "id,name\n1,Test\n2,Data");
+
+            // When - Publish batch completed event
+            BatchCompletedEvent event = new BatchCompletedEvent(
+                    batch.getId(), TEST_ACCOUNT_ID, 1, 256L
+            );
+            eventPublisher.publishEvent(event);
+            Thread.sleep(1000);
+
+            // Then - SQL generation should succeed (table name prefixed with _)
+            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(FRESH_SITE_ID);
+            assertThat(generations).hasSize(1);
+
+            PluginSqlGeneration generation = generations.get(0);
+            assertThat(generation.getInsertCount()).isEqualTo(2);
+            assertThat(generation.getS3Key()).isNotBlank();
+        }
+    }
+
+    @Nested
     @DisplayName("S3 Storage")
     class S3Storage {
 

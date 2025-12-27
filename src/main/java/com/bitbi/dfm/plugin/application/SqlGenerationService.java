@@ -397,6 +397,7 @@ public class SqlGenerationService {
     /**
      * Derives table name from CSV filename.
      * Example: customers.csv -> customers
+     * Example: 77nsfsfira.csv -> _77nsfsfira (prefixed because starts with digit)
      */
     private String deriveTableName(String fileName) {
         String name = fileName;
@@ -404,7 +405,15 @@ public class SqlGenerationService {
             name = name.substring(0, name.length() - 4);
         }
         // Sanitize: replace invalid characters with underscore
-        return name.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+        name = name.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+
+        // PostgreSQL identifiers must start with letter or underscore
+        // If starts with digit, prefix with underscore
+        if (!name.isEmpty() && Character.isDigit(name.charAt(0))) {
+            name = "_" + name;
+        }
+
+        return name;
     }
 
     /**
