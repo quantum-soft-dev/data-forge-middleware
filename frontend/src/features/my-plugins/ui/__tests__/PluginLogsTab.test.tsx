@@ -231,12 +231,12 @@ describe('PluginLogsTab', () => {
     expect(pluginLogsQueries.usePluginLogsQuery).toHaveBeenCalledWith('bit-bi', 0)
   })
 
-  it('should filter out EVENT_DISPATCHED from visible logs', () => {
-    const logsWithEventDispatched: PluginLogPageResponse = {
+  it('should filter out EVENT_DISPATCH_* from visible logs', () => {
+    const logsWithEventDispatch: PluginLogPageResponse = {
       content: [
         {
           id: 1,
-          actionType: 'EVENT_DISPATCHED',
+          actionType: 'EVENT_DISPATCH_STARTED',
           success: true,
           occurredAt: '2025-12-27T10:30:00Z',
         },
@@ -252,7 +252,7 @@ describe('PluginLogsTab', () => {
         },
         {
           id: 3,
-          actionType: 'EVENT_FAILED',
+          actionType: 'EVENT_DISPATCH_FAILED',
           success: false,
           errorMessage: 'Technical error',
           occurredAt: '2025-12-27T10:30:02Z',
@@ -265,7 +265,7 @@ describe('PluginLogsTab', () => {
     }
 
     vi.mocked(pluginLogsQueries.usePluginLogsQuery).mockReturnValue({
-      data: logsWithEventDispatched,
+      data: logsWithEventDispatch,
       isLoading: false,
       isError: false,
       error: null,
@@ -276,7 +276,7 @@ describe('PluginLogsTab', () => {
     // SQL_GENERATION_COMPLETED should be shown with user-friendly label
     expect(screen.getByText(/sql generated/i)).toBeInTheDocument()
 
-    // EVENT_DISPATCHED and EVENT_FAILED should NOT be shown
+    // EVENT_DISPATCH_* should NOT be shown
     expect(screen.queryByText(/event dispatched/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/event failed/i)).not.toBeInTheDocument()
   })
