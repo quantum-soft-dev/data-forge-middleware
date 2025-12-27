@@ -16,6 +16,19 @@ import { Badge } from '@/shared/ui/ui/badge'
 import { usePluginLogsQuery } from '../api/pluginLogsQueries'
 import type { PluginLogEntry, PluginActionType, SqlGenerationMetadata } from '../model/types'
 
+/**
+ * Action types visible to end users.
+ * Technical events (EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT) are hidden.
+ */
+const USER_VISIBLE_ACTIONS: PluginActionType[] = [
+  'ACTIVATE',
+  'DEACTIVATE',
+  'REACTIVATE',
+  'SQL_GENERATION_STARTED',
+  'SQL_GENERATION_COMPLETED',
+  'SQL_GENERATION_FAILED',
+]
+
 interface PluginLogsTabProps {
   /** Plugin identifier (e.g., "bit-bi") */
   pluginId: string
@@ -24,14 +37,25 @@ interface PluginLogsTabProps {
 }
 
 /**
- * Format action type for display.
- * Converts SNAKE_CASE to human-readable format.
+ * User-friendly labels for action types.
+ */
+const ACTION_TYPE_LABELS: Record<PluginActionType, string> = {
+  ACTIVATE: 'Plugin Activated',
+  DEACTIVATE: 'Plugin Deactivated',
+  REACTIVATE: 'Plugin Reactivated',
+  SQL_GENERATION_STARTED: 'Generating SQL...',
+  SQL_GENERATION_COMPLETED: 'SQL Generated',
+  SQL_GENERATION_FAILED: 'SQL Generation Failed',
+  EVENT_DISPATCHED: 'Event Dispatched',
+  EVENT_FAILED: 'Event Failed',
+  EVENT_TIMEOUT: 'Event Timeout',
+}
+
+/**
+ * Format action type for display using user-friendly labels.
  */
 function formatActionType(actionType: PluginActionType): string {
-  return actionType
-    .split('_')
-    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
-    .join(' ')
+  return ACTION_TYPE_LABELS[actionType] || actionType
 }
 
 /**
@@ -169,7 +193,12 @@ export function PluginLogsTab({ pluginId, page = 0 }: PluginLogsTabProps) {
     )
   }
 
-  if (!data || data.content.length === 0) {
+  // Filter out technical events that are not meaningful to users
+  const visibleLogs = data?.content.filter((log) =>
+    USER_VISIBLE_ACTIONS.includes(log.actionType)
+  ) ?? []
+
+  if (!data || visibleLogs.length === 0) {
     return (
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
         <FileText className="mx-auto h-12 w-12 text-gray-400" />
@@ -183,7 +212,7 @@ export function PluginLogsTab({ pluginId, page = 0 }: PluginLogsTabProps) {
 
   return (
     <div className="space-y-4">
-      {data.content.map((entry) => (
+      {visibleLogs.map((entry) => (
         <LogEntry key={entry.id} entry={entry} />
       ))}
 

@@ -130,10 +130,10 @@ describe('PluginLogsTab', () => {
 
     renderWithProvider(<PluginLogsTab pluginId="bit-bi" />)
 
-    // Check that log entries are displayed
-    expect(screen.getByText(/sql generation completed/i)).toBeInTheDocument()
-    expect(screen.getByText(/sql generation started/i)).toBeInTheDocument()
-    expect(screen.getByText(/activate/i)).toBeInTheDocument()
+    // Check that log entries are displayed with user-friendly labels
+    expect(screen.getByText(/sql generated/i)).toBeInTheDocument()
+    expect(screen.getByText(/generating sql\.\.\./i)).toBeInTheDocument()
+    expect(screen.getByText(/plugin activated/i)).toBeInTheDocument()
   })
 
   it('should display success badge for successful operations', () => {
@@ -229,5 +229,84 @@ describe('PluginLogsTab', () => {
     renderWithProvider(<PluginLogsTab pluginId="bit-bi" />)
 
     expect(pluginLogsQueries.usePluginLogsQuery).toHaveBeenCalledWith('bit-bi', 0)
+  })
+
+  it('should filter out EVENT_DISPATCHED from visible logs', () => {
+    const logsWithEventDispatched: PluginLogPageResponse = {
+      content: [
+        {
+          id: 1,
+          actionType: 'EVENT_DISPATCHED',
+          success: true,
+          occurredAt: '2025-12-27T10:30:00Z',
+        },
+        {
+          id: 2,
+          actionType: 'SQL_GENERATION_COMPLETED',
+          success: true,
+          metadata: {
+            batchId: '550e8400-e29b-41d4-a716-446655440000',
+            insertCount: 100,
+          },
+          occurredAt: '2025-12-27T10:30:01Z',
+        },
+        {
+          id: 3,
+          actionType: 'EVENT_FAILED',
+          success: false,
+          errorMessage: 'Technical error',
+          occurredAt: '2025-12-27T10:30:02Z',
+        },
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 3,
+      totalPages: 1,
+    }
+
+    vi.mocked(pluginLogsQueries.usePluginLogsQuery).mockReturnValue({
+      data: logsWithEventDispatched,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any)
+
+    renderWithProvider(<PluginLogsTab pluginId="bit-bi" />)
+
+    // SQL_GENERATION_COMPLETED should be shown with user-friendly label
+    expect(screen.getByText(/sql generated/i)).toBeInTheDocument()
+
+    // EVENT_DISPATCHED and EVENT_FAILED should NOT be shown
+    expect(screen.queryByText(/event dispatched/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/event failed/i)).not.toBeInTheDocument()
+  })
+
+  it('should display user-friendly labels for action types', () => {
+    const logsWithActivate: PluginLogPageResponse = {
+      content: [
+        {
+          id: 1,
+          actionType: 'ACTIVATE',
+          success: true,
+          occurredAt: '2025-12-01T10:00:00Z',
+        },
+      ],
+      page: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+    }
+
+    vi.mocked(pluginLogsQueries.usePluginLogsQuery).mockReturnValue({
+      data: logsWithActivate,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any)
+
+    renderWithProvider(<PluginLogsTab pluginId="bit-bi" />)
+
+    // Should show "Plugin Activated" instead of just "Activate"
+    expect(screen.getByText(/plugin activated/i)).toBeInTheDocument()
   })
 })
