@@ -51,6 +51,8 @@ public class SqlGenerationService {
      */
     private static final int MAX_CSV_FILES_PER_BATCH = 100;
 
+    private static final String PLUGIN_ID = "bit-bi";
+
     private final BatchRepository batchRepository;
     private final SiteRepository siteRepository;
     private final AccountPluginRepository accountPluginRepository;
@@ -61,6 +63,7 @@ public class SqlGenerationService {
     private final S3Client s3Client;
     private final String bucketName;
     private final MeterRegistry meterRegistry;
+    private final PluginAuditService pluginAuditService;
 
     public SqlGenerationService(
             BatchRepository batchRepository,
@@ -72,7 +75,8 @@ public class SqlGenerationService {
             S3SqlFileStorageService s3SqlFileStorageService,
             S3Client s3Client,
             @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}") String bucketName,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            PluginAuditService pluginAuditService) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -83,6 +87,7 @@ public class SqlGenerationService {
         this.s3Client = s3Client;
         this.bucketName = bucketName;
         this.meterRegistry = meterRegistry;
+        this.pluginAuditService = pluginAuditService;
     }
 
     /**
@@ -104,10 +109,12 @@ public class SqlGenerationService {
     public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
+        BatchData batchData = null;
+        long startTimeMs = System.currentTimeMillis();
 
         try {
             // Phase 1: Load all required data (uses JOIN FETCH to prevent N+1)
-            BatchData batchData = loadBatchData(batchId);
+            batchData = loadBatchData(batchId);
             if (batchData == null) {
                 return Optional.empty();
             }
@@ -118,6 +125,14 @@ public class SqlGenerationService {
             MDC.put("accountId", batchData.batch.getAccountId().toString());
 
             log.info("Starting SQL generation for batch: batchId={}", batchId);
+
+            // Audit: Log SQL generation started
+            pluginAuditService.logSqlGenerationStarted(
+                    PLUGIN_ID,
+                    batchData.batch.getAccountId(),
+                    batchId,
+                    batchData.batch.getSiteId()
+            );
 
             // Phase 2: Generate SQL content (S3 reads outside transaction)
             SqlGenerationResult result = generateSqlContent(batchData);
@@ -148,6 +163,17 @@ public class SqlGenerationService {
             log.info("SQL generation completed: batchId={}, statements={}, duration={}ms",
                     batchId, result.stats.total(), durationMs / 1_000_000);
 
+            // Audit: Log SQL generation completed
+            pluginAuditService.logSqlGenerationCompleted(
+                    PLUGIN_ID,
+                    batchData.batch.getAccountId(),
+                    batchId,
+                    batchData.batch.getSiteId(),
+                    result.stats,
+                    s3Key,
+                    durationMs / 1_000_000  // Convert nanos to ms
+            );
+
             // Record metrics
             meterRegistry.counter("sql.generation.statements.inserts").increment(result.stats.inserts());
             meterRegistry.counter("sql.generation.statements.updates").increment(result.stats.updates());
@@ -159,11 +185,39 @@ public class SqlGenerationService {
             log.error("SQL generation failed for batch (I/O error): batchId={}", batchId, e);
             meterRegistry.counter("sql.generation.errors").increment();
             cleanupOrphanedS3File(s3Key);
+
+            // Audit: Log SQL generation failed (if we have batch data)
+            if (batchData != null) {
+                long durationMs = System.currentTimeMillis() - startTimeMs;
+                pluginAuditService.logSqlGenerationFailed(
+                        PLUGIN_ID,
+                        batchData.batch.getAccountId(),
+                        batchId,
+                        batchData.batch.getSiteId(),
+                        "I/O error: " + e.getMessage(),
+                        durationMs
+                );
+            }
+
             throw new SqlGenerationException("Failed to read CSV files for SQL generation", e);
         } catch (RuntimeException e) {
             log.error("SQL generation failed for batch: batchId={}", batchId, e);
             meterRegistry.counter("sql.generation.errors").increment();
             cleanupOrphanedS3File(s3Key);
+
+            // Audit: Log SQL generation failed (if we have batch data)
+            if (batchData != null) {
+                long durationMs = System.currentTimeMillis() - startTimeMs;
+                pluginAuditService.logSqlGenerationFailed(
+                        PLUGIN_ID,
+                        batchData.batch.getAccountId(),
+                        batchId,
+                        batchData.batch.getSiteId(),
+                        e.getMessage(),
+                        durationMs
+                );
+            }
+
             throw e;
         } finally {
             MDC.clear();

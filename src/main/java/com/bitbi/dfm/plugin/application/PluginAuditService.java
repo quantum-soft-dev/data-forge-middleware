@@ -3,12 +3,15 @@ package com.bitbi.dfm.plugin.application;
 import com.bitbi.dfm.plugin.domain.PluginActionType;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
+import com.bitbi.dfm.plugin.domain.SqlGenerationStats;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -247,6 +250,121 @@ public class PluginAuditService {
         } catch (Exception e) {
             log.error("Failed to log deactivation failure audit: plugin={} error={}",
                     pluginId, e.getMessage());
+        }
+    }
+
+    // ==================== SQL Generation Audit Methods ====================
+
+    /**
+     * Logs the start of SQL generation for a batch.
+     *
+     * @param pluginId  the plugin identifier (e.g., "bit-bi")
+     * @param accountId the account that owns the batch
+     * @param batchId   the batch being processed
+     * @param siteId    the site the batch belongs to
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlGenerationStarted(String pluginId, UUID accountId, UUID batchId, UUID siteId) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            metadata.put("siteId", siteId.toString());
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_GENERATION_STARTED)
+                    .withMetadata(metadata);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_GENERATION_STARTED plugin={} account={} batch={}",
+                    pluginId, accountId, batchId);
+        } catch (Exception e) {
+            log.error("Failed to log SQL generation started audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs successful completion of SQL generation for a batch.
+     *
+     * @param pluginId   the plugin identifier
+     * @param accountId  the account that owns the batch
+     * @param batchId    the batch that was processed
+     * @param siteId     the site the batch belongs to
+     * @param stats      the generation statistics (inserts, updates, deletes, files)
+     * @param s3Key      the S3 key where the SQL file was stored
+     * @param durationMs time taken to generate the SQL file
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlGenerationCompleted(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID siteId,
+            SqlGenerationStats stats,
+            String s3Key,
+            long durationMs) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            metadata.put("siteId", siteId.toString());
+            metadata.put("insertCount", stats.inserts());
+            metadata.put("updateCount", stats.updates());
+            metadata.put("deleteCount", stats.deletes());
+            metadata.put("filesProcessed", stats.filesProcessed());
+            metadata.put("s3Key", s3Key);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_GENERATION_COMPLETED)
+                    .withMetadata(metadata)
+                    .withDuration(durationMs);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_GENERATION_COMPLETED plugin={} account={} batch={} " +
+                            "inserts={} updates={} deletes={} duration={}ms",
+                    pluginId, accountId, batchId, stats.inserts(), stats.updates(), stats.deletes(), durationMs);
+        } catch (Exception e) {
+            log.error("Failed to log SQL generation completed audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs a failed SQL generation attempt.
+     *
+     * @param pluginId     the plugin identifier
+     * @param accountId    the account that owns the batch
+     * @param batchId      the batch that failed processing
+     * @param siteId       the site the batch belongs to
+     * @param errorMessage the error message describing the failure
+     * @param durationMs   time elapsed before failure
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlGenerationFailed(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID siteId,
+            String errorMessage,
+            long durationMs) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            metadata.put("siteId", siteId.toString());
+
+            PluginAuditLog auditLog = PluginAuditLog.failure(pluginId, accountId,
+                            PluginActionType.SQL_GENERATION_FAILED, errorMessage)
+                    .withMetadata(metadata)
+                    .withDuration(durationMs);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_GENERATION_FAILED plugin={} account={} batch={} error={}",
+                    pluginId, accountId, batchId, errorMessage);
+        } catch (Exception e) {
+            log.error("Failed to log SQL generation failure audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
         }
     }
 }

@@ -63,4 +63,15 @@ public interface PluginAuditLogRepository {
      * @return count of matching logs
      */
     long countByActionTypeAndDateRange(PluginActionType actionType, Instant from, Instant to);
+
+    /**
+     * Finds audit logs for a specific plugin and account.
+     * Used for user-facing plugin log viewing.
+     *
+     * @param pluginId  the plugin identifier (e.g., "bit-bi")
+     * @param accountId the account identifier
+     * @param pageable  pagination parameters
+     * @return page of audit logs ordered by occurredAt DESC
+     */
+    Page<PluginAuditLog> findByPluginIdAndAccountId(String pluginId, UUID accountId, Pageable pageable);
 }

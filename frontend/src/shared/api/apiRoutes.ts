@@ -113,6 +113,7 @@ export const ADMIN_PLUGINS_AUDIT_BY_PLUGIN = (pluginId: string) => `${ADMIN_PLUG
 
 // Account Plugins (User-facing)
 export const ACCOUNT_PLUGINS = `${ADMIN_API_BASE}/account/plugins`;
+export const ACCOUNT_PLUGIN_LOGS = (pluginId: string) => `${ACCOUNT_PLUGINS}/${pluginId}/logs`;
 
 // Plugin Activation
 export const PLUGINS = `${ADMIN_API_BASE}/plugins`;

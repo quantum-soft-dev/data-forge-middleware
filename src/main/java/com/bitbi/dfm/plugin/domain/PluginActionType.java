@@ -21,5 +21,14 @@ public enum PluginActionType {
     EVENT_FAILED,
 
     /** Event dispatch timed out (30 second limit per FR-008) */
-    EVENT_TIMEOUT
+    EVENT_TIMEOUT,
+
+    /** SQL generation started for a batch */
+    SQL_GENERATION_STARTED,
+
+    /** SQL generation completed successfully */
+    SQL_GENERATION_COMPLETED,
+
+    /** SQL generation failed with error */
+    SQL_GENERATION_FAILED
 }

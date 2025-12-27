@@ -58,4 +58,16 @@ public interface JpaPluginAuditLogRepository extends JpaRepository<PluginAuditLo
             @Param("actionType") PluginActionType actionType,
             @Param("from") Instant from,
             @Param("to") Instant to);
+
+    @Override
+    @Query("""
+        SELECT pal FROM PluginAuditLog pal
+        WHERE pal.pluginId = :pluginId
+        AND pal.accountId = :accountId
+        ORDER BY pal.occurredAt DESC
+        """)
+    Page<PluginAuditLog> findByPluginIdAndAccountId(
+            @Param("pluginId") String pluginId,
+            @Param("accountId") UUID accountId,
+            Pageable pageable);
 }

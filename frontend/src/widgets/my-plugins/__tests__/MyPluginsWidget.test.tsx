@@ -28,6 +28,15 @@ vi.mock('@/features/my-plugins/api/myPluginsMutations', () => ({
   useDeactivatePluginMutation: vi.fn(),
 }))
 
+vi.mock('@/features/my-plugins/api/pluginLogsQueries', () => ({
+  usePluginLogsQuery: vi.fn(() => ({
+    data: { content: [], page: 0, size: 20, totalElements: 0, totalPages: 0 },
+    isLoading: false,
+    isError: false,
+    error: null,
+  })),
+}))
+
 // Mock sonner toast
 vi.mock('sonner', () => ({
   toast: {
@@ -328,6 +337,57 @@ describe('MyPluginsWidget', () => {
       render(<MyPluginsWidget />, { wrapper: createWrapper() })
 
       expect(screen.getByRole('button', { name: 'Deactivating...' })).toBeDisabled()
+    })
+  })
+
+  describe('Tabs', () => {
+    beforeEach(() => {
+      vi.mocked(myPluginsQueries.useAccountPluginsQuery).mockReturnValue({
+        data: mockAccountPluginsResponse,
+        isLoading: false,
+        error: null,
+      } as any)
+      vi.mocked(myPluginsQueries.useAvailablePluginsQuery).mockReturnValue({
+        data: mockAvailablePlugins,
+        isLoading: false,
+        error: null,
+      } as any)
+    })
+
+    it('should render Plugins and Logs tabs', () => {
+      render(<MyPluginsWidget />, { wrapper: createWrapper() })
+
+      expect(screen.getByRole('tab', { name: /plugins/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { name: /logs/i })).toBeInTheDocument()
+    })
+
+    it('should show Plugins tab by default', () => {
+      render(<MyPluginsWidget />, { wrapper: createWrapper() })
+
+      const pluginsTab = screen.getByRole('tab', { name: /plugins/i })
+      expect(pluginsTab).toHaveAttribute('data-state', 'active')
+    })
+
+    it('should switch to Logs tab when clicked', async () => {
+      const user = userEvent.setup()
+
+      render(<MyPluginsWidget />, { wrapper: createWrapper() })
+
+      const logsTab = screen.getByRole('tab', { name: /logs/i })
+      await user.click(logsTab)
+
+      expect(logsTab).toHaveAttribute('data-state', 'active')
+    })
+
+    it('should show log entries when Logs tab is active', async () => {
+      const user = userEvent.setup()
+
+      render(<MyPluginsWidget />, { wrapper: createWrapper() })
+
+      await user.click(screen.getByRole('tab', { name: /logs/i }))
+
+      // Empty state should be shown since mock returns empty content
+      expect(screen.getByText(/no log entries/i)).toBeInTheDocument()
     })
   })
 })

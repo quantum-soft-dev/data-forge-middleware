@@ -111,13 +111,29 @@ docker-compose up postgres localstack     # Start dependencies
 - **Plugin interface**: `Plugin.getId()`, `validateConfig()`, `onActivate()`, `onDeactivate()`
 - **BitBiPlugin**: SQL generation from CSV uploads, API key auth
 - **API key**: Generated on activation, BCrypt hashed, returned once only
-- **Audit logs**: All plugin actions logged to partitioned table
+- **Audit logs**: All plugin actions logged to partitioned table with JSONB metadata
+
+#### Plugin Action Types
+| Type | Description |
+|------|-------------|
+| `ACTIVATE` | Plugin activated for account |
+| `DEACTIVATE` | Plugin deactivated |
+| `SQL_GENERATION_STARTED` | SQL generation began for batch |
+| `SQL_GENERATION_COMPLETED` | SQL generation finished (includes stats: insertCount, updateCount, deleteCount) |
+| `SQL_GENERATION_FAILED` | SQL generation error (includes errorMessage) |
+
+#### User-Facing Plugin Logs
+- **Endpoint**: `GET /api/v1/account/plugins/{pluginId}/logs`
+- **Frontend**: Logs tab in My Plugins widget (Dashboard)
+- **Data**: Action type, success/failure status, error messages, SQL generation statistics
+- **Security**: Excludes sensitive data (IP, user agent, client IDs)
 
 ### Bit BI Plugin API Endpoints
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/plugins/bit-bi/sites` | GET | List sites for account |
 | `/api/v1/plugins/bit-bi/sql-changes` | GET | Get SQL changes (params: siteId, since) |
+| `/api/v1/account/plugins/{pluginId}/logs` | GET | Plugin activity logs (user-facing) |
 
 ### S3 File Storage
 - **Path**: `{accountId}/{domain}/{date}/{time}/{filename}`

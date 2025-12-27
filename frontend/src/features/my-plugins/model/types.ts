@@ -108,3 +108,90 @@ export interface BitBiPluginData {
   /** Tenant ID for Bit BI connection */
   tenantId: string
 }
+
+// ==================== Plugin Logs Types ====================
+
+/**
+ * Plugin action types for user-facing log entries.
+ * Maps to PluginActionType.java enum.
+ */
+export type PluginActionType =
+  | 'ACTIVATE'
+  | 'DEACTIVATE'
+  | 'EVENT_DISPATCH_STARTED'
+  | 'EVENT_DISPATCH_COMPLETED'
+  | 'EVENT_DISPATCH_FAILED'
+  | 'SQL_GENERATION_STARTED'
+  | 'SQL_GENERATION_COMPLETED'
+  | 'SQL_GENERATION_FAILED'
+
+/**
+ * Metadata for SQL generation log entries.
+ * Contains statistics and S3 path for generated SQL.
+ */
+export interface SqlGenerationMetadata {
+  /** Unique batch identifier */
+  batchId?: string
+  /** Site identifier */
+  siteId?: string
+  /** Number of INSERT statements generated */
+  insertCount?: number
+  /** Number of UPDATE statements generated */
+  updateCount?: number
+  /** Number of DELETE statements generated */
+  deleteCount?: number
+  /** S3 key where SQL file was stored */
+  s3Key?: string
+  /** Duration in milliseconds */
+  durationMs?: number
+}
+
+/**
+ * User-facing plugin log entry.
+ * Maps to UserPluginLogDto.java
+ *
+ * Security: Excludes sensitive data like client IDs and IP addresses.
+ */
+export interface PluginLogEntry {
+  /** Log entry ID */
+  id: number
+  /** Type of action */
+  actionType: PluginActionType
+  /** Whether the operation succeeded */
+  success: boolean
+  /** Error message if operation failed */
+  errorMessage?: string
+  /** Structured event metadata */
+  metadata?: SqlGenerationMetadata | Record<string, unknown>
+  /** When the event occurred (ISO 8601) */
+  occurredAt: string
+}
+
+/**
+ * Paginated response for plugin logs.
+ * Maps to UserPluginLogPageResponseDto.java
+ */
+export interface PluginLogPageResponse {
+  /** List of log entries for the current page */
+  content: PluginLogEntry[]
+  /** Current page number (0-indexed) */
+  page: number
+  /** Page size */
+  size: number
+  /** Total number of log entries */
+  totalElements: number
+  /** Total number of pages */
+  totalPages: number
+}
+
+/**
+ * Query filters for plugin logs.
+ */
+export interface PluginLogFilters {
+  /** Plugin ID (e.g., "bit-bi") */
+  pluginId: string
+  /** Page number (0-indexed) */
+  page?: number
+  /** Page size (1-100) */
+  size?: number
+}

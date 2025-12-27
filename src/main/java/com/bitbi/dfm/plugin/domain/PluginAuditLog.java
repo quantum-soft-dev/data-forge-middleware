@@ -1,10 +1,13 @@
 package com.bitbi.dfm.plugin.domain;
 
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Type;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -65,6 +68,14 @@ public class PluginAuditLog {
 
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
+
+    /**
+     * Structured event metadata (JSONB).
+     * Contains batchId, siteId, stats for SQL generation events.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "metadata", columnDefinition = "jsonb")
+    private Map<String, Object> metadata;
 
     /**
      * Creates a successful audit log entry.
@@ -154,6 +165,15 @@ public class PluginAuditLog {
      */
     public PluginAuditLog withOccurredAt(Instant occurredAt) {
         this.occurredAt = occurredAt;
+        return this;
+    }
+
+    /**
+     * Builder-style method to set structured metadata.
+     * Used for SQL generation events to store batchId, stats, s3Key, etc.
+     */
+    public PluginAuditLog withMetadata(Map<String, Object> metadata) {
+        this.metadata = metadata;
         return this;
     }
 

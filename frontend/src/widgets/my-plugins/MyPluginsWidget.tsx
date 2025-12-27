@@ -3,11 +3,13 @@
  *
  * Dashboard widget for managing user's plugin integrations.
  * Shows activated and available plugins with activation/deactivation actions.
+ * Includes Logs tab for viewing plugin activity.
  */
 
 import { useState, useCallback, useMemo } from 'react'
-import { Plug } from 'lucide-react'
+import { Plug, FileText } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs'
 import {
   useAccountPluginsQuery,
   useAvailablePluginsQuery,
@@ -15,6 +17,7 @@ import {
   useDeactivatePluginMutation,
 } from '@/features/my-plugins'
 import { PluginList } from '@/features/my-plugins/ui/PluginList'
+import { PluginLogsTab } from '@/features/my-plugins/ui/PluginLogsTab'
 import { PluginActivationDialog } from '@/features/my-plugins/ui/PluginActivationDialog'
 import type { AvailablePlugin, ActivatePluginRequest } from '@/features/my-plugins'
 
@@ -88,6 +91,9 @@ export function MyPluginsWidget() {
 
   const isLoading = isLoadingAccountPlugins || isLoadingAvailablePlugins
 
+  // Get the first active plugin for logs (default to bit-bi if not found)
+  const activePluginId = accountPlugins?.content?.find(p => p.isActive)?.pluginId ?? 'bit-bi'
+
   return (
     <Card>
       <CardHeader>
@@ -97,15 +103,34 @@ export function MyPluginsWidget() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <PluginList
-          plugins={accountPlugins?.content ?? []}
-          availablePlugins={availablePlugins ?? []}
-          isLoading={isLoading}
-          error={accountPluginsError}
-          pendingPluginIds={pendingPluginIds}
-          onActivate={handleActivateClick}
-          onDeactivate={handleDeactivate}
-        />
+        <Tabs defaultValue="plugins" className="w-full">
+          <TabsList className="mb-4">
+            <TabsTrigger value="plugins" className="flex items-center gap-1">
+              <Plug className="h-4 w-4" />
+              Plugins
+            </TabsTrigger>
+            <TabsTrigger value="logs" className="flex items-center gap-1">
+              <FileText className="h-4 w-4" />
+              Logs
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="plugins">
+            <PluginList
+              plugins={accountPlugins?.content ?? []}
+              availablePlugins={availablePlugins ?? []}
+              isLoading={isLoading}
+              error={accountPluginsError}
+              pendingPluginIds={pendingPluginIds}
+              onActivate={handleActivateClick}
+              onDeactivate={handleDeactivate}
+            />
+          </TabsContent>
+
+          <TabsContent value="logs">
+            <PluginLogsTab pluginId={activePluginId} />
+          </TabsContent>
+        </Tabs>
 
         <PluginActivationDialog
           open={dialogOpen}
