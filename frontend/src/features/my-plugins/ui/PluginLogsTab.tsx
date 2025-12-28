@@ -18,11 +18,12 @@ import type { PluginLogEntry, PluginActionType, SqlGenerationMetadata } from '..
 
 /**
  * Action types visible to end users.
- * Technical events (EVENT_DISPATCH_*) are hidden.
+ * Technical events (EVENT_DISPATCHED, EVENT_FAILED, EVENT_TIMEOUT) are hidden.
  */
 const USER_VISIBLE_ACTIONS: PluginActionType[] = [
   'ACTIVATE',
   'DEACTIVATE',
+  'REACTIVATE',
   'SQL_GENERATION_STARTED',
   'SQL_GENERATION_COMPLETED',
   'SQL_GENERATION_FAILED',
@@ -41,12 +42,13 @@ interface PluginLogsTabProps {
 const ACTION_TYPE_LABELS: Record<PluginActionType, string> = {
   ACTIVATE: 'Plugin Activated',
   DEACTIVATE: 'Plugin Deactivated',
+  REACTIVATE: 'Plugin Reactivated',
   SQL_GENERATION_STARTED: 'Generating SQL...',
   SQL_GENERATION_COMPLETED: 'SQL Generated',
   SQL_GENERATION_FAILED: 'SQL Generation Failed',
-  EVENT_DISPATCH_STARTED: 'Event Dispatched',
-  EVENT_DISPATCH_COMPLETED: 'Event Completed',
-  EVENT_DISPATCH_FAILED: 'Event Failed',
+  EVENT_DISPATCHED: 'Event Dispatched',
+  EVENT_FAILED: 'Event Failed',
+  EVENT_TIMEOUT: 'Event Timeout',
 }
 
 /**
