@@ -1,4 +1,4 @@
--- V10: Add SQL_GENERATION action types to plugin_audit_logs
+-- V13: Add SQL_GENERATION action types to plugin_audit_logs
 -- Feature: 001-plugin-sql-generation
 -- Date: 2025-12-28
 -- Issue: SQL_GENERATION_STARTED, SQL_GENERATION_COMPLETED, SQL_GENERATION_FAILED
