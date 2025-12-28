@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.infrastructure;
 
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.plugin.domain.PluginActionType;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
@@ -58,8 +59,6 @@ public class PluginAuditFilter extends OncePerRequestFilter {
             "^/api/v1/plugins/([a-z0-9-]+)/(activate|deactivate)$"
     );
 
-    private static final String AUTH0_ACCOUNT_ID_CLAIM = "https://api.dataforge.com/accountId";
-
     /**
      * Maximum request body size to read for hashing (1MB).
      * Prevents memory exhaustion from malicious large payloads.
@@ -73,9 +72,11 @@ public class PluginAuditFilter extends OncePerRequestFilter {
     private static final int MAX_PLUGIN_ID_LENGTH = 64;
 
     private final PluginAuditLogRepository auditLogRepository;
+    private final Auth0Properties auth0Properties;
 
-    public PluginAuditFilter(PluginAuditLogRepository auditLogRepository) {
+    public PluginAuditFilter(PluginAuditLogRepository auditLogRepository, Auth0Properties auth0Properties) {
         this.auditLogRepository = auditLogRepository;
+        this.auth0Properties = auth0Properties;
     }
 
     @Override
@@ -216,12 +217,19 @@ public class PluginAuditFilter extends OncePerRequestFilter {
 
     /**
      * Extracts the account ID from the security context (Auth0 JWT claim).
+     * Uses the configured claim namespace from Auth0Properties.
      */
     private UUID extractAccountId() {
         try {
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();
             if (auth != null && auth.getPrincipal() instanceof Jwt jwt) {
-                String accountIdStr = jwt.getClaimAsString(AUTH0_ACCOUNT_ID_CLAIM);
+                // Try namespaced claim first (e.g., https://dev.dfm.bitbi.io/accountId)
+                String accountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
+                if (accountIdStr != null && !accountIdStr.isBlank()) {
+                    return UUID.fromString(accountIdStr);
+                }
+                // Fallback to legacy "accountId" claim
+                accountIdStr = jwt.getClaimAsString("accountId");
                 if (accountIdStr != null && !accountIdStr.isBlank()) {
                     return UUID.fromString(accountIdStr);
                 }
