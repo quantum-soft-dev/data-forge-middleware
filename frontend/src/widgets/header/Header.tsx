@@ -25,11 +25,16 @@ export function Header() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           {/* Logo / Title */}
-          <div className="flex items-center">
+          <Link to="/dashboard" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
+            <img
+              src="/favicon.svg"
+              alt="DataForge Logo"
+              className="h-8 w-8"
+            />
             <h1 className="text-xl font-bold text-gray-900">
               DataForge Middleware
             </h1>
-          </div>
+          </Link>
 
           {/* Navigation Menu */}
           <nav className="flex items-center space-x-6">

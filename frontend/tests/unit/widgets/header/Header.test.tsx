@@ -45,9 +45,14 @@ describe('Header', () => {
 
   it('should render Dashboard link with correct route', () => {
     render(<Header />)
-    const dashboardLink = screen.getByTestId('link-/dashboard')
-    expect(dashboardLink).toBeInTheDocument()
-    expect(dashboardLink).toHaveTextContent('Dashboard')
+    // There are two links to /dashboard: logo and nav link
+    const dashboardLinks = screen.getAllByTestId('link-/dashboard')
+    expect(dashboardLinks.length).toBeGreaterThanOrEqual(1)
+    // The nav link should have "Dashboard" text
+    const navLink = dashboardLinks.find((link) =>
+      link.textContent?.includes('Dashboard')
+    )
+    expect(navLink).toBeInTheDocument()
   })
 
   it('should render User Management link with correct route for admin', () => {
@@ -66,5 +71,12 @@ describe('Header', () => {
   it('should render app title', () => {
     render(<Header />)
     expect(screen.getByText('DataForge Middleware')).toBeInTheDocument()
+  })
+
+  it('should render logo that links to dashboard', () => {
+    render(<Header />)
+    const logo = screen.getByAltText('DataForge Logo')
+    expect(logo).toBeInTheDocument()
+    expect(logo).toHaveAttribute('src', '/favicon.svg')
   })
 })
