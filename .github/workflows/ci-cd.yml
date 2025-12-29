@@ -413,9 +413,11 @@ jobs:
         working-directory: ./deploy-script
         run: |
           chmod +x deploy.sh
+          echo "Deploying branch: ${{ github.ref_name }}"
+          echo "Using Image Tag: ${{ github.ref_name }}-${{ github.sha }}"
           ./deploy.sh ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }} update
         env:
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ github.ref_name }}-${{ github.sha }}
           DB_MASTER_PASSWORD: ${{ secrets.DB_MASTER_PASSWORD }}
           APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
