@@ -64,3 +64,5 @@ jacoco/
 
 # Deploy secrets
 deploy-script/parameters-*.json
+deploy-script/config/*.json
+!deploy-script/config/*.template

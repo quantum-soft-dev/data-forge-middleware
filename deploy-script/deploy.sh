@@ -6,22 +6,12 @@ set -e
 # DFM CloudFormation Deployment Script
 # =============================================================================
 # Usage:
-#   ./deploy.sh create             # Create new stack
-#   ./deploy.sh update             # Update existing stack via Change Set
-#   ./deploy.sh delete             # Delete stack
-#   ./deploy.sh deploy             # Force new ECS deployment (pull latest image)
-#   ./deploy.sh status             # Show stack status
-#   ./deploy.sh outputs            # Show stack outputs
-#   ./deploy.sh events             # Show recent stack events
-#   ./deploy.sh logs [minutes]     # Show ECS logs (default: last 10 min)
-#   ./deploy.sh rollback           # Cancel update and rollback
+#   ./deploy.sh <env> <command>
+# Examples:
+#   ./deploy.sh dev create         # Create new dev stack
+#   ./deploy.sh dev update         # Update dev stack
+#   ./deploy.sh prod status        # Check prod stack status
 # =============================================================================
-
-# Configuration
-TEMPLATE_FILE="template-1763397226530.yaml"
-PARAMETERS_FILE="parameters-dev.json"
-STACK_NAME="dfm-dev"
-AWS_REGION="us-east-1"
 
 # Colors for output
 RED='\033[0;31m'
@@ -81,6 +71,30 @@ wait_for_stack() {
 }
 
 # -----------------------------------------------------------------------------
+# Configuration & Setup
+# -----------------------------------------------------------------------------
+
+ENV=${1:-dev}
+COMMAND=${2:-status}
+TEMPLATE_FILE="template-1763397226530.yaml"
+PARAMETERS_FILE="config/${ENV}.json"
+STACK_NAME="dfm-${ENV}"
+AWS_REGION="us-east-1"
+
+# If parameters file doesn't exist but template does, generate it
+if [[ ! -f "$PARAMETERS_FILE" && -f "${PARAMETERS_FILE}.template" ]]; then
+    log_info "Generating $PARAMETERS_FILE from template..."
+    # Check if envsubst is available
+    if command -v envsubst &> /dev/null; then
+        envsubst < "${PARAMETERS_FILE}.template" > "$PARAMETERS_FILE"
+        log_success "Generated configuration for $ENV"
+    else
+        log_error "envsubst not found. Please install gettext."
+        exit 1
+    fi
+fi
+
+# -----------------------------------------------------------------------------
 # Stack operations
 # -----------------------------------------------------------------------------
 
@@ -104,7 +118,7 @@ create_stack() {
     if stack_exists; then
         local status=$(get_stack_status)
         log_error "Stack already exists with status: $status"
-        log_info "Use './deploy.sh update' to update or './deploy.sh delete' to delete first"
+        log_info "Use './deploy.sh $ENV update' to update or './deploy.sh $ENV delete' to delete first"
         return 1
     fi
 
@@ -116,7 +130,7 @@ create_stack() {
         --parameters "file://$PARAMETERS_FILE" \
         --capabilities CAPABILITY_NAMED_IAM \
         --region "$AWS_REGION" \
-        --tags Key=Environment,Value=dev Key=Project,Value=dfm
+        --tags Key=Environment,Value=$ENV Key=Project,Value=dfm
 
     wait_for_stack "create"
 
@@ -129,7 +143,7 @@ update_stack() {
     log_info "Updating stack: $STACK_NAME via Change Set"
 
     if ! stack_exists; then
-        log_error "Stack does not exist. Use './deploy.sh create' first"
+        log_error "Stack does not exist. Use './deploy.sh $ENV create' first"
         return 1
     fi
 
@@ -342,7 +356,7 @@ force_deploy() {
 }
 
 show_help() {
-    echo "Usage: $0 <command>"
+    echo "Usage: $0 <env> <command>"
     echo ""
     echo "Commands:"
     echo "  create       Create new stack"
@@ -379,7 +393,7 @@ if [[ ! -f "$PARAMETERS_FILE" ]]; then
 fi
 
 # Parse command
-case "${1:-}" in
+case "$COMMAND" in
     create)
         create_stack
         ;;
@@ -399,7 +413,7 @@ case "${1:-}" in
         show_events
         ;;
     logs)
-        show_logs "${2:-10}"
+        show_logs "${3:-10}"
         ;;
     rollback)
         rollback_stack
@@ -410,12 +424,8 @@ case "${1:-}" in
     help|--help|-h)
         show_help
         ;;
-    "")
-        show_help
-        exit 1
-        ;;
     *)
-        log_error "Unknown command: $1"
+        log_error "Unknown command: $COMMAND"
         show_help
         exit 1
         ;;

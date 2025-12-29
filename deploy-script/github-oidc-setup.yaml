@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub Actions OIDC Trust for data-forge-middleware
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: quantum-soft-dev
+    Description: GitHub Organization
+  RepositoryName:
+    Type: String
+    Default: data-forge-middleware
+    Description: GitHub Repository Name
+  OIDCProviderArn:
+    Description: Arn for the GitHub OIDC Provider. (Optional - creates new if empty)
+    Default: ""
+    Type: String
+
+Conditions:
+  CreateOIDCProvider: !Equals [!Ref OIDCProviderArn, ""]
+
+Resources:
+  # 1. OIDC Provider (Create only if not provided)
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: 
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1 # GitHub's Thumbprint
+
+  # 2. IAM Role for GitHub Actions
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GitHubActions-DFM-Deployer
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !If [CreateOIDCProvider, !Ref GitHubOidcProvider, !Ref OIDCProviderArn]
+            Condition:
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${RepositoryName}:*
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess # Giving Full Access for ease of deployment. Can be scoped down.
+      Description: Role assumed by GitHub Actions to deploy DFM infrastructure
+
+Outputs:
+  RoleArn:
+    Description: ARN of the created IAM Role to use in GitHub Actions
+    Value: !GetAtt GitHubActionsRole.Arn

@@ -146,6 +146,10 @@ Parameters:
     Default: main
     Description: Frontend container image tag (version)
 
+  PluginBitbiClientId:
+    Type: String
+    Description: Client ID for the Bitbi plugin
+
 Resources:
   # DNS Record (Alias to ALB)
   DNSRecord:
@@ -757,7 +761,7 @@ Resources:
             - Name: AUTH0_CLAIMS_NAMESPACE
               Value: !Ref Auth0ClaimsNamespace
             - Name: PLUGIN_BITBI_CLIENT_ID
-              Value: vlyrbKacW1kdcF5srxVYe99wN2UrmZKH
+              Value: !Ref PluginBitbiClientId
           Secrets:
             - Name: DB_USERNAME
               ValueFrom: !Sub '${AppDBCredentialsSecret}:username::'
