@@ -5,6 +5,7 @@ import com.bitbi.dfm.plugin.application.PluginApiKeyService;
 import com.bitbi.dfm.plugin.application.SqlChangesQueryService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.PluginApiKey;
+import com.bitbi.dfm.plugin.presentation.dto.TableDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.site.domain.Site;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +16,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -48,6 +51,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>TC11: Valid request with no sites returns 200 OK with empty array</li>
  *   <li>TC12: Missing API key returns 401 Unauthorized</li>
  *   <li>TC13: Invalid API key returns 401 Unauthorized</li>
+ * </ul>
+ *
+ * <p>Tests GET /api/v1/plugins/bit-bi/tables endpoint:
+ * <ul>
+ *   <li>TC14: Valid request returns 200 OK with table list</li>
+ *   <li>TC15: Valid request with no tables returns 200 OK with empty array</li>
+ *   <li>TC16: Missing API key returns 401 Unauthorized</li>
+ *   <li>TC17: Table names are derived from file names (extensions stripped)</li>
  * </ul>
  *
  * @see com.bitbi.dfm.plugin.presentation.BitBiPluginApiController
@@ -312,6 +323,88 @@ class BitBiPluginApiContractTest extends BaseIntegrationTest {
 
             // When / Then
             mockMvc.perform(get(ApiRoutes.BITBI_SITES)
+                    .header(API_KEY_HEADER, INVALID_API_KEY))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.message").value("Invalid or missing API key"));
+
+            verify(pluginApiKeyService).validateApiKey(INVALID_API_KEY);
+        }
+    }
+
+    @Nested
+    @DisplayName("GET /api/v1/plugins/bit-bi/tables")
+    class ListTables {
+
+        @Test
+        @DisplayName("TC14: Should return 200 OK with table list for valid request")
+        void shouldReturn200WithTableList() throws Exception {
+            // Given
+            List<TableDto> tables = List.of(
+                    TableDto.of("customers", 1048576L, Instant.parse("2025-01-15T10:30:00Z")),
+                    TableDto.of("orders", 2097152L, Instant.parse("2025-01-15T11:45:00Z"))
+            );
+
+            when(pluginApiKeyService.validateApiKey(VALID_API_KEY))
+                .thenReturn(Optional.of(mockAccountPlugin));
+            when(sqlChangesQueryService.listTables(TEST_ACCOUNT_ID))
+                .thenReturn(tables);
+
+            // When / Then
+            mockMvc.perform(get(ApiRoutes.BITBI_TABLES)
+                    .header(API_KEY_HEADER, VALID_API_KEY))
+                .andDo(print())
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.tables").isArray())
+                .andExpect(jsonPath("$.tables", hasSize(2)))
+                .andExpect(jsonPath("$.tables[0].tableName").value("customers"))
+                .andExpect(jsonPath("$.tables[0].fileSize").value(1048576))
+                .andExpect(jsonPath("$.tables[0].lastUpdatedAt").exists())
+                .andExpect(jsonPath("$.tables[1].tableName").value("orders"));
+
+            verify(pluginApiKeyService).validateApiKey(VALID_API_KEY);
+            verify(sqlChangesQueryService).listTables(TEST_ACCOUNT_ID);
+        }
+
+        @Test
+        @DisplayName("TC15: Should return 200 OK with empty array when no tables")
+        void shouldReturn200WithEmptyArrayWhenNoTables() throws Exception {
+            // Given
+            when(pluginApiKeyService.validateApiKey(VALID_API_KEY))
+                .thenReturn(Optional.of(mockAccountPlugin));
+            when(sqlChangesQueryService.listTables(TEST_ACCOUNT_ID))
+                .thenReturn(Collections.emptyList());
+
+            // When / Then
+            mockMvc.perform(get(ApiRoutes.BITBI_TABLES)
+                    .header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tables").isArray())
+                .andExpect(jsonPath("$.tables", hasSize(0)));
+        }
+
+        @Test
+        @DisplayName("TC16: Should return 401 Unauthorized when API key is missing")
+        void shouldReturn401WhenApiKeyMissing() throws Exception {
+            // When / Then - no API key header
+            mockMvc.perform(get(ApiRoutes.BITBI_TABLES))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+
+            verify(pluginApiKeyService, never()).validateApiKey(any());
+        }
+
+        @Test
+        @DisplayName("TC17: Should return 401 Unauthorized when API key is invalid")
+        void shouldReturn401WhenApiKeyInvalid() throws Exception {
+            // Given
+            when(pluginApiKeyService.validateApiKey(INVALID_API_KEY))
+                .thenReturn(Optional.empty());
+
+            // When / Then
+            mockMvc.perform(get(ApiRoutes.BITBI_TABLES)
                     .header(API_KEY_HEADER, INVALID_API_KEY))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))

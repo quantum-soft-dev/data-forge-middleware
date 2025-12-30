@@ -50,7 +50,8 @@ public class PluginApiKeyAuthenticationFilter extends OncePerRequestFilter {
      */
     private static final String[] PLUGIN_API_PATHS = {
         "/api/v1/plugins/bit-bi/sql-changes",
-        "/api/v1/plugins/bit-bi/sites"
+        "/api/v1/plugins/bit-bi/sites",
+        "/api/v1/plugins/bit-bi/tables"
     };
 
     private final PluginApiKeyService pluginApiKeyService;

@@ -71,7 +71,9 @@ src/main/java/com/bitbi/dfm/plugin/
     ├── BitBiPluginApiController.java  # NEW: Plugin API endpoints
     └── dto/
         ├── SqlChangesResponseDto.java # NEW
-        └── SiteListResponseDto.java   # NEW
+        ├── SiteListResponseDto.java   # NEW
+        ├── TableDto.java              # NEW: Table info with name, size, timestamp
+        └── TableListResponseDto.java  # NEW: Response wrapper for /tables
 
 src/test/java/com/bitbi/dfm/plugin/
 ├── contract/
@@ -88,6 +90,67 @@ src/main/resources/db/migration/
 ```
 
 **Structure Decision**: Extends existing `plugin` package following DDD/PbLF pattern. No new packages created, all code lives within `com.bitbi.dfm.plugin`.
+
+## Implementation Details
+
+### CsvDiffService Algorithm
+
+The CSV diff algorithm uses the existing `DiffService` (java-diff-utils with Myers algorithm) to compare CSV files between batches. This approach ensures accurate detection of row-level changes without false positives.
+
+#### Algorithm Steps
+
+1. **Sort CSV Content**: Both previous and current CSV files are sorted by all columns (lexicographic comparison) to normalize row order. This ensures consistent comparison regardless of how the client exports data.
+
+2. **Generate Diff**: Uses `DiffService.generateDiff()` with sorted CSV content (without header row) to produce a JSON diff with hunks containing ADDED/REMOVED changes.
+
+3. **Parse Diff Output**: Convert diff hunks to `CsvRowDiff` objects:
+   - **ADDED only** → New row → Generate `INSERT`
+   - **REMOVED only** → Deleted row → Generate `DELETE`
+   - **Adjacent REMOVED+ADDED with SOME unchanged columns** → Modified row → Generate `UPDATE`
+   - **Adjacent REMOVED+ADDED with ALL columns changed** → Different rows → Generate `DELETE` + `INSERT`
+
+#### Key Design Decisions
+
+- **Why Myers Algorithm**: Efficient O(ND) diff algorithm already implemented in codebase via java-diff-utils
+- **Why Pre-Sort**: Eliminates false positives from row reordering (e.g., database exports in different order)
+- **Why Check Column Changes**: Distinguishes true modifications (some columns unchanged) from unrelated delete+insert (all columns changed)
+
+#### Code Location
+
+- `CsvDiffService.java`: Main diff service using DiffService
+- `DiffService.java` / `DiffServiceImpl.java`: Existing Myers algorithm implementation in `comparison` domain
+
+### /tables Endpoint
+
+New endpoint added to support table discovery for Bit BI integration.
+
+#### Query (Native SQL)
+
+```sql
+WITH latest_uploads AS (
+    SELECT uf.original_file_name, MAX(uf.uploaded_at) AS max_uploaded_at
+    FROM uploaded_files uf
+    JOIN batches b ON uf.batch_id = b.id
+    WHERE b.account_id = :accountId
+    GROUP BY uf.original_file_name
+)
+SELECT uf.original_file_name AS originalFileName,
+       uf.file_size AS fileSize,
+       uf.uploaded_at AS uploadedAt
+FROM uploaded_files uf
+JOIN latest_uploads lu ON uf.original_file_name = lu.original_file_name
+    AND uf.uploaded_at = lu.max_uploaded_at
+JOIN batches b ON uf.batch_id = b.id
+WHERE b.account_id = :accountId
+ORDER BY uf.original_file_name
+```
+
+#### Table Name Derivation
+
+Table names are derived from CSV filenames by:
+1. Removing `.csv.gz` extension (if present)
+2. Removing `.csv` extension (if present)
+3. Prefixing with `_` if name starts with a digit
 
 ## Complexity Tracking
 

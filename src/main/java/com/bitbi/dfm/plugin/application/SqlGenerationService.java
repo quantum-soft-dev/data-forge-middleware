@@ -304,18 +304,25 @@ public class SqlGenerationService {
 
             log.debug("Processing CSV file: {} -> table {}", currentFile.getOriginalFileName(), tableName);
 
-            // Read current file content from S3
-            List<Map<String, String>> currentRows = readCsvFromS3(currentFile.getS3Key());
+            // Read current file content from S3 as raw CSV string
+            String currentCsvContent = readCsvContentFromS3(currentFile.getS3Key());
 
-            // Read previous file content (empty if first batch)
-            List<Map<String, String>> previousRows = new ArrayList<>();
-            UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
-            if (previousFile != null) {
-                previousRows = readCsvFromS3(previousFile.getS3Key());
+            // Extract headers from current CSV
+            List<String> headers = extractHeaders(currentCsvContent);
+            if (headers.isEmpty()) {
+                log.warn("Empty headers in CSV file: {}", currentFile.getOriginalFileName());
+                continue;
             }
 
-            // Generate diffs
-            List<CsvRowDiff> diffs = csvDiffService.compare(previousRows, currentRows, Map.of());
+            // Read previous file content (empty if first batch)
+            String previousCsvContent = "";
+            UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
+            if (previousFile != null) {
+                previousCsvContent = readCsvContentFromS3(previousFile.getS3Key());
+            }
+
+            // Generate diffs using the new compare method (accepts raw CSV content)
+            List<CsvRowDiff> diffs = csvDiffService.compare(previousCsvContent, currentCsvContent, headers);
 
             // Generate SQL statements
             for (CsvRowDiff diff : diffs) {
@@ -405,9 +412,9 @@ public class SqlGenerationService {
     ) {}
 
     /**
-     * Reads CSV content from S3 and returns rows as list of maps.
+     * Reads CSV content from S3 and returns it as a raw string.
      */
-    private List<Map<String, String>> readCsvFromS3(String s3Key) throws IOException {
+    private String readCsvContentFromS3(String s3Key) throws IOException {
         GetObjectRequest request = GetObjectRequest.builder()
                 .bucket(bucketName)
                 .key(s3Key)
@@ -421,20 +428,30 @@ public class SqlGenerationService {
                 inputStream = new GZIPInputStream(s3Response);
             }
 
-            try (Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
-                 CSVParser parser = CSVFormat.DEFAULT.withFirstRecordAsHeader().parse(reader)) {
-
-                List<Map<String, String>> rows = new ArrayList<>();
-                for (CSVRecord record : parser) {
-                    // Use LinkedHashMap to preserve column order
-                    Map<String, String> row = new LinkedHashMap<>();
-                    for (String header : parser.getHeaderNames()) {
-                        row.put(header, record.get(header));
-                    }
-                    rows.add(row);
+            try (Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8)) {
+                StringBuilder content = new StringBuilder();
+                char[] buffer = new char[8192];
+                int bytesRead;
+                while ((bytesRead = reader.read(buffer)) != -1) {
+                    content.append(buffer, 0, bytesRead);
                 }
-                return rows;
+                return content.toString();
             }
+        }
+    }
+
+    /**
+     * Extracts headers (column names) from CSV content.
+     */
+    private List<String> extractHeaders(String csvContent) throws IOException {
+        if (csvContent == null || csvContent.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        try (CSVParser parser = CSVFormat.DEFAULT
+                .withFirstRecordAsHeader()
+                .parse(new StringReader(csvContent))) {
+            return new ArrayList<>(parser.getHeaderNames());
         }
     }
 

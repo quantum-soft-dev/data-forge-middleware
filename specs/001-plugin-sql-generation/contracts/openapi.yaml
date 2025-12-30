@@ -20,6 +20,8 @@ tags:
     description: Retrieve SQL changes from batch comparisons
   - name: Sites
     description: List available sites for the account
+  - name: Tables
+    description: List available tables (derived from uploaded CSV files)
 
 paths:
   /sql-changes:
@@ -127,6 +129,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /tables:
+    get:
+      tags:
+        - Tables
+      summary: List available tables
+      description: |
+        Returns a list of unique table names derived from uploaded CSV files.
+        Table names are derived from the original filename (without .csv or .csv.gz extension).
+        Only returns the latest upload information for each table.
+      operationId: listTables
+      responses:
+        '200':
+          description: Tables retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableListResponse'
+              example:
+                tables:
+                  - tableName: "customers"
+                    fileSize: 1048576
+                    lastUpdatedAt: "2025-12-28T10:30:00Z"
+                  - tableName: "orders"
+                    fileSize: 2097152
+                    lastUpdatedAt: "2025-12-28T11:45:00Z"
+        '401':
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     PluginApiKey:
@@ -148,6 +182,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Site'
+
+    TableListResponse:
+      type: object
+      required:
+        - tables
+      properties:
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/Table'
+
+    Table:
+      type: object
+      required:
+        - tableName
+        - fileSize
+        - lastUpdatedAt
+      properties:
+        tableName:
+          type: string
+          description: Table name derived from CSV filename (without extension)
+          example: "customers"
+        fileSize:
+          type: integer
+          format: int64
+          description: Size of the latest uploaded file in bytes
+          example: 1048576
+        lastUpdatedAt:
+          type: string
+          format: date-time
+          description: Timestamp of the latest upload for this table
+          example: "2025-12-28T10:30:00Z"
 
     Site:
       type: object

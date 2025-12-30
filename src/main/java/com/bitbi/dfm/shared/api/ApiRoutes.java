@@ -650,6 +650,17 @@ public final class ApiRoutes {
      */
     public static final String BITBI_SITES = BITBI_PLUGIN_API + "/sites";
 
+    /**
+     * List tables for account endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: Plugin API Key (X-Plugin-Api-Key header)<br>
+     * Content-Type: application/json<br>
+     * Returns: TableListResponseDto with unique table names derived from uploaded files
+     * </p>
+     */
+    public static final String BITBI_TABLES = BITBI_PLUGIN_API + "/tables";
+
     // Private constructor to prevent instantiation
     private ApiRoutes() {
         throw new UnsupportedOperationException("Utility class - do not instantiate");

@@ -1,5 +1,6 @@
 package com.bitbi.dfm.upload.domain;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,4 +32,22 @@ public interface UploadedFileRepository {
     UploadedFile save(UploadedFile file);
 
     void deleteById(UUID id);
+
+    /**
+     * Finds the latest uploaded file for each unique original file name.
+     * Used by Plugin API to list available tables.
+     *
+     * @param accountId account identifier
+     * @return list of latest file info per unique file name
+     */
+    List<LatestFileInfo> findLatestByOriginalFileNameForAccount(UUID accountId);
+
+    /**
+     * Projection interface for latest file info query.
+     */
+    interface LatestFileInfo {
+        String getOriginalFileName();
+        Long getFileSize();
+        Instant getUploadedAt();
+    }
 }

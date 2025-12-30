@@ -134,6 +134,26 @@ When the Bit BI plugin is activated, a Plugin API Key is generated, returned to 
 
 ---
 
+### User Story 7 - List Available Tables via Plugin API (Priority: P2)
+
+Bit BI users can retrieve a list of unique table names derived from uploaded CSV files through the Plugin API.
+
+**Why this priority**: Helps users discover which tables are available without needing to make a SQL changes request first.
+
+**Independent Test**: Can be tested by making API request with valid API Key and verifying table list matches account's uploaded file names.
+
+**Acceptance Scenarios**:
+
+1. **Given** a valid Plugin API Key, **When** requesting `GET /tables`, **Then** a list of unique table names is returned with file size and last update timestamp.
+
+2. **Given** multiple batches have uploaded the same file name, **When** the request is executed, **Then** only the latest upload information is returned for each table.
+
+3. **Given** an invalid API Key, **When** the request is executed, **Then** 401 Unauthorized is returned.
+
+4. **Given** no files have been uploaded for the account, **When** the request is executed, **Then** 200 OK with empty tables array is returned.
+
+---
+
 ### Edge Cases
 
 - **Empty diff (identical files)**: No SQL file is created, no record in plugin_sql_generations
@@ -166,6 +186,7 @@ When the Bit BI plugin is activated, a Plugin API Key is generated, returned to 
 
 - **FR-010**: System MUST provide endpoint `GET /api/v1/plugins/bit-bi/sql-changes` accepting siteId and since parameters
 - **FR-011**: System MUST provide endpoint `GET /api/v1/plugins/bit-bi/sites` returning account's sites
+- **FR-011a**: System MUST provide endpoint `GET /api/v1/plugins/bit-bi/tables` returning unique table names with latest upload info
 - **FR-012**: System MUST validate Plugin API Key on all plugin API requests
 - **FR-013**: System MUST verify siteId belongs to the API Key's account before returning data
 - **FR-014**: System MUST return 401 Unauthorized for invalid or missing API Key
