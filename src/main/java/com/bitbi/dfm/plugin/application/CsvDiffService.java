@@ -36,8 +36,17 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>ADDED only → new row, generates INSERT</li>
  *   <li>REMOVED only → deleted row, generates DELETE</li>
- *   <li>Adjacent REMOVED + ADDED at same position → modified row, generates UPDATE</li>
+ *   <li>Adjacent REMOVED + ADDED with SOME unchanged columns → modified row, generates UPDATE</li>
+ *   <li>Adjacent REMOVED + ADDED with ALL columns changed → different rows, generates DELETE + INSERT</li>
  * </ul>
+ *
+ * <h2>Performance</h2>
+ * <ul>
+ *   <li>Sorting: O(n log n) where n = number of rows</li>
+ *   <li>Myers diff: O(ND) where N = total rows, D = number of differences</li>
+ *   <li>Parsing diff: O(D) where D = number of differences</li>
+ * </ul>
+ * <p><strong>Memory:</strong> O(n × m) where n = rows, m = average row size (sorts in-memory)</p>
  *
  * @see DiffService
  * @see CsvRowDiff
@@ -84,14 +93,18 @@ public class CsvDiffService {
         // Validate headers
         validateHeaders(headers);
 
-        if (currentCsvContent == null || currentCsvContent.isBlank()) {
-            log.debug("Current CSV content is empty");
+        // Handle edge case: both empty → no changes
+        boolean currentEmpty = currentCsvContent == null || currentCsvContent.isBlank();
+        boolean previousEmpty = previousCsvContent == null || previousCsvContent.isBlank();
+
+        if (currentEmpty && previousEmpty) {
+            log.debug("Both CSV contents are empty, no changes");
             return Collections.emptyList();
         }
 
         log.debug("Comparing CSV files: previousLength={}, currentLength={}, headers={}",
-                previousCsvContent != null ? previousCsvContent.length() : 0,
-                currentCsvContent.length(),
+                previousEmpty ? 0 : previousCsvContent.length(),
+                currentEmpty ? 0 : currentCsvContent.length(),
                 headers.size());
 
         try {
@@ -167,23 +180,19 @@ public class CsvDiffService {
         });
 
         // Write sorted rows (NO header) - each row on its own line
-        // Using simple comma-join for consistent diff comparison
+        // Using CSVFormat with empty record separator to avoid manual newline stripping
+        CSVFormat csvFormat = CSVFormat.DEFAULT.builder()
+                .setRecordSeparator("")
+                .build();
+
         StringBuilder result = new StringBuilder();
         for (int i = 0; i < rows.size(); i++) {
             List<String> row = rows.get(i);
-            // Use CSVPrinter for proper escaping of values with commas/quotes
             StringWriter rowWriter = new StringWriter();
-            try (CSVPrinter printer = new CSVPrinter(rowWriter, CSVFormat.DEFAULT)) {
+            try (CSVPrinter printer = new CSVPrinter(rowWriter, csvFormat)) {
                 printer.printRecord(row);
             }
-            // Remove trailing newline from individual row
-            String rowStr = rowWriter.toString();
-            if (rowStr.endsWith("\r\n")) {
-                rowStr = rowStr.substring(0, rowStr.length() - 2);
-            } else if (rowStr.endsWith("\n")) {
-                rowStr = rowStr.substring(0, rowStr.length() - 1);
-            }
-            result.append(rowStr);
+            result.append(rowWriter.toString());
             if (i < rows.size() - 1) {
                 result.append("\n");
             }
@@ -290,6 +299,8 @@ public class CsvDiffService {
 
     /**
      * Parses a CSV line into a map of column name to value.
+     *
+     * @throws CsvDiffException if CSV parsing fails (indicates corrupted data)
      */
     private Map<String, String> parseCsvLine(String csvLine, List<String> headers) {
         Map<String, String> row = new LinkedHashMap<>();
@@ -302,12 +313,11 @@ public class CsvDiffService {
                 break; // Only process first record
             }
         } catch (IOException e) {
-            log.warn("Failed to parse CSV line: {}", csvLine, e);
-            // Fallback: split by comma (simple case)
-            String[] values = csvLine.split(",", -1);
-            for (int i = 0; i < headers.size() && i < values.length; i++) {
-                row.put(headers.get(i), values[i]);
-            }
+            // CSV parsing should never fail on valid CSV data produced by sortCsvContent.
+            // If it does, it indicates corrupted data - fail fast rather than silently corrupt the diff.
+            log.error("CRITICAL: Failed to parse CSV line, cannot safely proceed: {}",
+                    sanitizeForLogging(csvLine), e);
+            throw new CsvDiffException("Failed to parse CSV line: " + e.getMessage(), e);
         }
 
         return row;

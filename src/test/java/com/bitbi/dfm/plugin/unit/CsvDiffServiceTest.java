@@ -261,18 +261,37 @@ class CsvDiffServiceTest {
     class EdgeCases {
 
         @Test
-        @DisplayName("should handle empty current content")
-        void shouldHandleEmptyCurrentContent() {
-            // Given
+        @DisplayName("should detect deletions when current content is empty")
+        void shouldDetectDeletionsWhenCurrentContentIsEmpty() {
+            // Given - previous has data, current is empty (all rows deleted)
             String previousCsv = "id,name\n1,Alice";
             String currentCsv = "";
             List<String> headers = List.of("id", "name");
 
+            // When current is empty, all previous rows should be detected as DELETED
+            String diffJson = """
+                {
+                  "hunks": [{
+                    "oldStart": 1, "oldLines": 1,
+                    "newStart": 1, "newLines": 0,
+                    "changes": [
+                      {"type": "REMOVED", "lineNumber": 1, "content": "1,Alice"}
+                    ]
+                  }]
+                }
+                """;
+
+            when(diffService.generateDiff(any(), any(), any(), any()))
+                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 0, 1, 10L));
+
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
-            // Then
-            assertThat(diffs).isEmpty();
+            // Then - all rows should be marked as DELETED (fixes "empty CSV hides deletions" bug)
+            assertThat(diffs).hasSize(1);
+            assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.DELETED);
+            assertThat(diffs.get(0).values()).containsEntry("id", "1");
+            assertThat(diffs.get(0).values()).containsEntry("name", "Alice");
         }
 
         @Test

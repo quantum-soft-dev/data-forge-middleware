@@ -156,7 +156,7 @@ public class SecurityConfiguration {
      * Bit BI Plugin API filter chain.
      * <p>
      * <b>Order 3</b>: Third priority - evaluated AFTER legacy JWT filter chain<br>
-     * <b>Matches</b>: /api/v1/plugins/bit-bi/sql-changes, /api/v1/plugins/bit-bi/sites<br>
+     * <b>Matches</b>: /api/v1/plugins/bit-bi/sql-changes, /api/v1/plugins/bit-bi/sites, /api/v1/plugins/bit-bi/tables<br>
      * <b>Authentication</b>: Plugin API Key (X-Plugin-Api-Key header)
      * </p>
      * <p>
@@ -177,7 +177,7 @@ public class SecurityConfiguration {
     @Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites")
+            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/tables")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -228,7 +228,7 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites").denyAll() // Explicitly deny (already handled by Order 3)
+                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (already handled by Order 3)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
