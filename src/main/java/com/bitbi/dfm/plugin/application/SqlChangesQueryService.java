@@ -3,8 +3,10 @@ package com.bitbi.dfm.plugin.application;
 import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
+import com.bitbi.dfm.plugin.presentation.dto.TableDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -49,16 +51,19 @@ public class SqlChangesQueryService {
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final S3SqlFileStorageService s3SqlFileStorageService;
     private final SiteRepository siteRepository;
+    private final UploadedFileRepository uploadedFileRepository;
     private final MeterRegistry meterRegistry;
 
     public SqlChangesQueryService(
             PluginSqlGenerationRepository sqlGenerationRepository,
             S3SqlFileStorageService s3SqlFileStorageService,
             SiteRepository siteRepository,
+            UploadedFileRepository uploadedFileRepository,
             MeterRegistry meterRegistry) {
         this.sqlGenerationRepository = sqlGenerationRepository;
         this.s3SqlFileStorageService = s3SqlFileStorageService;
         this.siteRepository = siteRepository;
+        this.uploadedFileRepository = uploadedFileRepository;
         this.meterRegistry = meterRegistry;
     }
 
@@ -151,5 +156,29 @@ public class SqlChangesQueryService {
     public List<Site> listSites(UUID accountId) {
         log.debug("Listing sites for accountId={}", accountId);
         return siteRepository.findActiveByAccountId(accountId);
+    }
+
+    /**
+     * Lists all unique tables (uploaded files) for an account with their latest upload info.
+     *
+     * <p>Returns a unique list of table names derived from original file names,
+     * along with the file size and upload timestamp of the most recent upload for each.</p>
+     *
+     * @param accountId the account ID from the API key authentication
+     * @return list of table DTOs with latest upload info
+     */
+    @Transactional(readOnly = true)
+    public List<TableDto> listTables(UUID accountId) {
+        log.debug("Listing tables for accountId={}", accountId);
+
+        List<UploadedFileRepository.LatestFileInfo> latestFiles =
+                uploadedFileRepository.findLatestByOriginalFileNameForAccount(accountId);
+
+        return latestFiles.stream()
+                .map(file -> TableDto.of(
+                        TableDto.deriveTableName(file.getOriginalFileName()),
+                        file.getFileSize(),
+                        file.getUploadedAt()))
+                .toList();
     }
 }

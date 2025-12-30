@@ -69,4 +69,31 @@ public interface JpaUploadedFileRepository extends JpaRepository<UploadedFile, U
      */
     @Query("SELECT COUNT(f) FROM UploadedFile f JOIN Batch b ON f.batchId = b.id WHERE b.siteId = :siteId")
     long countBySiteId(UUID siteId);
+
+    /**
+     * Finds the latest uploaded file for each unique original file name for a given account.
+     * Uses a subquery to find the maximum uploaded_at per file name.
+     *
+     * @param accountId account identifier
+     * @return list of latest file info per unique file name
+     */
+    @Query(value = """
+        WITH latest_uploads AS (
+            SELECT
+                uf.original_file_name,
+                MAX(uf.uploaded_at) AS max_uploaded_at
+            FROM uploaded_files uf
+            JOIN batches b ON uf.batch_id = b.id
+            WHERE b.account_id = :accountId
+            GROUP BY uf.original_file_name
+        )
+        SELECT uf.original_file_name AS originalFileName, uf.file_size AS fileSize, uf.uploaded_at AS uploadedAt
+        FROM uploaded_files uf
+        JOIN latest_uploads lu ON uf.original_file_name = lu.original_file_name
+            AND uf.uploaded_at = lu.max_uploaded_at
+        JOIN batches b ON uf.batch_id = b.id
+        WHERE b.account_id = :accountId
+        ORDER BY uf.original_file_name
+        """, nativeQuery = true)
+    List<LatestFileInfo> findLatestByOriginalFileNameForAccount(UUID accountId);
 }

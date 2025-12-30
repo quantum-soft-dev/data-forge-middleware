@@ -1,48 +1,45 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.comparison.domain.ChangeType;
+import com.bitbi.dfm.comparison.domain.DiffService;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
-import com.bitbi.dfm.plugin.domain.DbfColumnType;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
  * Service for comparing CSV files and generating row-level diffs.
- * Used to detect added, modified, and deleted rows between batch uploads.
+ * Uses the existing DiffService (java-diff-utils with Myers algorithm) for comparison.
  *
- * <h2>Row Identity Detection</h2>
- * <p>
- * <strong>IMPORTANT:</strong> This service uses the <b>first column</b> of the CSV
- * as the row identity key for detecting modifications vs additions/deletions.
- * </p>
+ * <h2>Algorithm</h2>
+ * <ol>
+ *   <li>Sort both CSV files by all columns to normalize row order</li>
+ *   <li>Generate diff using DiffService (Myers algorithm)</li>
+ *   <li>Parse diff output to identify ADDED, REMOVED, and MODIFIED rows</li>
+ * </ol>
  *
- * <h3>Assumptions</h3>
+ * <h2>Interpretation of Diff Output</h2>
  * <ul>
- *   <li>The first column contains a unique identifier (e.g., id, sku, email)</li>
- *   <li>The first column values are stable between batches</li>
- *   <li>Column order remains consistent between batches</li>
+ *   <li>ADDED only → new row, generates INSERT</li>
+ *   <li>REMOVED only → deleted row, generates DELETE</li>
+ *   <li>Adjacent REMOVED + ADDED at same position → modified row, generates UPDATE</li>
  * </ul>
  *
- * <h3>Limitations</h3>
- * <ul>
- *   <li>If the first column is NOT unique (e.g., country, category), incorrect
- *       UPDATE/DELETE statements may be generated</li>
- *   <li>If a row exists with the same key in both batches but different values,
- *       it will be detected as MODIFIED</li>
- *   <li>Rows without a key value fall back to full row comparison (slower)</li>
- * </ul>
- *
- * <h3>Recommendations for CSV Structure</h3>
- * <ul>
- *   <li>Place the unique identifier column (id, primary key) as the first column</li>
- *   <li>Ensure identifier values are immutable and unique within the file</li>
- *   <li>Use consistent column ordering across all batch uploads</li>
- * </ul>
- *
+ * @see DiffService
  * @see CsvRowDiff
  */
 @Service
@@ -62,131 +59,258 @@ public class CsvDiffService {
      */
     private static final int MAX_COLUMNS = 500;
 
+    private final DiffService diffService;
+    private final ObjectMapper objectMapper;
+
+    public CsvDiffService(DiffService diffService, ObjectMapper objectMapper) {
+        this.diffService = diffService;
+        this.objectMapper = objectMapper;
+    }
+
     /**
-     * Compares two lists of CSV rows and returns the differences.
-     * Uses first column as row identity key for modification detection.
+     * Compares two CSV file contents and returns the differences.
      *
-     * @param previousRows Rows from the previous batch (empty for first batch)
-     * @param currentRows Rows from the current batch
-     * @param columnTypes Map of column name to DBF type (for type-aware comparison)
+     * @param previousCsvContent Raw CSV content from previous batch (empty string for first batch)
+     * @param currentCsvContent  Raw CSV content from current batch
+     * @param headers            Column names from the CSV header row
      * @return List of row differences (added, modified, deleted)
      * @throws InvalidCsvHeaderException if column headers are invalid
      */
     public List<CsvRowDiff> compare(
-            List<Map<String, String>> previousRows,
-            List<Map<String, String>> currentRows,
-            Map<String, DbfColumnType> columnTypes
+            String previousCsvContent,
+            String currentCsvContent,
+            List<String> headers
     ) {
-        // Validate CSV headers before processing
-        validateHeaders(currentRows);
-        validateHeaders(previousRows);
+        // Validate headers
+        validateHeaders(headers);
+
+        if (currentCsvContent == null || currentCsvContent.isBlank()) {
+            log.debug("Current CSV content is empty");
+            return Collections.emptyList();
+        }
+
+        log.debug("Comparing CSV files: previousLength={}, currentLength={}, headers={}",
+                previousCsvContent != null ? previousCsvContent.length() : 0,
+                currentCsvContent.length(),
+                headers.size());
+
+        try {
+            // Step 1: Sort both CSV files by all columns
+            String sortedPrevious = sortCsvContent(previousCsvContent, headers);
+            String sortedCurrent = sortCsvContent(currentCsvContent, headers);
+
+            // Step 2: Generate diff using existing DiffService (Myers algorithm)
+            DiffService.DiffResult diffResult = diffService.generateDiff(
+                    sortedCurrent,
+                    sortedPrevious,
+                    "current.csv",
+                    "previous.csv"
+            );
+
+            log.debug("Diff result: changeType={}, additions={}, deletions={}",
+                    diffResult.changeType(),
+                    diffResult.lineAdditions(),
+                    diffResult.lineDeletions());
+
+            // If unchanged, return empty list
+            if (diffResult.changeType() == ChangeType.UNCHANGED) {
+                return Collections.emptyList();
+            }
+
+            // Step 3: Parse diff JSON and convert to CsvRowDiff
+            return parseDiffJson(diffResult.unifiedDiffJson(), headers);
+
+        } catch (IOException e) {
+            log.error("Failed to compare CSV files", e);
+            throw new CsvDiffException("Failed to compare CSV files: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Sorts CSV content by all columns to normalize row order.
+     * This ensures consistent comparison regardless of how the client exports data.
+     *
+     * <p>Note: The output does NOT include headers - only data rows are returned.
+     * This is important because the diff algorithm treats every line as data.</p>
+     */
+    private String sortCsvContent(String csvContent, List<String> headers) throws IOException {
+        if (csvContent == null || csvContent.isBlank()) {
+            return "";
+        }
+
+        // Parse CSV content
+        List<List<String>> rows = new ArrayList<>();
+        try (CSVParser parser = CSVFormat.DEFAULT
+                .withFirstRecordAsHeader()
+                .parse(new StringReader(csvContent))) {
+
+            for (CSVRecord record : parser) {
+                List<String> row = new ArrayList<>();
+                for (String header : headers) {
+                    row.add(record.isMapped(header) ? record.get(header) : "");
+                }
+                rows.add(row);
+            }
+        }
+
+        // Sort rows by all columns (lexicographic comparison)
+        rows.sort((row1, row2) -> {
+            for (int i = 0; i < row1.size(); i++) {
+                String val1 = row1.get(i) != null ? row1.get(i) : "";
+                String val2 = row2.get(i) != null ? row2.get(i) : "";
+                int cmp = val1.compareTo(val2);
+                if (cmp != 0) {
+                    return cmp;
+                }
+            }
+            return 0;
+        });
+
+        // Write sorted rows (NO header) - each row on its own line
+        // Using simple comma-join for consistent diff comparison
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < rows.size(); i++) {
+            List<String> row = rows.get(i);
+            // Use CSVPrinter for proper escaping of values with commas/quotes
+            StringWriter rowWriter = new StringWriter();
+            try (CSVPrinter printer = new CSVPrinter(rowWriter, CSVFormat.DEFAULT)) {
+                printer.printRecord(row);
+            }
+            // Remove trailing newline from individual row
+            String rowStr = rowWriter.toString();
+            if (rowStr.endsWith("\r\n")) {
+                rowStr = rowStr.substring(0, rowStr.length() - 2);
+            } else if (rowStr.endsWith("\n")) {
+                rowStr = rowStr.substring(0, rowStr.length() - 1);
+            }
+            result.append(rowStr);
+            if (i < rows.size() - 1) {
+                result.append("\n");
+            }
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Parses diff JSON and converts to CsvRowDiff objects.
+     * Identifies ADDED-only, REMOVED-only, and MODIFIED (adjacent REMOVED+ADDED) changes.
+     *
+     * <p>The algorithm processes changes in order, detecting modifications as
+     * adjacent REMOVED+ADDED pairs. Non-adjacent REMOVED becomes DELETED,
+     * and non-adjacent ADDED becomes ADDED (INSERT).</p>
+     */
+    private List<CsvRowDiff> parseDiffJson(String diffJson, List<String> headers) throws JsonProcessingException {
+        if (diffJson == null || diffJson.isBlank()) {
+            return Collections.emptyList();
+        }
 
         List<CsvRowDiff> diffs = new ArrayList<>();
+        JsonNode root = objectMapper.readTree(diffJson);
+        JsonNode hunks = root.get("hunks");
 
-        // Get identity column (first column) if available
-        String identityColumn = getIdentityColumn(currentRows, previousRows);
+        if (hunks == null || !hunks.isArray()) {
+            return Collections.emptyList();
+        }
 
-        // Build lookup by identity column value
-        Map<String, Map<String, String>> previousByKey = buildKeyLookup(previousRows, identityColumn);
-        Map<String, Map<String, String>> currentByKey = buildKeyLookup(currentRows, identityColumn);
+        for (JsonNode hunk : hunks) {
+            JsonNode changes = hunk.get("changes");
+            if (changes == null || !changes.isArray()) {
+                continue;
+            }
 
-        // Track which previous keys were matched (for deletion detection)
-        Set<String> matchedPreviousKeys = new HashSet<>();
+            // Process changes in order to detect adjacent REMOVED+ADDED pairs (modifications)
+            int i = 0;
+            int changesSize = changes.size();
 
-        // Process current rows
-        for (int i = 0; i < currentRows.size(); i++) {
-            Map<String, String> currentRow = currentRows.get(i);
-            int lineNumber = i + 1; // 1-based line number
+            while (i < changesSize) {
+                JsonNode change = changes.get(i);
+                String type = change.get("type").asText();
 
-            String key = getKeyValue(currentRow, identityColumn);
+                if ("REMOVED".equals(type)) {
+                    // Check if next change is ADDED (adjacent = modification)
+                    if (i + 1 < changesSize) {
+                        JsonNode nextChange = changes.get(i + 1);
+                        String nextType = nextChange.get("type").asText();
 
-            if (key != null && previousByKey.containsKey(key)) {
-                // Row with same key exists in previous
-                Map<String, String> previousRow = previousByKey.get(key);
-                matchedPreviousKeys.add(key);
+                        if ("ADDED".equals(nextType)) {
+                            // Check if this is a true modification or unrelated delete+insert
+                            int lineNumber = nextChange.get("lineNumber").asInt();
+                            String previousContent = change.get("content").asText();
+                            String currentContent = nextChange.get("content").asText();
 
-                // Check if values differ
-                Map<String, String> changedColumns = findChangedColumns(previousRow, currentRow);
-                if (!changedColumns.isEmpty()) {
-                    diffs.add(CsvRowDiff.modified(lineNumber, currentRow, changedColumns));
+                            Map<String, String> previousRow = parseCsvLine(previousContent, headers);
+                            Map<String, String> currentRow = parseCsvLine(currentContent, headers);
+
+                            Map<String, String> changedColumns = findChangedColumns(previousRow, currentRow);
+
+                            // If ALL columns changed, these are different rows (delete + insert)
+                            // If SOME columns are unchanged, it's a modification of the same row
+                            if (!changedColumns.isEmpty() && changedColumns.size() < headers.size()) {
+                                // True modification: some columns unchanged, some changed
+                                diffs.add(CsvRowDiff.modified(lineNumber, currentRow, changedColumns));
+                                i += 2; // Skip both REMOVED and ADDED
+                                continue;
+                            } else if (changedColumns.size() == headers.size()) {
+                                // All columns changed = different rows, treat as DELETE + INSERT
+                                // Fall through to process REMOVED as DELETE
+                            } else {
+                                // No changes (shouldn't happen in diff), skip both
+                                i += 2;
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Standalone REMOVED = DELETED
+                    int lineNumber = change.get("lineNumber").asInt();
+                    String content = change.get("content").asText();
+                    Map<String, String> row = parseCsvLine(content, headers);
+                    diffs.add(CsvRowDiff.deleted(lineNumber, row));
+                    i++;
+
+                } else if ("ADDED".equals(type)) {
+                    // Standalone ADDED = INSERT
+                    int lineNumber = change.get("lineNumber").asInt();
+                    String content = change.get("content").asText();
+                    Map<String, String> row = parseCsvLine(content, headers);
+                    diffs.add(CsvRowDiff.added(lineNumber, row));
+                    i++;
+
+                } else {
+                    // Skip unknown change types
+                    i++;
                 }
-                // else: unchanged row
-            } else {
-                // New row - ADDED
-                diffs.add(CsvRowDiff.added(lineNumber, currentRow));
             }
         }
 
-        // Detect DELETED rows (in previous but not matched in current)
-        for (int i = 0; i < previousRows.size(); i++) {
-            Map<String, String> previousRow = previousRows.get(i);
-            int lineNumber = i + 1;
-
-            String key = getKeyValue(previousRow, identityColumn);
-
-            if (key != null && !matchedPreviousKeys.contains(key)) {
-                // Not matched - was deleted
-                diffs.add(CsvRowDiff.deleted(lineNumber, previousRow));
-            } else if (key == null && !isRowInList(previousRow, currentRows)) {
-                // No key column, use full row comparison
-                diffs.add(CsvRowDiff.deleted(lineNumber, previousRow));
-            }
-        }
-
+        log.debug("Parsed {} diffs from diff JSON", diffs.size());
         return diffs;
     }
 
     /**
-     * Gets the identity column name (first column from the rows).
+     * Parses a CSV line into a map of column name to value.
      */
-    private String getIdentityColumn(List<Map<String, String>> currentRows, List<Map<String, String>> previousRows) {
-        if (!currentRows.isEmpty() && !currentRows.get(0).isEmpty()) {
-            return currentRows.get(0).keySet().iterator().next();
-        }
-        if (!previousRows.isEmpty() && !previousRows.get(0).isEmpty()) {
-            return previousRows.get(0).keySet().iterator().next();
-        }
-        return null;
-    }
+    private Map<String, String> parseCsvLine(String csvLine, List<String> headers) {
+        Map<String, String> row = new LinkedHashMap<>();
 
-    /**
-     * Builds a lookup map from identity column value to row.
-     */
-    private Map<String, Map<String, String>> buildKeyLookup(List<Map<String, String>> rows, String identityColumn) {
-        Map<String, Map<String, String>> lookup = new HashMap<>();
-        if (identityColumn == null) {
-            return lookup;
-        }
-        for (Map<String, String> row : rows) {
-            String key = getKeyValue(row, identityColumn);
-            if (key != null) {
-                lookup.put(key, row);
+        try (CSVParser parser = CSVFormat.DEFAULT.parse(new StringReader(csvLine))) {
+            for (CSVRecord record : parser) {
+                for (int i = 0; i < headers.size() && i < record.size(); i++) {
+                    row.put(headers.get(i), record.get(i));
+                }
+                break; // Only process first record
+            }
+        } catch (IOException e) {
+            log.warn("Failed to parse CSV line: {}", csvLine, e);
+            // Fallback: split by comma (simple case)
+            String[] values = csvLine.split(",", -1);
+            for (int i = 0; i < headers.size() && i < values.length; i++) {
+                row.put(headers.get(i), values[i]);
             }
         }
-        return lookup;
-    }
 
-    /**
-     * Gets the value of the identity column from a row.
-     */
-    private String getKeyValue(Map<String, String> row, String identityColumn) {
-        if (identityColumn == null || row == null) {
-            return null;
-        }
-        return row.get(identityColumn);
-    }
-
-    /**
-     * Checks if a row exists in a list using full row comparison.
-     */
-    private boolean isRowInList(Map<String, String> row, List<Map<String, String>> rows) {
-        String fingerprint = getRowFingerprint(row);
-        for (Map<String, String> other : rows) {
-            if (fingerprint.equals(getRowFingerprint(other))) {
-                return true;
-            }
-        }
-        return false;
+        return row;
     }
 
     /**
@@ -211,52 +335,23 @@ public class CsvDiffService {
     }
 
     /**
-     * Creates a fingerprint for a row based on all column values.
-     * Order of columns is normalized for consistent comparison.
-     */
-    private String getRowFingerprint(Map<String, String> row) {
-        if (row == null) {
-            return "";
-        }
-        return row.entrySet().stream()
-            .sorted(Map.Entry.comparingByKey())
-            .map(e -> e.getKey() + "=" + (e.getValue() == null ? "\0NULL\0" : e.getValue()))
-            .collect(Collectors.joining("|"));
-    }
-
-    /**
      * Validates CSV headers for security and sanity.
-     * Checks:
-     * - Column count limit
-     * - Column name format (no SQL injection vectors)
-     * - No empty column names
-     *
-     * @param rows CSV rows to validate headers from
-     * @throws InvalidCsvHeaderException if headers are invalid
      */
-    private void validateHeaders(List<Map<String, String>> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return; // Empty is valid
+    private void validateHeaders(List<String> headers) {
+        if (headers == null || headers.isEmpty()) {
+            return; // Empty is valid for first batch
         }
-
-        Map<String, String> firstRow = rows.get(0);
-        if (firstRow == null || firstRow.isEmpty()) {
-            return; // Empty row is valid
-        }
-
-        Set<String> columns = firstRow.keySet();
 
         // Check column count
-        if (columns.size() > MAX_COLUMNS) {
-            log.error("CSV has too many columns: count={}, max={}",
-                    columns.size(), MAX_COLUMNS);
+        if (headers.size() > MAX_COLUMNS) {
+            log.error("CSV has too many columns: count={}, max={}", headers.size(), MAX_COLUMNS);
             throw new InvalidCsvHeaderException(
-                    "CSV file has " + columns.size() + " columns, exceeding limit of " + MAX_COLUMNS);
+                    "CSV file has " + headers.size() + " columns, exceeding limit of " + MAX_COLUMNS);
         }
 
         // Validate each column name
         List<String> invalidColumns = new ArrayList<>();
-        for (String column : columns) {
+        for (String column : headers) {
             if (column == null || column.trim().isEmpty()) {
                 invalidColumns.add("<empty>");
                 continue;
@@ -268,8 +363,7 @@ public class CsvDiffService {
         }
 
         if (!invalidColumns.isEmpty()) {
-            log.error("CSV has invalid column names: columns={}",
-                    String.join(", ", invalidColumns));
+            log.error("CSV has invalid column names: columns={}", String.join(", ", invalidColumns));
             throw new InvalidCsvHeaderException(
                     "CSV file has " + invalidColumns.size() + " invalid column name(s). " +
                     "Column names must contain only letters, numbers, underscores, spaces, and common punctuation.");
@@ -283,7 +377,6 @@ public class CsvDiffService {
         if (value == null) {
             return "<null>";
         }
-        // Truncate and escape control characters
         String truncated = value.length() > 50 ? value.substring(0, 50) + "..." : value;
         return truncated.replaceAll("[\\r\\n\\t]", " ")
                         .replaceAll("[^\\p{Print}]", "?");
@@ -295,6 +388,15 @@ public class CsvDiffService {
     public static class InvalidCsvHeaderException extends RuntimeException {
         public InvalidCsvHeaderException(String message) {
             super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when CSV diff operation fails.
+     */
+    public static class CsvDiffException extends RuntimeException {
+        public CsvDiffException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 }
