@@ -240,3 +240,42 @@ The following Admin UI features have been implemented for monitoring and viewing
 **API Integration**:
 - `GET /api/v1/admin/plugins` - List registered plugins
 - `GET /api/v1/admin/plugins/audit` - Query audit logs with filters
+
+## Bit BI Plugin API (Added 2025-12-30)
+
+The Bit BI plugin provides a dedicated API for external access to SQL changes and account data.
+
+### Authentication
+
+All endpoints require `X-Plugin-Api-Key` header with the API key generated during plugin activation.
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/plugins/bit-bi/sites` | GET | List sites for the account |
+| `/api/v1/plugins/bit-bi/tables` | GET | List unique table names with latest upload info |
+| `/api/v1/plugins/bit-bi/sql-changes` | GET | Get SQL changes (params: siteId, since) |
+
+### /tables Endpoint (New)
+
+Returns a list of unique table names derived from uploaded CSV files for the authenticated account.
+
+**Response**:
+```json
+{
+  "tables": [
+    {
+      "tableName": "customers",
+      "fileSize": 1048576,
+      "lastUpdatedAt": "2025-12-28T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Table Name Derivation**:
+- `.csv.gz` and `.csv` extensions are stripped
+- Names starting with digits are prefixed with `_`
+
+See [001-plugin-sql-generation/spec.md](../001-plugin-sql-generation/spec.md) for full Plugin API specification.
