@@ -165,10 +165,35 @@ describe('PluginListWidget', () => {
         wrapper: createWrapper(),
       })
 
-      const card = screen.getByText('Bit BI Integration').closest('div[role="button"]')
-      await user.click(card!)
+      // Click the Audit Logs button for the first plugin
+      const auditButtons = screen.getAllByRole('button', { name: /audit logs/i })
+      await user.click(auditButtons[0])
 
       expect(onPluginClick).toHaveBeenCalledWith('bit-bi')
+    })
+  })
+
+  describe('onHistoryClick Callback', () => {
+    it('should pass onHistoryClick to PluginListView', async () => {
+      const user = userEvent.setup()
+      const onHistoryClick = vi.fn()
+
+      vi.mocked(pluginQueries.usePluginsQuery).mockReturnValue({
+        data: mockPlugins,
+        isLoading: false,
+        isError: false,
+        error: null,
+      } as ReturnType<typeof pluginQueries.usePluginsQuery>)
+
+      render(<PluginListWidget onHistoryClick={onHistoryClick} />, {
+        wrapper: createWrapper(),
+      })
+
+      // Click the SQL History button for the first plugin
+      const historyButtons = screen.getAllByRole('button', { name: /sql history/i })
+      await user.click(historyButtons[0])
+
+      expect(onHistoryClick).toHaveBeenCalledWith('bit-bi')
     })
   })
 })

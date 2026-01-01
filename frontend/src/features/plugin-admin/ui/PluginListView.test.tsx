@@ -120,7 +120,7 @@ describe('PluginListView', () => {
   })
 
   describe('Click Interactions', () => {
-    it('should call onPluginClick when card is clicked', async () => {
+    it('should call onPluginClick when Audit Logs button is clicked', async () => {
       const user = userEvent.setup()
       const onPluginClick = vi.fn()
 
@@ -132,14 +132,33 @@ describe('PluginListView', () => {
         />
       )
 
-      const card = screen.getByText('Bit BI Integration').closest('div[role="button"]')
-      await user.click(card!)
+      // Find the first Audit Logs button (for bit-bi plugin)
+      const auditButtons = screen.getAllByRole('button', { name: /audit logs/i })
+      await user.click(auditButtons[0])
 
       expect(onPluginClick).toHaveBeenCalledWith('bit-bi')
     })
 
-    it('should call onPluginClick on Enter key', async () => {
+    it('should call onHistoryClick when SQL History button is clicked', async () => {
       const user = userEvent.setup()
+      const onHistoryClick = vi.fn()
+
+      render(
+        <PluginListView
+          plugins={mockPlugins}
+          isLoading={false}
+          onHistoryClick={onHistoryClick}
+        />
+      )
+
+      // Find the first SQL History button (for bit-bi plugin)
+      const historyButtons = screen.getAllByRole('button', { name: /sql history/i })
+      await user.click(historyButtons[0])
+
+      expect(onHistoryClick).toHaveBeenCalledWith('bit-bi')
+    })
+
+    it('should render Audit Logs button when onPluginClick is provided', () => {
       const onPluginClick = vi.fn()
 
       render(
@@ -150,66 +169,30 @@ describe('PluginListView', () => {
         />
       )
 
-      const card = screen.getByText('Bit BI Integration').closest('div[role="button"]')
-      card!.focus()
-      await user.keyboard('{Enter}')
-
-      expect(onPluginClick).toHaveBeenCalledWith('bit-bi')
+      const buttons = screen.getAllByRole('button', { name: /audit logs/i })
+      expect(buttons).toHaveLength(2) // One for each plugin
     })
 
-    it('should call onPluginClick on Space key', async () => {
-      const user = userEvent.setup()
-      const onPluginClick = vi.fn()
+    it('should render SQL History button when onHistoryClick is provided', () => {
+      const onHistoryClick = vi.fn()
 
       render(
         <PluginListView
           plugins={mockPlugins}
           isLoading={false}
-          onPluginClick={onPluginClick}
+          onHistoryClick={onHistoryClick}
         />
       )
 
-      const card = screen.getByText('Bit BI Integration').closest('div[role="button"]')
-      card!.focus()
-      await user.keyboard(' ')
-
-      expect(onPluginClick).toHaveBeenCalledWith('bit-bi')
+      const buttons = screen.getAllByRole('button', { name: /sql history/i })
+      expect(buttons).toHaveLength(2) // One for each plugin
     })
 
-    it('should have role="button" when onPluginClick is provided', () => {
-      const onPluginClick = vi.fn()
-
-      render(
-        <PluginListView
-          plugins={mockPlugins}
-          isLoading={false}
-          onPluginClick={onPluginClick}
-        />
-      )
-
-      const buttons = screen.getAllByRole('button')
-      expect(buttons).toHaveLength(2)
-    })
-
-    it('should not have role="button" when onPluginClick is not provided', () => {
+    it('should not render action buttons when no callbacks provided', () => {
       render(<PluginListView plugins={mockPlugins} isLoading={false} />)
 
-      expect(screen.queryByRole('button')).not.toBeInTheDocument()
-    })
-
-    it('should have cursor-pointer class when clickable', () => {
-      const onPluginClick = vi.fn()
-
-      const { container } = render(
-        <PluginListView
-          plugins={mockPlugins}
-          isLoading={false}
-          onPluginClick={onPluginClick}
-        />
-      )
-
-      const card = container.querySelector('.cursor-pointer')
-      expect(card).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /audit logs/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /sql history/i })).not.toBeInTheDocument()
     })
   })
 
