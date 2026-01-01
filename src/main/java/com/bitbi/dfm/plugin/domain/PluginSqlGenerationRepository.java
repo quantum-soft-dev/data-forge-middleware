@@ -117,4 +117,13 @@ public interface PluginSqlGenerationRepository {
      * @return Optional containing the active generation if found
      */
     Optional<PluginSqlGeneration> findActiveBySourceBatchId(UUID sourceBatchId);
+
+    /**
+     * Counts generations for an account-plugin.
+     * Used for admin listing to show generation counts.
+     *
+     * @param accountPluginId the account plugin ID
+     * @return count of generations
+     */
+    long countByAccountPluginId(Long accountPluginId);
 }

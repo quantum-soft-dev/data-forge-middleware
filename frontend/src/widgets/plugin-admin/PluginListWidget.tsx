@@ -9,9 +9,10 @@ import { usePluginsQuery } from '@/features/plugin-admin/api/pluginQueries'
 
 interface PluginListWidgetProps {
   onPluginClick?: (pluginId: string) => void
+  onHistoryClick?: (pluginId: string) => void
 }
 
-export function PluginListWidget({ onPluginClick }: PluginListWidgetProps) {
+export function PluginListWidget({ onPluginClick, onHistoryClick }: PluginListWidgetProps) {
   const { data: plugins, isLoading, isError, error } = usePluginsQuery()
 
   if (isError) {
@@ -29,6 +30,7 @@ export function PluginListWidget({ onPluginClick }: PluginListWidgetProps) {
       plugins={plugins || []}
       isLoading={isLoading}
       onPluginClick={onPluginClick}
+      onHistoryClick={onHistoryClick}
     />
   )
 }

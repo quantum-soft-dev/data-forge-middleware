@@ -221,6 +221,51 @@ public class PluginAdminController {
     // ==================== Plugin History Endpoints (Feature 014) ====================
 
     /**
+     * Lists account-plugin activations for a plugin with generation counts.
+     * Used in the SQL History tab to select which account to view.
+     *
+     * @param pluginId the plugin identifier
+     * @param page page number
+     * @param size page size
+     * @return paginated list of account-plugin activations
+     */
+    @GetMapping("/{pluginId}/account-plugins")
+    @Operation(
+            summary = "List account-plugins for SQL history",
+            description = "Returns paginated list of accounts with active plugin activation and their SQL generation counts"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paginated list of account-plugins",
+                    content = @Content(schema = @Schema(implementation = AdminAccountPluginPageDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized (requires ROLE_ADMIN)")
+    })
+    public ResponseEntity<AdminAccountPluginPageDto> listAccountPlugins(
+            @Parameter(description = "Plugin identifier")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size (max 100)")
+            @RequestParam(defaultValue = "20") int size) {
+
+        log.debug("Admin request: list account-plugins for plugin={}, page={}, size={}", pluginId, page, size);
+
+        int effectiveSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "activatedAt"));
+
+        Page<AdminAccountPluginDto> accountPlugins = pluginAdminQueryService.listAccountPluginsForPlugin(pluginId, pageable);
+
+        log.info("Returned {} account-plugins for plugin={}", accountPlugins.getNumberOfElements(), pluginId);
+
+        return ResponseEntity.ok(AdminAccountPluginPageDto.fromPage(accountPlugins));
+    }
+
+    /**
      * Lists SQL generations for an account-plugin with pagination.
      *
      * @param pluginId the plugin identifier

@@ -5,20 +5,23 @@
  */
 
 import { formatDistanceToNow } from 'date-fns'
-import { Plug, Calendar, Settings } from 'lucide-react'
+import { Plug, Calendar, Settings, FileText, Database } from 'lucide-react'
 import type { PluginConfig } from '@/entities/plugin/model/types'
 import { PluginStatusBadge } from '@/entities/plugin/ui/PluginStatusBadge'
+import { Button } from '@/shared/ui/ui/button'
 
 interface PluginListViewProps {
   plugins: PluginConfig[]
   isLoading?: boolean
   onPluginClick?: (pluginId: string) => void
+  onHistoryClick?: (pluginId: string) => void
 }
 
 export function PluginListView({
   plugins,
   isLoading = false,
   onPluginClick,
+  onHistoryClick,
 }: PluginListViewProps) {
   if (isLoading) {
     return (
@@ -45,18 +48,7 @@ export function PluginListView({
       {plugins.map((plugin) => (
         <div
           key={plugin.pluginId}
-          className={`rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md ${
-            onPluginClick ? 'cursor-pointer' : ''
-          }`}
-          onClick={() => onPluginClick?.(plugin.pluginId)}
-          role={onPluginClick ? 'button' : undefined}
-          tabIndex={onPluginClick ? 0 : undefined}
-          onKeyDown={(e) => {
-            if (onPluginClick && (e.key === 'Enter' || e.key === ' ')) {
-              e.preventDefault()
-              onPluginClick(plugin.pluginId)
-            }
-          }}
+          className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
         >
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
@@ -102,6 +94,32 @@ export function PluginListView({
               </div>
             </div>
           )}
+
+          {/* Action buttons */}
+          <div className="mt-4 flex gap-2 border-t pt-3">
+            {onPluginClick && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => onPluginClick(plugin.pluginId)}
+              >
+                <FileText className="mr-1 h-3.5 w-3.5" />
+                Audit Logs
+              </Button>
+            )}
+            {onHistoryClick && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => onHistoryClick(plugin.pluginId)}
+              >
+                <Database className="mr-1 h-3.5 w-3.5" />
+                SQL History
+              </Button>
+            )}
+          </div>
         </div>
       ))}
     </div>

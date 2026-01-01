@@ -10,11 +10,13 @@ import {
   ADMIN_PLUGINS,
   ADMIN_PLUGINS_AUDIT,
   ADMIN_PLUGINS_AUDIT_BY_PLUGIN,
+  ADMIN_PLUGIN_ACCOUNT_PLUGINS,
 } from '@/shared/api/apiRoutes'
 import type {
   PluginConfig,
   PluginAuditLogPageResponse,
   AuditLogFilters,
+  AdminAccountPluginPageResponse,
 } from '@/entities/plugin/model/types'
 
 /**
@@ -83,8 +85,27 @@ export async function fetchPluginAuditLogs(
   return response.data
 }
 
+/**
+ * Fetch account-plugins for a specific plugin (for SQL History tab)
+ */
+export async function fetchAccountPlugins(
+  pluginId: string,
+  page: number = 0,
+  size: number = 20
+): Promise<AdminAccountPluginPageResponse> {
+  const params = new URLSearchParams()
+  params.append('page', String(page))
+  params.append('size', String(size))
+
+  const response = await apiClient.get<AdminAccountPluginPageResponse>(
+    `${ADMIN_PLUGIN_ACCOUNT_PLUGINS(pluginId)}?${params.toString()}`
+  )
+  return response.data
+}
+
 export const pluginAdminApi = {
   fetchPlugins,
   fetchAuditLogs,
   fetchPluginAuditLogs,
+  fetchAccountPlugins,
 }

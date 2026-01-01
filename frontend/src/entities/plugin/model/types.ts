@@ -75,3 +75,34 @@ export interface AuditLogFilters {
   page?: number
   size?: number
 }
+
+// ==================== Admin Account-Plugin Types (Feature 014) ====================
+
+/**
+ * Admin view of account-plugin activation
+ * Maps to AdminAccountPluginDto.java
+ */
+export interface AdminAccountPlugin {
+  accountId: string
+  pluginId: string
+  pluginName: string
+  isActive: boolean
+  activatedAt: string | null // ISO 8601
+  deactivatedAt: string | null // ISO 8601
+  lastUsedAt: string | null // ISO 8601
+  generationCount: number
+}
+
+/**
+ * Paginated admin account-plugin response
+ * Maps to AdminAccountPluginPageDto.java
+ */
+export interface AdminAccountPluginPageResponse {
+  content: AdminAccountPlugin[]
+  page: number
+  size: number
+  totalElements: number
+  totalPages: number
+  first: boolean
+  last: boolean
+}

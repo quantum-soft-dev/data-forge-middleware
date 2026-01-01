@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.*;
+import com.bitbi.dfm.plugin.presentation.dto.AdminAccountPluginDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginAuditLogEntryDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginConfigResponseDto;
 import org.slf4j.Logger;
@@ -34,14 +35,20 @@ public class PluginAdminQueryService {
     private final PluginRegistry pluginRegistry;
     private final PluginConfigRepository pluginConfigRepository;
     private final PluginAuditLogRepository auditLogRepository;
+    private final AccountPluginRepository accountPluginRepository;
+    private final PluginSqlGenerationRepository sqlGenerationRepository;
 
     public PluginAdminQueryService(
             PluginRegistry pluginRegistry,
             PluginConfigRepository pluginConfigRepository,
-            PluginAuditLogRepository auditLogRepository) {
+            PluginAuditLogRepository auditLogRepository,
+            AccountPluginRepository accountPluginRepository,
+            PluginSqlGenerationRepository sqlGenerationRepository) {
         this.pluginRegistry = pluginRegistry;
         this.pluginConfigRepository = pluginConfigRepository;
         this.auditLogRepository = auditLogRepository;
+        this.accountPluginRepository = accountPluginRepository;
+        this.sqlGenerationRepository = sqlGenerationRepository;
     }
 
     /**
@@ -149,5 +156,31 @@ public class PluginAdminQueryService {
      */
     public long countByActionType(PluginActionType actionType, Instant from, Instant to) {
         return auditLogRepository.countByActionTypeAndDateRange(actionType, from, to);
+    }
+
+    // ==================== Account-Plugin Listing (Feature 014) ====================
+
+    /**
+     * Lists all account-plugin activations for a specific plugin with generation counts.
+     * Used in admin SQL History tab to select which account to view history for.
+     *
+     * @param pluginId the plugin identifier
+     * @param pageable pagination parameters
+     * @return page of account-plugin activations with generation counts
+     */
+    public Page<AdminAccountPluginDto> listAccountPluginsForPlugin(String pluginId, Pageable pageable) {
+        log.debug("Listing account-plugins for plugin: {}", pluginId);
+
+        // Get plugin display name
+        String pluginName = pluginConfigRepository.findByPluginId(pluginId)
+                .map(PluginConfig::getDisplayName)
+                .orElse(pluginId);
+
+        Page<AccountPlugin> accountPlugins = accountPluginRepository.findByPluginIdAndActiveTrue(pluginId, pageable);
+
+        return accountPlugins.map(ap -> {
+            long generationCount = sqlGenerationRepository.countByAccountPluginId(ap.getId());
+            return AdminAccountPluginDto.fromEntity(ap, pluginName, generationCount);
+        });
     }
 }

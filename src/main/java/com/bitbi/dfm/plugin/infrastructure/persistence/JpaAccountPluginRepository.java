@@ -68,4 +68,7 @@ public interface JpaAccountPluginRepository extends JpaRepository<AccountPlugin,
         String apiKeyJson = String.format("{\"apiKey\": \"%s\"}", apiKey);
         return findByPluginIdAndApiKeyJson(pluginId, apiKeyJson);
     }
+
+    @Override
+    Page<AccountPlugin> findByPluginIdAndActiveTrue(String pluginId, Pageable pageable);
 }

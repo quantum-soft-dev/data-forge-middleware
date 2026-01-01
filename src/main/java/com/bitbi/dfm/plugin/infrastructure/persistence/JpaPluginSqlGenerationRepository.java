@@ -108,4 +108,10 @@ public interface JpaPluginSqlGenerationRepository extends JpaRepository<PluginSq
      */
     @Query("SELECT g FROM PluginSqlGeneration g WHERE g.sourceBatchId = :sourceBatchId AND g.superseded = false")
     Optional<PluginSqlGeneration> findActiveBySourceBatchId(@Param("sourceBatchId") UUID sourceBatchId);
+
+    /**
+     * Counts generations for an account-plugin.
+     */
+    @Query("SELECT COUNT(g) FROM PluginSqlGeneration g WHERE g.accountPluginId = :accountPluginId")
+    long countByAccountPluginId(@Param("accountPluginId") Long accountPluginId);
 }

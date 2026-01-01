@@ -89,4 +89,20 @@ public interface AccountPluginRepository {
      * @return the activation record if found and active
      */
     Optional<AccountPlugin> findByPluginIdAndApiKey(String pluginId, String apiKey);
+
+    /**
+     * Finds all account-plugin activations with pagination.
+     * Used for admin listing of all plugin activations.
+     * @param pageable pagination parameters
+     * @return page of all account-plugin activations
+     */
+    Page<AccountPlugin> findAll(Pageable pageable);
+
+    /**
+     * Finds all active account-plugin activations by plugin ID with pagination.
+     * @param pluginId the plugin identifier
+     * @param pageable pagination parameters
+     * @return page of active plugin activations for the specified plugin
+     */
+    Page<AccountPlugin> findByPluginIdAndActiveTrue(String pluginId, Pageable pageable);
 }

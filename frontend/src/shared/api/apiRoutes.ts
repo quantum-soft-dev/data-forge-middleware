@@ -120,6 +120,10 @@ export const PLUGINS = `${ADMIN_API_BASE}/plugins`;
 export const PLUGINS_ACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/activate`;
 export const PLUGINS_DEACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/deactivate`;
 
+// Plugin Account-Plugins (Admin) - for SQL History tab
+export const ADMIN_PLUGIN_ACCOUNT_PLUGINS = (pluginId: string) =>
+  `${ADMIN_PLUGINS}/${pluginId}/account-plugins`;
+
 // Plugin History (Admin)
 export const ADMIN_PLUGIN_GENERATIONS = (pluginId: string, accountId: string) =>
   `${ADMIN_PLUGINS}/${pluginId}/accounts/${accountId}/generations`;

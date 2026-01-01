@@ -1,7 +1,7 @@
 /**
  * PluginsAdminPage - Plugin Administration
  *
- * Admin page for viewing registered plugins and audit logs.
+ * Admin page for viewing registered plugins, audit logs, and SQL history.
  * Read-only: displays plugin status, capabilities, and audit trail.
  *
  * Route: /admin/plugins
@@ -9,12 +9,13 @@
  */
 
 import { useState } from 'react'
-import { Plug, FileText } from 'lucide-react'
+import { Plug, FileText, Database } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
 import { PluginListWidget } from '@/widgets/plugin-admin/PluginListWidget'
 import { AuditLogWidget } from '@/widgets/plugin-admin/AuditLogWidget'
+import { SqlHistoryWidget } from '@/widgets/plugin-admin/SqlHistoryWidget'
 
-type TabType = 'plugins' | 'audit'
+type TabType = 'plugins' | 'audit' | 'history'
 
 export default function PluginsAdminPage() {
   const [activeTab, setActiveTab] = useState<TabType>('plugins')
@@ -23,6 +24,11 @@ export default function PluginsAdminPage() {
   const handlePluginClick = (pluginId: string) => {
     setSelectedPluginId(pluginId)
     setActiveTab('audit')
+  }
+
+  const handlePluginHistoryClick = (pluginId: string) => {
+    setSelectedPluginId(pluginId)
+    setActiveTab('history')
   }
 
   return (
@@ -65,7 +71,23 @@ export default function PluginsAdminPage() {
             >
               <FileText className="h-4 w-4" />
               Audit Logs
-              {selectedPluginId && (
+              {selectedPluginId && activeTab === 'audit' && (
+                <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
+                  {selectedPluginId}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium ${
+                activeTab === 'history'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+              }`}
+            >
+              <Database className="h-4 w-4" />
+              SQL History
+              {selectedPluginId && activeTab === 'history' && (
                 <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
                   {selectedPluginId}
                 </span>
@@ -77,13 +99,22 @@ export default function PluginsAdminPage() {
         {/* Tab content */}
         {activeTab === 'plugins' && (
           <section>
-            <PluginListWidget onPluginClick={handlePluginClick} />
+            <PluginListWidget
+              onPluginClick={handlePluginClick}
+              onHistoryClick={handlePluginHistoryClick}
+            />
           </section>
         )}
 
         {activeTab === 'audit' && (
           <section>
             <AuditLogWidget initialPluginId={selectedPluginId} />
+          </section>
+        )}
+
+        {activeTab === 'history' && (
+          <section>
+            <SqlHistoryWidget pluginId={selectedPluginId} />
           </section>
         )}
       </main>
