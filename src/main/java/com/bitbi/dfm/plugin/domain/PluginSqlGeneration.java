@@ -61,6 +61,12 @@ public class PluginSqlGeneration {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "superseded", nullable = false)
+    private Boolean superseded = false;
+
+    @Column(name = "superseded_by")
+    private UUID supersededBy;
+
     /**
      * Factory method for creating a new SQL generation record.
      *
@@ -99,6 +105,8 @@ public class PluginSqlGeneration {
         entity.filesProcessed = stats.filesProcessed();
         entity.generationDurationMs = durationMs;
         entity.createdAt = LocalDateTime.now();
+        entity.superseded = false;
+        entity.supersededBy = null;
         return entity;
     }
 
@@ -115,5 +123,30 @@ public class PluginSqlGeneration {
      */
     public SqlGenerationStats toStats() {
         return new SqlGenerationStats(insertCount, updateCount, deleteCount, filesProcessed);
+    }
+
+    /**
+     * Returns true if this generation has been superseded by a regeneration.
+     */
+    public boolean isSuperseded() {
+        return Boolean.TRUE.equals(superseded);
+    }
+
+    /**
+     * Marks this generation as superseded by a new generation.
+     * Used when regenerating SQL for a batch.
+     *
+     * @param newGenerationId The ID of the new generation that supersedes this one
+     * @throws IllegalStateException if this generation is already superseded
+     */
+    public void markAsSuperseded(UUID newGenerationId) {
+        if (this.superseded) {
+            throw new IllegalStateException("Generation is already superseded: " + this.id);
+        }
+        if (newGenerationId == null) {
+            throw new IllegalArgumentException("New generation ID cannot be null");
+        }
+        this.superseded = true;
+        this.supersededBy = newGenerationId;
     }
 }

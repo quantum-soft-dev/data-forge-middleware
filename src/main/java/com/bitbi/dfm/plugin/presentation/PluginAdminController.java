@@ -1,10 +1,9 @@
 package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.PluginAdminQueryService;
+import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.domain.PluginActionType;
-import com.bitbi.dfm.plugin.presentation.dto.PluginAuditLogEntryDto;
-import com.bitbi.dfm.plugin.presentation.dto.PluginAuditLogPageResponseDto;
-import com.bitbi.dfm.plugin.presentation.dto.PluginConfigResponseDto;
+import com.bitbi.dfm.plugin.presentation.dto.*;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -20,7 +19,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -36,12 +38,13 @@ import java.util.UUID;
  *   <li>GET /api/v1/admin/plugins/audit - Query plugin audit logs with filters</li>
  * </ul>
  *
- * <p>Requires ROLE_ADMIN for all operations (configured in SecurityConfiguration).</p>
+ * <p>Requires ROLE_ADMIN for all operations.</p>
  *
  * <p>User Story 6 (Phase 8) - Admin Views Plugin Audit Trail</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin/plugins")
+@PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Plugin Administration", description = "Admin endpoints for plugin management and audit")
 @SecurityRequirement(name = "oauth2")
 public class PluginAdminController {
@@ -49,9 +52,14 @@ public class PluginAdminController {
     private static final Logger log = LoggerFactory.getLogger(PluginAdminController.class);
 
     private final PluginAdminQueryService pluginAdminQueryService;
+    private final PluginHistoryService pluginHistoryService;
 
-    public PluginAdminController(PluginAdminQueryService pluginAdminQueryService) {
+    public PluginAdminController(
+            PluginAdminQueryService pluginAdminQueryService,
+            PluginHistoryService pluginHistoryService
+    ) {
         this.pluginAdminQueryService = pluginAdminQueryService;
+        this.pluginHistoryService = pluginHistoryService;
     }
 
     /**
@@ -208,5 +216,285 @@ public class PluginAdminController {
                 auditLogs.getNumberOfElements(), pluginId, page, auditLogs.getTotalPages());
 
         return ResponseEntity.ok(PluginAuditLogPageResponseDto.fromPage(auditLogs));
+    }
+
+    // ==================== Plugin History Endpoints (Feature 014) ====================
+
+    /**
+     * Lists SQL generations for an account-plugin with pagination.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param includeSuperseded whether to include superseded generations
+     * @param page page number
+     * @param size page size
+     * @return paginated list of SQL generations
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/generations")
+    @Operation(
+            summary = "List SQL generations",
+            description = "Returns paginated list of SQL generation records for a specific account-plugin"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paginated list of SQL generations",
+                    content = @Content(schema = @Schema(implementation = SqlGenerationListResponseDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized (requires ROLE_ADMIN)"),
+            @ApiResponse(responseCode = "404", description = "Account-plugin not found")
+    })
+    public ResponseEntity<SqlGenerationListResponseDto> listGenerations(
+            @Parameter(description = "Plugin identifier")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Account ID")
+            @PathVariable UUID accountId,
+
+            @Parameter(description = "Include superseded generations")
+            @RequestParam(defaultValue = "false") boolean includeSuperseded,
+
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size (max 100)")
+            @RequestParam(defaultValue = "20") int size) {
+
+        log.debug("Admin request: list generations for plugin={}, account={}, includeSuperseded={}, page={}, size={}",
+                pluginId, accountId, includeSuperseded, page, size);
+
+        int effectiveSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<SqlGenerationSummaryDto> generations = pluginHistoryService.listGenerations(
+                pluginId, accountId, includeSuperseded, pageable);
+
+        log.info("Returned {} generations for plugin={}, account={}", generations.getNumberOfElements(), pluginId, accountId);
+
+        return ResponseEntity.ok(SqlGenerationListResponseDto.fromPage(generations));
+    }
+
+    /**
+     * Gets a single SQL generation by ID.
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/generations/{generationId}")
+    @Operation(
+            summary = "Get SQL generation details",
+            description = "Returns detailed information about a specific SQL generation"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "SQL generation details",
+                    content = @Content(schema = @Schema(implementation = SqlGenerationSummaryDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized"),
+            @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<SqlGenerationSummaryDto> getGeneration(
+            @PathVariable String pluginId,
+            @PathVariable UUID accountId,
+            @PathVariable UUID generationId) {
+
+        log.debug("Admin request: get generation plugin={}, account={}, generation={}",
+                pluginId, accountId, generationId);
+
+        SqlGenerationSummaryDto generation = pluginHistoryService.getGeneration(pluginId, accountId, generationId);
+
+        return ResponseEntity.ok(generation);
+    }
+
+    /**
+     * Gets paginated SQL content for a generation.
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/generations/{generationId}/content")
+    @Operation(
+            summary = "Get SQL content (paginated)",
+            description = "Returns paginated SQL statements for a generation"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paginated SQL content",
+                    content = @Content(schema = @Schema(implementation = SqlContentPageDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized"),
+            @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<SqlContentPageDto> getSqlContent(
+            @PathVariable String pluginId,
+            @PathVariable UUID accountId,
+            @PathVariable UUID generationId,
+
+            @Parameter(description = "Page number (0-based)")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Statements per page (max 100)")
+            @RequestParam(defaultValue = "100") int size) {
+
+        log.debug("Admin request: get SQL content plugin={}, account={}, generation={}, page={}, size={}",
+                pluginId, accountId, generationId, page, size);
+
+        int effectiveSize = Math.min(size, 100);
+        SqlContentPageDto content = pluginHistoryService.getSqlContent(
+                pluginId, accountId, generationId, page, effectiveSize);
+
+        return ResponseEntity.ok(content);
+    }
+
+    /**
+     * Downloads the complete SQL file.
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/generations/{generationId}/download")
+    @Operation(
+            summary = "Download SQL file",
+            description = "Returns the complete SQL file as a download"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "SQL file download",
+                    content = @Content(mediaType = "text/plain")
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized"),
+            @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<String> downloadSqlFile(
+            @PathVariable String pluginId,
+            @PathVariable UUID accountId,
+            @PathVariable UUID generationId) {
+
+        log.debug("Admin request: download SQL file plugin={}, account={}, generation={}",
+                pluginId, accountId, generationId);
+
+        String sqlContent = pluginHistoryService.downloadSqlFile(pluginId, accountId, generationId);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"generation-" + generationId + ".sql\"");
+        headers.add(HttpHeaders.CONTENT_TYPE, "text/plain;charset=UTF-8");
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(sqlContent);
+    }
+
+    /**
+     * Gets summary of what will be deleted when clearing history.
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/history/summary")
+    @Operation(
+            summary = "Get history clear summary",
+            description = "Returns summary of what will be deleted if history is cleared"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "History clear summary",
+                    content = @Content(schema = @Schema(implementation = HistoryClearSummaryDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized"),
+            @ApiResponse(responseCode = "404", description = "Account-plugin not found")
+    })
+    public ResponseEntity<HistoryClearSummaryDto> getHistorySummary(
+            @PathVariable String pluginId,
+            @PathVariable UUID accountId) {
+
+        log.debug("Admin request: get history summary plugin={}, account={}", pluginId, accountId);
+
+        HistoryClearSummaryDto summary = pluginHistoryService.getHistorySummary(pluginId, accountId);
+
+        return ResponseEntity.ok(summary);
+    }
+
+    /**
+     * Clears all plugin history for an account.
+     */
+    @DeleteMapping("/{pluginId}/accounts/{accountId}/history")
+    @Operation(
+            summary = "Clear all plugin history",
+            description = "Deletes all SQL generations, S3 files, and deactivates the plugin"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "History cleared successfully",
+                    content = @Content(schema = @Schema(implementation = HistoryClearResultDto.class))
+            ),
+            @ApiResponse(responseCode = "400", description = "Confirmation not provided"),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized"),
+            @ApiResponse(responseCode = "404", description = "Account-plugin not found")
+    })
+    public ResponseEntity<?> clearHistory(
+            @PathVariable String pluginId,
+            @PathVariable UUID accountId,
+
+            @Parameter(description = "Must be 'true' to confirm deletion")
+            @RequestParam(required = false) Boolean confirm) {
+
+        log.debug("Admin request: clear history plugin={}, account={}, confirm={}", pluginId, accountId, confirm);
+
+        if (confirm == null || !confirm) {
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of(
+                            "error", "BAD_REQUEST",
+                            "message", "Confirmation required. Set confirm=true to proceed with deletion."
+                    ));
+        }
+
+        HistoryClearResultDto result = pluginHistoryService.clearHistory(pluginId, accountId);
+
+        log.info("History cleared: plugin={}, account={}, deleted={}", pluginId, accountId, result.deletedGenerations());
+
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Regenerates SQL for a specific generation.
+     */
+    @PostMapping("/{pluginId}/accounts/{accountId}/generations/{generationId}/regenerate")
+    @Operation(
+            summary = "Regenerate SQL for a batch",
+            description = "Triggers regeneration of SQL for the batch. Original is marked as superseded."
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Regeneration completed successfully",
+                    content = @Content(schema = @Schema(implementation = RegenerateResultDto.class))
+            ),
+            @ApiResponse(responseCode = "400", description = "Source CSV files not available"),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized"),
+            @ApiResponse(responseCode = "404", description = "Generation not found"),
+            @ApiResponse(responseCode = "409", description = "Generation already superseded")
+    })
+    public ResponseEntity<?> regenerateSql(
+            @PathVariable String pluginId,
+            @PathVariable UUID accountId,
+            @PathVariable UUID generationId) {
+
+        log.debug("Admin request: regenerate SQL plugin={}, account={}, generation={}",
+                pluginId, accountId, generationId);
+
+        try {
+            RegenerateResultDto result = pluginHistoryService.regenerateSql(pluginId, accountId, generationId);
+
+            log.info("SQL regenerated: plugin={}, account={}, original={}, new={}",
+                    pluginId, accountId, generationId, result.newGenerationId());
+
+            return ResponseEntity.ok(result);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(409)
+                    .body(java.util.Map.of(
+                            "error", "CONFLICT",
+                            "message", e.getMessage()
+                    ));
+        }
     }
 }

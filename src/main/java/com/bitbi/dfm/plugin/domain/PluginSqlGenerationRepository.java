@@ -65,4 +65,56 @@ public interface PluginSqlGenerationRepository {
      * @return List of all SQL generations
      */
     List<PluginSqlGeneration> findAll();
+
+    // ==================== Plugin History Methods (Feature 014) ====================
+
+    /**
+     * Finds all SQL generations for an account-plugin with pagination.
+     * Used for listing generation history in admin UI.
+     *
+     * @param accountPluginId the account plugin ID
+     * @param includeSuperseded whether to include superseded generations
+     * @param pageable pagination parameters
+     * @return page of SQL generations
+     */
+    org.springframework.data.domain.Page<PluginSqlGeneration> findByAccountPluginId(
+            Long accountPluginId,
+            boolean includeSuperseded,
+            org.springframework.data.domain.Pageable pageable
+    );
+
+    /**
+     * Counts generations and sums file sizes for an account-plugin.
+     * Used for clear history summary.
+     *
+     * @param accountPluginId the account plugin ID
+     * @return array containing [count, totalBytes]
+     */
+    Object[] countAndSumByAccountPluginId(Long accountPluginId);
+
+    /**
+     * Gets all S3 keys for an account-plugin.
+     * Used for bulk S3 deletion when clearing history.
+     *
+     * @param accountPluginId the account plugin ID
+     * @return list of S3 keys
+     */
+    List<String> findS3KeysByAccountPluginId(Long accountPluginId);
+
+    /**
+     * Deletes all generations for an account-plugin.
+     * Used when clearing history.
+     *
+     * @param accountPluginId the account plugin ID
+     */
+    void deleteByAccountPluginId(Long accountPluginId);
+
+    /**
+     * Finds the active (non-superseded) generation for a source batch.
+     * Used for regeneration to find the generation to supersede.
+     *
+     * @param sourceBatchId the source batch ID
+     * @return Optional containing the active generation if found
+     */
+    Optional<PluginSqlGeneration> findActiveBySourceBatchId(UUID sourceBatchId);
 }

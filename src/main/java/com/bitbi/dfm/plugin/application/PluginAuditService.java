@@ -367,4 +367,163 @@ public class PluginAuditService {
                     pluginId, batchId, e.getMessage());
         }
     }
+
+    // ==================== Plugin History Audit Methods (Feature 014) ====================
+
+    /**
+     * Logs that plugin history was cleared for an account.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param deletedCount number of generation records deleted
+     * @param deletedFilesCount number of S3 files deleted
+     * @param deletedTotalBytes total bytes deleted
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logHistoryCleared(
+            String pluginId,
+            UUID accountId,
+            long deletedCount,
+            long deletedFilesCount,
+            long deletedTotalBytes) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("deletedCount", deletedCount);
+            metadata.put("deletedFilesCount", deletedFilesCount);
+            metadata.put("totalBytes", deletedTotalBytes);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.PLUGIN_HISTORY_CLEARED)
+                    .withMetadata(metadata);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: PLUGIN_HISTORY_CLEARED plugin={} account={} deleted={}",
+                    pluginId, accountId, deletedCount);
+        } catch (Exception e) {
+            log.error("Failed to log history cleared audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs the start of SQL regeneration for a batch.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param batchId the batch being regenerated
+     * @param originalGenerationId the original generation being superseded (may be null)
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlRegenerationStarted(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID originalGenerationId) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            if (originalGenerationId != null) {
+                metadata.put("originalGenerationId", originalGenerationId.toString());
+            }
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_REGENERATION_STARTED)
+                    .withMetadata(metadata);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_REGENERATION_STARTED plugin={} account={} batch={}",
+                    pluginId, accountId, batchId);
+        } catch (Exception e) {
+            log.error("Failed to log SQL regeneration started audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs successful completion of SQL regeneration.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param batchId the batch that was regenerated
+     * @param originalGenerationId the original generation that was superseded (may be null)
+     * @param newGenerationId the new generation created
+     * @param stats the generation statistics
+     * @param durationMs time taken to regenerate
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlRegenerationCompleted(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID originalGenerationId,
+            UUID newGenerationId,
+            SqlGenerationStats stats,
+            long durationMs) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            if (originalGenerationId != null) {
+                metadata.put("originalGenerationId", originalGenerationId.toString());
+            }
+            metadata.put("newGenerationId", newGenerationId.toString());
+            metadata.put("insertCount", stats.inserts());
+            metadata.put("updateCount", stats.updates());
+            metadata.put("deleteCount", stats.deletes());
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_REGENERATION_COMPLETED)
+                    .withMetadata(metadata)
+                    .withDuration(durationMs);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_REGENERATION_COMPLETED plugin={} account={} batch={} duration={}ms",
+                    pluginId, accountId, batchId, durationMs);
+        } catch (Exception e) {
+            log.error("Failed to log SQL regeneration completed audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs a failed SQL regeneration attempt.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param batchId the batch that failed regeneration
+     * @param originalGenerationId the original generation ID (may be null)
+     * @param errorMessage the error message
+     * @param durationMs time elapsed before failure
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlRegenerationFailed(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID originalGenerationId,
+            String errorMessage,
+            long durationMs) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            if (originalGenerationId != null) {
+                metadata.put("originalGenerationId", originalGenerationId.toString());
+            }
+
+            PluginAuditLog auditLog = PluginAuditLog.failure(pluginId, accountId,
+                            PluginActionType.SQL_REGENERATION_FAILED, errorMessage)
+                    .withMetadata(metadata)
+                    .withDuration(durationMs);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_REGENERATION_FAILED plugin={} account={} batch={} error={}",
+                    pluginId, accountId, batchId, errorMessage);
+        } catch (Exception e) {
+            log.error("Failed to log SQL regeneration failure audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
 }

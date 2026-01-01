@@ -1,0 +1,577 @@
+openapi: 3.0.3
+info:
+  title: Plugin History Admin API
+  description: Admin endpoints for viewing, clearing, and regenerating plugin SQL generation history
+  version: 1.0.0
+
+servers:
+  - url: /api/v1/admin
+    description: Admin API base path
+
+security:
+  - bearerAuth: []
+
+paths:
+  /plugins/{pluginId}/accounts/{accountId}/generations:
+    get:
+      summary: List SQL generations for account-plugin
+      description: |
+        Returns paginated list of SQL generation records for a specific account-plugin combination.
+        By default, returns only active (non-superseded) generations.
+      operationId: listGenerations
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+        - name: includeSuperseded
+          in: query
+          description: Include superseded (replaced) generations
+          schema:
+            type: boolean
+            default: false
+        - name: page
+          in: query
+          description: Page number (0-based)
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          description: Page size (max 100)
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated list of SQL generations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{pluginId}/accounts/{accountId}/generations/{generationId}:
+    get:
+      summary: Get SQL generation details
+      description: Returns detailed information about a specific SQL generation
+      operationId: getGeneration
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/generationId'
+      responses:
+        '200':
+          description: SQL generation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SqlGenerationDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{pluginId}/accounts/{accountId}/generations/{generationId}/content:
+    get:
+      summary: Get SQL content (paginated)
+      description: |
+        Returns paginated SQL statements for a generation.
+        Statements are split by `--- END OF COMMAND ---` delimiter.
+      operationId: getSqlContent
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/generationId'
+        - name: page
+          in: query
+          description: Page number (0-based)
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          description: Statements per page (max 100)
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated SQL content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SqlContentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{pluginId}/accounts/{accountId}/generations/{generationId}/download:
+    get:
+      summary: Download SQL file
+      description: Returns the complete SQL file as a download
+      operationId: downloadSqlFile
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/generationId'
+      responses:
+        '200':
+          description: SQL file download
+          content:
+            text/plain:
+              schema:
+                type: string
+          headers:
+            Content-Disposition:
+              description: File download header
+              schema:
+                type: string
+                example: 'attachment; filename="generation-abc123.sql"'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{pluginId}/accounts/{accountId}/history/summary:
+    get:
+      summary: Get history clear summary
+      description: |
+        Returns summary of what will be deleted if history is cleared.
+        Use this before showing confirmation dialog.
+      operationId: getHistoryClearSummary
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+      responses:
+        '200':
+          description: History clear summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryClearSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{pluginId}/accounts/{accountId}/history:
+    delete:
+      summary: Clear all plugin history
+      description: |
+        Deletes all SQL generations, S3 files, and deactivates the plugin connection.
+        Requires `confirm=true` query parameter to execute.
+      operationId: clearHistory
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+        - name: confirm
+          in: query
+          required: true
+          description: Must be 'true' to confirm deletion
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: History cleared successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryClearResult'
+        '400':
+          description: Confirmation not provided or active batches exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Active batches in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /plugins/{pluginId}/accounts/{accountId}/generations/{generationId}/regenerate:
+    post:
+      summary: Regenerate SQL for a batch
+      description: |
+        Triggers regeneration of SQL for the batch associated with this generation.
+        Original generation is marked as superseded, new generation is created.
+      operationId: regenerateSql
+      tags:
+        - Plugin History
+      parameters:
+        - $ref: '#/components/parameters/pluginId'
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/generationId'
+      responses:
+        '200':
+          description: Regeneration completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegenerateResult'
+        '400':
+          description: Source CSV files not available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Generation already superseded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Auth0 JWT token with ROLE_ADMIN
+
+  parameters:
+    pluginId:
+      name: pluginId
+      in: path
+      required: true
+      description: Plugin identifier (e.g., 'bit-bi')
+      schema:
+        type: string
+        example: bit-bi
+    accountId:
+      name: accountId
+      in: path
+      required: true
+      description: Account UUID
+      schema:
+        type: string
+        format: uuid
+    generationId:
+      name: generationId
+      in: path
+      required: true
+      description: SQL Generation UUID
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: ROLE_ADMIN required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    GenerationListResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/SqlGenerationSummary'
+        page:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          example: 42
+        totalPages:
+          type: integer
+          example: 3
+
+    SqlGenerationSummary:
+      type: object
+      required:
+        - id
+        - sourceBatchId
+        - siteId
+        - siteDomain
+        - createdAt
+        - statementCount
+        - insertCount
+        - updateCount
+        - deleteCount
+        - fileSizeBytes
+        - generationDurationMs
+        - isInitialLoad
+        - superseded
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceBatchId:
+          type: string
+          format: uuid
+        comparisonBatchId:
+          type: string
+          format: uuid
+          nullable: true
+        siteId:
+          type: string
+          format: uuid
+        siteDomain:
+          type: string
+          example: admin-site.example.com
+        createdAt:
+          type: string
+          format: date-time
+        statementCount:
+          type: integer
+          example: 150
+        insertCount:
+          type: integer
+          example: 100
+        updateCount:
+          type: integer
+          example: 30
+        deleteCount:
+          type: integer
+          example: 20
+        fileSizeBytes:
+          type: integer
+          format: int64
+          example: 45678
+        generationDurationMs:
+          type: integer
+          format: int64
+          example: 234
+        isInitialLoad:
+          type: boolean
+          description: True if this was the first batch (no comparison)
+        superseded:
+          type: boolean
+          description: True if replaced by regeneration
+        supersededBy:
+          type: string
+          format: uuid
+          nullable: true
+
+    SqlGenerationDetail:
+      allOf:
+        - $ref: '#/components/schemas/SqlGenerationSummary'
+        - type: object
+          properties:
+            filesProcessed:
+              type: integer
+              example: 3
+            s3Key:
+              type: string
+              example: plugins/bit-bi/abc123/site-name/2026-01-01_12-30-00.sql
+
+    SqlContentPage:
+      type: object
+      required:
+        - generationId
+        - page
+        - pageSize
+        - totalPages
+        - totalStatements
+        - statements
+        - hasNext
+        - hasPrevious
+      properties:
+        generationId:
+          type: string
+          format: uuid
+        page:
+          type: integer
+          example: 0
+        pageSize:
+          type: integer
+          example: 100
+        totalPages:
+          type: integer
+          example: 2
+        totalStatements:
+          type: integer
+          example: 150
+        statements:
+          type: array
+          items:
+            type: string
+          description: SQL statements for current page
+        hasNext:
+          type: boolean
+        hasPrevious:
+          type: boolean
+
+    HistoryClearSummary:
+      type: object
+      required:
+        - accountId
+        - pluginId
+        - generationCount
+        - totalFileSizeBytes
+        - pluginWillBeDeactivated
+        - hasActiveBatches
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        pluginId:
+          type: string
+          example: bit-bi
+        generationCount:
+          type: integer
+          format: int64
+          example: 42
+        totalFileSizeBytes:
+          type: integer
+          format: int64
+          example: 1234567
+        pluginWillBeDeactivated:
+          type: boolean
+          description: Plugin connection will be deactivated
+        hasActiveBatches:
+          type: boolean
+          description: Warning - active batches exist
+
+    HistoryClearResult:
+      type: object
+      required:
+        - deletedGenerations
+        - deletedFilesCount
+        - deletedTotalBytes
+        - failedS3Keys
+        - pluginDeactivated
+        - clearedAt
+      properties:
+        deletedGenerations:
+          type: integer
+          format: int64
+        deletedFilesCount:
+          type: integer
+          format: int64
+        deletedTotalBytes:
+          type: integer
+          format: int64
+        failedS3Keys:
+          type: array
+          items:
+            type: string
+          description: S3 keys that failed to delete (empty if all succeeded)
+        pluginDeactivated:
+          type: boolean
+        clearedAt:
+          type: string
+          format: date-time
+
+    RegenerateResult:
+      type: object
+      required:
+        - originalGenerationId
+        - newGenerationId
+        - statementCount
+        - insertCount
+        - updateCount
+        - deleteCount
+        - generationDurationMs
+        - regeneratedAt
+      properties:
+        originalGenerationId:
+          type: string
+          format: uuid
+        newGenerationId:
+          type: string
+          format: uuid
+        statementCount:
+          type: integer
+        insertCount:
+          type: integer
+        updateCount:
+          type: integer
+        deleteCount:
+          type: integer
+        generationDurationMs:
+          type: integer
+          format: int64
+        regeneratedAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - timestamp
+      properties:
+        error:
+          type: string
+          example: BAD_REQUEST
+        message:
+          type: string
+          example: Confirmation required to clear history
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true

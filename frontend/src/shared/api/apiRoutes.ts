@@ -119,3 +119,19 @@ export const ACCOUNT_PLUGIN_LOGS = (pluginId: string) => `${ACCOUNT_PLUGINS}/${p
 export const PLUGINS = `${ADMIN_API_BASE}/plugins`;
 export const PLUGINS_ACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/activate`;
 export const PLUGINS_DEACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/deactivate`;
+
+// Plugin History (Admin)
+export const ADMIN_PLUGIN_GENERATIONS = (pluginId: string, accountId: string) =>
+  `${ADMIN_PLUGINS}/${pluginId}/accounts/${accountId}/generations`;
+export const ADMIN_PLUGIN_GENERATION = (pluginId: string, accountId: string, generationId: string) =>
+  `${ADMIN_PLUGIN_GENERATIONS(pluginId, accountId)}/${generationId}`;
+export const ADMIN_PLUGIN_GENERATION_CONTENT = (pluginId: string, accountId: string, generationId: string) =>
+  `${ADMIN_PLUGIN_GENERATION(pluginId, accountId, generationId)}/content`;
+export const ADMIN_PLUGIN_GENERATION_DOWNLOAD = (pluginId: string, accountId: string, generationId: string) =>
+  `${ADMIN_PLUGIN_GENERATION(pluginId, accountId, generationId)}/download`;
+export const ADMIN_PLUGIN_GENERATION_REGENERATE = (pluginId: string, accountId: string, generationId: string) =>
+  `${ADMIN_PLUGIN_GENERATION(pluginId, accountId, generationId)}/regenerate`;
+export const ADMIN_PLUGIN_HISTORY = (pluginId: string, accountId: string) =>
+  `${ADMIN_PLUGINS}/${pluginId}/accounts/${accountId}/history`;
+export const ADMIN_PLUGIN_HISTORY_SUMMARY = (pluginId: string, accountId: string) =>
+  `${ADMIN_PLUGIN_HISTORY(pluginId, accountId)}/summary`;

@@ -488,6 +488,180 @@ public class SqlGenerationService {
     }
 
     /**
+     * Regenerates SQL for a batch, creating a new generation record.
+     * Used when admin wants to re-run SQL generation for a specific batch.
+     * <p>
+     * Unlike {@link #generateSqlForBatch}, this method:
+     * <ul>
+     *   <li>Does not check for existing generation (allows regeneration)</li>
+     *   <li>Returns the new generation (caller handles marking original as superseded)</li>
+     * </ul>
+     * </p>
+     *
+     * @param batchId The batch ID to regenerate SQL for
+     * @param accountPluginId The ID of the active account plugin
+     * @return The new generation record
+     * @throws IllegalArgumentException if batch not found
+     * @throws SqlGenerationException if generation fails
+     */
+    public PluginSqlGeneration regenerateForBatch(UUID batchId, Long accountPluginId) {
+        Timer.Sample timer = Timer.start(meterRegistry);
+        String s3Key = null;
+        BatchData batchData = null;
+        long startTimeMs = System.currentTimeMillis();
+
+        try {
+            // Load batch data (without checking for existing generation)
+            batchData = loadBatchDataForRegeneration(batchId);
+            if (batchData == null) {
+                throw new IllegalArgumentException("Cannot regenerate: no CSV files in batch " + batchId);
+            }
+
+            MDC.put("batchId", batchId.toString());
+            MDC.put("siteId", batchData.batch.getSiteId().toString());
+            MDC.put("accountId", batchData.batch.getAccountId().toString());
+
+            log.info("Starting SQL regeneration for batch: batchId={}", batchId);
+
+            // Audit: Log regeneration started
+            pluginAuditService.logSqlRegenerationStarted(
+                    PLUGIN_ID,
+                    batchData.batch.getAccountId(),
+                    batchId,
+                    null  // Original generation ID is tracked by caller
+            );
+
+            // Generate SQL content
+            SqlGenerationResult result = generateSqlContent(batchData);
+            if (result == null) {
+                log.info("No changes detected during regeneration, creating empty generation record");
+                // For regeneration, we still create a record even if no changes
+                result = new SqlGenerationResult("-- No changes detected\n",
+                        new SqlGenerationStats(0, 0, 0, 0));
+            }
+
+            // Store SQL file in S3
+            s3Key = s3SqlFileStorageService.storeSqlFile(
+                    batchData.batch.getAccountId(),
+                    batchData.site.getDomain(),
+                    result.sqlContent
+            );
+            long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
+
+            // Save generation record
+            long durationMs = timer.stop(meterRegistry.timer("sql.regeneration.duration"));
+            PluginSqlGeneration generation = saveGenerationRecord(
+                    accountPluginId,
+                    batchData,
+                    s3Key,
+                    fileSize,
+                    result.stats,
+                    durationMs
+            );
+
+            log.info("SQL regeneration completed: batchId={}, statements={}, duration={}ms",
+                    batchId, result.stats.total(), durationMs / 1_000_000);
+
+            // Audit: Log regeneration completed
+            // Note: originalGenerationId is null here as we don't have it in this context
+            // The caller (PluginHistoryService) tracks the original generation
+            pluginAuditService.logSqlRegenerationCompleted(
+                    PLUGIN_ID,
+                    batchData.batch.getAccountId(),
+                    batchId,
+                    null,  // originalGenerationId - tracked by caller
+                    generation.getId(),
+                    result.stats,
+                    durationMs / 1_000_000
+            );
+
+            return generation;
+
+        } catch (IOException e) {
+            log.error("SQL regeneration failed for batch (I/O error): batchId={}", batchId, e);
+            meterRegistry.counter("sql.regeneration.errors").increment();
+            cleanupOrphanedS3File(s3Key);
+
+            if (batchData != null) {
+                long durationMs = System.currentTimeMillis() - startTimeMs;
+                pluginAuditService.logSqlRegenerationFailed(
+                        PLUGIN_ID,
+                        batchData.batch.getAccountId(),
+                        batchId,
+                        null,  // originalGenerationId - tracked by caller
+                        "I/O error: " + e.getMessage(),
+                        durationMs
+                );
+            }
+
+            throw new SqlGenerationException("Failed to regenerate SQL for batch", e);
+        } catch (RuntimeException e) {
+            log.error("SQL regeneration failed for batch: batchId={}", batchId, e);
+            meterRegistry.counter("sql.regeneration.errors").increment();
+            cleanupOrphanedS3File(s3Key);
+
+            if (batchData != null) {
+                long durationMs = System.currentTimeMillis() - startTimeMs;
+                pluginAuditService.logSqlRegenerationFailed(
+                        PLUGIN_ID,
+                        batchData.batch.getAccountId(),
+                        batchId,
+                        null,  // originalGenerationId - tracked by caller
+                        e.getMessage(),
+                        durationMs
+                );
+            }
+
+            throw e;
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    /**
+     * Loads batch data for regeneration (skips existing generation check).
+     */
+    @Transactional(readOnly = true)
+    protected BatchData loadBatchDataForRegeneration(UUID batchId) {
+        Batch batch = batchRepository.findByIdWithFiles(batchId)
+                .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
+
+        Site site = siteRepository.findById(batch.getSiteId())
+                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
+
+        List<UploadedFile> currentFiles = batch.getUploadedFiles();
+        if (currentFiles.isEmpty()) {
+            return null;
+        }
+
+        List<UploadedFile> csvFiles = currentFiles.stream()
+                .filter(f -> f.getOriginalFileName().toLowerCase().endsWith(".csv") ||
+                             f.getOriginalFileName().toLowerCase().endsWith(".csv.gz"))
+                .collect(Collectors.toList());
+
+        if (csvFiles.isEmpty()) {
+            return null;
+        }
+
+        if (csvFiles.size() > MAX_CSV_FILES_PER_BATCH) {
+            throw new IllegalArgumentException(
+                    "Batch contains " + csvFiles.size() + " CSV files, exceeding limit of " + MAX_CSV_FILES_PER_BATCH);
+        }
+
+        Optional<Batch> previousBatchOpt = batchRepository
+                .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
+
+        Map<String, UploadedFile> previousFilesMap = new HashMap<>();
+        if (previousBatchOpt.isPresent()) {
+            for (UploadedFile file : previousBatchOpt.get().getUploadedFiles()) {
+                previousFilesMap.put(normalizeFileName(file.getOriginalFileName()), file);
+            }
+        }
+
+        return new BatchData(batch, site, csvFiles, previousBatchOpt, previousFilesMap);
+    }
+
+    /**
      * Exception thrown when SQL generation fails.
      */
     public static class SqlGenerationException extends RuntimeException {

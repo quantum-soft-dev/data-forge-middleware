@@ -30,5 +30,17 @@ public enum PluginActionType {
     SQL_GENERATION_COMPLETED,
 
     /** SQL generation failed with error */
-    SQL_GENERATION_FAILED
+    SQL_GENERATION_FAILED,
+
+    /** Admin cleared all plugin history for an account */
+    PLUGIN_HISTORY_CLEARED,
+
+    /** SQL regeneration started for a batch */
+    SQL_REGENERATION_STARTED,
+
+    /** SQL regeneration completed successfully */
+    SQL_REGENERATION_COMPLETED,
+
+    /** SQL regeneration failed with error */
+    SQL_REGENERATION_FAILED
 }
