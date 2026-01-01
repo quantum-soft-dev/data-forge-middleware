@@ -174,6 +174,82 @@ class PluginActivationServiceTest {
         }
 
         @Test
+        @DisplayName("should return API key when reactivating deactivated plugin")
+        void shouldReturnApiKeyWhenReactivatingDeactivatedPlugin() {
+            // Given
+            AccountPlugin existingPlugin = AccountPlugin.activate(accountId, pluginId, Map.of("tenantId", "old-tenant"));
+            existingPlugin.deactivate();
+            String expectedApiKey = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
+
+            when(pluginRegistry.findById(pluginId)).thenReturn(Optional.of(mockPlugin));
+            when(pluginConfigRepository.findByPluginId(pluginId)).thenReturn(Optional.of(mockPluginConfig));
+            when(mockPluginConfig.isEnabled()).thenReturn(true);
+            when(mockPluginConfig.getDisplayName()).thenReturn("Bit BI");
+            when(accountPluginRepository.findByAccountIdAndPluginId(accountId, pluginId))
+                .thenReturn(Optional.of(existingPlugin));
+            when(accountPluginRepository.save(any(AccountPlugin.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+            when(mockPlugin.onActivate(any(AccountPlugin.class))).thenReturn(expectedApiKey);
+
+            // When
+            ActivationResult result = service.activate(accountId, pluginId, pluginData);
+
+            // Then - API key should be returned for reactivation (new key is generated)
+            assertThat(result.apiKey()).isEqualTo(expectedApiKey);
+            assertThat(result.isNewActivation()).isFalse();
+        }
+
+        @Test
+        @DisplayName("should NOT return API key when updating already active plugin")
+        void shouldNotReturnApiKeyWhenUpdatingAlreadyActivePlugin() {
+            // Given
+            AccountPlugin existingPlugin = AccountPlugin.activate(accountId, pluginId, Map.of("tenantId", "old-tenant"));
+            // Note: plugin is active, not deactivated
+            String apiKeyFromHook = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
+
+            when(pluginRegistry.findById(pluginId)).thenReturn(Optional.of(mockPlugin));
+            when(pluginConfigRepository.findByPluginId(pluginId)).thenReturn(Optional.of(mockPluginConfig));
+            when(mockPluginConfig.isEnabled()).thenReturn(true);
+            when(mockPluginConfig.getDisplayName()).thenReturn("Bit BI");
+            when(accountPluginRepository.findByAccountIdAndPluginId(accountId, pluginId))
+                .thenReturn(Optional.of(existingPlugin));
+            when(accountPluginRepository.save(any(AccountPlugin.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+            when(mockPlugin.onActivate(any(AccountPlugin.class))).thenReturn(apiKeyFromHook);
+
+            // When
+            ActivationResult result = service.activate(accountId, pluginId, pluginData);
+
+            // Then - API key should NOT be returned for updates (existing key remains valid)
+            assertThat(result.apiKey()).isNull();
+            assertThat(result.isNewActivation()).isFalse();
+        }
+
+        @Test
+        @DisplayName("should return API key for new activation")
+        void shouldReturnApiKeyForNewActivation() {
+            // Given
+            String expectedApiKey = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
+
+            when(pluginRegistry.findById(pluginId)).thenReturn(Optional.of(mockPlugin));
+            when(pluginConfigRepository.findByPluginId(pluginId)).thenReturn(Optional.of(mockPluginConfig));
+            when(mockPluginConfig.isEnabled()).thenReturn(true);
+            when(mockPluginConfig.getDisplayName()).thenReturn("Bit BI");
+            when(accountPluginRepository.findByAccountIdAndPluginId(accountId, pluginId))
+                .thenReturn(Optional.empty());
+            when(accountPluginRepository.save(any(AccountPlugin.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+            when(mockPlugin.onActivate(any(AccountPlugin.class))).thenReturn(expectedApiKey);
+
+            // When
+            ActivationResult result = service.activate(accountId, pluginId, pluginData);
+
+            // Then - API key should be returned for new activation
+            assertThat(result.apiKey()).isEqualTo(expectedApiKey);
+            assertThat(result.isNewActivation()).isTrue();
+        }
+
+        @Test
         @DisplayName("should throw PluginNotFoundException when plugin not in registry")
         void shouldThrowPluginNotFoundExceptionWhenPluginNotInRegistry() {
             // Given
