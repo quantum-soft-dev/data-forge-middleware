@@ -44,8 +44,14 @@ public class PluginHistoryService {
      *
      * @see com.bitbi.dfm.plugin.application.SqlGenerationService#generateSql
      */
-    private static final String STATEMENT_DELIMITER = "--- END OF COMMAND";
+    private static final String STATEMENT_DELIMITER = "--- END OF COMMAND ---";
     private static final int DEFAULT_PAGE_SIZE = 100;
+
+    /**
+     * Maximum file size allowed for S3 content reads (50 MB).
+     * Prevents memory exhaustion from extremely large SQL files.
+     */
+    private static final long MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final AccountPluginRepository accountPluginRepository;
@@ -162,6 +168,9 @@ public class PluginHistoryService {
         AccountPlugin accountPlugin = findAccountPlugin(accountId, pluginId);
         PluginSqlGeneration generation = findGeneration(generationId, accountPlugin.getId());
 
+        // Check file size before loading into memory
+        validateFileSize(generation);
+
         // Fetch SQL content from S3
         String sqlContent = s3StorageService.getSqlFileContent(generation.getS3Key());
 
@@ -189,6 +198,9 @@ public class PluginHistoryService {
 
         AccountPlugin accountPlugin = findAccountPlugin(accountId, pluginId);
         PluginSqlGeneration generation = findGeneration(generationId, accountPlugin.getId());
+
+        // Check file size before loading into memory
+        validateFileSize(generation);
 
         return s3StorageService.getSqlFileContent(generation.getS3Key());
     }
@@ -351,12 +363,20 @@ public class PluginHistoryService {
             return List.of();
         }
 
-        // Split by delimiter and filter empty statements
-        String[] parts = sqlContent.split(STATEMENT_DELIMITER + "[^-]*---");
+        // Simple split by delimiter - no regex needed
+        String[] parts = sqlContent.split(STATEMENT_DELIMITER);
         return Arrays.stream(parts)
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.toList());
+    }
+
+    private void validateFileSize(PluginSqlGeneration generation) {
+        Long fileSize = generation.getFileSizeBytes();
+        if (fileSize != null && fileSize > MAX_FILE_SIZE_BYTES) {
+            throw new IllegalArgumentException(
+                    "File size exceeds maximum allowed: " + fileSize + " bytes (max: " + MAX_FILE_SIZE_BYTES + " bytes)");
+        }
     }
 
     private List<String> deleteS3Files(List<String> s3Keys) {

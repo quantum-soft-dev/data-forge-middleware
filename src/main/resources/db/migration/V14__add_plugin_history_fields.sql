@@ -26,6 +26,11 @@ WHERE superseded = FALSE;
 CREATE INDEX idx_plugin_sql_generations_account_plugin
 ON plugin_sql_generations(account_plugin_id, created_at DESC);
 
+-- Composite index for queries filtering by includeSuperseded parameter
+-- Covers: findByAccountPluginId(accountPluginId, includeSuperseded, pageable)
+CREATE INDEX idx_plugin_sql_generations_superseded_filter
+ON plugin_sql_generations(account_plugin_id, superseded, created_at DESC);
+
 -- Index for superseded_by lookups (finding replacements)
 CREATE INDEX idx_plugin_sql_generations_superseded_by
 ON plugin_sql_generations(superseded_by)
