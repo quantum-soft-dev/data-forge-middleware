@@ -374,15 +374,7 @@ public class SqlGenerationService {
                 durationNanos / 1_000_000 // Convert nanos to ms
         );
 
-        log.info("Saving SQL generation: accountPluginId={}, batchId={}, siteId={}, s3Key={}",
-                accountPluginId, data.batch.getId(), data.batch.getSiteId(), s3Key);
-
-        PluginSqlGeneration saved = sqlGenerationRepository.save(generation);
-
-        log.info("SQL generation saved: id={}, accountPluginId={}",
-                saved.getId(), saved.getAccountPluginId());
-
-        return saved;
+        return sqlGenerationRepository.save(generation);
     }
 
     /**

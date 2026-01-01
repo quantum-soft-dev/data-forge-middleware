@@ -171,26 +171,15 @@ public class PluginAdminQueryService {
     public Page<AdminAccountPluginDto> listAccountPluginsForPlugin(String pluginId, Pageable pageable) {
         log.debug("Listing account-plugins for plugin: {}", pluginId);
 
-        // Diagnostic: count all records in plugin_sql_generations table
-        List<PluginSqlGeneration> allGenerations = sqlGenerationRepository.findAll();
-        log.info("DIAGNOSTIC: Total records in plugin_sql_generations table: {}", allGenerations.size());
-        if (!allGenerations.isEmpty()) {
-            allGenerations.forEach(g -> log.info("DIAGNOSTIC: Generation id={} accountPluginId={} batchId={}",
-                    g.getId(), g.getAccountPluginId(), g.getSourceBatchId()));
-        }
-
         // Get plugin display name
         String pluginName = pluginConfigRepository.findByPluginId(pluginId)
                 .map(PluginConfig::getDisplayName)
                 .orElse(pluginId);
 
         Page<AccountPlugin> accountPlugins = accountPluginRepository.findByPluginIdAndActiveTrue(pluginId, pageable);
-        log.info("Found {} active account-plugins for plugin={}", accountPlugins.getTotalElements(), pluginId);
 
         return accountPlugins.map(ap -> {
             long generationCount = sqlGenerationRepository.countByAccountPluginId(ap.getId());
-            log.info("AccountPlugin id={} accountId={} has {} generations",
-                    ap.getId(), ap.getAccountId(), generationCount);
             return AdminAccountPluginDto.fromEntity(ap, pluginName, generationCount);
         });
     }
