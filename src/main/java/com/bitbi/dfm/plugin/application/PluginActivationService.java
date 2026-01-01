@@ -145,6 +145,7 @@ public class PluginActivationService {
 
             AccountPlugin accountPlugin;
             boolean isNewActivation;
+            boolean isReactivation = false;
 
             if (existingActivation.isPresent()) {
                 accountPlugin = existingActivation.get();
@@ -154,10 +155,11 @@ public class PluginActivationService {
                     accountPlugin.updatePluginData(pluginData);
                     isNewActivation = false;
                 } else {
-                    // Was deactivated - reactivate
+                    // Was deactivated - reactivate (new API key will be generated)
                     logger.debug("Reactivating plugin {} for account {}", pluginId, accountId);
                     accountPlugin.reactivate(pluginData);
                     isNewActivation = false;
+                    isReactivation = true;
                 }
             } else {
                 // New activation
@@ -189,6 +191,7 @@ public class PluginActivationService {
                     existingPlugin.updatePluginData(pluginData);
                 } else {
                     existingPlugin.reactivate(pluginData);
+                    isReactivation = true;
                 }
                 accountPlugin = accountPluginRepository.save(existingPlugin);
                 isNewActivation = false;
@@ -204,11 +207,12 @@ public class PluginActivationService {
                 logger.warn("Plugin {} onActivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
             }
 
-            // Only return API key for new activations (FR-019: security - don't expose on updates)
-            String returnApiKey = isNewActivation ? apiKey : null;
+            // Return API key for new activations and reactivations (new key is generated in both cases)
+            // Don't expose on updates - the existing key remains valid
+            String returnApiKey = (isNewActivation || isReactivation) ? apiKey : null;
 
-            logger.info("Plugin {} {} for account {}", pluginId,
-                isNewActivation ? "activated" : "updated", accountId);
+            String action = isNewActivation ? "activated" : (isReactivation ? "reactivated" : "updated");
+            logger.info("Plugin {} {} for account {}", pluginId, action, accountId);
 
             // 7. Record metrics
             // Note: Audit logging is handled by PluginAuditFilter for HTTP requests
