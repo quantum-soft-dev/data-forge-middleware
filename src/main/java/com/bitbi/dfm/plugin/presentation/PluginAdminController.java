@@ -22,6 +22,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -37,12 +38,13 @@ import java.util.UUID;
  *   <li>GET /api/v1/admin/plugins/audit - Query plugin audit logs with filters</li>
  * </ul>
  *
- * <p>Requires ROLE_ADMIN for all operations (configured in SecurityConfiguration).</p>
+ * <p>Requires ROLE_ADMIN for all operations.</p>
  *
  * <p>User Story 6 (Phase 8) - Admin Views Plugin Audit Trail</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin/plugins")
+@PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Plugin Administration", description = "Admin endpoints for plugin management and audit")
 @SecurityRequirement(name = "oauth2")
 public class PluginAdminController {

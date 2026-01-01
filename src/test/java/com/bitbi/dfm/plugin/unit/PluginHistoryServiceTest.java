@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.unit;
 
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.SqlGenerationService;
@@ -50,6 +51,9 @@ class PluginHistoryServiceTest {
 
     @Mock
     private SiteRepository siteRepository;
+
+    @Mock
+    private BatchRepository batchRepository;
 
     @Mock
     private S3SqlFileStorageService s3StorageService;
@@ -107,7 +111,9 @@ class PluginHistoryServiceTest {
             when(sqlGenerationRepository.findByAccountPluginId(eq(ACCOUNT_PLUGIN_ID), eq(false), any(Pageable.class)))
                     .thenReturn(generationPage);
 
-            when(siteRepository.findById(SITE_ID)).thenReturn(Optional.of(mockSite));
+            // Mock batch site lookup (uses findAllById for N+1 prevention)
+            when(mockSite.getId()).thenReturn(SITE_ID);
+            when(siteRepository.findAllById(any())).thenReturn(List.of(mockSite));
 
             Pageable pageable = PageRequest.of(0, 20);
 
@@ -246,6 +252,9 @@ class PluginHistoryServiceTest {
             when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
                     .thenReturn(countAndSum);
 
+            // Mock no active batches (empty site list)
+            when(siteRepository.findSiteIdsByAccountId(ACCOUNT_ID)).thenReturn(List.of());
+
             // When
             HistoryClearSummaryDto result = pluginHistoryService.getHistorySummary(PLUGIN_ID, ACCOUNT_ID);
 
@@ -255,6 +264,29 @@ class PluginHistoryServiceTest {
             assertThat(result.generationCount()).isEqualTo(42L);
             assertThat(result.totalFileSizeBytes()).isEqualTo(1234567L);
             assertThat(result.pluginWillBeDeactivated()).isTrue();
+            assertThat(result.hasActiveBatches()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should detect active batches when present")
+        void shouldDetectActiveBatchesWhenPresent() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+
+            Object[] countAndSum = new Object[]{5L, 50000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            // Mock active batch exists
+            when(siteRepository.findSiteIdsByAccountId(ACCOUNT_ID)).thenReturn(List.of(SITE_ID));
+            when(batchRepository.findActiveBySiteId(SITE_ID)).thenReturn(Optional.of(mock(com.bitbi.dfm.batch.domain.Batch.class)));
+
+            // When
+            HistoryClearSummaryDto result = pluginHistoryService.getHistorySummary(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then
+            assertThat(result.hasActiveBatches()).isTrue();
         }
     }
 

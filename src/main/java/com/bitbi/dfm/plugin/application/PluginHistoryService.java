@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.plugin.presentation.dto.*;
@@ -26,12 +27,30 @@ import java.util.stream.Collectors;
 public class PluginHistoryService {
 
     private static final Logger log = LoggerFactory.getLogger(PluginHistoryService.class);
+
+    /**
+     * SQL statement delimiter used by the Bit BI plugin SQL generator.
+     *
+     * <p><strong>Contract:</strong> The SQL generation process (SqlGenerationService) uses this
+     * delimiter to separate individual SQL statements in the generated file. This delimiter
+     * is designed to be unique and unlikely to appear in normal SQL content:</p>
+     *
+     * <ul>
+     *   <li>Format: {@code --- END OF COMMAND ---}</li>
+     *   <li>The generator inserts this delimiter after each complete SQL statement</li>
+     *   <li>The delimiter should NOT appear within SQL string literals or comments in generated SQL</li>
+     *   <li>If the source CSV data contains this pattern, it will be escaped during generation</li>
+     * </ul>
+     *
+     * @see com.bitbi.dfm.plugin.application.SqlGenerationService#generateSql
+     */
     private static final String STATEMENT_DELIMITER = "--- END OF COMMAND";
     private static final int DEFAULT_PAGE_SIZE = 100;
 
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final AccountPluginRepository accountPluginRepository;
     private final SiteRepository siteRepository;
+    private final BatchRepository batchRepository;
     private final S3SqlFileStorageService s3StorageService;
     private final PluginAuditService auditService;
     private final SqlGenerationService sqlGenerationService;
@@ -40,6 +59,7 @@ public class PluginHistoryService {
             PluginSqlGenerationRepository sqlGenerationRepository,
             AccountPluginRepository accountPluginRepository,
             SiteRepository siteRepository,
+            BatchRepository batchRepository,
             S3SqlFileStorageService s3StorageService,
             PluginAuditService auditService,
             SqlGenerationService sqlGenerationService
@@ -47,6 +67,7 @@ public class PluginHistoryService {
         this.sqlGenerationRepository = sqlGenerationRepository;
         this.accountPluginRepository = accountPluginRepository;
         this.siteRepository = siteRepository;
+        this.batchRepository = batchRepository;
         this.s3StorageService = s3StorageService;
         this.auditService = auditService;
         this.sqlGenerationService = sqlGenerationService;
@@ -191,8 +212,8 @@ public class PluginHistoryService {
         long count = ((Number) countAndSum[0]).longValue();
         long totalBytes = ((Number) countAndSum[1]).longValue();
 
-        // Check for active batches - simplified for now, can be enhanced
-        boolean hasActiveBatches = false; // Would need BatchRepository query
+        // Check for active batches across account's sites
+        boolean hasActiveBatches = checkForActiveBatches(accountId);
 
         return HistoryClearSummaryDto.create(accountId, pluginId, count, totalBytes, hasActiveBatches);
     }
@@ -301,12 +322,28 @@ public class PluginHistoryService {
     }
 
     private Map<UUID, String> loadSiteDomains(Set<UUID> siteIds) {
-        Map<UUID, String> domains = new HashMap<>();
-        for (UUID siteId : siteIds) {
-            siteRepository.findById(siteId)
-                    .ifPresent(site -> domains.put(siteId, site.getDomain()));
+        if (siteIds.isEmpty()) {
+            return Map.of();
         }
-        return domains;
+        // Batch load to prevent N+1 queries
+        return siteRepository.findAllById(siteIds).stream()
+                .collect(Collectors.toMap(Site::getId, Site::getDomain));
+    }
+
+    private boolean checkForActiveBatches(UUID accountId) {
+        // Get all site IDs for the account
+        List<UUID> siteIds = siteRepository.findSiteIdsByAccountId(accountId);
+        if (siteIds.isEmpty()) {
+            return false;
+        }
+
+        // Check each site for active batches
+        for (UUID siteId : siteIds) {
+            if (batchRepository.findActiveBySiteId(siteId).isPresent()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> parseStatements(String sqlContent) {

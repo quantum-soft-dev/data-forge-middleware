@@ -26,6 +26,11 @@ WHERE superseded = FALSE;
 CREATE INDEX idx_plugin_sql_generations_account_plugin
 ON plugin_sql_generations(account_plugin_id, created_at DESC);
 
+-- Index for superseded_by lookups (finding replacements)
+CREATE INDEX idx_plugin_sql_generations_superseded_by
+ON plugin_sql_generations(superseded_by)
+WHERE superseded_by IS NOT NULL;
+
 -- Note: PluginActionType is Java enum stored as VARCHAR
 -- New action types (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_*) are added in Java code
 -- No migration needed for enum values as PostgreSQL stores them as strings

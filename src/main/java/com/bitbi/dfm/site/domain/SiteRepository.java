@@ -17,6 +17,8 @@ public interface SiteRepository {
 
     Optional<Site> findById(UUID id);
 
+    List<Site> findAllById(Iterable<UUID> ids);
+
     Optional<Site> findByDomain(String domain);
 
     List<Site> findByAccountId(UUID accountId);
