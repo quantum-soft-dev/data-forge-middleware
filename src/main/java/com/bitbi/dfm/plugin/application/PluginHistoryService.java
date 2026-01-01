@@ -220,9 +220,10 @@ public class PluginHistoryService {
 
         AccountPlugin accountPlugin = findAccountPlugin(accountId, pluginId);
 
-        Object[] countAndSum = sqlGenerationRepository.countAndSumByAccountPluginId(accountPlugin.getId());
-        long count = ((Number) countAndSum[0]).longValue();
-        long totalBytes = ((Number) countAndSum[1]).longValue();
+        long[] countAndSum = extractCountAndSum(
+                sqlGenerationRepository.countAndSumByAccountPluginId(accountPlugin.getId()));
+        long count = countAndSum[0];
+        long totalBytes = countAndSum[1];
 
         // Check for active batches across account's sites
         boolean hasActiveBatches = checkForActiveBatches(accountId);
@@ -246,9 +247,10 @@ public class PluginHistoryService {
         Long accountPluginId = accountPlugin.getId();
 
         // Get statistics before deletion
-        Object[] countAndSum = sqlGenerationRepository.countAndSumByAccountPluginId(accountPluginId);
-        long count = ((Number) countAndSum[0]).longValue();
-        long totalBytes = ((Number) countAndSum[1]).longValue();
+        long[] stats = extractCountAndSum(
+                sqlGenerationRepository.countAndSumByAccountPluginId(accountPluginId));
+        long count = stats[0];
+        long totalBytes = stats[1];
 
         // Get all S3 keys for deletion
         List<String> s3Keys = sqlGenerationRepository.findS3KeysByAccountPluginId(accountPluginId);
@@ -392,5 +394,26 @@ public class PluginHistoryService {
         }
 
         return failedKeys;
+    }
+
+    /**
+     * Extracts count and sum from JPA aggregate query result.
+     * Handles both direct tuple format and wrapped format that Spring Data JPA may return.
+     *
+     * @param queryResult the result from countAndSumByAccountPluginId query
+     * @return array with [count, totalBytes]
+     */
+    private long[] extractCountAndSum(Object[] queryResult) {
+        Object[] tuple = queryResult;
+
+        // Spring Data JPA may wrap the tuple in an extra array layer
+        if (queryResult.length > 0 && queryResult[0] instanceof Object[]) {
+            tuple = (Object[]) queryResult[0];
+        }
+
+        long count = tuple[0] != null ? ((Number) tuple[0]).longValue() : 0L;
+        long totalBytes = tuple[1] != null ? ((Number) tuple[1]).longValue() : 0L;
+
+        return new long[]{count, totalBytes};
     }
 }
