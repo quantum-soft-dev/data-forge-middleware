@@ -162,3 +162,10 @@ pages/{feature}/            # Route pages
 
 - Swagger UI: `/swagger-ui.html`
 - OpenAPI spec: `/v3/api-docs`
+
+## Active Technologies
+- Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3) (014-plugin-history)
+- PostgreSQL 16 (existing plugin_sql_generations, account_plugins, plugin_audit_logs tables) (014-plugin-history)
+
+## Recent Changes
+- 014-plugin-history: Added Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)

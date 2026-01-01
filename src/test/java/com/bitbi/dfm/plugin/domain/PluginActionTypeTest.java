@@ -40,6 +40,39 @@ class PluginActionTypeTest {
     }
 
     @Nested
+    @DisplayName("History Management Action Types")
+    class HistoryManagementActionTypes {
+
+        @Test
+        @DisplayName("Should have PLUGIN_HISTORY_CLEARED type for logging when history is cleared")
+        void shouldHavePluginHistoryClearedType() {
+            PluginActionType type = PluginActionType.PLUGIN_HISTORY_CLEARED;
+            assertThat(type.name()).isEqualTo("PLUGIN_HISTORY_CLEARED");
+        }
+
+        @Test
+        @DisplayName("Should have SQL_REGENERATION_STARTED type for logging when regeneration begins")
+        void shouldHaveSqlRegenerationStartedType() {
+            PluginActionType type = PluginActionType.SQL_REGENERATION_STARTED;
+            assertThat(type.name()).isEqualTo("SQL_REGENERATION_STARTED");
+        }
+
+        @Test
+        @DisplayName("Should have SQL_REGENERATION_COMPLETED type for logging successful regeneration")
+        void shouldHaveSqlRegenerationCompletedType() {
+            PluginActionType type = PluginActionType.SQL_REGENERATION_COMPLETED;
+            assertThat(type.name()).isEqualTo("SQL_REGENERATION_COMPLETED");
+        }
+
+        @Test
+        @DisplayName("Should have SQL_REGENERATION_FAILED type for logging failed regeneration")
+        void shouldHaveSqlRegenerationFailedType() {
+            PluginActionType type = PluginActionType.SQL_REGENERATION_FAILED;
+            assertThat(type.name()).isEqualTo("SQL_REGENERATION_FAILED");
+        }
+    }
+
+    @Nested
     @DisplayName("Existing Action Types")
     class ExistingActionTypes {
 
@@ -61,9 +94,10 @@ class PluginActionTypeTest {
     }
 
     @Test
-    @DisplayName("Should have exactly 9 action types")
-    void shouldHaveNineActionTypes() {
-        // 6 existing + 3 new SQL generation types
-        assertThat(PluginActionType.values()).hasSize(9);
+    @DisplayName("Should have exactly 13 action types")
+    void shouldHaveThirteenActionTypes() {
+        // 6 existing + 3 SQL generation types + 4 history management types
+        // (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_STARTED, SQL_REGENERATION_COMPLETED, SQL_REGENERATION_FAILED)
+        assertThat(PluginActionType.values()).hasSize(13);
     }
 }
