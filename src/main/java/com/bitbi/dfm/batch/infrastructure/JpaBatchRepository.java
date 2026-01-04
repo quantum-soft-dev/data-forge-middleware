@@ -251,4 +251,24 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         LIMIT 1
         """)
     Optional<Batch> findPreviousBatchForSiteWithFiles(UUID siteId, UUID excludeBatchId);
+
+    /**
+     * Finds the most recent completed batch for an account across all sites.
+     * <p>
+     * Used by plugin initialization to find the batch to generate SQL from.
+     * Only considers COMPLETED or COMPLETED_WITH_WARNINGS batches.
+     * </p>
+     *
+     * @param accountId The account ID
+     * @return Optional containing the most recent completed batch, or empty if none
+     */
+    @Query("""
+        SELECT b
+        FROM Batch b
+        WHERE b.accountId = :accountId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+        ORDER BY b.completedAt DESC
+        LIMIT 1
+        """)
+    Optional<Batch> findLatestCompletedByAccountId(UUID accountId);
 }

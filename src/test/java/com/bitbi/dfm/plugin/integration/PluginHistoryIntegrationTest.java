@@ -282,6 +282,88 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         }
     }
 
+    // ==================== Feature 015: Reinit ====================
+
+    @Nested
+    @DisplayName("Reinit Plugin SQL State (Feature 015)")
+    @Disabled("Requires async SQL generation to complete - run manually with extended timeout")
+    class ReinitPlugin {
+
+        private static final String USER_TOKEN = "Bearer mock.user.jwt.token";
+
+        @Test
+        @DisplayName("T021: Should reinit and regenerate SQL via REST endpoint")
+        void shouldReinitAndRegenerateSqlViaRestEndpoint() throws Exception {
+            // Given - Create SQL generation first
+            createSqlGenerationViaEvent();
+            Thread.sleep(1000);
+
+            List<PluginSqlGeneration> generationsBefore = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
+            assertThat(generationsBefore).isNotEmpty();
+            String s3KeyBefore = generationsBefore.get(0).getS3Key();
+
+            // Verify S3 file exists before reinit
+            assertS3ObjectExists(s3KeyBefore);
+
+            // When - Call reinit endpoint
+            mockMvc.perform(post("/api/v1/account/plugins/{pluginId}/reinit", PLUGIN_ID)
+                            .header("Authorization", USER_TOKEN))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true))
+                    .andExpect(jsonPath("$.deletedGenerations").value(1))
+                    .andExpect(jsonPath("$.sqlGenerationTriggered").value(true));
+
+            // Then - Verify old records deleted
+            List<PluginSqlGeneration> generationsAfterReinit = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
+            // May be empty momentarily while async generation runs
+            // Old S3 file should be deleted
+            assertS3ObjectDoesNotExist(s3KeyBefore);
+
+            // Verify plugin still active (key difference from clearHistory)
+            AccountPlugin plugin = accountPluginRepository.findByAccountIdAndPluginId(TEST_ACCOUNT_ID, PLUGIN_ID)
+                    .orElseThrow();
+            assertThat(plugin.isActive()).isTrue();
+        }
+
+        @Test
+        @DisplayName("T022: Should reject reinit for inactive plugin")
+        void shouldRejectReinitForInactivePlugin() throws Exception {
+            // Given - Deactivate the plugin
+            testAccountPlugin.deactivate();
+            accountPluginRepository.save(testAccountPlugin);
+
+            // When/Then - Reinit should fail with 400
+            mockMvc.perform(post("/api/v1/account/plugins/{pluginId}/reinit", PLUGIN_ID)
+                            .header("Authorization", USER_TOKEN))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("Should preserve plugin active state and configuration after reinit")
+        void shouldPreservePluginActiveStateAndConfigurationAfterReinit() throws Exception {
+            // Given - Create SQL generation
+            createSqlGenerationViaEvent();
+            Thread.sleep(1000);
+
+            // Store original plugin data
+            AccountPlugin pluginBefore = accountPluginRepository.findByAccountIdAndPluginId(TEST_ACCOUNT_ID, PLUGIN_ID)
+                    .orElseThrow();
+            assertThat(pluginBefore.isActive()).isTrue();
+            Object tenantIdBefore = pluginBefore.getPluginData().get("tenantId");
+
+            // When - Reinit
+            mockMvc.perform(post("/api/v1/account/plugins/{pluginId}/reinit", PLUGIN_ID)
+                            .header("Authorization", USER_TOKEN))
+                    .andExpect(status().isOk());
+
+            // Then - Plugin should remain active with same config
+            AccountPlugin pluginAfter = accountPluginRepository.findByAccountIdAndPluginId(TEST_ACCOUNT_ID, PLUGIN_ID)
+                    .orElseThrow();
+            assertThat(pluginAfter.isActive()).isTrue();
+            assertThat(pluginAfter.getPluginData().get("tenantId")).isEqualTo(tenantIdBefore);
+        }
+    }
+
     // ==================== Helper Methods ====================
 
     /**

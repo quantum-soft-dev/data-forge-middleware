@@ -1,9 +1,11 @@
 package com.bitbi.dfm.plugin.contract;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
+import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginListResponseDto;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginSummaryDto;
+import com.bitbi.dfm.plugin.presentation.dto.ReinitResultDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +53,9 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
 
     @MockitoBean
     private PluginQueryService pluginQueryService;
+
+    @MockitoBean
+    private PluginHistoryService pluginHistoryService;
 
     @MockitoBean
     private AuthorizationHelper authorizationHelper;
@@ -288,6 +293,135 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.page").value(0))
                 .andExpect(jsonPath("$.size").value(20));
+        }
+    }
+
+    // ==================== Feature 015: Reinit Endpoint ====================
+
+    @Nested
+    @DisplayName("POST /api/v1/account/plugins/{pluginId}/reinit - Feature 015")
+    class ReinitPlugin {
+
+        private static final UUID BATCH_ID = UUID.fromString("b1b2c3d4-e5f6-7890-abcd-ef1234567890");
+
+        @Test
+        @DisplayName("T020: Should return 200 OK on successful reinit")
+        void shouldReturn200OnSuccessfulReinit() throws Exception {
+            // Given
+            ReinitResultDto result = ReinitResultDto.success(
+                    10L,  // deletedGenerations
+                    10L,  // deletedS3Files
+                    50000L,  // totalBytesFreed
+                    true,  // sqlGenerationTriggered
+                    BATCH_ID,  // batchId
+                    Collections.emptyList()  // s3DeleteWarnings
+            );
+
+            when(pluginHistoryService.reinit("bit-bi", TEST_ACCOUNT_ID)).thenReturn(result);
+
+            // When / Then
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
+                    .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andDo(print())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.deletedGenerations").value(10))
+                .andExpect(jsonPath("$.deletedS3Files").value(10))
+                .andExpect(jsonPath("$.totalBytesFreed").value(50000))
+                .andExpect(jsonPath("$.sqlGenerationTriggered").value(true))
+                .andExpect(jsonPath("$.batchId").value(BATCH_ID.toString()))
+                .andExpect(jsonPath("$.message").value(containsString("SQL generation running asynchronously")))
+                .andExpect(jsonPath("$.s3DeleteWarnings").isArray())
+                .andExpect(jsonPath("$.s3DeleteWarnings", hasSize(0)));
+
+            verify(pluginHistoryService).reinit("bit-bi", TEST_ACCOUNT_ID);
+        }
+
+        @Test
+        @DisplayName("Should return 200 with no SQL generation when no batches exist")
+        void shouldReturn200WithNoSqlGenerationWhenNoBatches() throws Exception {
+            // Given
+            ReinitResultDto result = ReinitResultDto.success(
+                    5L,  // deletedGenerations
+                    5L,  // deletedS3Files
+                    25000L,  // totalBytesFreed
+                    false,  // sqlGenerationTriggered - no batches
+                    null,  // batchId - null when no batch
+                    Collections.emptyList()
+            );
+
+            when(pluginHistoryService.reinit("bit-bi", TEST_ACCOUNT_ID)).thenReturn(result);
+
+            // When / Then
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
+                    .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.sqlGenerationTriggered").value(false))
+                .andExpect(jsonPath("$.batchId").isEmpty())
+                .andExpect(jsonPath("$.message").value(containsString("No completed batches")));
+        }
+
+        @Test
+        @DisplayName("Should return 400 when plugin is not active")
+        void shouldReturn400WhenPluginNotActive() throws Exception {
+            // Given
+            when(pluginHistoryService.reinit("bit-bi", TEST_ACCOUNT_ID))
+                    .thenThrow(new IllegalArgumentException("Plugin 'bit-bi' is not active for this account"));
+
+            // When / Then
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
+                    .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("Should return 401 when not authenticated")
+        void shouldReturn401WhenNotAuthenticated() throws Exception {
+            // When / Then - no Authorization header
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @DisplayName("Should return 400 for invalid plugin ID format")
+        void shouldReturn400ForInvalidPluginIdFormat() throws Exception {
+            // When / Then - invalid plugin ID (contains uppercase)
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/BitBI/reinit")
+                    .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("Should include S3 delete warnings in response when present")
+        void shouldIncludeS3DeleteWarningsInResponse() throws Exception {
+            // Given
+            ReinitResultDto result = ReinitResultDto.success(
+                    10L,
+                    8L,  // Only 8 succeeded
+                    50000L,
+                    true,
+                    BATCH_ID,
+                    List.of("key1.sql", "key2.sql")  // 2 failures
+            );
+
+            when(pluginHistoryService.reinit("bit-bi", TEST_ACCOUNT_ID)).thenReturn(result);
+
+            // When / Then
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
+                    .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.deletedS3Files").value(8))
+                .andExpect(jsonPath("$.s3DeleteWarnings", hasSize(2)))
+                .andExpect(jsonPath("$.s3DeleteWarnings[0]").value("key1.sql"))
+                .andExpect(jsonPath("$.s3DeleteWarnings[1]").value("key2.sql"));
         }
     }
 }

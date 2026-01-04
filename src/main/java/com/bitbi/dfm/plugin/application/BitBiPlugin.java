@@ -1,5 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.Plugin;
 import com.bitbi.dfm.plugin.domain.PluginEvent;
@@ -9,8 +11,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -49,6 +53,7 @@ public class BitBiPlugin implements Plugin {
 
     private SqlGenerationService sqlGenerationService;
     private PluginApiKeyService pluginApiKeyService;
+    private BatchRepository batchRepository;
 
     /**
      * Inject SqlGenerationService lazily to avoid circular dependency.
@@ -66,6 +71,15 @@ public class BitBiPlugin implements Plugin {
     @Lazy
     public void setPluginApiKeyService(PluginApiKeyService pluginApiKeyService) {
         this.pluginApiKeyService = pluginApiKeyService;
+    }
+
+    /**
+     * Inject BatchRepository lazily to avoid circular dependency.
+     */
+    @Autowired
+    @Lazy
+    public void setBatchRepository(BatchRepository batchRepository) {
+        this.batchRepository = batchRepository;
     }
 
     /**
@@ -202,5 +216,53 @@ public class BitBiPlugin implements Plugin {
             tenantId);
 
         // TODO: Optionally notify Bit BI about the disconnection
+    }
+
+    /**
+     * Initializes SQL generation from the latest completed batch for the account.
+     *
+     * <p>Called asynchronously after plugin activation (new or reactivation) to
+     * ensure SQL changes are immediately available for the user (FR-001, FR-002).</p>
+     *
+     * <p>This method is intentionally best-effort - failures are logged but do not
+     * affect the activation response. Users can trigger reinit manually if needed.</p>
+     *
+     * @param accountPlugin the activation record
+     * @param isNewOrReactivation true if this is a new activation or reactivation (FR-003)
+     */
+    @Async("pluginExecutor")
+    public void initializeSqlFromLatestBatch(AccountPlugin accountPlugin, boolean isNewOrReactivation) {
+        if (!isNewOrReactivation) {
+            log.debug("Skipping SQL initialization for config update on account {}",
+                accountPlugin.getAccountId());
+            return;
+        }
+
+        log.info("Initializing SQL from latest batch for account {} plugin {}",
+            accountPlugin.getAccountId(), accountPlugin.getPluginId());
+
+        try {
+            Optional<Batch> latestBatch = batchRepository.findLatestCompletedByAccountId(
+                accountPlugin.getAccountId());
+
+            if (latestBatch.isEmpty()) {
+                log.info("No completed batches found for account {} - skipping SQL initialization",
+                    accountPlugin.getAccountId());
+                return;
+            }
+
+            Batch batch = latestBatch.get();
+            log.info("Found latest completed batch {} for account {}, triggering SQL generation",
+                batch.getId(), accountPlugin.getAccountId());
+
+            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
+
+            log.info("SQL generation triggered for batch {} account {}",
+                batch.getId(), accountPlugin.getAccountId());
+        } catch (Exception e) {
+            log.error("Failed to initialize SQL from latest batch for account {}: {}",
+                accountPlugin.getAccountId(), e.getMessage(), e);
+            // Don't rethrow - initialization failures should not fail activation
+        }
     }
 }

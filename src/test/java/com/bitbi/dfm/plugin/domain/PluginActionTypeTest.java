@@ -93,11 +93,23 @@ class PluginActionTypeTest {
         }
     }
 
+    @Nested
+    @DisplayName("Plugin Reinit Action Types - Feature 015")
+    class PluginReinitActionTypes {
+
+        @Test
+        @DisplayName("Should have REINIT type for logging when plugin SQL state is reinitialized")
+        void shouldHaveReinitType() {
+            PluginActionType type = PluginActionType.REINIT;
+            assertThat(type.name()).isEqualTo("REINIT");
+        }
+    }
+
     @Test
-    @DisplayName("Should have exactly 13 action types")
-    void shouldHaveThirteenActionTypes() {
-        // 6 existing + 3 SQL generation types + 4 history management types
-        // (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_STARTED, SQL_REGENERATION_COMPLETED, SQL_REGENERATION_FAILED)
-        assertThat(PluginActionType.values()).hasSize(13);
+    @DisplayName("Should have exactly 14 action types")
+    void shouldHaveFourteenActionTypes() {
+        // 6 existing + 3 SQL generation types + 4 history management types + 1 reinit type (Feature 015)
+        // (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_STARTED, SQL_REGENERATION_COMPLETED, SQL_REGENERATION_FAILED, REINIT)
+        assertThat(PluginActionType.values()).hasSize(14);
     }
 }
