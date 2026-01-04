@@ -460,6 +460,42 @@ class PluginHistoryServiceTest {
         }
 
         @Test
+        @DisplayName("Should handle SQL generation failure gracefully (best-effort)")
+        void shouldHandleSqlGenerationFailureGracefully() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(mockAccountPlugin.isActive()).thenReturn(true);
+
+            Object[] countAndSum = new Object[]{5L, 25000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            com.bitbi.dfm.batch.domain.Batch mockBatch = mock(com.bitbi.dfm.batch.domain.Batch.class);
+            when(mockBatch.getId()).thenReturn(BATCH_ID);
+            when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
+                    .thenReturn(Optional.of(mockBatch));
+
+            // SQL generation throws exception
+            doThrow(new RuntimeException("SQL generation failed"))
+                    .when(sqlGenerationService).generateSqlForBatch(any(), any());
+
+            // When
+            ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then - reinit should succeed but sqlGenerationTriggered should be false
+            assertThat(result.success()).isTrue();
+            assertThat(result.sqlGenerationTriggered()).isFalse();
+            assertThat(result.deletedGenerations()).isEqualTo(5L);
+
+            // Verify deletion still happened
+            verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
+        }
+
+        @Test
         @DisplayName("Should handle S3 deletion failures gracefully")
         void shouldHandleS3DeletionFailuresGracefully() {
             // Given
