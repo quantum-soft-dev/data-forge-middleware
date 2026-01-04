@@ -207,6 +207,14 @@ public class PluginActivationService {
                 logger.warn("Plugin {} onActivate hook failed for account {}: {}", pluginId, accountId, e.getMessage());
             }
 
+            // 7. Trigger async SQL initialization for new activations and reactivations (FR-001, FR-002)
+            boolean shouldInitializeSql = isNewActivation || isReactivation;
+            if (plugin instanceof BitBiPlugin bitBiPlugin) {
+                bitBiPlugin.initializeSqlFromLatestBatch(accountPlugin, shouldInitializeSql);
+                logger.debug("SQL initialization triggered for plugin {} account {} (newOrReactivation={})",
+                        pluginId, accountId, shouldInitializeSql);
+            }
+
             // Return API key for new activations and reactivations (new key is generated in both cases)
             // Don't expose on updates - the existing key remains valid
             String returnApiKey = (isNewActivation || isReactivation) ? apiKey : null;

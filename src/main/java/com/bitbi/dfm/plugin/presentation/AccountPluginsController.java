@@ -1,9 +1,11 @@
 package com.bitbi.dfm.plugin.presentation;
 
+import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginListResponseDto;
+import com.bitbi.dfm.plugin.presentation.dto.ReinitResultDto;
 import com.bitbi.dfm.plugin.presentation.dto.UserPluginLogDto;
 import com.bitbi.dfm.plugin.presentation.dto.UserPluginLogPageResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
@@ -59,14 +61,17 @@ public class AccountPluginsController {
 
     private final PluginQueryService pluginQueryService;
     private final PluginAuditLogRepository auditLogRepository;
+    private final PluginHistoryService pluginHistoryService;
     private final AuthorizationHelper authorizationHelper;
 
     public AccountPluginsController(
             PluginQueryService pluginQueryService,
             PluginAuditLogRepository auditLogRepository,
+            PluginHistoryService pluginHistoryService,
             AuthorizationHelper authorizationHelper) {
         this.pluginQueryService = pluginQueryService;
         this.auditLogRepository = auditLogRepository;
+        this.pluginHistoryService = pluginHistoryService;
         this.authorizationHelper = authorizationHelper;
     }
 
@@ -235,5 +240,89 @@ public class AccountPluginsController {
         log.debug("Returning {} logs for plugin {} account {}", dtoPage.getContent().size(), pluginId, accountId);
 
         return ResponseEntity.ok(UserPluginLogPageResponseDto.fromPage(dtoPage));
+    }
+
+    /**
+     * Reinitializes plugin SQL state by clearing all history and regenerating from latest batch.
+     *
+     * <p>Feature 015: Plugin Reinit Option - User Story 2</p>
+     *
+     * <p>What happens:
+     * <ol>
+     *   <li>All existing SQL generation records are deleted</li>
+     *   <li>All S3 SQL files for this plugin are deleted</li>
+     *   <li>New SQL is generated from the latest completed batch (async)</li>
+     *   <li>API key and plugin configuration remain unchanged</li>
+     * </ol>
+     *
+     * @param pluginId the plugin identifier (e.g., "bit-bi")
+     * @return the reinit result
+     */
+    @PostMapping("/{pluginId}/reinit")
+    @Operation(
+        summary = "Reinitialize plugin SQL state",
+        description = """
+            Clears all existing SQL generation history for the plugin and triggers
+            regeneration from the most recent completed batch.
+
+            **What happens:**
+            1. All existing SQL generation records are deleted
+            2. All S3 SQL files for this plugin are deleted
+            3. New SQL is generated from the latest completed batch (async)
+            4. API key and plugin configuration remain unchanged
+
+            **Use cases:**
+            - Data has drifted and you need a fresh baseline
+            - Want to rebuild SQL history without changing API key
+            - Troubleshooting SQL generation issues
+            """
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "Reinit completed successfully",
+            content = @Content(
+                mediaType = "application/json",
+                schema = @Schema(implementation = ReinitResultDto.class)
+            )
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request (plugin not active)"
+        ),
+        @ApiResponse(
+            responseCode = "401",
+            description = "Not authenticated"
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Plugin not found or not activated for this account"
+        )
+    })
+    public ResponseEntity<ReinitResultDto> reinitPlugin(
+            @Parameter(description = "Plugin identifier", example = "bit-bi")
+            @PathVariable
+            @Size(min = 1, max = 64, message = "Plugin ID must be 1-64 characters")
+            @Pattern(regexp = "^[a-z0-9-]+$", message = "Plugin ID must be lowercase alphanumeric with hyphens")
+            String pluginId) {
+
+        // Get authenticated account ID
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+
+        if (accountIdOpt.isEmpty()) {
+            // Admin user without Account - cannot reinit
+            log.warn("Admin user without Account record attempted reinit for plugin {}", pluginId);
+            throw new IllegalArgumentException("Account not found for authenticated user");
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.info("Reinit requested for plugin {} account {}", pluginId, accountId);
+
+        ReinitResultDto result = pluginHistoryService.reinit(pluginId, accountId);
+
+        log.info("Reinit completed for plugin {} account {}: deleted={}, triggered={}",
+                pluginId, accountId, result.deletedGenerations(), result.sqlGenerationTriggered());
+
+        return ResponseEntity.ok(result);
     }
 }

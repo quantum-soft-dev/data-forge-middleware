@@ -1,0 +1,161 @@
+openapi: 3.0.3
+info:
+  title: BitBi Plugin Reinit API
+  description: API endpoint for reinitializing BitBi plugin SQL state
+  version: 1.0.0
+
+paths:
+  /api/v1/account/plugins/{pluginId}/reinit:
+    post:
+      summary: Reinitialize plugin SQL state
+      description: |
+        Clears all existing SQL generation history for the plugin and triggers
+        regeneration from the most recent completed batch.
+
+        **What happens:**
+        1. All existing SQL generation records are deleted
+        2. All S3 SQL files for this plugin are deleted
+        3. New SQL is generated from the latest completed batch (async)
+        4. API key and plugin configuration remain unchanged
+
+        **Use cases:**
+        - Data has drifted and you need a fresh baseline
+        - Want to rebuild SQL history without changing API key
+        - Troubleshooting SQL generation issues
+      operationId: reinitPlugin
+      tags:
+        - Account Plugins
+      security:
+        - oauth2: []
+      parameters:
+        - name: pluginId
+          in: path
+          required: true
+          description: Plugin identifier (e.g., "bit-bi")
+          schema:
+            type: string
+            pattern: ^[a-z0-9-]+$
+            minLength: 1
+            maxLength: 64
+            example: bit-bi
+      responses:
+        '200':
+          description: Reinit completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReinitResponse'
+              example:
+                success: true
+                deletedGenerations: 10
+                deletedS3Files: 10
+                totalBytesFreed: 1048576
+                sqlGenerationTriggered: true
+                batchId: "550e8400-e29b-41d4-a716-446655440000"
+                message: "Plugin reinitialized. SQL generation running asynchronously."
+        '400':
+          description: Bad request (plugin not active)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Bad Request"
+                message: "Plugin 'bit-bi' is not active for this account"
+                timestamp: "2026-01-04T12:00:00Z"
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Plugin not found or not activated for this account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Not Found"
+                message: "No plugin activation found for 'bit-bi'"
+                timestamp: "2026-01-04T12:00:00Z"
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/authorize
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes: {}
+
+  schemas:
+    ReinitResponse:
+      type: object
+      required:
+        - success
+        - deletedGenerations
+        - deletedS3Files
+        - sqlGenerationTriggered
+      properties:
+        success:
+          type: boolean
+          description: Whether the reinit operation completed successfully
+          example: true
+        deletedGenerations:
+          type: integer
+          format: int64
+          description: Number of SQL generation records deleted
+          example: 10
+        deletedS3Files:
+          type: integer
+          format: int64
+          description: Number of S3 SQL files deleted
+          example: 10
+        totalBytesFreed:
+          type: integer
+          format: int64
+          description: Total storage freed in bytes
+          example: 1048576
+        sqlGenerationTriggered:
+          type: boolean
+          description: Whether SQL generation was triggered (false if no batches exist)
+          example: true
+        batchId:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of the batch used for SQL generation (null if no batches)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        message:
+          type: string
+          description: Human-readable status message
+          example: "Plugin reinitialized. SQL generation running asynchronously."
+        s3DeleteWarnings:
+          type: array
+          items:
+            type: string
+          description: Warnings for any S3 files that failed to delete
+          example: []
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - timestamp
+      properties:
+        error:
+          type: string
+          description: Error type
+          example: "Bad Request"
+        message:
+          type: string
+          description: Detailed error message
+          example: "Plugin 'bit-bi' is not active for this account"
+        timestamp:
+          type: string
+          format: date-time
+          description: When the error occurred
+          example: "2026-01-04T12:00:00Z"

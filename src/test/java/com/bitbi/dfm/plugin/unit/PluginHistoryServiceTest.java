@@ -352,6 +352,147 @@ class PluginHistoryServiceTest {
         }
     }
 
+    // ==================== User Story 4: Reinit (Feature 015) ====================
+
+    @Nested
+    @DisplayName("reinit - Feature 015")
+    class Reinit {
+
+        @Test
+        @DisplayName("T017: Should reinit successfully - delete history and trigger SQL generation")
+        void shouldReinitSuccessfully() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(mockAccountPlugin.isActive()).thenReturn(true);
+
+            Object[] countAndSum = new Object[]{10L, 50000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            List<String> s3Keys = List.of("key1.sql", "key2.sql", "key3.sql");
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(s3Keys);
+
+            com.bitbi.dfm.batch.domain.Batch mockBatch = mock(com.bitbi.dfm.batch.domain.Batch.class);
+            when(mockBatch.getId()).thenReturn(BATCH_ID);
+            when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
+                    .thenReturn(Optional.of(mockBatch));
+
+            // When
+            ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then
+            assertThat(result.success()).isTrue();
+            assertThat(result.deletedGenerations()).isEqualTo(10L);
+            assertThat(result.deletedS3Files()).isEqualTo(3L);
+            assertThat(result.totalBytesFreed()).isEqualTo(50000L);
+            assertThat(result.sqlGenerationTriggered()).isTrue();
+            assertThat(result.batchId()).isEqualTo(BATCH_ID);
+            assertThat(result.message()).contains("SQL generation running asynchronously");
+
+            // Verify S3 files deleted
+            verify(s3StorageService, times(3)).deleteFile(anyString());
+
+            // Verify DB records deleted
+            verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
+
+            // Verify SQL generation triggered
+            verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACCOUNT_PLUGIN_ID);
+
+            // Verify audit logged
+            verify(auditService).logReinit(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(10L), eq(3L), eq(true), eq(BATCH_ID));
+
+            // Verify plugin NOT deactivated (key difference from clearHistory)
+            verify(mockAccountPlugin, never()).deactivate();
+        }
+
+        @Test
+        @DisplayName("T018: Should reject reinit for inactive plugin (FR-009)")
+        void shouldRejectReinitForInactivePlugin() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(mockAccountPlugin.isActive()).thenReturn(false);
+
+            // When / Then
+            assertThatThrownBy(() -> pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is not active");
+
+            // Verify failure was audited
+            verify(auditService).logReinitFailed(eq(PLUGIN_ID), eq(ACCOUNT_ID), contains("is not active"));
+
+            // Verify no deletions occurred
+            verifyNoInteractions(s3StorageService);
+            verify(sqlGenerationRepository, never()).deleteByAccountPluginId(any());
+        }
+
+        @Test
+        @DisplayName("T019: Should preserve API key on reinit (not regenerate)")
+        void shouldPreserveApiKeyOnReinit() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(mockAccountPlugin.isActive()).thenReturn(true);
+
+            Object[] countAndSum = new Object[]{5L, 25000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
+                    .thenReturn(Optional.empty());
+
+            // When
+            ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then
+            assertThat(result.success()).isTrue();
+            assertThat(result.sqlGenerationTriggered()).isFalse();
+            assertThat(result.message()).contains("No completed batches");
+
+            // Key assertion: plugin should NOT be deactivated (preserves API key)
+            verify(mockAccountPlugin, never()).deactivate();
+            verify(accountPluginRepository, never()).save(mockAccountPlugin);
+        }
+
+        @Test
+        @DisplayName("Should handle S3 deletion failures gracefully")
+        void shouldHandleS3DeletionFailuresGracefully() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(mockAccountPlugin.isActive()).thenReturn(true);
+
+            Object[] countAndSum = new Object[]{3L, 15000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            List<String> s3Keys = List.of("key1.sql", "key2.sql", "key3.sql");
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(s3Keys);
+
+            // First succeeds, second fails, third succeeds
+            doNothing().when(s3StorageService).deleteFile("key1.sql");
+            doThrow(new RuntimeException("S3 error")).when(s3StorageService).deleteFile("key2.sql");
+            doNothing().when(s3StorageService).deleteFile("key3.sql");
+
+            when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
+                    .thenReturn(Optional.empty());
+
+            // When
+            ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then
+            assertThat(result.success()).isTrue();
+            assertThat(result.deletedS3Files()).isEqualTo(2L); // Only 2 succeeded
+            assertThat(result.s3DeleteWarnings()).containsExactly("key2.sql");
+        }
+    }
+
     // ==================== User Story 3: Regenerate ====================
 
     @Nested

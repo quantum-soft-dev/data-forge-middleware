@@ -274,6 +274,88 @@ public class PluginHistoryService {
         return HistoryClearResultDto.create(count, s3Keys.size() - failedKeys.size(), totalBytes, failedKeys);
     }
 
+    // ==================== User Story 4: Reinit (Feature 015) ====================
+
+    /**
+     * Reinitializes plugin SQL state by clearing all history and regenerating from latest batch.
+     * Unlike clearHistory, this preserves the plugin's active status and API key.
+     *
+     * <p>Feature 015: Plugin Reinit Option - User Story 2</p>
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @return result of the reinit operation
+     * @throws IllegalArgumentException if plugin is not active
+     */
+    @Transactional
+    public ReinitResultDto reinit(String pluginId, UUID accountId) {
+        log.info("Reinit requested: pluginId={}, accountId={}", pluginId, accountId);
+
+        AccountPlugin accountPlugin = findAccountPlugin(accountId, pluginId);
+        Long accountPluginId = accountPlugin.getId();
+
+        // FR-009: Validate plugin is active
+        if (!accountPlugin.isActive()) {
+            String errorMessage = "Plugin '" + pluginId + "' is not active for this account";
+            auditService.logReinitFailed(pluginId, accountId, errorMessage);
+            throw new IllegalArgumentException(errorMessage);
+        }
+
+        // Get statistics before deletion
+        long[] stats = extractCountAndSum(
+                sqlGenerationRepository.countAndSumByAccountPluginId(accountPluginId));
+        long count = stats[0];
+        long totalBytes = stats[1];
+
+        // Get all S3 keys for deletion
+        List<String> s3Keys = sqlGenerationRepository.findS3KeysByAccountPluginId(accountPluginId);
+
+        // Delete S3 files (best effort, collect failures) - reuse existing helper
+        List<String> failedKeys = deleteS3Files(s3Keys);
+
+        // Delete database records
+        sqlGenerationRepository.deleteByAccountPluginId(accountPluginId);
+
+        // Find latest completed batch
+        Optional<com.bitbi.dfm.batch.domain.Batch> latestBatch = batchRepository
+                .findLatestCompletedByAccountId(accountId);
+
+        boolean sqlGenerationTriggered = false;
+        UUID batchId = null;
+
+        // Trigger async SQL generation if batch exists
+        if (latestBatch.isPresent()) {
+            batchId = latestBatch.get().getId();
+            sqlGenerationTriggered = true;
+            log.info("Triggering SQL generation from batch {} for reinit", batchId);
+            sqlGenerationService.generateSqlForBatch(batchId, accountPluginId);
+        } else {
+            log.info("No completed batches found for account {} - skipping SQL generation", accountId);
+        }
+
+        // Audit log
+        auditService.logReinit(
+                pluginId,
+                accountId,
+                count,
+                s3Keys.size() - failedKeys.size(),
+                sqlGenerationTriggered,
+                batchId
+        );
+
+        log.info("Reinit completed: pluginId={}, accountId={}, deleted={}, triggered={}",
+                pluginId, accountId, count, sqlGenerationTriggered);
+
+        return ReinitResultDto.success(
+                count,
+                s3Keys.size() - failedKeys.size(),
+                totalBytes,
+                sqlGenerationTriggered,
+                batchId,
+                failedKeys
+        );
+    }
+
     // ==================== User Story 3: Regenerate ====================
 
     /**

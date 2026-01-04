@@ -526,4 +526,78 @@ public class PluginAuditService {
                     pluginId, batchId, e.getMessage());
         }
     }
+
+    // ==================== Plugin Reinit Audit Methods (Feature 015) ====================
+
+    /**
+     * Logs a successful plugin reinitialization.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param deletedGenerations number of SQL generation records deleted
+     * @param deletedS3Files number of S3 files deleted
+     * @param sqlGenerationTriggered whether SQL generation was triggered
+     * @param batchId the batch used for regeneration (may be null if no batches exist)
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logReinit(
+            String pluginId,
+            UUID accountId,
+            long deletedGenerations,
+            long deletedS3Files,
+            boolean sqlGenerationTriggered,
+            UUID batchId) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("deletedGenerations", deletedGenerations);
+            metadata.put("deletedS3Files", deletedS3Files);
+            metadata.put("sqlGenerationTriggered", sqlGenerationTriggered);
+            metadata.put("success", true);
+            if (batchId != null) {
+                metadata.put("batchId", batchId.toString());
+            }
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId, PluginActionType.REINIT)
+                    .withMetadata(metadata);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: REINIT plugin={} account={} deleted={} triggered={}",
+                    pluginId, accountId, deletedGenerations, sqlGenerationTriggered);
+        } catch (Exception e) {
+            log.error("Failed to log reinit audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs a failed plugin reinitialization attempt.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param errorMessage the error message describing the failure
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logReinitFailed(
+            String pluginId,
+            UUID accountId,
+            String errorMessage) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("deletedGenerations", 0);
+            metadata.put("success", false);
+
+            PluginAuditLog auditLog = PluginAuditLog.failure(pluginId, accountId,
+                            PluginActionType.REINIT, errorMessage)
+                    .withMetadata(metadata);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: REINIT_FAILED plugin={} account={} error={}",
+                    pluginId, accountId, errorMessage);
+        } catch (Exception e) {
+            log.error("Failed to log reinit failure audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
 }

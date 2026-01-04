@@ -76,4 +76,13 @@ public interface BatchRepository {
      * @return Optional containing the previous batch with files
      */
     Optional<Batch> findPreviousBatchForSiteWithFiles(UUID siteId, UUID excludeBatchId);
+
+    /**
+     * Finds the most recent completed batch for an account across all sites.
+     * Used by plugin initialization to find the batch to generate SQL from.
+     *
+     * @param accountId The account ID
+     * @return Optional containing the most recent completed batch, or empty if none
+     */
+    Optional<Batch> findLatestCompletedByAccountId(UUID accountId);
 }

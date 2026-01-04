@@ -42,5 +42,8 @@ public enum PluginActionType {
     SQL_REGENERATION_COMPLETED,
 
     /** SQL regeneration failed with error */
-    SQL_REGENERATION_FAILED
+    SQL_REGENERATION_FAILED,
+
+    /** Plugin SQL state reinitialized (history cleared + regenerated from latest batch) */
+    REINIT
 }
