@@ -107,6 +107,22 @@ public class SqlGenerationService {
      * @return Optional containing the generation record, or empty if no changes
      */
     public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId) {
+        return generateSqlForBatch(batchId, accountPluginId, false);
+    }
+
+    /**
+     * Generates SQL file from batch comparison with optional full generation mode.
+     * <p>
+     * When forceFullGeneration is true, skips previous batch comparison and generates
+     * INSERT statements for all data. Used by reinit and plugin activation.
+     * </p>
+     *
+     * @param batchId The completed batch ID
+     * @param accountPluginId The ID of the active account plugin
+     * @param forceFullGeneration If true, skips previous batch comparison (generates all INSERTs)
+     * @return Optional containing the generation record, or empty if no changes
+     */
+    public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
         BatchData batchData = null;
@@ -114,7 +130,7 @@ public class SqlGenerationService {
 
         try {
             // Phase 1: Load all required data (uses JOIN FETCH to prevent N+1)
-            batchData = loadBatchData(batchId);
+            batchData = loadBatchData(batchId, forceFullGeneration);
             if (batchData == null) {
                 return Optional.empty();
             }
@@ -227,9 +243,12 @@ public class SqlGenerationService {
     /**
      * Phase 1: Loads all required batch data using JOIN FETCH.
      * Returns null if generation should be skipped.
+     *
+     * @param batchId The batch ID to load
+     * @param forceFullGeneration If true, skips previous batch lookup (generates all INSERTs)
      */
     @Transactional(readOnly = true)
-    protected BatchData loadBatchData(UUID batchId) {
+    protected BatchData loadBatchData(UUID batchId, boolean forceFullGeneration) {
         // Get batch with files using JOIN FETCH (prevents N+1)
         Batch batch = batchRepository.findByIdWithFiles(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("Batch not found: " + batchId));
@@ -270,11 +289,18 @@ public class SqlGenerationService {
         }
 
         // Find previous batch for comparison using JOIN FETCH
-        Optional<Batch> previousBatchOpt = batchRepository
-                .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
+        // When forceFullGeneration=true, skip previous batch lookup (generate all INSERTs)
+        Optional<Batch> previousBatchOpt;
+        if (forceFullGeneration) {
+            log.info("Force full generation enabled - skipping previous batch comparison (will generate all INSERTs)");
+            previousBatchOpt = Optional.empty();
+        } else {
+            previousBatchOpt = batchRepository
+                    .findPreviousBatchForSiteWithFiles(batch.getSiteId(), batchId);
+        }
 
         log.debug("Previous batch for comparison: {}",
-                previousBatchOpt.map(b -> b.getId().toString()).orElse("none (first batch)"));
+                previousBatchOpt.map(b -> b.getId().toString()).orElse("none (first batch or force full)"));
 
         // Build previous files map
         Map<String, UploadedFile> previousFilesMap = new HashMap<>();

@@ -403,8 +403,8 @@ class PluginHistoryServiceTest {
             // Verify DB records deleted
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
 
-            // Verify SQL generation triggered
-            verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACCOUNT_PLUGIN_ID);
+            // Verify SQL generation triggered with forceFullGeneration=true
+            verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACCOUNT_PLUGIN_ID, true);
 
             // Verify audit logged
             verify(auditService).logReinit(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(10L), eq(3L), eq(true), eq(BATCH_ID));
@@ -487,7 +487,7 @@ class PluginHistoryServiceTest {
 
             // SQL generation throws exception
             doThrow(new RuntimeException("SQL generation failed"))
-                    .when(sqlGenerationService).generateSqlForBatch(any(), any());
+                    .when(sqlGenerationService).generateSqlForBatch(any(), any(), anyBoolean());
 
             // When
             ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);

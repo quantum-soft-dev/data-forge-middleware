@@ -326,9 +326,10 @@ public class PluginHistoryService {
         // Trigger SQL generation if batch exists (best-effort, don't fail reinit on generation error)
         if (latestBatch.isPresent()) {
             batchId = latestBatch.get().getId();
-            log.info("Triggering SQL generation from batch {} for reinit", batchId);
+            log.info("Triggering SQL generation from batch {} for reinit (full generation)", batchId);
             try {
-                sqlGenerationService.generateSqlForBatch(batchId, accountPluginId);
+                // forceFullGeneration=true: generate all INSERTs since history was cleared
+                sqlGenerationService.generateSqlForBatch(batchId, accountPluginId, true);
                 sqlGenerationTriggered = true;
             } catch (Exception e) {
                 // SQL generation failure should not fail the reinit operation

@@ -255,9 +255,10 @@ public class BitBiPlugin implements Plugin {
             log.info("Found latest completed batch {} for account {}, triggering SQL generation",
                 batch.getId(), accountPlugin.getAccountId());
 
-            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
+            // forceFullGeneration=true: generate all INSERTs for new/reactivated plugin
+            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId(), true);
 
-            log.info("SQL generation triggered for batch {} account {}",
+            log.info("SQL generation triggered for batch {} account {} (full generation)",
                 batch.getId(), accountPlugin.getAccountId());
         } catch (Exception e) {
             log.error("Failed to initialize SQL from latest batch for account {}: {}",

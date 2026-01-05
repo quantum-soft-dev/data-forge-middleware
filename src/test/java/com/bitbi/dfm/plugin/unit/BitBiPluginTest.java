@@ -23,6 +23,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -383,7 +384,7 @@ class BitBiPluginTest {
 
             // Then
             verify(batchRepository).findLatestCompletedByAccountId(accountId);
-            verify(sqlGenerationService).generateSqlForBatch(batchId, accountPluginId);
+            verify(sqlGenerationService).generateSqlForBatch(batchId, accountPluginId, true);
         }
 
         @Test
@@ -441,7 +442,7 @@ class BitBiPluginTest {
                     .thenReturn(Optional.of(mockBatch));
 
             doThrow(new RuntimeException("SQL generation failed"))
-                    .when(sqlGenerationService).generateSqlForBatch(any(), any());
+                    .when(sqlGenerationService).generateSqlForBatch(any(), any(), anyBoolean());
 
             // When / Then - should not throw
             assertThatCode(() -> pluginWithMocks.initializeSqlFromLatestBatch(accountPlugin, true))
