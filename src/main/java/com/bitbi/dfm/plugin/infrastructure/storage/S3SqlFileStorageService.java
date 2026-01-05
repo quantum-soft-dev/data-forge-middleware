@@ -14,6 +14,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -148,6 +150,75 @@ public class S3SqlFileStorageService {
         } catch (S3Exception e) {
             throw new SqlFileStorageException("Failed to delete SQL file from S3: " + s3Key, e);
         }
+    }
+
+    /**
+     * Deletes multiple SQL files from S3 in batch.
+     * Uses AWS S3 batch delete for efficiency (up to 1000 objects per request).
+     *
+     * @param s3Keys List of S3 keys to delete
+     * @return List of keys that failed to delete
+     */
+    public List<String> deleteFiles(List<String> s3Keys) {
+        if (s3Keys == null || s3Keys.isEmpty()) {
+            return List.of();
+        }
+
+        List<String> failedKeys = new ArrayList<>();
+        int batchSize = 1000; // S3 DeleteObjects limit
+
+        for (int i = 0; i < s3Keys.size(); i += batchSize) {
+            List<String> batch = s3Keys.subList(i, Math.min(i + batchSize, s3Keys.size()));
+            failedKeys.addAll(deleteBatch(batch));
+        }
+
+        log.info("Batch delete completed: total={}, failed={}", s3Keys.size(), failedKeys.size());
+        return failedKeys;
+    }
+
+    /**
+     * Deletes a batch of S3 objects (max 1000).
+     */
+    private List<String> deleteBatch(List<String> keys) {
+        List<String> failedKeys = new ArrayList<>();
+
+        try {
+            List<ObjectIdentifier> objectIds = keys.stream()
+                    .map(key -> ObjectIdentifier.builder().key(key).build())
+                    .toList();
+
+            Delete delete = Delete.builder()
+                    .objects(objectIds)
+                    .quiet(false) // Return info about deleted objects
+                    .build();
+
+            DeleteObjectsRequest request = DeleteObjectsRequest.builder()
+                    .bucket(bucketName)
+                    .delete(delete)
+                    .build();
+
+            DeleteObjectsResponse response = s3Client.deleteObjects(request);
+
+            // Collect any errors
+            if (response.hasErrors() && !response.errors().isEmpty()) {
+                for (S3Error error : response.errors()) {
+                    log.warn("Failed to delete S3 object: key={}, code={}, message={}",
+                            error.key(), error.code(), error.message());
+                    failedKeys.add(error.key());
+                }
+            }
+
+            int successCount = keys.size() - failedKeys.size();
+            log.debug("Batch delete: requested={}, succeeded={}, failed={}",
+                    keys.size(), successCount, failedKeys.size());
+
+        } catch (S3Exception e) {
+            log.error("Batch delete failed: {}", e.getMessage(), e);
+            // If the entire batch fails, all keys are considered failed
+            failedKeys.addAll(keys);
+        }
+
+        return failedKeys;
     }
 
     /**

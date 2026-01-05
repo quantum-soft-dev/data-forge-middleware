@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
+import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginListResponseDto;
@@ -62,16 +63,19 @@ public class AccountPluginsController {
     private final PluginQueryService pluginQueryService;
     private final PluginAuditLogRepository auditLogRepository;
     private final PluginHistoryService pluginHistoryService;
+    private final PluginRateLimiterService rateLimiterService;
     private final AuthorizationHelper authorizationHelper;
 
     public AccountPluginsController(
             PluginQueryService pluginQueryService,
             PluginAuditLogRepository auditLogRepository,
             PluginHistoryService pluginHistoryService,
+            PluginRateLimiterService rateLimiterService,
             AuthorizationHelper authorizationHelper) {
         this.pluginQueryService = pluginQueryService;
         this.auditLogRepository = auditLogRepository;
         this.pluginHistoryService = pluginHistoryService;
+        this.rateLimiterService = rateLimiterService;
         this.authorizationHelper = authorizationHelper;
     }
 
@@ -297,6 +301,10 @@ public class AccountPluginsController {
         @ApiResponse(
             responseCode = "404",
             description = "Plugin not found or not activated for this account"
+        ),
+        @ApiResponse(
+            responseCode = "429",
+            description = "Too many requests - rate limited (1 request per 30 seconds)"
         )
     })
     public ResponseEntity<ReinitResultDto> reinitPlugin(
@@ -316,6 +324,15 @@ public class AccountPluginsController {
         }
 
         UUID accountId = accountIdOpt.get();
+
+        // Check rate limiting (1 request per 30 seconds)
+        if (!rateLimiterService.tryConsumeReinit(accountId)) {
+            log.warn("Reinit rate limit exceeded for plugin {} account {}", pluginId, accountId);
+            return ResponseEntity.status(429)
+                    .header("Retry-After", String.valueOf(rateLimiterService.getReinitRetryAfterSeconds()))
+                    .build();
+        }
+
         log.info("Reinit requested for plugin {} account {}", pluginId, accountId);
 
         ReinitResultDto result = pluginHistoryService.reinit(pluginId, accountId);

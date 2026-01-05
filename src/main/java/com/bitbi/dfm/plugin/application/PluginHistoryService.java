@@ -471,16 +471,23 @@ public class PluginHistoryService {
         }
     }
 
+    /**
+     * Deletes S3 files in batch for better performance.
+     * Uses AWS S3 batch delete API (up to 1000 files per request).
+     *
+     * @param s3Keys list of S3 keys to delete
+     * @return list of keys that failed to delete
+     */
     private List<String> deleteS3Files(List<String> s3Keys) {
-        List<String> failedKeys = new ArrayList<>();
+        if (s3Keys.isEmpty()) {
+            return List.of();
+        }
 
-        for (String key : s3Keys) {
-            try {
-                s3StorageService.deleteFile(key);
-            } catch (Exception e) {
-                log.warn("Failed to delete S3 file: key={}, error={}", key, e.getMessage());
-                failedKeys.add(key);
-            }
+        log.debug("Deleting {} S3 files in batch", s3Keys.size());
+        List<String> failedKeys = s3StorageService.deleteFiles(s3Keys);
+
+        if (!failedKeys.isEmpty()) {
+            log.warn("Failed to delete {} S3 files", failedKeys.size());
         }
 
         return failedKeys;

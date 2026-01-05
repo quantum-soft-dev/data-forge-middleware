@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.contract;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
+import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginListResponseDto;
 import com.bitbi.dfm.plugin.presentation.dto.AccountPluginSummaryDto;
 import com.bitbi.dfm.plugin.presentation.dto.ReinitResultDto;
@@ -58,6 +59,9 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
     private PluginHistoryService pluginHistoryService;
 
     @MockitoBean
+    private PluginRateLimiterService rateLimiterService;
+
+    @MockitoBean
     private AuthorizationHelper authorizationHelper;
 
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
@@ -68,6 +72,10 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
         // Mock both methods for backward compatibility
         when(authorizationHelper.getAuthenticatedAccountId()).thenReturn(TEST_ACCOUNT_ID);
         when(authorizationHelper.getOptionalAuthenticatedAccountId()).thenReturn(Optional.of(TEST_ACCOUNT_ID));
+
+        // Allow rate limiting by default (so other tests pass)
+        when(rateLimiterService.tryConsumeReinit(any(UUID.class))).thenReturn(true);
+        when(rateLimiterService.getReinitRetryAfterSeconds()).thenReturn(30);
     }
 
     @Nested
@@ -422,6 +430,23 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.s3DeleteWarnings", hasSize(2)))
                 .andExpect(jsonPath("$.s3DeleteWarnings[0]").value("key1.sql"))
                 .andExpect(jsonPath("$.s3DeleteWarnings[1]").value("key2.sql"));
+        }
+
+        @Test
+        @DisplayName("Should return 429 when rate limited")
+        void shouldReturn429WhenRateLimited() throws Exception {
+            // Given - rate limiter returns false (rate limited)
+            when(rateLimiterService.tryConsumeReinit(TEST_ACCOUNT_ID)).thenReturn(false);
+
+            // When / Then
+            mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
+                    .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
+                    .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "30"));
+
+            // Verify service was never called due to rate limiting
+            verify(pluginHistoryService, never()).reinit(any(), any());
         }
     }
 }

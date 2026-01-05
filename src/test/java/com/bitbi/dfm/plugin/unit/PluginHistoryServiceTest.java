@@ -309,6 +309,9 @@ class PluginHistoryServiceTest {
             when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
                     .thenReturn(s3Keys);
 
+            // Mock batch deletion - returns empty list (all successful)
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(List.of());
+
             // When
             HistoryClearResultDto result = pluginHistoryService.clearHistory(PLUGIN_ID, ACCOUNT_ID);
 
@@ -318,7 +321,7 @@ class PluginHistoryServiceTest {
             assertThat(result.failedS3Keys()).isEmpty();
             assertThat(result.pluginDeactivated()).isTrue();
 
-            verify(s3StorageService, times(2)).deleteFile(anyString());
+            verify(s3StorageService).deleteFiles(s3Keys);
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
             verify(mockAccountPlugin).deactivate();
             verify(accountPluginRepository).save(mockAccountPlugin);
@@ -340,8 +343,8 @@ class PluginHistoryServiceTest {
             when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
                     .thenReturn(s3Keys);
 
-            doNothing().when(s3StorageService).deleteFile("key1.sql");
-            doThrow(new RuntimeException("S3 error")).when(s3StorageService).deleteFile("key2.sql");
+            // Mock batch deletion - returns list of failed keys
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(List.of("key2.sql"));
 
             // When
             HistoryClearResultDto result = pluginHistoryService.clearHistory(PLUGIN_ID, ACCOUNT_ID);
@@ -374,6 +377,9 @@ class PluginHistoryServiceTest {
             when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
                     .thenReturn(s3Keys);
 
+            // Mock batch deletion - returns empty list (all successful)
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(List.of());
+
             com.bitbi.dfm.batch.domain.Batch mockBatch = mock(com.bitbi.dfm.batch.domain.Batch.class);
             when(mockBatch.getId()).thenReturn(BATCH_ID);
             when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
@@ -391,8 +397,8 @@ class PluginHistoryServiceTest {
             assertThat(result.batchId()).isEqualTo(BATCH_ID);
             assertThat(result.message()).contains("SQL generation running asynchronously");
 
-            // Verify S3 files deleted
-            verify(s3StorageService, times(3)).deleteFile(anyString());
+            // Verify S3 files deleted via batch method
+            verify(s3StorageService).deleteFiles(s3Keys);
 
             // Verify DB records deleted
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
@@ -511,10 +517,8 @@ class PluginHistoryServiceTest {
             when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
                     .thenReturn(s3Keys);
 
-            // First succeeds, second fails, third succeeds
-            doNothing().when(s3StorageService).deleteFile("key1.sql");
-            doThrow(new RuntimeException("S3 error")).when(s3StorageService).deleteFile("key2.sql");
-            doNothing().when(s3StorageService).deleteFile("key3.sql");
+            // Mock batch deletion - returns list of failed keys
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(List.of("key2.sql"));
 
             when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
                     .thenReturn(Optional.empty());
