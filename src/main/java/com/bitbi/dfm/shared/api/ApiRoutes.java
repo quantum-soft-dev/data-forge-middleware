@@ -556,6 +556,80 @@ public final class ApiRoutes {
      */
     public static final String COMPARISONS_SUMMARY_DOWNLOAD = COMPARISONS + "/{id}/summary/download";
 
+    // ==================== Global Errors API ====================
+
+    /**
+     * Base path for user-facing global errors endpoints.
+     * <p>
+     * Requires: Authenticated user (Auth0 OAuth2 with accountId claim)
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS = ADMIN_API_BASE + "/account/errors";
+
+    /**
+     * List global errors endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: Auth0 OAuth2 (requires accountId claim)<br>
+     * Query Params: page, size, unreadOnly<br>
+     * Returns: PageResponseDto&lt;GlobalErrorSummaryDto&gt;
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS_LIST = GLOBAL_ERRORS;
+
+    /**
+     * Get unread global errors count endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: Auth0 OAuth2 (requires accountId claim)<br>
+     * Returns: UnreadCountResponseDto
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS_UNREAD_COUNT = GLOBAL_ERRORS + "/unread-count";
+
+    /**
+     * Get global error details endpoint.
+     * <p>
+     * Method: GET<br>
+     * Path Variable: {errorId} - Error ID<br>
+     * Authentication: Auth0 OAuth2 (requires accountId claim)<br>
+     * Returns: GlobalErrorResponseDto
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS_DETAIL = GLOBAL_ERRORS + "/{errorId}";
+
+    /**
+     * Mark single error as read endpoint.
+     * <p>
+     * Method: PATCH<br>
+     * Path Variable: {errorId} - Error ID<br>
+     * Authentication: Auth0 OAuth2 (requires accountId claim)<br>
+     * Returns: 204 No Content
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS_MARK_READ = GLOBAL_ERRORS + "/{errorId}/read";
+
+    /**
+     * Mark multiple errors as read endpoint.
+     * <p>
+     * Method: POST<br>
+     * Authentication: Auth0 OAuth2 (requires accountId claim)<br>
+     * Request Body: MarkAsReadRequestDto<br>
+     * Returns: MarkAsReadResponseDto
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS_MARK_MULTIPLE_READ = GLOBAL_ERRORS + "/mark-as-read";
+
+    /**
+     * Mark all errors as read endpoint.
+     * <p>
+     * Method: POST<br>
+     * Authentication: Auth0 OAuth2 (requires accountId claim)<br>
+     * Returns: MarkAsReadResponseDto
+     * </p>
+     */
+    public static final String GLOBAL_ERRORS_MARK_ALL_READ = GLOBAL_ERRORS + "/mark-all-as-read";
+
     // ==================== Plugins API ====================
 
     /**

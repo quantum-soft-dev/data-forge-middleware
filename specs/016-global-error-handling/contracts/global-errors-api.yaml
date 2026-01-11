@@ -1,0 +1,374 @@
+openapi: 3.0.3
+info:
+  title: Global Errors User API
+  description: User-facing API for viewing and managing global errors
+  version: 1.0.0
+
+servers:
+  - url: /api/v1/account
+    description: User Account API
+
+paths:
+  /errors:
+    get:
+      summary: List global errors for account
+      description: Returns paginated list of global errors (batch_id IS NULL) for the authenticated user's account
+      operationId: listGlobalErrors
+      tags:
+        - Global Errors
+      security:
+        - auth0: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number (0-based)
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: size
+          in: query
+          description: Page size
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: unreadOnly
+          in: query
+          description: Filter to show only unread errors
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Paginated list of global errors
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalErrorPageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /errors/unread-count:
+    get:
+      summary: Get unread global errors count
+      description: Returns the count of unread global errors for badge display
+      operationId: getUnreadCount
+      tags:
+        - Global Errors
+      security:
+        - auth0: []
+      responses:
+        '200':
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnreadCountResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /errors/{errorId}:
+    get:
+      summary: Get global error details
+      description: Returns full details of a specific global error
+      operationId: getGlobalError
+      tags:
+        - Global Errors
+      security:
+        - auth0: []
+      parameters:
+        - name: errorId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Error details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /errors/{errorId}/read:
+    patch:
+      summary: Mark single error as read
+      description: Marks a specific error as read
+      operationId: markAsRead
+      tags:
+        - Global Errors
+      security:
+        - auth0: []
+      parameters:
+        - name: errorId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Error marked as read
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /errors/mark-as-read:
+    post:
+      summary: Mark multiple errors as read
+      description: Marks specified errors as read (bulk operation)
+      operationId: markMultipleAsRead
+      tags:
+        - Global Errors
+      security:
+        - auth0: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkAsReadRequest'
+      responses:
+        '200':
+          description: Errors marked as read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkAsReadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /errors/mark-all-as-read:
+    post:
+      summary: Mark all errors as read
+      description: Marks all unread global errors for the account as read
+      operationId: markAllAsRead
+      tags:
+        - Global Errors
+      security:
+        - auth0: []
+      responses:
+        '200':
+          description: All errors marked as read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkAsReadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    auth0:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://YOUR_DOMAIN.auth0.com/authorize
+          tokenUrl: https://YOUR_DOMAIN.auth0.com/oauth/token
+          scopes: {}
+
+  schemas:
+    GlobalErrorResponse:
+      type: object
+      required:
+        - id
+        - siteId
+        - siteName
+        - type
+        - title
+        - message
+        - severity
+        - isRead
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        siteName:
+          type: string
+          description: Name of the site that reported the error
+        type:
+          type: string
+          maxLength: 100
+        title:
+          type: string
+          maxLength: 500
+        message:
+          type: string
+        stackTrace:
+          type: string
+          nullable: true
+        clientVersion:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+        severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+        isRead:
+          type: boolean
+        occurredAt:
+          type: string
+          format: date-time
+
+    GlobalErrorSummary:
+      type: object
+      required:
+        - id
+        - siteId
+        - siteName
+        - type
+        - title
+        - severity
+        - isRead
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        siteName:
+          type: string
+        type:
+          type: string
+        title:
+          type: string
+        severity:
+          $ref: '#/components/schemas/ErrorSeverity'
+        isRead:
+          type: boolean
+        occurredAt:
+          type: string
+          format: date-time
+
+    GlobalErrorPageResponse:
+      type: object
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/GlobalErrorSummary'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    UnreadCountResponse:
+      type: object
+      required:
+        - count
+      properties:
+        count:
+          type: integer
+          format: int64
+          description: Number of unread global errors
+
+    MarkAsReadRequest:
+      type: object
+      required:
+        - errorIds
+      properties:
+        errorIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 100
+          description: List of error IDs to mark as read
+
+    MarkAsReadResponse:
+      type: object
+      required:
+        - markedCount
+      properties:
+        markedCount:
+          type: integer
+          description: Number of errors actually marked as read
+
+    ErrorSeverity:
+      type: string
+      enum:
+        - CRITICAL
+        - ERROR
+        - WARNING
+        - INFO
+
+    ErrorResponse:
+      type: object
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+        - path
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Access denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

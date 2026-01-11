@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.domain.ErrorSeverity;
 import com.bitbi.dfm.error.presentation.dto.ErrorLogSummaryDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import org.slf4j.Logger;
@@ -47,32 +48,51 @@ public class ErrorLoggingService {
     }
 
     /**
-     * Log error for batch.
+     * Log error for batch with severity.
      * <p>
      * Updates batch hasErrors flag automatically.
      * </p>
      *
-     * @param batchId   batch identifier
-     * @param siteId    site identifier
-     * @param type      error type (e.g., "validation", "upload", "processing")
-     * @param message   error message
-     * @param metadata  optional error metadata (stored as JSONB)
+     * @param batchId  batch identifier
+     * @param siteId   site identifier
+     * @param type     error type (e.g., "validation", "upload", "processing")
+     * @param message  error message
+     * @param metadata optional error metadata (stored as JSONB)
+     * @param severity error severity level (defaults to ERROR if null)
      * @return created error log
      */
-    public ErrorLog logError(UUID batchId, UUID siteId, String type, String message, Map<String, Object> metadata) {
-        logger.debug("Logging error: batchId={}, siteId={}, type={}, message={}",
-                    batchId, siteId, type, message);
+    public ErrorLog logError(UUID batchId, UUID siteId, String type, String message,
+                             Map<String, Object> metadata, ErrorSeverity severity) {
+        logger.debug("Logging error: batchId={}, siteId={}, type={}, severity={}, message={}",
+                batchId, siteId, type, severity, message);
 
-        ErrorLog errorLog = ErrorLog.create(siteId, batchId, type, type, message, null, null, metadata);
+        ErrorLog errorLog = ErrorLog.create(siteId, batchId, type, type, message, null, null, metadata, severity);
         ErrorLog saved = errorLogRepository.save(errorLog);
 
         // Update batch hasErrors flag
         batchLifecycleService.markBatchHasErrors(batchId);
 
-        logger.info("Error logged successfully: errorId={}, batchId={}, type={}",
-                   saved.getId(), batchId, type);
+        logger.info("Error logged successfully: errorId={}, batchId={}, type={}, severity={}",
+                saved.getId(), batchId, type, saved.getSeverity());
 
         return saved;
+    }
+
+    /**
+     * Log error for batch with default severity (ERROR).
+     * <p>
+     * Updates batch hasErrors flag automatically.
+     * </p>
+     *
+     * @param batchId  batch identifier
+     * @param siteId   site identifier
+     * @param type     error type (e.g., "validation", "upload", "processing")
+     * @param message  error message
+     * @param metadata optional error metadata (stored as JSONB)
+     * @return created error log
+     */
+    public ErrorLog logError(UUID batchId, UUID siteId, String type, String message, Map<String, Object> metadata) {
+        return logError(batchId, siteId, type, message, metadata, ErrorSeverity.ERROR);
     }
 
     /**
@@ -85,11 +105,39 @@ public class ErrorLoggingService {
      * @return created error log
      */
     public ErrorLog logError(UUID batchId, UUID siteId, String type, String message) {
-        return logError(batchId, siteId, type, message, null);
+        return logError(batchId, siteId, type, message, null, ErrorSeverity.ERROR);
     }
 
     /**
-     * Log standalone error without batch association.
+     * Log standalone error without batch association with severity.
+     * <p>
+     * Used for errors that occur outside of batch processing context,
+     * such as configuration errors, startup errors, or authentication errors.
+     * </p>
+     *
+     * @param siteId   site identifier
+     * @param type     error type (e.g., "ConfigurationError", "AuthenticationError")
+     * @param message  error message
+     * @param metadata optional error metadata (stored as JSONB)
+     * @param severity error severity level (defaults to ERROR if null)
+     * @return created error log
+     */
+    public ErrorLog logStandaloneError(UUID siteId, String type, String message,
+                                       Map<String, Object> metadata, ErrorSeverity severity) {
+        logger.debug("Logging standalone error: siteId={}, type={}, severity={}, message={}",
+                siteId, type, severity, message);
+
+        ErrorLog errorLog = ErrorLog.create(siteId, null, type, type, message, null, null, metadata, severity);
+        ErrorLog saved = errorLogRepository.save(errorLog);
+
+        logger.info("Standalone error logged successfully: errorId={}, siteId={}, type={}, severity={}",
+                saved.getId(), siteId, type, saved.getSeverity());
+
+        return saved;
+    }
+
+    /**
+     * Log standalone error without batch association with default severity (ERROR).
      * <p>
      * Used for errors that occur outside of batch processing context,
      * such as configuration errors, startup errors, or authentication errors.
@@ -102,16 +150,7 @@ public class ErrorLoggingService {
      * @return created error log
      */
     public ErrorLog logStandaloneError(UUID siteId, String type, String message, Map<String, Object> metadata) {
-        logger.debug("Logging standalone error: siteId={}, type={}, message={}",
-                    siteId, type, message);
-
-        ErrorLog errorLog = ErrorLog.create(siteId, null, type, type, message, null, null, metadata);
-        ErrorLog saved = errorLogRepository.save(errorLog);
-
-        logger.info("Standalone error logged successfully: errorId={}, siteId={}, type={}",
-                   saved.getId(), siteId, type);
-
-        return saved;
+        return logStandaloneError(siteId, type, message, metadata, ErrorSeverity.ERROR);
     }
 
     /**
@@ -123,7 +162,7 @@ public class ErrorLoggingService {
      * @return created error log
      */
     public ErrorLog logStandaloneError(UUID siteId, String type, String message) {
-        return logStandaloneError(siteId, type, message, null);
+        return logStandaloneError(siteId, type, message, null, ErrorSeverity.ERROR);
     }
 
     /**

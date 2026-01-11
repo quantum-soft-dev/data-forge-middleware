@@ -83,9 +83,16 @@ public class ErrorLogController {
 
         UUID siteId = extractSiteId(authHeader);
 
-        logger.debug("Logging standalone error: siteId={}, type={}", siteId, request.type());
+        logger.debug("Logging standalone error: siteId={}, type={}, severity={}",
+                siteId, request.type(), request.effectiveSeverity());
 
-        errorLoggingService.logStandaloneError(siteId, request.type(), request.message(), request.metadata());
+        errorLoggingService.logStandaloneError(
+                siteId,
+                request.type(),
+                request.message(),
+                request.metadata(),
+                request.effectiveSeverity()
+        );
 
         return ResponseEntity.noContent().build();
     }
@@ -131,9 +138,17 @@ public class ErrorLogController {
             throw new AccessDeniedException("Cannot log errors to batch owned by another site");
         }
 
-        logger.debug("Logging error: batchId={}, siteId={}, type={}", batchId, siteId, request.type());
+        logger.debug("Logging error: batchId={}, siteId={}, type={}, severity={}",
+                batchId, siteId, request.type(), request.effectiveSeverity());
 
-        ErrorLog errorLog = errorLoggingService.logError(batchId, siteId, request.type(), request.message(), request.metadata());
+        ErrorLog errorLog = errorLoggingService.logError(
+                batchId,
+                siteId,
+                request.type(),
+                request.message(),
+                request.metadata(),
+                request.effectiveSeverity()
+        );
 
         ErrorLogResponseDto response = ErrorLogResponseDto.fromEntity(errorLog);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);

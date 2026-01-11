@@ -160,7 +160,14 @@ public class CsvDiffService {
             for (CSVRecord record : parser) {
                 List<String> row = new ArrayList<>();
                 for (String header : headers) {
-                    row.add(record.isMapped(header) ? record.get(header) : "");
+                    String value = record.isMapped(header) ? record.get(header) : "";
+                    // Normalize embedded newlines - replace with space
+                    // This prevents DiffServiceImpl.splitIntoLines() from breaking multiline CSV records
+                    // which would cause CSVException in parseCsvLine()
+                    if (value != null) {
+                        value = value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ");
+                    }
+                    row.add(value);
                 }
                 rows.add(row);
             }
