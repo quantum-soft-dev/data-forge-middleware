@@ -57,7 +57,9 @@ public interface ErrorLogRepository {
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of global error logs
+     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountId(UUID, Pageable)} to avoid N+1 query
      */
+    @Deprecated
     Page<ErrorLog> findGlobalErrorsByAccountId(UUID accountId, Pageable pageable);
 
     /**
@@ -66,8 +68,28 @@ public interface ErrorLogRepository {
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of unread global error logs
+     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountIdAndUnread(UUID, Pageable)} to avoid N+1 query
      */
+    @Deprecated
     Page<ErrorLog> findGlobalErrorsByAccountIdAndUnread(UUID accountId, Pageable pageable);
+
+    /**
+     * Find global errors with site name for account (single query, no N+1).
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of global error projections with site name
+     */
+    Page<GlobalErrorProjection> findGlobalErrorsWithSiteByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Find unread global errors with site name for account (single query, no N+1).
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of unread global error projections with site name
+     */
+    Page<GlobalErrorProjection> findGlobalErrorsWithSiteByAccountIdAndUnread(UUID accountId, Pageable pageable);
 
     /**
      * Count unread global errors for account.
