@@ -5,6 +5,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import type { GlobalErrorsQueryParams } from '../model/global-error.types'
 import * as api from './global-errors.api'
 
@@ -62,8 +63,12 @@ export function useMarkAsRead() {
   return useMutation({
     mutationFn: (errorId: string) => api.markAsRead(errorId),
     onSuccess: () => {
-      // Invalidate all global errors queries
       queryClient.invalidateQueries({ queryKey: globalErrorsKeys.all })
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to mark error as read', {
+        description: error.message,
+      })
     },
   })
 }
@@ -76,8 +81,16 @@ export function useMarkMultipleAsRead() {
 
   return useMutation({
     mutationFn: (errorIds: string[]) => api.markMultipleAsRead(errorIds),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: globalErrorsKeys.all })
+      toast.success('Errors marked as read', {
+        description: `${data.markedCount} error(s) marked as read`,
+      })
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to mark errors as read', {
+        description: error.message,
+      })
     },
   })
 }
@@ -90,8 +103,16 @@ export function useMarkAllAsRead() {
 
   return useMutation({
     mutationFn: () => api.markAllAsRead(),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: globalErrorsKeys.all })
+      toast.success('All errors marked as read', {
+        description: `${data.markedCount} error(s) marked as read`,
+      })
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to mark all errors as read', {
+        description: error.message,
+      })
     },
   })
 }

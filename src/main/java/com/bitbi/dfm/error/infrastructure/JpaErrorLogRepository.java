@@ -2,6 +2,7 @@ package com.bitbi.dfm.error.infrastructure;
 
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.domain.GlobalErrorProjection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -154,6 +155,7 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      * @param pageable  pagination parameters
      * @return page of global error logs
      */
+    @Deprecated
     @Query("SELECT e FROM ErrorLog e " +
             "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
             "WHERE s.accountId = :accountId AND e.batchId IS NULL " +
@@ -166,12 +168,44 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of unread global error logs
+     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountIdAndUnread(UUID, Pageable)} to avoid N+1 query
      */
+    @Deprecated
     @Query("SELECT e FROM ErrorLog e " +
             "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
             "WHERE s.accountId = :accountId AND e.batchId IS NULL AND e.isRead = false " +
             "ORDER BY e.occurredAt DESC")
     Page<ErrorLog> findGlobalErrorsByAccountIdAndUnread(UUID accountId, Pageable pageable);
+
+    /**
+     * Find global errors with site name for account (single query, no N+1).
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of global error projections with site name
+     */
+    @Query("SELECT e.id AS id, e.siteId AS siteId, s.domain AS siteName, " +
+            "e.type AS type, e.title AS title, e.severity AS severity, " +
+            "e.isRead AS isRead, e.occurredAt AS occurredAt " +
+            "FROM ErrorLog e " +
+            "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
+            "WHERE s.accountId = :accountId AND e.batchId IS NULL")
+    Page<GlobalErrorProjection> findGlobalErrorsWithSiteByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Find unread global errors with site name for account (single query, no N+1).
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of unread global error projections with site name
+     */
+    @Query("SELECT e.id AS id, e.siteId AS siteId, s.domain AS siteName, " +
+            "e.type AS type, e.title AS title, e.severity AS severity, " +
+            "e.isRead AS isRead, e.occurredAt AS occurredAt " +
+            "FROM ErrorLog e " +
+            "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
+            "WHERE s.accountId = :accountId AND e.batchId IS NULL AND e.isRead = false")
+    Page<GlobalErrorProjection> findGlobalErrorsWithSiteByAccountIdAndUnread(UUID accountId, Pageable pageable);
 
     /**
      * Count unread global errors for account.
@@ -188,18 +222,33 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
     long countUnreadGlobalErrorsByAccountId(UUID accountId);
 
     /**
-     * Mark specified errors as read.
+     * Mark specified errors as read (internal use only - no account filtering).
+     *
+     * @param ids list of error IDs to mark as read
+     * @return number of errors actually marked as read
+     * @deprecated Use {@link #markAsReadByIdsAndAccountId(List, UUID)} for secure bulk updates
+     */
+    @Deprecated
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ErrorLog e SET e.isRead = true WHERE e.id IN :ids AND e.isRead = false")
+    int markAsReadByIds(List<UUID> ids);
+
+    /**
+     * Mark specified global errors as read with account authorization.
      * <p>
-     * Updates is_read to true for unread errors in the list.
+     * Only updates errors that belong to the account's sites and have batch_id IS NULL.
+     * This prevents cross-tenant information disclosure.
      * </p>
      *
-     * @param ids        list of error IDs to mark as read
-     * @param occurredAt partition hint (not used in query but kept for signature compatibility)
+     * @param ids       list of error IDs to mark as read
+     * @param accountId account identifier for authorization
      * @return number of errors actually marked as read
      */
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE ErrorLog e SET e.isRead = true WHERE e.id IN :ids AND e.isRead = false")
-    int markAsReadByIds(List<UUID> ids, LocalDateTime occurredAt);
+    @Query("UPDATE ErrorLog e SET e.isRead = true " +
+            "WHERE e.id IN :ids AND e.isRead = false AND e.batchId IS NULL " +
+            "AND e.siteId IN (SELECT s.id FROM com.bitbi.dfm.site.domain.Site s WHERE s.accountId = :accountId)")
+    int markAsReadByIdsAndAccountId(List<UUID> ids, UUID accountId);
 
     /**
      * Mark all unread global errors as read for account.

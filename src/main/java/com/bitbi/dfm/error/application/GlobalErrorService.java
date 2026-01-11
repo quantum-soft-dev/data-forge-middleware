@@ -2,6 +2,7 @@ package com.bitbi.dfm.error.application;
 
 import com.bitbi.dfm.error.domain.ErrorLog;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.error.domain.GlobalErrorProjection;
 import com.bitbi.dfm.error.presentation.dto.GlobalErrorResponseDto;
 import com.bitbi.dfm.error.presentation.dto.GlobalErrorSummaryDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -15,10 +16,9 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Application service for global error handling.
@@ -46,6 +46,10 @@ public class GlobalErrorService {
 
     /**
      * List global errors for account with pagination.
+     * <p>
+     * Uses projection query to fetch errors with site names in a single query,
+     * avoiding N+1 query problem.
+     * </p>
      *
      * @param accountId  account identifier
      * @param page       page number (0-indexed)
@@ -60,34 +64,43 @@ public class GlobalErrorService {
 
         PageRequest pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "occurredAt"));
 
-        Page<ErrorLog> errorPage;
+        // Single query with projection - includes site name, no N+1
+        Page<GlobalErrorProjection> projectionPage;
         if (unreadOnly) {
-            errorPage = errorLogRepository.findGlobalErrorsByAccountIdAndUnread(accountId, pageable);
+            projectionPage = errorLogRepository.findGlobalErrorsWithSiteByAccountIdAndUnread(accountId, pageable);
         } else {
-            errorPage = errorLogRepository.findGlobalErrorsByAccountId(accountId, pageable);
+            projectionPage = errorLogRepository.findGlobalErrorsWithSiteByAccountId(accountId, pageable);
         }
 
-        // Get site names for all errors
-        List<UUID> siteIds = errorPage.getContent().stream()
-                .map(ErrorLog::getSiteId)
-                .distinct()
+        List<GlobalErrorSummaryDto> summaries = projectionPage.getContent().stream()
+                .map(this::toSummaryDto)
                 .toList();
 
-        Map<UUID, String> siteNames = getSiteNames(siteIds);
-
-        List<GlobalErrorSummaryDto> summaries = errorPage.getContent().stream()
-                .map(error -> GlobalErrorSummaryDto.fromEntity(error, siteNames.get(error.getSiteId())))
-                .toList();
-
-        logger.info("Retrieved {} global errors for account: accountId={}, page={}/{}, totalElements={}",
-                summaries.size(), accountId, page, errorPage.getTotalPages(), errorPage.getTotalElements());
+        logger.debug("Retrieved {} global errors for account: accountId={}, page={}/{}, totalElements={}",
+                summaries.size(), accountId, page, projectionPage.getTotalPages(), projectionPage.getTotalElements());
 
         return new PageResponseDto<>(
                 summaries,
-                errorPage.getNumber(),
-                errorPage.getSize(),
-                errorPage.getTotalElements(),
-                errorPage.getTotalPages()
+                projectionPage.getNumber(),
+                projectionPage.getSize(),
+                projectionPage.getTotalElements(),
+                projectionPage.getTotalPages()
+        );
+    }
+
+    /**
+     * Convert projection to summary DTO.
+     */
+    private GlobalErrorSummaryDto toSummaryDto(GlobalErrorProjection projection) {
+        return new GlobalErrorSummaryDto(
+                projection.getId(),
+                projection.getSiteId(),
+                projection.getSiteName(),
+                projection.getType(),
+                projection.getTitle(),
+                projection.getSeverity(),
+                projection.getIsRead(),
+                projection.getOccurredAt().toInstant(ZoneOffset.UTC)
         );
     }
 
@@ -134,7 +147,11 @@ public class GlobalErrorService {
     }
 
     /**
-     * Mark multiple errors as read.
+     * Mark multiple errors as read with account authorization.
+     * <p>
+     * Only marks errors that belong to the account's sites and are global errors (batch_id IS NULL).
+     * This prevents cross-tenant information disclosure.
+     * </p>
      *
      * @param errorIds  list of error IDs to mark as read
      * @param accountId account identifier for authorization
@@ -143,14 +160,9 @@ public class GlobalErrorService {
     public int markMultipleAsRead(List<UUID> errorIds, UUID accountId) {
         logger.debug("Marking multiple errors as read: count={}, accountId={}", errorIds.size(), accountId);
 
-        // Note: For security, we should verify each error belongs to the account.
-        // The repository query only updates unread errors, so no security issue if ID doesn't exist.
-        // However, a malicious user could infer error existence. For now, we accept this trade-off
-        // for performance. A stricter implementation would filter errorIds first.
+        int updated = errorLogRepository.markAsReadByIdsAndAccountId(errorIds, accountId);
 
-        int updated = errorLogRepository.markAsReadByIds(errorIds, null);
-
-        logger.info("Marked {} errors as read: accountId={}", updated, accountId);
+        logger.debug("Marked {} errors as read: accountId={}", updated, accountId);
         return updated;
     }
 
@@ -183,21 +195,6 @@ public class GlobalErrorService {
 
         logger.debug("Unread count for account {}: {}", accountId, count);
         return count;
-    }
-
-    /**
-     * Get site names for a list of site IDs.
-     *
-     * @param siteIds list of site IDs
-     * @return map of site ID to domain name
-     */
-    private Map<UUID, String> getSiteNames(List<UUID> siteIds) {
-        if (siteIds.isEmpty()) {
-            return Map.of();
-        }
-
-        return siteRepository.findAllById(siteIds).stream()
-                .collect(Collectors.toMap(Site::getId, Site::getDomain));
     }
 
     /**

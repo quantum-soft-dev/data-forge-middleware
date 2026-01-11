@@ -90,28 +90,4 @@ public record GlobalErrorResponseDto(
                 errorLog.getOccurredAt().toInstant(ZoneOffset.UTC)
         );
     }
-
-    /**
-     * Create full DTO from ErrorLog entity with site name.
-     *
-     * @param errorLog the error log entity
-     * @param siteName the site domain name
-     * @return full response DTO
-     */
-    public static GlobalErrorResponseDto fromEntity(ErrorLog errorLog, String siteName) {
-        return new GlobalErrorResponseDto(
-                errorLog.getId(),
-                errorLog.getSiteId(),
-                siteName != null ? siteName : "Unknown",
-                errorLog.getType(),
-                errorLog.getTitle(),
-                errorLog.getMessage(),
-                errorLog.getStackTrace(),
-                errorLog.getClientVersion(),
-                errorLog.getMetadata(),
-                errorLog.getSeverity(),
-                errorLog.isRead(),
-                errorLog.getOccurredAt().toInstant(ZoneOffset.UTC)
-        );
-    }
 }

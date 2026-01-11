@@ -57,7 +57,9 @@ public interface ErrorLogRepository {
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of global error logs
+     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountId(UUID, Pageable)} to avoid N+1 query
      */
+    @Deprecated
     Page<ErrorLog> findGlobalErrorsByAccountId(UUID accountId, Pageable pageable);
 
     /**
@@ -66,8 +68,28 @@ public interface ErrorLogRepository {
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of unread global error logs
+     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountIdAndUnread(UUID, Pageable)} to avoid N+1 query
      */
+    @Deprecated
     Page<ErrorLog> findGlobalErrorsByAccountIdAndUnread(UUID accountId, Pageable pageable);
+
+    /**
+     * Find global errors with site name for account (single query, no N+1).
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of global error projections with site name
+     */
+    Page<GlobalErrorProjection> findGlobalErrorsWithSiteByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Find unread global errors with site name for account (single query, no N+1).
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of unread global error projections with site name
+     */
+    Page<GlobalErrorProjection> findGlobalErrorsWithSiteByAccountIdAndUnread(UUID accountId, Pageable pageable);
 
     /**
      * Count unread global errors for account.
@@ -78,13 +100,27 @@ public interface ErrorLogRepository {
     long countUnreadGlobalErrorsByAccountId(UUID accountId);
 
     /**
-     * Mark specified errors as read.
+     * Mark specified errors as read (internal use only - no account filtering).
      *
-     * @param ids        list of error IDs to mark as read
-     * @param occurredAt partition key for partition pruning (optional, can be null)
+     * @param ids list of error IDs to mark as read
+     * @return number of errors actually marked as read
+     * @deprecated Use {@link #markAsReadByIdsAndAccountId(List, UUID)} for secure bulk updates
+     */
+    @Deprecated
+    int markAsReadByIds(List<UUID> ids);
+
+    /**
+     * Mark specified global errors as read with account authorization.
+     * <p>
+     * Only updates errors that belong to the account's sites and have batch_id IS NULL.
+     * This prevents cross-tenant information disclosure.
+     * </p>
+     *
+     * @param ids       list of error IDs to mark as read
+     * @param accountId account identifier for authorization
      * @return number of errors actually marked as read
      */
-    int markAsReadByIds(List<UUID> ids, java.time.LocalDateTime occurredAt);
+    int markAsReadByIdsAndAccountId(List<UUID> ids, UUID accountId);
 
     /**
      * Mark all unread global errors as read for account.
