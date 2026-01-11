@@ -1,5 +1,6 @@
 package com.bitbi.dfm.error.presentation.dto;
 
+import com.bitbi.dfm.error.domain.ErrorSeverity;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -14,10 +15,11 @@ import java.util.Map;
  * </p>
  *
  * @param type     Error type/category (max 100 characters, required)
- * @param message  Error message description (max 1000 characters, required)
+ * @param message  Error message description (max 10000 characters, required)
+ * @param severity Error severity level (optional, defaults to ERROR)
  * @param metadata Optional additional error context (arbitrary JSON object)
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 2.0.0
  * @see com.bitbi.dfm.error.presentation.ErrorLogController
  */
 @Schema(description = "Request body for logging an error")
@@ -38,8 +40,16 @@ public record LogErrorRequestDto(
                 requiredMode = Schema.RequiredMode.REQUIRED
         )
         @NotBlank(message = "Error message is required")
-        @Size(max = 1000, message = "Error message must be at most 1000 characters")
+        @Size(max = 10000, message = "Error message must be at most 10000 characters")
         String message,
+
+        @Schema(
+                description = "Error severity level. Defaults to ERROR if not provided.",
+                example = "ERROR",
+                requiredMode = Schema.RequiredMode.NOT_REQUIRED,
+                allowableValues = {"CRITICAL", "ERROR", "WARNING", "INFO"}
+        )
+        ErrorSeverity severity,
 
         @Schema(
                 description = "Optional additional error context (max 20 entries, 10KB total size)",
@@ -49,4 +59,12 @@ public record LogErrorRequestDto(
         @ValidMetadata
         Map<String, Object> metadata
 ) {
+    /**
+     * Get effective severity, defaulting to ERROR if null.
+     *
+     * @return the severity or ERROR if null
+     */
+    public ErrorSeverity effectiveSeverity() {
+        return severity != null ? severity : ErrorSeverity.ERROR;
+    }
 }

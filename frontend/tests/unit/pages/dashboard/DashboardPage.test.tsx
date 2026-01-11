@@ -25,6 +25,11 @@ vi.mock('@/widgets/header/Header', () => ({
   Header: () => <header data-testid="header">Header</header>,
 }))
 
+// Mock GlobalErrorsWidget to avoid QueryClient requirement
+vi.mock('@/widgets/global-errors/GlobalErrorsWidget', () => ({
+  GlobalErrorsWidget: () => <div data-testid="global-errors-widget">Global Errors</div>,
+}))
+
 describe('DashboardPage', () => {
   it('should render the page', () => {
     render(<DashboardPage />)

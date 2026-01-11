@@ -63,7 +63,7 @@ class ErrorLogControllerTest {
     @DisplayName("Should log standalone error successfully")
     void shouldLogStandaloneErrorSuccessfully() {
         // Given
-        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", Map.of());
+        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", null, Map.of());
 
         // When
         ResponseEntity<Void> response = controller.logStandaloneError(request, testAuthHeader);
@@ -76,6 +76,7 @@ class ErrorLogControllerTest {
                 eq(testSiteId),
                 eq("ValidationError"),
                 eq("Test error message"),
+                any(),
                 any()
         );
     }
@@ -84,11 +85,11 @@ class ErrorLogControllerTest {
     @DisplayName("Should log batch error successfully")
     void shouldLogBatchErrorSuccessfully() {
         // Given
-        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", null);
+        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", null, null);
 
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "ValidationError", "Test error message", null, null, null);
 
-        when(errorLoggingService.logError(eq(testBatchId), eq(testSiteId), any(), any(), any()))
+        when(errorLoggingService.logError(eq(testBatchId), eq(testSiteId), any(), any(), any(), any()))
                 .thenReturn(errorLog);
 
         // When
@@ -103,7 +104,7 @@ class ErrorLogControllerTest {
         assertEquals(errorLog.getSiteId(), body.siteId());
 
         verify(tokenService).validateToken(testToken);
-        verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), any());
+        verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), any(), any());
     }
 
     @Test
@@ -138,11 +139,11 @@ class ErrorLogControllerTest {
         metadata.put("sourceFile", "test.csv");
         metadata.put("lineNumber", 42);
 
-        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", metadata);
+        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", null, metadata);
 
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "ValidationError", "Test error message", null, null, metadata);
 
-        when(errorLoggingService.logError(eq(testBatchId), eq(testSiteId), any(), any(), any()))
+        when(errorLoggingService.logError(eq(testBatchId), eq(testSiteId), any(), any(), any(), any()))
                 .thenReturn(errorLog);
 
         // When
@@ -154,18 +155,18 @@ class ErrorLogControllerTest {
         ErrorLogResponseDto body = response.getBody();
         assertNotNull(body.metadata());
 
-        verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), eq(metadata));
+        verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), eq(metadata), any());
     }
 
     @Test
     @DisplayName("Should handle null metadata in batch error")
     void shouldHandleNullMetadataInBatchError() {
         // Given
-        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", null);
+        LogErrorRequestDto request = new LogErrorRequestDto("ValidationError", "Test error message", null, null);
 
         ErrorLog errorLog = ErrorLog.create(testSiteId, testBatchId, "Error", "ValidationError", "Test error message", null, null, null);
 
-        when(errorLoggingService.logError(eq(testBatchId), eq(testSiteId), any(), any(), any()))
+        when(errorLoggingService.logError(eq(testBatchId), eq(testSiteId), any(), any(), any(), any()))
                 .thenReturn(errorLog);
 
         // When
@@ -175,7 +176,7 @@ class ErrorLogControllerTest {
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
 
-        verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), eq(null));
+        verify(errorLoggingService).logError(eq(testBatchId), eq(testSiteId), eq("ValidationError"), eq("Test error message"), eq(null), any());
     }
 
     @Test

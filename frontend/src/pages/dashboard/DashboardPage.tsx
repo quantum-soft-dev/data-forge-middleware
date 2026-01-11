@@ -1,17 +1,19 @@
 /**
  * Dashboard Page
  *
- * Displays overview metrics and charts for subscriber data.
+ * Displays overview metrics, charts, and global errors widget.
  * Per FR-008: Shows demo charts with navigation and logout.
  *
  * Features:
  * - Navigation header with Dashboard/Accounts links
  * - 4 chart widgets in responsive grid
+ * - Global errors widget with unread badge
  * - Logout button in header
  */
 
 import { Header } from '@/widgets/header/Header'
 import { DashboardCharts } from '@/widgets/dashboard-charts'
+import { GlobalErrorsWidget } from '@/widgets/global-errors/GlobalErrorsWidget'
 
 export default function DashboardPage() {
   return (
@@ -24,6 +26,13 @@ export default function DashboardPage() {
             Overview of subscriber metrics and growth trends
           </p>
         </div>
+
+        {/* Global Errors Widget */}
+        <div className="mb-8">
+          <GlobalErrorsWidget pageSize={10} />
+        </div>
+
+        {/* Charts */}
         <DashboardCharts />
       </main>
     </div>

@@ -5,11 +5,13 @@ import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -139,4 +141,90 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      */
     @Query("SELECT COUNT(e) FROM ErrorLog e WHERE e.siteId IN :siteIds")
     long countBySiteIds(List<UUID> siteIds);
+
+    // ==================== Global Error Handling Methods ====================
+
+    /**
+     * Find global errors (batch_id IS NULL) for account with pagination.
+     * <p>
+     * Joins with sites table to find errors for all sites belonging to the account.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of global error logs
+     */
+    @Query("SELECT e FROM ErrorLog e " +
+            "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
+            "WHERE s.accountId = :accountId AND e.batchId IS NULL " +
+            "ORDER BY e.occurredAt DESC")
+    Page<ErrorLog> findGlobalErrorsByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Find unread global errors (batch_id IS NULL AND is_read = false) for account.
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of unread global error logs
+     */
+    @Query("SELECT e FROM ErrorLog e " +
+            "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
+            "WHERE s.accountId = :accountId AND e.batchId IS NULL AND e.isRead = false " +
+            "ORDER BY e.occurredAt DESC")
+    Page<ErrorLog> findGlobalErrorsByAccountIdAndUnread(UUID accountId, Pageable pageable);
+
+    /**
+     * Count unread global errors for account.
+     * <p>
+     * Uses partial index idx_error_logs_global_unread for performance.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @return count of unread global errors
+     */
+    @Query("SELECT COUNT(e) FROM ErrorLog e " +
+            "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
+            "WHERE s.accountId = :accountId AND e.batchId IS NULL AND e.isRead = false")
+    long countUnreadGlobalErrorsByAccountId(UUID accountId);
+
+    /**
+     * Mark specified errors as read.
+     * <p>
+     * Updates is_read to true for unread errors in the list.
+     * </p>
+     *
+     * @param ids        list of error IDs to mark as read
+     * @param occurredAt partition hint (not used in query but kept for signature compatibility)
+     * @return number of errors actually marked as read
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ErrorLog e SET e.isRead = true WHERE e.id IN :ids AND e.isRead = false")
+    int markAsReadByIds(List<UUID> ids, LocalDateTime occurredAt);
+
+    /**
+     * Mark all unread global errors as read for account.
+     * <p>
+     * Only affects global errors (batch_id IS NULL) that are unread.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @return number of errors marked as read
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ErrorLog e SET e.isRead = true " +
+            "WHERE e.siteId IN (SELECT s.id FROM com.bitbi.dfm.site.domain.Site s WHERE s.accountId = :accountId) " +
+            "AND e.batchId IS NULL AND e.isRead = false")
+    int markAllAsReadByAccountId(UUID accountId);
+
+    /**
+     * Find a single global error by ID with account authorization check.
+     *
+     * @param errorId   error identifier
+     * @param accountId account identifier for authorization
+     * @return optional error log if found and belongs to account
+     */
+    @Query("SELECT e FROM ErrorLog e " +
+            "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
+            "WHERE e.id = :errorId AND s.accountId = :accountId AND e.batchId IS NULL")
+    Optional<ErrorLog> findGlobalErrorByIdAndAccountId(UUID errorId, UUID accountId);
 }

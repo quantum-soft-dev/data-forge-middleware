@@ -48,6 +48,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         LogErrorRequestDto errorRequest = new LogErrorRequestDto(
                 "MaliciousError",
                 "Attempting cross-tenant error logging",
+                null, // severity - use default
                 Map.of("malicious", "true")
         );
 
@@ -76,6 +77,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         LogErrorRequestDto errorRequest = new LogErrorRequestDto(
                 "ValidationError",
                 "Legitimate error message",
+                null, // severity - use default
                 Map.of("field", "amount", "value", "invalid")
         );
 
@@ -108,7 +110,8 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
         LogErrorRequestDto errorRequest = new LogErrorRequestDto(
                 "TestError",
                 "Test message",
-                null
+                null, // severity - use default
+                null  // metadata
         );
 
         String requestBody = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(errorRequest);

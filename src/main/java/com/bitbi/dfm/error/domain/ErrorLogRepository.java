@@ -48,4 +48,58 @@ public interface ErrorLogRepository {
     Page<ErrorLog> findAll(Pageable pageable);
 
     void deleteById(UUID id);
+
+    // ==================== Global Error Handling Methods ====================
+
+    /**
+     * Find global errors (batch_id IS NULL) for account with pagination.
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of global error logs
+     */
+    Page<ErrorLog> findGlobalErrorsByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Find unread global errors (batch_id IS NULL AND is_read = false) for account.
+     *
+     * @param accountId account identifier
+     * @param pageable  pagination parameters
+     * @return page of unread global error logs
+     */
+    Page<ErrorLog> findGlobalErrorsByAccountIdAndUnread(UUID accountId, Pageable pageable);
+
+    /**
+     * Count unread global errors for account.
+     *
+     * @param accountId account identifier
+     * @return count of unread global errors
+     */
+    long countUnreadGlobalErrorsByAccountId(UUID accountId);
+
+    /**
+     * Mark specified errors as read.
+     *
+     * @param ids        list of error IDs to mark as read
+     * @param occurredAt partition key for partition pruning (optional, can be null)
+     * @return number of errors actually marked as read
+     */
+    int markAsReadByIds(List<UUID> ids, java.time.LocalDateTime occurredAt);
+
+    /**
+     * Mark all unread global errors as read for account.
+     *
+     * @param accountId account identifier
+     * @return number of errors marked as read
+     */
+    int markAllAsReadByAccountId(UUID accountId);
+
+    /**
+     * Find a single global error by ID with account authorization check.
+     *
+     * @param errorId   error identifier
+     * @param accountId account identifier for authorization
+     * @return optional error log if found and belongs to account
+     */
+    Optional<ErrorLog> findGlobalErrorByIdAndAccountId(UUID errorId, UUID accountId);
 }

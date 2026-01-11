@@ -135,6 +135,22 @@ docker-compose up postgres localstack     # Start dependencies
 | `/api/v1/plugins/bit-bi/sql-changes` | GET | Get SQL changes (params: siteId, since) |
 | `/api/v1/account/plugins/{pluginId}/logs` | GET | Plugin activity logs (user-facing) |
 
+### Global Error Handling (016)
+- **Client API**: `POST /api/dfc/error` with optional `severity` field (CRITICAL, ERROR, WARNING, INFO)
+- **User API**: Auth0 OAuth2 with accountId claim
+- **ErrorLog**: severity (enum), isRead (boolean) fields added
+- **Dashboard**: GlobalErrorsWidget with unread badge (30s polling)
+
+#### Global Error API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/account/errors` | GET | List global errors (params: page, size, unreadOnly) |
+| `/api/v1/account/errors/unread-count` | GET | Get unread error count for badge |
+| `/api/v1/account/errors/{errorId}` | GET | Get global error details |
+| `/api/v1/account/errors/{errorId}/read` | PATCH | Mark single error as read |
+| `/api/v1/account/errors/mark-as-read` | POST | Mark multiple errors as read (body: errorIds[]) |
+| `/api/v1/account/errors/mark-all-as-read` | POST | Mark all errors as read |
+
 ### S3 File Storage
 - **Path**: `{accountId}/{domain}/{date}/{time}/{filename}`
 - **Plugins**: `plugins/{pluginId}/{accountId}/{siteName}/{datetime}.sql`
@@ -167,6 +183,8 @@ pages/{feature}/            # Route pages
 - Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3) (014-plugin-history)
 - PostgreSQL 16 (existing plugin_sql_generations, account_plugins, plugin_audit_logs tables) (014-plugin-history)
 - PostgreSQL 16 (existing `plugin_sql_generations`, `account_plugins`, `plugin_audit_logs` tables) (015-plugin-reinit)
+- PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 
 ## Recent Changes
+- 016-global-error-handling: Added severity and isRead to ErrorLog, GlobalErrorUserController with user-facing endpoints, frontend GlobalErrorsWidget on Dashboard
 - 014-plugin-history: Added Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)
