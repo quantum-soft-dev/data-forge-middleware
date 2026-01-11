@@ -19,7 +19,7 @@ import type { GlobalErrorResponse, ErrorSeverity } from '../model/global-error.t
 import { useMarkAsRead } from '../api/global-errors.queries'
 
 interface GlobalErrorDetailsProps {
-  error: GlobalErrorResponse | null
+  error: GlobalErrorResponse | null | undefined
   open: boolean
   onOpenChange: (open: boolean) => void
 }

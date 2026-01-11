@@ -1,6 +1,12 @@
 -- V17: Add severity and is_read columns to error_logs table
 -- Feature: 016-global-error-handling
 -- Date: 2026-01-11
+--
+-- ROLLBACK (manual - Flyway doesn't auto-rollback):
+-- DROP INDEX IF EXISTS idx_error_logs_global_unread;
+-- ALTER TABLE error_logs DROP CONSTRAINT IF EXISTS chk_error_logs_severity;
+-- ALTER TABLE error_logs DROP COLUMN IF EXISTS is_read;
+-- ALTER TABLE error_logs DROP COLUMN IF EXISTS severity;
 
 -- Add severity column with default 'ERROR'
 ALTER TABLE error_logs

@@ -215,7 +215,7 @@ class ErrorLogRepositoryTest extends AbstractIntegrationTest {
             ErrorLog saved = errorLogRepository.save(error);
 
             // Mark as read
-            errorLogRepository.markAsReadByIds(List.of(saved.getId()), saved.getOccurredAt());
+            errorLogRepository.markAsReadByIds(List.of(saved.getId()));
 
             // When
             long count = errorLogRepository.countUnreadGlobalErrorsByAccountId(TEST_ACCOUNT_ID);
@@ -267,8 +267,7 @@ class ErrorLogRepositoryTest extends AbstractIntegrationTest {
 
             // When
             int updated = errorLogRepository.markAsReadByIds(
-                    List.of(saved1.getId(), saved2.getId()),
-                    saved1.getOccurredAt()
+                    List.of(saved1.getId(), saved2.getId())
             );
 
             // Then
@@ -300,7 +299,7 @@ class ErrorLogRepositoryTest extends AbstractIntegrationTest {
 
             // When: Try to update this error and a non-existent one
             List<UUID> ids = List.of(saved.getId(), UUID.randomUUID());
-            int updated = errorLogRepository.markAsReadByIds(ids, saved.getOccurredAt());
+            int updated = errorLogRepository.markAsReadByIds(ids);
 
             // Then: Only one should be updated
             assertThat(updated).isEqualTo(1);
@@ -322,10 +321,10 @@ class ErrorLogRepositoryTest extends AbstractIntegrationTest {
                     ErrorSeverity.INFO
             );
             ErrorLog saved = errorLogRepository.save(error);
-            errorLogRepository.markAsReadByIds(List.of(saved.getId()), saved.getOccurredAt());
+            errorLogRepository.markAsReadByIds(List.of(saved.getId()));
 
             // When: Try to mark as read again
-            int updated = errorLogRepository.markAsReadByIds(List.of(saved.getId()), saved.getOccurredAt());
+            int updated = errorLogRepository.markAsReadByIds(List.of(saved.getId()));
 
             // Then: Should return 0 since already read
             assertThat(updated).isZero();

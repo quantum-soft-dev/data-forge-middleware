@@ -79,7 +79,7 @@ public class GlobalErrorService {
                 .map(error -> GlobalErrorSummaryDto.fromEntity(error, siteNames.get(error.getSiteId())))
                 .toList();
 
-        logger.info("Retrieved {} global errors for account: accountId={}, page={}/{}, totalElements={}",
+        logger.debug("Retrieved {} global errors for account: accountId={}, page={}/{}, totalElements={}",
                 summaries.size(), accountId, page, errorPage.getTotalPages(), errorPage.getTotalElements());
 
         return new PageResponseDto<>(
@@ -134,7 +134,11 @@ public class GlobalErrorService {
     }
 
     /**
-     * Mark multiple errors as read.
+     * Mark multiple errors as read with account authorization.
+     * <p>
+     * Only marks errors that belong to the account's sites and are global errors (batch_id IS NULL).
+     * This prevents cross-tenant information disclosure.
+     * </p>
      *
      * @param errorIds  list of error IDs to mark as read
      * @param accountId account identifier for authorization
@@ -143,14 +147,9 @@ public class GlobalErrorService {
     public int markMultipleAsRead(List<UUID> errorIds, UUID accountId) {
         logger.debug("Marking multiple errors as read: count={}, accountId={}", errorIds.size(), accountId);
 
-        // Note: For security, we should verify each error belongs to the account.
-        // The repository query only updates unread errors, so no security issue if ID doesn't exist.
-        // However, a malicious user could infer error existence. For now, we accept this trade-off
-        // for performance. A stricter implementation would filter errorIds first.
+        int updated = errorLogRepository.markAsReadByIdsAndAccountId(errorIds, accountId);
 
-        int updated = errorLogRepository.markAsReadByIds(errorIds, null);
-
-        logger.info("Marked {} errors as read: accountId={}", updated, accountId);
+        logger.debug("Marked {} errors as read: accountId={}", updated, accountId);
         return updated;
     }
 

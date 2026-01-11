@@ -10,7 +10,7 @@ import { Checkbox } from '@/shared/ui/ui/checkbox'
 import { Skeleton } from '@/shared/ui/ui/skeleton'
 import { GlobalErrorItem } from './GlobalErrorItem'
 import { GlobalErrorDetails } from './GlobalErrorDetails'
-import type { GlobalErrorPageResponse, GlobalErrorResponse } from '../model/global-error.types'
+import type { GlobalErrorPageResponse } from '../model/global-error.types'
 import { useGlobalError, useMarkMultipleAsRead } from '../api/global-errors.queries'
 
 interface GlobalErrorListProps {
@@ -162,7 +162,7 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange }: GlobalE
 
       {/* Error details modal */}
       <GlobalErrorDetails
-        error={selectedError as GlobalErrorResponse | null}
+        error={selectedError}
         open={detailsOpen && !isLoadingDetails && !!selectedError}
         onOpenChange={setDetailsOpen}
       />
