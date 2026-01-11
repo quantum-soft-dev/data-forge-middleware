@@ -87,6 +87,7 @@ export function GlobalErrorsWidget({ pageSize = 10 }: GlobalErrorsWidgetProps) {
           isLoading={isLoadingErrors}
           page={page}
           onPageChange={setPage}
+          unreadOnly={unreadOnly}
         />
       </CardContent>
     </Card>

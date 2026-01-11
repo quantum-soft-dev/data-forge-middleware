@@ -223,9 +223,10 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      *
      * @param ids list of error IDs to mark as read
      * @return number of errors actually marked as read
-     * @deprecated Use {@link #markAsReadByIdsAndAccountId(List, UUID)} for secure bulk updates
+     * @deprecated Use {@link #markAsReadByIdsAndAccountId(List, UUID)} for secure bulk updates.
+     *             This method will be removed in a future release.
      */
-    @Deprecated
+    @Deprecated(forRemoval = true)
     @Modifying(clearAutomatically = true)
     @Query("UPDATE ErrorLog e SET e.isRead = true WHERE e.id IN :ids AND e.isRead = false")
     int markAsReadByIds(List<UUID> ids);

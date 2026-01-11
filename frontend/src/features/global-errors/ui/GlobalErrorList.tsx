@@ -19,9 +19,11 @@ interface GlobalErrorListProps {
   isLoading: boolean
   page: number
   onPageChange: (page: number) => void
+  /** Whether only unread errors are shown (for empty state message) */
+  unreadOnly?: boolean
 }
 
-export function GlobalErrorList({ data, isLoading, page, onPageChange }: GlobalErrorListProps) {
+export function GlobalErrorList({ data, isLoading, page, onPageChange, unreadOnly = false }: GlobalErrorListProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [selectedErrorId, setSelectedErrorId] = useState<string | null>(null)
@@ -61,8 +63,9 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange }: GlobalE
         onSuccess: (data) => {
           // Handle partial failure: some errors may have already been read or inaccessible
           if (data.markedCount < requestedCount) {
+            const failed = requestedCount - data.markedCount
             toast.warning('Partial update', {
-              description: `Only ${data.markedCount} of ${requestedCount} errors were marked as read`,
+              description: `Marked ${data.markedCount} of ${requestedCount} as read. ${failed} error(s) may have been already read or deleted.`,
             })
           }
           setSelectedIds(new Set())
@@ -90,7 +93,7 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange }: GlobalE
   if (!data || data.content.length === 0) {
     return (
       <div className="text-center py-8 text-gray-500">
-        No global errors found
+        {unreadOnly ? 'No unread errors' : 'No global errors found'}
       </div>
     )
   }

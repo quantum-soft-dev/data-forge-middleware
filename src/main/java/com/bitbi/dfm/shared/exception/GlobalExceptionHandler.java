@@ -550,6 +550,32 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle GlobalErrorNotFoundException (404 Not Found).
+     * <p>
+     * Thrown when a global error is not found or access is denied.
+     * Returns generic 404 to prevent information disclosure about error existence.
+     * </p>
+     * User Story: US016 - Global Error Handling
+     */
+    @ExceptionHandler(com.bitbi.dfm.error.application.GlobalErrorService.GlobalErrorNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleGlobalErrorNotFound(
+            com.bitbi.dfm.error.application.GlobalErrorService.GlobalErrorNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Global error not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
      * Handle CannotLockOwnAccountException (403 Forbidden).
      * <p>
      * Prevents administrators from accidentally locking themselves out.
