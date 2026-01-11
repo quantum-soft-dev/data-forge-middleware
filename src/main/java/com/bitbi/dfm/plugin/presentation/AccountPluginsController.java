@@ -283,8 +283,8 @@ public class AccountPluginsController {
     )
     @ApiResponses({
         @ApiResponse(
-            responseCode = "200",
-            description = "Reinit completed successfully",
+            responseCode = "202",
+            description = "Reinit accepted - SQL generation continues asynchronously",
             content = @Content(
                 mediaType = "application/json",
                 schema = @Schema(implementation = ReinitResultDto.class)
@@ -337,9 +337,11 @@ public class AccountPluginsController {
 
         ReinitResultDto result = pluginHistoryService.reinit(pluginId, accountId);
 
-        log.info("Reinit completed for plugin {} account {}: deleted={}, triggered={}",
+        log.info("Reinit initiated for plugin {} account {}: deleted={}, sqlGenerationTriggered={}",
                 pluginId, accountId, result.deletedGenerations(), result.sqlGenerationTriggered());
 
-        return ResponseEntity.ok(result);
+        // Return 202 Accepted - SQL generation continues asynchronously in background
+        // Client can poll /sql-changes to check when generation completes
+        return ResponseEntity.accepted().body(result);
     }
 }

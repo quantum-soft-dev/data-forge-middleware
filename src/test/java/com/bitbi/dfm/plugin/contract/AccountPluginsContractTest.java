@@ -313,8 +313,8 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
         private static final UUID BATCH_ID = UUID.fromString("b1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
         @Test
-        @DisplayName("T020: Should return 200 OK on successful reinit")
-        void shouldReturn200OnSuccessfulReinit() throws Exception {
+        @DisplayName("T020: Should return 202 Accepted on successful reinit (async SQL generation)")
+        void shouldReturn202OnSuccessfulReinit() throws Exception {
             // Given
             ReinitResultDto result = ReinitResultDto.success(
                     10L,  // deletedGenerations
@@ -332,7 +332,7 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
                     .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
                     .contentType(MediaType.APPLICATION_JSON))
                 .andDo(print())
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.deletedGenerations").value(10))
                 .andExpect(jsonPath("$.deletedS3Files").value(10))
@@ -347,8 +347,8 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should return 200 with no SQL generation when no batches exist")
-        void shouldReturn200WithNoSqlGenerationWhenNoBatches() throws Exception {
+        @DisplayName("Should return 202 Accepted with no SQL generation when no batches exist")
+        void shouldReturn202WithNoSqlGenerationWhenNoBatches() throws Exception {
             // Given
             ReinitResultDto result = ReinitResultDto.success(
                     5L,  // deletedGenerations
@@ -365,7 +365,7 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
             mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
                     .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
                     .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.sqlGenerationTriggered").value(false))
                 .andExpect(jsonPath("$.batchId").isEmpty())
@@ -406,7 +406,7 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should include S3 delete warnings in response when present")
+        @DisplayName("Should include S3 delete warnings in response when present (202 Accepted)")
         void shouldIncludeS3DeleteWarningsInResponse() throws Exception {
             // Given
             ReinitResultDto result = ReinitResultDto.success(
@@ -424,7 +424,7 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
             mockMvc.perform(post(ApiRoutes.ACCOUNT_PLUGINS + "/bit-bi/reinit")
                     .header("Authorization", "Bearer " + MOCK_USER_JWT_TOKEN)
                     .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.deletedS3Files").value(8))
                 .andExpect(jsonPath("$.s3DeleteWarnings", hasSize(2)))
