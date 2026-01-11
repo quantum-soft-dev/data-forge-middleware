@@ -323,21 +323,15 @@ public class PluginHistoryService {
         boolean sqlGenerationTriggered = false;
         UUID batchId = null;
 
-        // Trigger SQL generation if batch exists (best-effort, don't fail reinit on generation error)
+        // Trigger SQL generation asynchronously if batch exists
+        // Returns immediately - SQL generation continues in background thread
         if (latestBatch.isPresent()) {
             batchId = latestBatch.get().getId();
-            log.info("Triggering SQL generation from batch {} for reinit (full generation)", batchId);
-            try {
-                // forceFullGeneration=true: generate all INSERTs since history was cleared
-                sqlGenerationService.generateSqlForBatch(batchId, accountPluginId, true);
-                sqlGenerationTriggered = true;
-            } catch (Exception e) {
-                // SQL generation failure should not fail the reinit operation
-                // History is already cleared, user can retry via normal batch completion
-                log.error("SQL generation failed during reinit for batch {} account {}: {}",
-                        batchId, accountId, e.getMessage(), e);
-                // sqlGenerationTriggered stays false
-            }
+            log.info("Triggering async SQL generation from batch {} for reinit (full generation)", batchId);
+            // forceFullGeneration=true: generate all INSERTs since history was cleared
+            // Async method - returns immediately, generation runs in pluginExecutor thread pool
+            sqlGenerationService.generateSqlForBatchAsync(batchId, accountPluginId, accountId);
+            sqlGenerationTriggered = true;
         } else {
             log.info("No completed batches found for account {} - skipping SQL generation", accountId);
         }

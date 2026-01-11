@@ -362,7 +362,7 @@ class PluginHistoryServiceTest {
     class Reinit {
 
         @Test
-        @DisplayName("T017: Should reinit successfully - delete history and trigger SQL generation")
+        @DisplayName("T017: Should reinit successfully - delete history and trigger async SQL generation")
         void shouldReinitSuccessfully() {
             // Given
             when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
@@ -403,8 +403,8 @@ class PluginHistoryServiceTest {
             // Verify DB records deleted
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
 
-            // Verify SQL generation triggered with forceFullGeneration=true
-            verify(sqlGenerationService).generateSqlForBatch(BATCH_ID, ACCOUNT_PLUGIN_ID, true);
+            // Verify async SQL generation triggered (returns immediately, runs in background)
+            verify(sqlGenerationService).generateSqlForBatchAsync(BATCH_ID, ACCOUNT_PLUGIN_ID, ACCOUNT_ID);
 
             // Verify audit logged
             verify(auditService).logReinit(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(10L), eq(3L), eq(true), eq(BATCH_ID));
@@ -466,8 +466,8 @@ class PluginHistoryServiceTest {
         }
 
         @Test
-        @DisplayName("Should handle SQL generation failure gracefully (best-effort)")
-        void shouldHandleSqlGenerationFailureGracefully() {
+        @DisplayName("Async SQL generation runs in background - failures don't affect reinit result")
+        void asyncSqlGenerationRunsInBackground() {
             // Given
             when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
                     .thenReturn(Optional.of(mockAccountPlugin));
@@ -485,20 +485,27 @@ class PluginHistoryServiceTest {
             when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
                     .thenReturn(Optional.of(mockBatch));
 
-            // SQL generation throws exception
-            doThrow(new RuntimeException("SQL generation failed"))
-                    .when(sqlGenerationService).generateSqlForBatch(any(), any(), anyBoolean());
+            // Note: With async behavior, the method returns immediately without waiting for
+            // SQL generation to complete. Any failures happen in the background thread.
+            // The async method (generateSqlForBatchAsync) catches exceptions internally.
 
             // When
             ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
 
-            // Then - reinit should succeed but sqlGenerationTriggered should be false
+            // Then - reinit succeeds and sqlGenerationTriggered is true because async call was made
+            // (Even if the async method fails later, reinit() has already returned)
             assertThat(result.success()).isTrue();
-            assertThat(result.sqlGenerationTriggered()).isFalse();
+            assertThat(result.sqlGenerationTriggered()).isTrue();  // Async call was triggered
             assertThat(result.deletedGenerations()).isEqualTo(5L);
+            assertThat(result.batchId()).isEqualTo(BATCH_ID);
+            assertThat(result.message()).contains("SQL generation running asynchronously");
 
             // Verify deletion still happened
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
+
+            // Verify async method was called (not the sync one)
+            verify(sqlGenerationService).generateSqlForBatchAsync(BATCH_ID, ACCOUNT_PLUGIN_ID, ACCOUNT_ID);
+            verify(sqlGenerationService, never()).generateSqlForBatch(any(), any(), anyBoolean());
         }
 
         @Test
