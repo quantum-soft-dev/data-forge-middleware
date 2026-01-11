@@ -356,5 +356,38 @@ class CsvDiffServiceTest {
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.MODIFIED);
             assertThat(diffs.get(0).values()).containsEntry("email", "");
         }
+
+        @Test
+        @DisplayName("should normalize embedded newlines in CSV values")
+        void shouldNormalizeEmbeddedNewlinesInCsvValues() {
+            // Given - CSV with embedded newline in quoted field (from real customer data nsfrmnd.csv)
+            String previousCsv = "";
+            String currentCsv = "id,name,memo\n1,Alice,\"Line1\nLine2\"";
+            List<String> headers = List.of("id", "name", "memo");
+
+            // The embedded newline should be normalized to space before diff comparison
+            // After normalization, the diff output will contain "Line1 Line2" (no newline)
+            String diffJson = """
+                {
+                  "hunks": [{
+                    "oldStart": 1, "oldLines": 0,
+                    "newStart": 1, "newLines": 1,
+                    "changes": [
+                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice,\\"Line1 Line2\\""}
+                    ]
+                  }]
+                }
+                """;
+
+            when(diffService.generateDiff(any(), any(), any(), any()))
+                .thenReturn(new DiffService.DiffResult(ChangeType.ADDED, diffJson, 1, 0, 20L));
+
+            // When
+            List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
+
+            // Then - should not crash with CSVException and should process the row
+            assertThat(diffs).hasSize(1);
+            assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.ADDED);
+        }
     }
 }
