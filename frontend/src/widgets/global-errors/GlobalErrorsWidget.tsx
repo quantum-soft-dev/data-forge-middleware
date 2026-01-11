@@ -15,6 +15,9 @@ import {
   useMarkAllAsRead,
 } from '@/features/global-errors/api/global-errors.queries'
 
+/** Maximum count displayed in badge; higher counts show as "99+" */
+const MAX_BADGE_COUNT = 99
+
 interface GlobalErrorsWidgetProps {
   /** Initial page size */
   pageSize?: number
@@ -51,7 +54,7 @@ export function GlobalErrorsWidget({ pageSize = 10 }: GlobalErrorsWidgetProps) {
           <CardTitle className="text-lg font-semibold">Global Errors</CardTitle>
           {unreadCount > 0 && (
             <Badge variant="destructive" className="rounded-full px-2">
-              {unreadCount > 99 ? '99+' : unreadCount}
+              {unreadCount > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : unreadCount}
             </Badge>
           )}
         </div>

@@ -5,6 +5,7 @@
  */
 
 import { useState, useCallback } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/shared/ui/ui/button'
 import { Checkbox } from '@/shared/ui/ui/checkbox'
 import { Skeleton } from '@/shared/ui/ui/skeleton'
@@ -55,8 +56,15 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange }: GlobalE
 
   const handleMarkSelectedAsRead = () => {
     if (selectedIds.size > 0) {
+      const requestedCount = selectedIds.size
       markMultiple.mutate(Array.from(selectedIds), {
-        onSuccess: () => {
+        onSuccess: (data) => {
+          // Handle partial failure: some errors may have already been read or inaccessible
+          if (data.markedCount < requestedCount) {
+            toast.warning('Partial update', {
+              description: `Only ${data.markedCount} of ${requestedCount} errors were marked as read`,
+            })
+          }
           setSelectedIds(new Set())
         },
       })

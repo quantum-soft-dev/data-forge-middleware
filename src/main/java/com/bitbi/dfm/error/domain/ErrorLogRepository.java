@@ -53,24 +53,28 @@ public interface ErrorLogRepository {
 
     /**
      * Find global errors (batch_id IS NULL) for account with pagination.
+     * <p>
+     * Returns full ErrorLog entities. For list views, prefer
+     * {@link #findGlobalErrorsWithSiteByAccountId(UUID, Pageable)} to include site name.
+     * </p>
      *
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of global error logs
-     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountId(UUID, Pageable)} to avoid N+1 query
      */
-    @Deprecated
     Page<ErrorLog> findGlobalErrorsByAccountId(UUID accountId, Pageable pageable);
 
     /**
      * Find unread global errors (batch_id IS NULL AND is_read = false) for account.
+     * <p>
+     * Returns full ErrorLog entities. For list views, prefer
+     * {@link #findGlobalErrorsWithSiteByAccountIdAndUnread(UUID, Pageable)} to include site name.
+     * </p>
      *
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of unread global error logs
-     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountIdAndUnread(UUID, Pageable)} to avoid N+1 query
      */
-    @Deprecated
     Page<ErrorLog> findGlobalErrorsByAccountIdAndUnread(UUID accountId, Pageable pageable);
 
     /**

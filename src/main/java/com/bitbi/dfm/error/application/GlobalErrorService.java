@@ -31,7 +31,7 @@ import java.util.UUID;
  * @version 1.0.0
  */
 @Service
-@Transactional
+@Transactional // Default: all methods are transactional; read methods override with readOnly=true
 public class GlobalErrorService {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalErrorService.class);
@@ -120,6 +120,7 @@ public class GlobalErrorService {
                 .orElseThrow(() -> new GlobalErrorNotFoundException(
                         "Global error not found or access denied: " + errorId));
 
+        // Site may be null if deleted after error was logged; DTO handles gracefully
         Site site = siteRepository.findById(errorLog.getSiteId()).orElse(null);
 
         return GlobalErrorResponseDto.fromEntity(errorLog, site);

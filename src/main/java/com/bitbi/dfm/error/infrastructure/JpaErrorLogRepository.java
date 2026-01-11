@@ -155,7 +155,6 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      * @param pageable  pagination parameters
      * @return page of global error logs
      */
-    @Deprecated
     @Query("SELECT e FROM ErrorLog e " +
             "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
             "WHERE s.accountId = :accountId AND e.batchId IS NULL " +
@@ -168,9 +167,7 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      * @param accountId account identifier
      * @param pageable  pagination parameters
      * @return page of unread global error logs
-     * @deprecated Use {@link #findGlobalErrorsWithSiteByAccountIdAndUnread(UUID, Pageable)} to avoid N+1 query
      */
-    @Deprecated
     @Query("SELECT e FROM ErrorLog e " +
             "JOIN com.bitbi.dfm.site.domain.Site s ON e.siteId = s.id " +
             "WHERE s.accountId = :accountId AND e.batchId IS NULL AND e.isRead = false " +
