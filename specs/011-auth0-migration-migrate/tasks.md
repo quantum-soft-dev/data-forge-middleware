@@ -165,7 +165,7 @@
 - [x] **T029** [P] [US1] Integration test for user creation in `src/test/java/com/bitbi/dfm/integration/Auth0UserCreationIntegrationTest.java`:
   - Use Testcontainers PostgreSQL
   - Mock Auth0 Management API
-  - Verify bidirectional linkage (PostgreSQL ← Auth0 user ID, Auth0 user_metadata → accountId)
+  - Verify bidirectional linkage (PostgreSQL ← Auth0 user ID, Auth0 app_metadata → accountId)
   - Verify rollback on Auth0 failure (no orphaned PostgreSQL record)
 
 - [x] **T030** [P] [US1] Unit test for `Auth0UserId` value object in `src/test/java/com/bitbi/dfm/auth/Auth0UserIdTest.java`:
@@ -190,7 +190,7 @@
   - Method `createAccount(email, name, phone, company)` with two-phase commit:
     - Phase 1: Create user in Auth0 via Management API with temporary password
     - Phase 2: Create Account entity in PostgreSQL with identityProviderUserId
-    - Phase 3: Update Auth0 user_metadata with accountId (bidirectional mapping)
+    - Phase 3: Update Auth0 app_metadata with accountId (bidirectional mapping)
     - Compensating transaction: Delete Auth0 user if PostgreSQL fails
   - Implements retry logic with `@Retryable` (maxAttempts=3, exponential backoff)
   - Publishes `AccountLinkedEvent` on success

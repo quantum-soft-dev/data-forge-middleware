@@ -526,11 +526,12 @@ Auth0 **не добавляет роли в JWT токен автоматиче�
        console.log(`Added roles to token for user ${event.user.user_id}:`, event.authorization.roles);
      }
 
-     // Опционально: добавляем accountId из user_metadata
-     if (event.user.user_metadata && event.user.user_metadata.accountId) {
-       api.accessToken.setCustomClaim(`${namespace}/accountId`, event.user.user_metadata.accountId);
+     // Добавляем accountId из app_metadata (НЕ user_metadata!)
+     // accountId хранится в app_metadata, т.к. это системные данные (не редактируемые пользователем)
+     if (event.user.app_metadata && event.user.app_metadata.accountId) {
+       api.accessToken.setCustomClaim(`${namespace}/accountId`, event.user.app_metadata.accountId);
 
-       console.log(`Added accountId to token: ${event.user.user_metadata.accountId}`);
+       console.log(`Added accountId to token: ${event.user.app_metadata.accountId}`);
      }
 
      // Опционально: добавляем email для удобства

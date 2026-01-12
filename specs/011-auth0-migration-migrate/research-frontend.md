@@ -256,8 +256,10 @@ exports.onExecutePostLogin = async (event, api) => {
     // Add roles to access token (for backend API)
     api.accessToken.setCustomClaim(`${namespace}/roles`, event.authorization.roles);
 
-    // Optional: Add user metadata
-    api.idToken.setCustomClaim(`${namespace}/account_id`, event.user.user_metadata.account_id);
+    // Add accountId from app_metadata (NOT user_metadata!)
+    if (event.user.app_metadata && event.user.app_metadata.accountId) {
+      api.idToken.setCustomClaim(`${namespace}/accountId`, event.user.app_metadata.accountId);
+    }
   }
 };
 ```

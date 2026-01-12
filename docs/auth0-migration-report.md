@@ -286,9 +286,9 @@ exports.onExecutePostLogin = async (event, api) => {
     // Добавляем роли в access_token
     api.accessToken.setCustomClaim(`${namespace}/roles`, event.authorization.roles);
 
-    // Опционально: добавляем accountId из user_metadata
-    if (event.user.user_metadata && event.user.user_metadata.accountId) {
-      api.accessToken.setCustomClaim(`${namespace}/accountId`, event.user.user_metadata.accountId);
+    // Добавляем accountId из app_metadata (НЕ user_metadata!)
+    if (event.user.app_metadata && event.user.app_metadata.accountId) {
+      api.accessToken.setCustomClaim(`${namespace}/accountId`, event.user.app_metadata.accountId);
     }
   }
 };

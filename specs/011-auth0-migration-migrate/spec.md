@@ -227,7 +227,7 @@ Developers need to run integration and unit tests without dependency on live Aut
 
 ### Key Entities
 
-- **Auth0 User**: Represents user account in Auth0 tenant, contains email, username, enabled/blocked status, user_metadata (accountId), last_login timestamp, assigned roles
+- **Auth0 User**: Represents user account in Auth0 tenant, contains email, username, enabled/blocked status, app_metadata (accountId), last_login timestamp, assigned roles
 
 - **Auth0 Role**: Represents authorization role in Auth0 (ROLE_USER or ROLE_ADMIN), assigned to users and included in JWT token custom claims
 
