@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -96,4 +97,56 @@ public interface JpaUploadedFileRepository extends JpaRepository<UploadedFile, U
         ORDER BY uf.original_file_name
         """, nativeQuery = true)
     List<LatestFileInfo> findLatestByOriginalFileNameForAccount(UUID accountId);
+
+    /**
+     * Finds the latest uploaded file for each unique original file name for a given site.
+     * Includes S3 key for file download operations.
+     *
+     * @param siteId site identifier
+     * @return list of latest file info with S3 key per unique file name
+     */
+    @Query(value = """
+        WITH latest_uploads AS (
+            SELECT
+                uf.original_file_name,
+                MAX(uf.uploaded_at) AS max_uploaded_at
+            FROM uploaded_files uf
+            JOIN batches b ON uf.batch_id = b.id
+            WHERE b.site_id = :siteId
+            GROUP BY uf.original_file_name
+        )
+        SELECT uf.original_file_name AS originalFileName,
+               uf.file_size AS fileSize,
+               uf.uploaded_at AS uploadedAt,
+               uf.s3_key AS s3Key
+        FROM uploaded_files uf
+        JOIN latest_uploads lu ON uf.original_file_name = lu.original_file_name
+            AND uf.uploaded_at = lu.max_uploaded_at
+        JOIN batches b ON uf.batch_id = b.id
+        WHERE b.site_id = :siteId
+        ORDER BY uf.original_file_name
+        """, nativeQuery = true)
+    List<LatestFileInfoWithS3Key> findLatestByOriginalFileNameForSite(UUID siteId);
+
+    /**
+     * Finds a specific file by site ID and original file name.
+     * Returns the latest version of the file if multiple versions exist.
+     *
+     * @param siteId site identifier
+     * @param originalFileName original file name to find
+     * @return the latest file info with S3 key, or empty if not found
+     */
+    @Query(value = """
+        SELECT uf.original_file_name AS originalFileName,
+               uf.file_size AS fileSize,
+               uf.uploaded_at AS uploadedAt,
+               uf.s3_key AS s3Key
+        FROM uploaded_files uf
+        JOIN batches b ON uf.batch_id = b.id
+        WHERE b.site_id = :siteId
+          AND uf.original_file_name = :originalFileName
+        ORDER BY uf.uploaded_at DESC
+        LIMIT 1
+        """, nativeQuery = true)
+    Optional<LatestFileInfoWithS3Key> findLatestByOriginalFileNameForSiteAndFileName(UUID siteId, String originalFileName);
 }

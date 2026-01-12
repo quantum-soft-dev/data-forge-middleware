@@ -132,8 +132,16 @@ docker-compose up postgres localstack     # Start dependencies
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/plugins/bit-bi/sites` | GET | List sites for account |
+| `/api/v1/plugins/bit-bi/sites/{siteId}/files` | GET | List CSV files for site (for initialization) |
+| `/api/v1/plugins/bit-bi/sites/{siteId}/files/{fileName}` | GET | Download CSV file (proxy from S3) |
 | `/api/v1/plugins/bit-bi/sql-changes` | GET | Get SQL changes (params: siteId, since) |
 | `/api/v1/account/plugins/{pluginId}/logs` | GET | Plugin activity logs (user-facing) |
+
+### Bit BI Plugin Initialization Flow
+1. **Activation/Reinit**: `baseline_batch_id` is set to the latest completed batch
+2. **Baseline batch**: Client downloads CSV files via `/sites/{siteId}/files` endpoint (no SQL generated)
+3. **Subsequent batches**: SQL deltas generated (INSERT/UPDATE/DELETE compared to previous batch)
+4. **First batch after activation (no history)**: Becomes the baseline batch automatically
 
 ### Global Error Handling (016)
 - **Client API**: `POST /api/dfc/error` with optional `severity` field (CRITICAL, ERROR, WARNING, INFO)
@@ -186,5 +194,6 @@ pages/{feature}/            # Route pages
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 
 ## Recent Changes
+- 017-csv-file-initialization: Added baseline_batch_id to account_plugins, new /sites/{siteId}/files endpoints for CSV download, SQL generation skipped for baseline batch
 - 016-global-error-handling: Added severity and isRead to ErrorLog, GlobalErrorUserController with user-facing endpoints, frontend GlobalErrorsWidget on Dashboard
 - 014-plugin-history: Added Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)

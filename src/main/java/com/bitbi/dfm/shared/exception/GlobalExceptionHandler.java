@@ -2,6 +2,7 @@ package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
 // import com.bitbi.dfm.account.application.KeycloakAccountSyncService; // DEPRECATED: Removed for Auth0 migration
+import com.bitbi.dfm.plugin.application.CsvFileQueryService;
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
@@ -1138,6 +1139,54 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+    }
+
+    /**
+     * Handle CsvFileQueryService.FileNotFoundException (404 Not Found).
+     * <p>
+     * Thrown when a CSV file is not found for a site.
+     * </p>
+     */
+    @ExceptionHandler(CsvFileQueryService.FileNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleCsvFileNotFound(
+            CsvFileQueryService.FileNotFoundException ex,
+            HttpServletRequest request) {
+
+        logger.warn("CSV file not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
+     * Handle CsvFileQueryService.FileDownloadException (500 Internal Server Error).
+     * <p>
+     * Thrown when file download from S3 fails.
+     * </p>
+     */
+    @ExceptionHandler(CsvFileQueryService.FileDownloadException.class)
+    public ResponseEntity<ErrorResponseDto> handleCsvFileDownloadError(
+            CsvFileQueryService.FileDownloadException ex,
+            HttpServletRequest request) {
+
+        logger.error("CSV file download failed: {}", ex.getMessage(), ex);
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "Internal Server Error",
+                "Failed to download file. Please try again later.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
     }
 
     /**

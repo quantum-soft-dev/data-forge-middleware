@@ -43,11 +43,41 @@ public interface UploadedFileRepository {
     List<LatestFileInfo> findLatestByOriginalFileNameForAccount(UUID accountId);
 
     /**
+     * Finds the latest uploaded file for each unique original file name for a site.
+     * Includes S3 key for file download. Used by Plugin API for CSV file initialization.
+     *
+     * @param siteId site identifier
+     * @return list of latest file info with S3 key per unique file name
+     */
+    List<LatestFileInfoWithS3Key> findLatestByOriginalFileNameForSite(UUID siteId);
+
+    /**
+     * Finds a specific file by site ID and original file name.
+     * Returns the latest version of the file if multiple versions exist.
+     *
+     * @param siteId site identifier
+     * @param originalFileName original file name to find
+     * @return the latest file info with S3 key, or empty if not found
+     */
+    Optional<LatestFileInfoWithS3Key> findLatestByOriginalFileNameForSiteAndFileName(UUID siteId, String originalFileName);
+
+    /**
      * Projection interface for latest file info query.
      */
     interface LatestFileInfo {
         String getOriginalFileName();
         Long getFileSize();
         Instant getUploadedAt();
+    }
+
+    /**
+     * Projection interface for latest file info with S3 key.
+     * Used for file download operations.
+     */
+    interface LatestFileInfoWithS3Key {
+        String getOriginalFileName();
+        Long getFileSize();
+        Instant getUploadedAt();
+        String getS3Key();
     }
 }

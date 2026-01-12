@@ -114,6 +114,14 @@ public class SqlGenerationService {
     /**
      * Generates SQL file from batch comparison with optional full generation mode.
      * <p>
+     * Baseline batch handling:
+     * <ul>
+     *   <li>If batchId equals account_plugin.baseline_batch_id - skips generation (use CSV files)</li>
+     *   <li>If baseline_batch_id is null - this batch becomes the baseline, sets it and skips generation</li>
+     *   <li>Otherwise - generates SQL delta compared to previous batch</li>
+     * </ul>
+     * </p>
+     * <p>
      * When forceFullGeneration is true, skips previous batch comparison and generates
      * INSERT statements for all data. Used by reinit and plugin activation.
      * </p>
@@ -121,7 +129,7 @@ public class SqlGenerationService {
      * @param batchId The completed batch ID
      * @param accountPluginId The ID of the active account plugin
      * @param forceFullGeneration If true, skips previous batch comparison (generates all INSERTs)
-     * @return Optional containing the generation record, or empty if no changes
+     * @return Optional containing the generation record, or empty if baseline batch (use CSV) or no changes
      */
     public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
         Timer.Sample timer = Timer.start(meterRegistry);
@@ -130,6 +138,29 @@ public class SqlGenerationService {
         long startTimeMs = System.currentTimeMillis();
 
         try {
+            // Check if this is a baseline batch (should use CSV files, not SQL generation)
+            AccountPlugin accountPlugin = accountPluginRepository.findById(accountPluginId)
+                    .orElseThrow(() -> new IllegalArgumentException("AccountPlugin not found: " + accountPluginId));
+
+            // Case 1: This batch is the baseline - skip SQL generation
+            if (accountPlugin.isBaselineBatch(batchId)) {
+                log.info("Skipping SQL generation for baseline batch {}. " +
+                        "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
+                        batchId);
+                return Optional.empty();
+            }
+
+            // Case 2: No baseline set - this is the first batch, make it baseline
+            if (!accountPlugin.hasBaselineBatch()) {
+                log.info("No baseline batch set. Setting batch {} as baseline. " +
+                        "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
+                        batchId);
+                accountPlugin.setBaselineBatchId(batchId);
+                accountPluginRepository.save(accountPlugin);
+                return Optional.empty();
+            }
+
+            // Case 3: Regular batch - generate SQL delta
             // Phase 1: Load all required data (uses JOIN FETCH to prevent N+1)
             batchData = loadBatchData(batchId, forceFullGeneration);
             if (batchData == null) {

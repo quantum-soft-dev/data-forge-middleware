@@ -463,4 +463,121 @@ class AccountPluginTest {
             assertThat(plugin.isActive()).isTrue();
         }
     }
+
+    @Nested
+    @DisplayName("Baseline Batch Methods")
+    class BaselineBatchMethods {
+
+        @Test
+        @DisplayName("setBaselineBatchId should set the baseline batch ID")
+        void shouldSetBaselineBatchId() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            UUID batchId = UUID.randomUUID();
+
+            // When
+            plugin.setBaselineBatchId(batchId);
+
+            // Then
+            assertThat(plugin.getBaselineBatchId()).isEqualTo(batchId);
+        }
+
+        @Test
+        @DisplayName("setBaselineBatchId should update updatedAt timestamp")
+        void shouldUpdateUpdatedAtWhenSettingBaseline() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            Instant originalUpdatedAt = plugin.getUpdatedAt();
+
+            // Small delay
+            try { Thread.sleep(1); } catch (InterruptedException e) { /* ignore */ }
+
+            // When
+            plugin.setBaselineBatchId(UUID.randomUUID());
+
+            // Then
+            assertThat(plugin.getUpdatedAt()).isAfterOrEqualTo(originalUpdatedAt);
+        }
+
+        @Test
+        @DisplayName("setBaselineBatchId with null should clear baseline")
+        void shouldClearBaselineWhenSetToNull() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            plugin.setBaselineBatchId(UUID.randomUUID());
+
+            // When
+            plugin.setBaselineBatchId(null);
+
+            // Then
+            assertThat(plugin.getBaselineBatchId()).isNull();
+        }
+
+        @Test
+        @DisplayName("hasBaselineBatch should return false when no baseline set")
+        void shouldReturnFalseWhenNoBaselineSet() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+
+            // Then
+            assertThat(plugin.hasBaselineBatch()).isFalse();
+        }
+
+        @Test
+        @DisplayName("hasBaselineBatch should return true when baseline is set")
+        void shouldReturnTrueWhenBaselineIsSet() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            plugin.setBaselineBatchId(UUID.randomUUID());
+
+            // Then
+            assertThat(plugin.hasBaselineBatch()).isTrue();
+        }
+
+        @Test
+        @DisplayName("isBaselineBatch should return true when batch matches baseline")
+        void shouldReturnTrueWhenBatchMatchesBaseline() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            UUID batchId = UUID.randomUUID();
+            plugin.setBaselineBatchId(batchId);
+
+            // Then
+            assertThat(plugin.isBaselineBatch(batchId)).isTrue();
+        }
+
+        @Test
+        @DisplayName("isBaselineBatch should return false when batch does not match baseline")
+        void shouldReturnFalseWhenBatchDoesNotMatchBaseline() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            UUID baselineBatchId = UUID.randomUUID();
+            UUID otherBatchId = UUID.randomUUID();
+            plugin.setBaselineBatchId(baselineBatchId);
+
+            // Then
+            assertThat(plugin.isBaselineBatch(otherBatchId)).isFalse();
+        }
+
+        @Test
+        @DisplayName("isBaselineBatch should return false when no baseline set")
+        void shouldReturnFalseWhenNoBaselineSetForComparison() {
+            // Given
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+
+            // Then
+            assertThat(plugin.isBaselineBatch(UUID.randomUUID())).isFalse();
+        }
+
+        @Test
+        @DisplayName("newly activated plugin should have null baseline batch")
+        void shouldHaveNullBaselineWhenNewlyActivated() {
+            // When
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+
+            // Then
+            assertThat(plugin.getBaselineBatchId()).isNull();
+            assertThat(plugin.hasBaselineBatch()).isFalse();
+        }
+    }
 }

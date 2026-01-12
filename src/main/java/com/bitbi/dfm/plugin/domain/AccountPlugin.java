@@ -63,6 +63,21 @@ public class AccountPlugin {
     @Column(name = "last_used_at")
     private Instant lastUsedAt;
 
+    /**
+     * The batch ID used as baseline for CSV file initialization.
+     * SQL generation is skipped for this batch - clients should download
+     * CSV files directly via the /sites/{siteId}/files endpoint.
+     *
+     * <p>Set when:
+     * <ul>
+     *   <li>Plugin activation: latest completed batch (or null if no batches exist)</li>
+     *   <li>Plugin reinit: latest completed batch at reinit time</li>
+     *   <li>First batch after activation: if null, the first incoming batch becomes baseline</li>
+     * </ul>
+     */
+    @Column(name = "baseline_batch_id")
+    private UUID baselineBatchId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -181,6 +196,34 @@ public class AccountPlugin {
      */
     public boolean isActive() {
         return active;
+    }
+
+    /**
+     * Sets the baseline batch ID for CSV file initialization.
+     * SQL generation will be skipped for this batch.
+     *
+     * @param baselineBatchId the batch ID to use as baseline, or null to clear
+     */
+    public void setBaselineBatchId(UUID baselineBatchId) {
+        this.baselineBatchId = baselineBatchId;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Checks if the given batch ID is the baseline batch.
+     * @param batchId the batch ID to check
+     * @return true if this is the baseline batch
+     */
+    public boolean isBaselineBatch(UUID batchId) {
+        return baselineBatchId != null && baselineBatchId.equals(batchId);
+    }
+
+    /**
+     * Checks if baseline batch is set.
+     * @return true if baseline batch ID is set
+     */
+    public boolean hasBaselineBatch() {
+        return baselineBatchId != null;
     }
 
     @PrePersist

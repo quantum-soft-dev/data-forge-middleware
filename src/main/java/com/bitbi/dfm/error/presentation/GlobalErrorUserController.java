@@ -1,5 +1,6 @@
 package com.bitbi.dfm.error.presentation;
 
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.error.application.GlobalErrorService;
 import com.bitbi.dfm.error.presentation.dto.*;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
@@ -41,12 +42,13 @@ import java.util.UUID;
 public class GlobalErrorUserController {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalErrorUserController.class);
-    private static final String ACCOUNT_ID_CLAIM = "https://api.dataforge.com/accountId";
 
     private final GlobalErrorService globalErrorService;
+    private final Auth0Properties auth0Properties;
 
-    public GlobalErrorUserController(GlobalErrorService globalErrorService) {
+    public GlobalErrorUserController(GlobalErrorService globalErrorService, Auth0Properties auth0Properties) {
         this.globalErrorService = globalErrorService;
+        this.auth0Properties = auth0Properties;
     }
 
     /**
@@ -239,16 +241,28 @@ public class GlobalErrorUserController {
 
     /**
      * Extract account ID from JWT claims.
+     * <p>
+     * Uses the configured Auth0 claim namespace from application properties.
+     * Falls back to legacy "accountId" claim for backwards compatibility.
+     * </p>
      *
      * @param jwt Auth0 JWT token
      * @return account ID
      * @throws IllegalArgumentException if accountId claim is missing
      */
     private UUID extractAccountId(Jwt jwt) {
-        String accountIdClaim = jwt.getClaimAsString(ACCOUNT_ID_CLAIM);
-        if (accountIdClaim == null || accountIdClaim.isEmpty()) {
+        // Try namespaced claim first (e.g., https://dev.dfm.bitbi.io/accountId)
+        String accountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
+
+        // Fall back to legacy claim
+        if (accountIdStr == null || accountIdStr.isEmpty()) {
+            accountIdStr = jwt.getClaimAsString("accountId");
+        }
+
+        if (accountIdStr == null || accountIdStr.isEmpty()) {
             throw new IllegalArgumentException("Missing accountId claim in JWT token");
         }
-        return UUID.fromString(accountIdClaim);
+
+        return UUID.fromString(accountIdStr);
     }
 }

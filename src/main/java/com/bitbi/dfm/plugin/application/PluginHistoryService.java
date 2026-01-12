@@ -277,8 +277,16 @@ public class PluginHistoryService {
     // ==================== User Story 4: Reinit (Feature 015) ====================
 
     /**
-     * Reinitializes plugin SQL state by clearing all history and regenerating from latest batch.
+     * Reinitializes plugin SQL state by clearing all history and setting a new baseline batch.
      * Unlike clearHistory, this preserves the plugin's active status and API key.
+     *
+     * <p>After reinit:
+     * <ul>
+     *   <li>All SQL generation history is deleted</li>
+     *   <li>The baseline_batch_id is set to the latest completed batch</li>
+     *   <li>Client should download CSV files via /sites/{siteId}/files endpoint for initialization</li>
+     *   <li>SQL generation will resume for batches AFTER the new baseline</li>
+     * </ul>
      *
      * <p>Feature 015: Plugin Reinit Option - User Story 2</p>
      *
@@ -316,24 +324,27 @@ public class PluginHistoryService {
         // Delete database records
         sqlGenerationRepository.deleteByAccountPluginId(accountPluginId);
 
-        // Find latest completed batch
+        // Find latest completed batch and set it as new baseline
         Optional<com.bitbi.dfm.batch.domain.Batch> latestBatch = batchRepository
                 .findLatestCompletedByAccountId(accountId);
 
-        boolean sqlGenerationTriggered = false;
         UUID batchId = null;
 
-        // Trigger SQL generation asynchronously if batch exists
-        // Returns immediately - SQL generation continues in background thread
         if (latestBatch.isPresent()) {
             batchId = latestBatch.get().getId();
-            log.info("Triggering async SQL generation from batch {} for reinit (full generation)", batchId);
-            // forceFullGeneration=true: generate all INSERTs since history was cleared
-            // Async method - returns immediately, generation runs in pluginExecutor thread pool
-            sqlGenerationService.generateSqlForBatchAsync(batchId, accountPluginId, accountId);
-            sqlGenerationTriggered = true;
+            // Set new baseline batch - SQL generation will be skipped for this batch
+            // Client should download CSV files via /sites/{siteId}/files endpoint
+            accountPlugin.setBaselineBatchId(batchId);
+            accountPluginRepository.save(accountPlugin);
+            log.info("Reinit: set new baseline batch {} for account {}. " +
+                    "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
+                    batchId, accountId);
         } else {
-            log.info("No completed batches found for account {} - skipping SQL generation", accountId);
+            // Clear baseline - first future batch will become baseline
+            accountPlugin.setBaselineBatchId(null);
+            accountPluginRepository.save(accountPlugin);
+            log.info("Reinit: no completed batches found for account {}. " +
+                    "First future batch will become baseline.", accountId);
         }
 
         // Audit log
@@ -342,18 +353,18 @@ public class PluginHistoryService {
                 accountId,
                 count,
                 s3Keys.size() - failedKeys.size(),
-                sqlGenerationTriggered,
+                false,  // SQL generation no longer triggered for reinit
                 batchId
         );
 
-        log.info("Reinit completed: pluginId={}, accountId={}, deleted={}, triggered={}",
-                pluginId, accountId, count, sqlGenerationTriggered);
+        log.info("Reinit completed: pluginId={}, accountId={}, deleted={}, newBaselineBatch={}",
+                pluginId, accountId, count, batchId);
 
         return ReinitResultDto.success(
                 count,
                 s3Keys.size() - failedKeys.size(),
                 totalBytes,
-                sqlGenerationTriggered,
+                false,  // SQL generation no longer triggered for reinit
                 batchId,
                 failedKeys
         );

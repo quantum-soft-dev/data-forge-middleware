@@ -7,15 +7,22 @@
  * Features:
  * - Navigation header with Dashboard/Accounts links
  * - 4 chart widgets in responsive grid
- * - Global errors widget with unread badge
+ * - Global errors widget with unread badge (regular users only)
  * - Logout button in header
  */
 
 import { Header } from '@/widgets/header/Header'
 import { DashboardCharts } from '@/widgets/dashboard-charts'
 import { GlobalErrorsWidget } from '@/widgets/global-errors/GlobalErrorsWidget'
+import { useAuth } from '@/entities/user-session/api/useAuth'
 
 export default function DashboardPage() {
+  const { hasRole, isRolesLoading } = useAuth()
+
+  // Admin users don't have accountId claim, so hide the widget for them
+  const isAdmin = hasRole('ROLE_ADMIN')
+  const showGlobalErrors = !isRolesLoading && !isAdmin
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
@@ -27,10 +34,12 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Global Errors Widget */}
-        <div className="mb-8">
-          <GlobalErrorsWidget pageSize={10} />
-        </div>
+        {/* Global Errors Widget - only shown for regular users with accountId */}
+        {showGlobalErrors && (
+          <div className="mb-8">
+            <GlobalErrorsWidget pageSize={10} />
+          </div>
+        )}
 
         {/* Charts */}
         <DashboardCharts />

@@ -7,11 +7,13 @@ vi.mock('@/entities/user-session/api/useAuth', () => ({
   useAuth: () => ({
     isAuthenticated: true,
     isLoading: false,
+    isRolesLoading: false,
     user: { profile: { name: 'Test User', email: 'test@example.com' } },
     error: null,
     signinRedirect: vi.fn(),
     signoutRedirect: vi.fn(),
     removeUser: vi.fn(),
+    hasRole: (role: string) => role !== 'ROLE_ADMIN', // Regular user (not admin)
   }),
 }))
 

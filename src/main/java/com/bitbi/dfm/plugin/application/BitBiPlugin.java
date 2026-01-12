@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.application;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
+import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.Plugin;
 import com.bitbi.dfm.plugin.domain.PluginEvent;
 import com.bitbi.dfm.plugin.domain.PluginEventType;
@@ -54,6 +55,7 @@ public class BitBiPlugin implements Plugin {
     private SqlGenerationService sqlGenerationService;
     private PluginApiKeyService pluginApiKeyService;
     private BatchRepository batchRepository;
+    private AccountPluginRepository accountPluginRepository;
 
     /**
      * Inject SqlGenerationService lazily to avoid circular dependency.
@@ -80,6 +82,15 @@ public class BitBiPlugin implements Plugin {
     @Lazy
     public void setBatchRepository(BatchRepository batchRepository) {
         this.batchRepository = batchRepository;
+    }
+
+    /**
+     * Inject AccountPluginRepository lazily to avoid circular dependency.
+     */
+    @Autowired
+    @Lazy
+    public void setAccountPluginRepository(AccountPluginRepository accountPluginRepository) {
+        this.accountPluginRepository = accountPluginRepository;
     }
 
     /**
@@ -174,9 +185,14 @@ public class BitBiPlugin implements Plugin {
     /**
      * Called when Bit BI plugin is activated for an account (FR-006, FR-019).
      *
-     * <p>Generates and stores an API Key for Plugin API authentication.
-     * The API Key is returned to the caller for inclusion in the activation response.
-     * This is the only time the raw API key is available - it's stored as BCrypt hash.</p>
+     * <p>This method:
+     * <ul>
+     *   <li>Sets the baseline_batch_id to the latest completed batch (for CSV initialization)</li>
+     *   <li>Generates and stores an API Key for Plugin API authentication</li>
+     * </ul>
+     *
+     * <p>The baseline batch is used for CSV file initialization - SQL generation is skipped
+     * for this batch. Clients should download CSV files via /sites/{siteId}/files endpoint.</p>
      *
      * @param accountPlugin the activation record
      * @return the raw API key (shown only once), or null if generation failed
@@ -187,6 +203,28 @@ public class BitBiPlugin implements Plugin {
         log.info("BitBiPlugin activated for account {} with tenant {}",
             accountPlugin.getAccountId(),
             tenantId);
+
+        // Set baseline batch ID for CSV initialization
+        // This batch will be used for downloading CSV files, not SQL generation
+        try {
+            Optional<Batch> latestBatch = batchRepository.findLatestCompletedByAccountId(
+                accountPlugin.getAccountId());
+
+            if (latestBatch.isPresent()) {
+                accountPlugin.setBaselineBatchId(latestBatch.get().getId());
+                accountPluginRepository.save(accountPlugin);
+                log.info("Set baseline batch {} for account {} (CSV initialization)",
+                    latestBatch.get().getId(), accountPlugin.getAccountId());
+            } else {
+                log.info("No completed batches found for account {} - baseline will be set on first batch",
+                    accountPlugin.getAccountId());
+                // baseline_batch_id stays null - will be set when first batch completes
+            }
+        } catch (Exception e) {
+            log.error("Failed to set baseline batch for account {}: {}",
+                accountPlugin.getAccountId(), e.getMessage(), e);
+            // Don't fail activation if baseline setting fails
+        }
 
         // Generate API Key for Plugin API authentication
         try {
@@ -219,51 +257,35 @@ public class BitBiPlugin implements Plugin {
     }
 
     /**
-     * Initializes SQL generation from the latest completed batch for the account.
+     * Called after plugin activation to log initialization status.
      *
-     * <p>Called asynchronously after plugin activation (new or reactivation) to
-     * ensure SQL changes are immediately available for the user (FR-001, FR-002).</p>
+     * <p>IMPORTANT: SQL generation is NO LONGER triggered on activation.
+     * For the baseline batch (set in onActivate), clients should download CSV files
+     * directly via /sites/{siteId}/files endpoint instead of receiving SQL statements.</p>
      *
-     * <p>This method is intentionally best-effort - failures are logged but do not
-     * affect the activation response. Users can trigger reinit manually if needed.</p>
+     * <p>SQL generation only happens for batches AFTER the baseline batch,
+     * producing delta statements (INSERT/UPDATE/DELETE).</p>
      *
      * @param accountPlugin the activation record
-     * @param isNewOrReactivation true if this is a new activation or reactivation (FR-003)
+     * @param isNewOrReactivation true if this is a new activation or reactivation
      */
     @Async("pluginExecutor")
     public void initializeSqlFromLatestBatch(AccountPlugin accountPlugin, boolean isNewOrReactivation) {
         if (!isNewOrReactivation) {
-            log.debug("Skipping SQL initialization for config update on account {}",
+            log.debug("Skipping initialization log for config update on account {}",
                 accountPlugin.getAccountId());
             return;
         }
 
-        log.info("Initializing SQL from latest batch for account {} plugin {}",
-            accountPlugin.getAccountId(), accountPlugin.getPluginId());
-
-        try {
-            Optional<Batch> latestBatch = batchRepository.findLatestCompletedByAccountId(
+        // Log initialization status - no SQL generation for baseline batch
+        if (accountPlugin.hasBaselineBatch()) {
+            log.info("Plugin initialized for account {} with baseline batch {}. " +
+                    "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
+                accountPlugin.getAccountId(), accountPlugin.getBaselineBatchId());
+        } else {
+            log.info("Plugin initialized for account {} without baseline batch. " +
+                    "First completed batch will become baseline (CSV files, no SQL generation).",
                 accountPlugin.getAccountId());
-
-            if (latestBatch.isEmpty()) {
-                log.info("No completed batches found for account {} - skipping SQL initialization",
-                    accountPlugin.getAccountId());
-                return;
-            }
-
-            Batch batch = latestBatch.get();
-            log.info("Found latest completed batch {} for account {}, triggering SQL generation",
-                batch.getId(), accountPlugin.getAccountId());
-
-            // forceFullGeneration=true: generate all INSERTs for new/reactivated plugin
-            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId(), true);
-
-            log.info("SQL generation triggered for batch {} account {} (full generation)",
-                batch.getId(), accountPlugin.getAccountId());
-        } catch (Exception e) {
-            log.error("Failed to initialize SQL from latest batch for account {}: {}",
-                accountPlugin.getAccountId(), e.getMessage(), e);
-            // Don't rethrow - initialization failures should not fail activation
         }
     }
 }
