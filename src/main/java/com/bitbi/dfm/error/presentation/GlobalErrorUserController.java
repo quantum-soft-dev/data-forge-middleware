@@ -245,10 +245,16 @@ public class GlobalErrorUserController {
      * Uses the configured Auth0 claim namespace from application properties.
      * Falls back to legacy "accountId" claim for backwards compatibility.
      * </p>
+     * <p>
+     * Admin users (ROLE_ADMIN) do not have accountId claims and should not
+     * access user-facing global error endpoints. They should use the admin
+     * error management endpoints at /api/v1/errors/** instead.
+     * </p>
      *
      * @param jwt Auth0 JWT token
      * @return account ID
-     * @throws IllegalArgumentException if accountId claim is missing
+     * @throws org.springframework.security.access.AccessDeniedException if accountId claim is missing
+     *         (indicates admin user trying to access user endpoint)
      */
     private UUID extractAccountId(Jwt jwt) {
         // Try namespaced claim first (e.g., https://dev.dfm.bitbi.io/accountId)
@@ -260,7 +266,11 @@ public class GlobalErrorUserController {
         }
 
         if (accountIdStr == null || accountIdStr.isEmpty()) {
-            throw new IllegalArgumentException("Missing accountId claim in JWT token");
+            // Admin users don't have accountId - redirect them to use admin endpoints
+            logger.warn("User without accountId claim attempted to access global errors. " +
+                    "Admin users should use /api/v1/errors/** instead.");
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "This endpoint is for regular users only. Admin users should use the admin error management endpoints.");
         }
 
         return UUID.fromString(accountIdStr);

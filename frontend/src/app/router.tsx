@@ -18,6 +18,7 @@ const ComparisonDetailPage = lazy(() => import('@/pages/comparison/ComparisonDet
 const PluginsAdminPage = lazy(() => import('@/pages/admin/plugins/PluginsAdminPage'))
 const PluginHistoryPage = lazy(() => import('@/pages/admin/plugins/PluginHistoryPage'))
 const MyPluginsPage = lazy(() => import('@/pages/account/plugins').then(m => ({ default: m.MyPluginsPage })))
+const DeviceVerifyPage = lazy(() => import('@/pages/device-verify/DeviceVerifyPage'))
 
 // Root route
 const rootRoute = createRootRoute({
@@ -134,6 +135,13 @@ const myPluginsRoute = createRoute({
   component: () => <UserOnlyGuard component={MyPluginsPage} />,
 })
 
+// Device Authorization route - for verifying device authorization requests (RFC 8628)
+const deviceVerifyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/device-verify',
+  component: () => <UserOnlyGuard component={DeviceVerifyPage} />,
+})
+
 // Create route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -151,6 +159,7 @@ const routeTree = rootRoute.addChildren([
   comparisonCreateRoute,
   comparisonDetailRoute,
   myPluginsRoute,
+  deviceVerifyRoute,
 ])
 
 // Create router instance

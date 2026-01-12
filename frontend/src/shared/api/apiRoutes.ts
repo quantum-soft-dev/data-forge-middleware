@@ -139,3 +139,13 @@ export const ADMIN_PLUGIN_HISTORY = (pluginId: string, accountId: string) =>
   `${ADMIN_PLUGINS}/${pluginId}/accounts/${accountId}/history`;
 export const ADMIN_PLUGIN_HISTORY_SUMMARY = (pluginId: string, accountId: string) =>
   `${ADMIN_PLUGIN_HISTORY(pluginId, accountId)}/summary`;
+
+// ==================== Device Authorization (RFC 8628) ====================
+
+/**
+ * Device Authorization endpoints for Device Code Flow.
+ * Allows headless devices to authorize through browser.
+ */
+export const DEVICE_AUTHORIZATION = `${DEVICE_API_BASE}/authorize`;
+export const DEVICE_AUTHORIZATION_TOKEN = `${DEVICE_API_BASE}/token`;
+export const DEVICE_AUTHORIZATION_CONFIRM = `${DEVICE_API_BASE}/confirm`;
