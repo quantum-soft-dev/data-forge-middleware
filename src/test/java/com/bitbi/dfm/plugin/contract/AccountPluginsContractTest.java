@@ -313,15 +313,15 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
         private static final UUID BATCH_ID = UUID.fromString("b1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
         @Test
-        @DisplayName("T020: Should return 202 Accepted on successful reinit (async SQL generation)")
+        @DisplayName("T020: Should return 202 Accepted on successful reinit (baseline batch set)")
         void shouldReturn202OnSuccessfulReinit() throws Exception {
             // Given
             ReinitResultDto result = ReinitResultDto.success(
                     10L,  // deletedGenerations
                     10L,  // deletedS3Files
                     50000L,  // totalBytesFreed
-                    true,  // sqlGenerationTriggered
-                    BATCH_ID,  // batchId
+                    false,  // sqlGenerationTriggered - now false (baseline batch logic, no SQL generation)
+                    BATCH_ID,  // batchId - used as baseline batch
                     Collections.emptyList()  // s3DeleteWarnings
             );
 
@@ -337,9 +337,9 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.deletedGenerations").value(10))
                 .andExpect(jsonPath("$.deletedS3Files").value(10))
                 .andExpect(jsonPath("$.totalBytesFreed").value(50000))
-                .andExpect(jsonPath("$.sqlGenerationTriggered").value(true))
+                .andExpect(jsonPath("$.sqlGenerationTriggered").value(false))
                 .andExpect(jsonPath("$.batchId").value(BATCH_ID.toString()))
-                .andExpect(jsonPath("$.message").value(containsString("SQL generation running asynchronously")))
+                .andExpect(jsonPath("$.message").value(containsString("baseline batch")))
                 .andExpect(jsonPath("$.s3DeleteWarnings").isArray())
                 .andExpect(jsonPath("$.s3DeleteWarnings", hasSize(0)));
 

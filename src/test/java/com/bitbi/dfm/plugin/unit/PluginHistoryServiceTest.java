@@ -388,14 +388,14 @@ class PluginHistoryServiceTest {
             // When
             ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
 
-            // Then
+            // Then - reinit now sets baseline batch instead of triggering SQL generation
             assertThat(result.success()).isTrue();
             assertThat(result.deletedGenerations()).isEqualTo(10L);
             assertThat(result.deletedS3Files()).isEqualTo(3L);
             assertThat(result.totalBytesFreed()).isEqualTo(50000L);
-            assertThat(result.sqlGenerationTriggered()).isTrue();
+            assertThat(result.sqlGenerationTriggered()).isFalse(); // No longer triggers SQL generation
             assertThat(result.batchId()).isEqualTo(BATCH_ID);
-            assertThat(result.message()).contains("SQL generation running asynchronously");
+            assertThat(result.message()).contains("baseline batch");
 
             // Verify S3 files deleted via batch method
             verify(s3StorageService).deleteFiles(s3Keys);
@@ -403,11 +403,12 @@ class PluginHistoryServiceTest {
             // Verify DB records deleted
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
 
-            // Verify async SQL generation triggered (returns immediately, runs in background)
-            verify(sqlGenerationService).generateSqlForBatchAsync(BATCH_ID, ACCOUNT_PLUGIN_ID, ACCOUNT_ID);
+            // Verify baseline batch is set (SQL generation no longer triggered)
+            verify(mockAccountPlugin).setBaselineBatchId(BATCH_ID);
+            verify(accountPluginRepository).save(mockAccountPlugin);
 
-            // Verify audit logged
-            verify(auditService).logReinit(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(10L), eq(3L), eq(true), eq(BATCH_ID));
+            // Verify audit logged (sqlGenerationTriggered = false now)
+            verify(auditService).logReinit(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(10L), eq(3L), eq(false), eq(BATCH_ID));
 
             // Verify plugin NOT deactivated (key difference from clearHistory)
             verify(mockAccountPlugin, never()).deactivate();
@@ -462,12 +463,14 @@ class PluginHistoryServiceTest {
 
             // Key assertion: plugin should NOT be deactivated (preserves API key)
             verify(mockAccountPlugin, never()).deactivate();
-            verify(accountPluginRepository, never()).save(mockAccountPlugin);
+            // Note: save() IS called to clear baselineBatchId when no batches exist
+            verify(mockAccountPlugin).setBaselineBatchId(null);
+            verify(accountPluginRepository).save(mockAccountPlugin);
         }
 
         @Test
-        @DisplayName("Async SQL generation runs in background - failures don't affect reinit result")
-        void asyncSqlGenerationRunsInBackground() {
+        @DisplayName("Reinit sets baseline batch when completed batch exists")
+        void reinitSetsBaselineBatchWhenCompletedBatchExists() {
             // Given
             when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
                     .thenReturn(Optional.of(mockAccountPlugin));
@@ -485,27 +488,25 @@ class PluginHistoryServiceTest {
             when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
                     .thenReturn(Optional.of(mockBatch));
 
-            // Note: With async behavior, the method returns immediately without waiting for
-            // SQL generation to complete. Any failures happen in the background thread.
-            // The async method (generateSqlForBatchAsync) catches exceptions internally.
-
             // When
             ReinitResultDto result = pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
 
-            // Then - reinit succeeds and sqlGenerationTriggered is true because async call was made
-            // (Even if the async method fails later, reinit() has already returned)
+            // Then - reinit sets baseline batch instead of triggering SQL generation
             assertThat(result.success()).isTrue();
-            assertThat(result.sqlGenerationTriggered()).isTrue();  // Async call was triggered
+            assertThat(result.sqlGenerationTriggered()).isFalse(); // No longer triggers SQL
             assertThat(result.deletedGenerations()).isEqualTo(5L);
             assertThat(result.batchId()).isEqualTo(BATCH_ID);
-            assertThat(result.message()).contains("SQL generation running asynchronously");
+            assertThat(result.message()).contains("baseline batch");
 
             // Verify deletion still happened
             verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
 
-            // Verify async method was called (not the sync one)
-            verify(sqlGenerationService).generateSqlForBatchAsync(BATCH_ID, ACCOUNT_PLUGIN_ID, ACCOUNT_ID);
-            verify(sqlGenerationService, never()).generateSqlForBatch(any(), any(), anyBoolean());
+            // Verify baseline batch is set
+            verify(mockAccountPlugin).setBaselineBatchId(BATCH_ID);
+            verify(accountPluginRepository).save(mockAccountPlugin);
+
+            // SQL generation is no longer triggered on reinit
+            verifyNoInteractions(sqlGenerationService);
         }
 
         @Test

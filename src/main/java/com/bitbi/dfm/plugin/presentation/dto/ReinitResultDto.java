@@ -56,9 +56,16 @@ public record ReinitResultDto(
             UUID batchId,
             List<String> failedS3Keys
     ) {
-        String message = sqlGenerationTriggered
-                ? "Plugin reinitialized. SQL generation running asynchronously."
-                : "Plugin reinitialized. No completed batches found for SQL generation.";
+        String message;
+        if (batchId != null) {
+            // New baseline batch logic: client should download CSV files
+            message = "Plugin reinitialized. New baseline batch set. " +
+                    "Client should download CSV files via /sites/{siteId}/files endpoint.";
+        } else {
+            // No batches exist yet
+            message = "Plugin reinitialized. No completed batches found. " +
+                    "First future batch will become baseline.";
+        }
 
         return new ReinitResultDto(
                 true,

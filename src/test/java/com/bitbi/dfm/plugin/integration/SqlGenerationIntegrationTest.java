@@ -70,12 +70,28 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
     private static final UUID FRESH_SITE_ID = UUID.fromString("0199bab0-1111-1111-1111-111111111111");
     private static final String FRESH_SITE_DOMAIN = "test-store.example.com";
 
+    /**
+     * Reference to the AccountPlugin activation, used by tests that need to set baseline.
+     */
+    private AccountPlugin accountPlugin;
+
     @BeforeEach
     void setUp() {
         // Activate Bit BI plugin for test account
-        AccountPlugin activation = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi",
+        accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi",
                 Map.of("tenantId", "test-tenant"));
-        accountPluginRepository.save(activation);
+        accountPluginRepository.save(accountPlugin);
+    }
+
+    /**
+     * Sets a baseline batch on the account plugin.
+     * After baseline is set, subsequent batches will trigger SQL generation.
+     *
+     * @param baselineBatchId the batch ID to set as baseline
+     */
+    private void setBaselineBatch(UUID baselineBatchId) {
+        accountPlugin.setBaselineBatchId(baselineBatchId);
+        accountPlugin = accountPluginRepository.save(accountPlugin);
     }
 
     @Nested
@@ -85,11 +101,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @Test
         @DisplayName("Should trigger SQL generation on BATCH_COMPLETED event")
         void shouldTriggerSqlGenerationOnBatchCompletedEvent() throws Exception {
-            // Given - First batch with CSV files in S3 and database
+            // Given - First batch is the baseline (set explicitly)
             Batch firstBatch = createBatchWithCsvFile(null, "customers.csv",
                     "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
+            setBaselineBatch(firstBatch.getId());
 
-            // Second batch with modified data
+            // Second batch with modified data (will trigger SQL generation)
             Batch secondBatch = createBatchWithCsvFile(null, "customers.csv",
                     "id,name,email\n1,Alice,alice@new.com\n3,Charlie,charlie@example.com");
 
@@ -114,9 +131,14 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should generate INSERT statements for first batch (no previous batch)")
+        @DisplayName("Should generate INSERT statements for first batch on fresh site (no previous batch)")
         void shouldGenerateInsertStatementsForFirstBatch() throws Exception {
-            // Given - First batch with CSV files (no previous batch) - use fresh site without pre-existing batches
+            // Given - Set baseline to any batch (required for SQL generation to proceed)
+            // Create a dummy baseline batch on the main test site
+            Batch baselineBatch = createBatchWithCsvFile(null, "dummy.csv", "id\n1");
+            setBaselineBatch(baselineBatch.getId());
+
+            // Create first batch for FRESH_SITE_ID (has no previous batch for this site)
             Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "products.csv",
                     "id,name,price\n1,Widget,9.99\n2,Gadget,19.99");
 
@@ -134,7 +156,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             assertThat(generations).isNotEmpty();
 
             PluginSqlGeneration generation = generations.get(0);
-            assertThat(generation.getComparisonBatchId()).isNull(); // No previous batch
+            assertThat(generation.getComparisonBatchId()).isNull(); // No previous batch for this site
             assertThat(generation.getInsertCount()).isEqualTo(2); // 2 rows
             assertThat(generation.getUpdateCount()).isEqualTo(0);
             assertThat(generation.getDeleteCount()).isEqualTo(0);
@@ -169,9 +191,10 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @Test
         @DisplayName("Should detect modified rows between batches")
         void shouldDetectModifiedRowsBetweenBatches() throws Exception {
-            // Given - First batch
-            createBatchWithCsvFile(null, "users.csv",
+            // Given - First batch is the baseline
+            Batch firstBatch = createBatchWithCsvFile(null, "users.csv",
                     "id,name,status\n1,Alice,active\n2,Bob,active");
+            setBaselineBatch(firstBatch.getId());
 
             // Second batch with Bob's status changed
             Batch secondBatch = createBatchWithCsvFile(null, "users.csv",
@@ -197,9 +220,10 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @Test
         @DisplayName("Should detect deleted rows between batches")
         void shouldDetectDeletedRowsBetweenBatches() throws Exception {
-            // Given - First batch with 3 rows
-            createBatchWithCsvFile(null, "items.csv",
+            // Given - First batch with 3 rows is the baseline
+            Batch firstBatch = createBatchWithCsvFile(null, "items.csv",
                     "id,name\n1,Item1\n2,Item2\n3,Item3");
+            setBaselineBatch(firstBatch.getId());
 
             // Second batch with row 3 removed
             Batch secondBatch = createBatchWithCsvFile(null, "items.csv",
@@ -225,9 +249,10 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @Test
         @DisplayName("Should handle multiple changes in single batch")
         void shouldHandleMultipleChangesInSingleBatch() throws Exception {
-            // Given - First batch
-            createBatchWithCsvFile(null, "data.csv",
+            // Given - First batch is the baseline
+            Batch firstBatch = createBatchWithCsvFile(null, "data.csv",
                     "id,value\n1,A\n2,B\n3,C");
+            setBaselineBatch(firstBatch.getId());
 
             // Second batch: 1 modified, 3 deleted, 4 added
             Batch secondBatch = createBatchWithCsvFile(null, "data.csv",
@@ -258,7 +283,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @Test
         @DisplayName("Should handle CSV filenames starting with digits by prefixing with underscore")
         void shouldHandleCsvFilenamesStartingWithDigits() throws Exception {
-            // Given - CSV file with name starting with digit (like 77nsfsfira.csv)
+            // Given - Set baseline to any batch (required for SQL generation to proceed)
+            Batch baselineBatch = createBatchWithCsvFile(null, "dummy.csv", "id\n1");
+            setBaselineBatch(baselineBatch.getId());
+
+            // Create batch with CSV file with name starting with digit (like 77nsfsfira.csv)
             Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "77nsfsfira.csv",
                     "id,name\n1,Test\n2,Data");
 
@@ -286,7 +315,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @Test
         @DisplayName("Should store generated SQL in S3 with correct path structure")
         void shouldStoreGeneratedSqlInS3WithCorrectPathStructure() throws Exception {
-            // Given
+            // Given - Set up baseline batch first
+            Batch baselineBatch = createBatchWithCsvFile(null, "orders.csv",
+                    "id,customer,total\n0,Dummy,0.00");
+            setBaselineBatch(baselineBatch.getId());
+
+            // Create second batch that will trigger SQL generation
             Batch batch = createBatchWithCsvFile(null, "orders.csv",
                     "id,customer,total\n1,Alice,100.00");
 

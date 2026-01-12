@@ -343,109 +343,59 @@ class BitBiPluginTest {
 
     @Nested
     @DisplayName("initializeSqlFromLatestBatch() - Feature 015")
-    @ExtendWith(MockitoExtension.class)
     class InitializeSqlFromLatestBatch {
 
-        @Mock
-        private BatchRepository batchRepository;
-
-        @Mock
-        private SqlGenerationService sqlGenerationService;
-
-        private BitBiPlugin pluginWithMocks;
+        private BitBiPlugin pluginUnderTest;
 
         @BeforeEach
         void setUpMocks() {
-            pluginWithMocks = new BitBiPlugin();
-            pluginWithMocks.setBatchRepository(batchRepository);
-            pluginWithMocks.setSqlGenerationService(sqlGenerationService);
+            pluginUnderTest = new BitBiPlugin();
         }
 
         @Test
-        @DisplayName("T008: Should initialize SQL on new activation when batch exists")
-        void shouldInitializeSqlOnNewActivation() {
+        @DisplayName("T008: Should log initialization with baseline batch when baseline exists")
+        void shouldLogInitializationWithBaselineBatch() {
             // Given
             UUID accountId = UUID.randomUUID();
-            UUID batchId = UUID.randomUUID();
-            Long accountPluginId = 123L;
+            UUID baselineBatchId = UUID.randomUUID();
 
             AccountPlugin accountPlugin = mock(AccountPlugin.class);
             when(accountPlugin.getAccountId()).thenReturn(accountId);
-            when(accountPlugin.getId()).thenReturn(accountPluginId);
-            when(accountPlugin.getPluginId()).thenReturn("bit-bi");
+            when(accountPlugin.hasBaselineBatch()).thenReturn(true);
+            when(accountPlugin.getBaselineBatchId()).thenReturn(baselineBatchId);
 
-            Batch mockBatch = mock(Batch.class);
-            when(mockBatch.getId()).thenReturn(batchId);
-            when(batchRepository.findLatestCompletedByAccountId(accountId))
-                    .thenReturn(Optional.of(mockBatch));
-
-            // When
-            pluginWithMocks.initializeSqlFromLatestBatch(accountPlugin, true);
-
-            // Then
-            verify(batchRepository).findLatestCompletedByAccountId(accountId);
-            verify(sqlGenerationService).generateSqlForBatch(batchId, accountPluginId, true);
+            // When / Then - should not throw (just logs)
+            assertThatCode(() -> pluginUnderTest.initializeSqlFromLatestBatch(accountPlugin, true))
+                    .doesNotThrowAnyException();
         }
 
         @Test
-        @DisplayName("T009: Should NOT initialize SQL on config update (isNewOrReactivation=false)")
-        void shouldNotInitializeSqlOnConfigUpdate() {
+        @DisplayName("T009: Should NOT log initialization on config update (isNewOrReactivation=false)")
+        void shouldNotLogInitializationOnConfigUpdate() {
             // Given
             AccountPlugin accountPlugin = mock(AccountPlugin.class);
             when(accountPlugin.getAccountId()).thenReturn(UUID.randomUUID());
 
-            // When
-            pluginWithMocks.initializeSqlFromLatestBatch(accountPlugin, false);
+            // When / Then - should not throw and should return early
+            assertThatCode(() -> pluginUnderTest.initializeSqlFromLatestBatch(accountPlugin, false))
+                    .doesNotThrowAnyException();
 
-            // Then
-            verifyNoInteractions(batchRepository);
-            verifyNoInteractions(sqlGenerationService);
+            // Verify hasBaselineBatch() was never called (early return)
+            verify(accountPlugin, never()).hasBaselineBatch();
         }
 
         @Test
-        @DisplayName("T010: Should skip initialization when no batches exist")
-        void shouldSkipInitializationWhenNoBatchesExist() {
+        @DisplayName("T010: Should log initialization without baseline when no baseline exists")
+        void shouldLogInitializationWithoutBaseline() {
             // Given
             UUID accountId = UUID.randomUUID();
 
             AccountPlugin accountPlugin = mock(AccountPlugin.class);
             when(accountPlugin.getAccountId()).thenReturn(accountId);
-            when(accountPlugin.getPluginId()).thenReturn("bit-bi");
+            when(accountPlugin.hasBaselineBatch()).thenReturn(false);
 
-            when(batchRepository.findLatestCompletedByAccountId(accountId))
-                    .thenReturn(Optional.empty());
-
-            // When
-            pluginWithMocks.initializeSqlFromLatestBatch(accountPlugin, true);
-
-            // Then
-            verify(batchRepository).findLatestCompletedByAccountId(accountId);
-            verifyNoInteractions(sqlGenerationService);
-        }
-
-        @Test
-        @DisplayName("Should handle SQL generation exception gracefully")
-        void shouldHandleSqlGenerationExceptionGracefully() {
-            // Given
-            UUID accountId = UUID.randomUUID();
-            UUID batchId = UUID.randomUUID();
-            Long accountPluginId = 123L;
-
-            AccountPlugin accountPlugin = mock(AccountPlugin.class);
-            when(accountPlugin.getAccountId()).thenReturn(accountId);
-            when(accountPlugin.getId()).thenReturn(accountPluginId);
-            when(accountPlugin.getPluginId()).thenReturn("bit-bi");
-
-            Batch mockBatch = mock(Batch.class);
-            when(mockBatch.getId()).thenReturn(batchId);
-            when(batchRepository.findLatestCompletedByAccountId(accountId))
-                    .thenReturn(Optional.of(mockBatch));
-
-            doThrow(new RuntimeException("SQL generation failed"))
-                    .when(sqlGenerationService).generateSqlForBatch(any(), any(), anyBoolean());
-
-            // When / Then - should not throw
-            assertThatCode(() -> pluginWithMocks.initializeSqlFromLatestBatch(accountPlugin, true))
+            // When / Then - should not throw (just logs)
+            assertThatCode(() -> pluginUnderTest.initializeSqlFromLatestBatch(accountPlugin, true))
                     .doesNotThrowAnyException();
         }
     }
