@@ -236,6 +236,7 @@ public class SecurityConfiguration {
                 .requestMatchers("/api/v1/admin/plugins/**").hasRole("ADMIN") // Plugin admin endpoints
                 .requestMatchers("/api/v1/plugins/**").authenticated() // Plugin activation endpoints (any authenticated user)
                 .requestMatchers("/api/v1/account/plugins/**").authenticated() // Account plugins list
+                .requestMatchers("/api/v1/account/errors/**").authenticated() // User global errors (Dashboard)
                 .requestMatchers("/api/v1/history/**").authenticated() // Any authenticated user
                 .requestMatchers("/api/v1/comparisons/**").authenticated() // Any authenticated user
                 .anyRequest().authenticated() // Default: require authentication
