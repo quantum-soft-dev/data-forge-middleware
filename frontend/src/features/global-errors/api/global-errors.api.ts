@@ -14,7 +14,7 @@ import type {
   UnreadCountResponse,
 } from '../model/global-error.types'
 
-const BASE_URL = '/v1/api/account/errors'
+const BASE_URL = '/v1/account/errors'
 
 /**
  * List global errors with pagination.

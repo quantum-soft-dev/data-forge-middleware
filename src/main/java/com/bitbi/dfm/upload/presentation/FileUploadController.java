@@ -30,7 +30,7 @@ import java.util.UUID;
  * @version 3.0.0
  */
 @RestController
-@RequestMapping("/v1/dfc/batch")
+@RequestMapping("/api/dfc/batch")
 public class FileUploadController {
 
     private static final Logger logger = LoggerFactory.getLogger(FileUploadController.class);

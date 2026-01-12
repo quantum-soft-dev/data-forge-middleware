@@ -36,7 +36,7 @@ import java.util.UUID;
  * @version 1.0.0
  */
 @RestController
-@RequestMapping("/v1/api/account/errors")
+@RequestMapping("/api/v1/account/errors")
 @Tag(name = "User - Global Errors", description = "User-facing global error management endpoints")
 @SecurityRequirement(name = "auth0")
 public class GlobalErrorUserController {
@@ -251,10 +251,8 @@ public class GlobalErrorUserController {
      * @throws IllegalArgumentException if accountId claim is missing
      */
     private UUID extractAccountId(Jwt jwt) {
-        String expectedClaim = auth0Properties.api().accountIdClaim();
-
         // Try namespaced claim first (e.g., https://dev.dfm.bitbi.io/accountId)
-        String accountIdStr = jwt.getClaimAsString(expectedClaim);
+        String accountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
 
         // Fall back to legacy claim
         if (accountIdStr == null || accountIdStr.isEmpty()) {
@@ -262,11 +260,7 @@ public class GlobalErrorUserController {
         }
 
         if (accountIdStr == null || accountIdStr.isEmpty()) {
-            logger.warn("Missing accountId claim in JWT. Expected claim: '{}'. Available claims: {}",
-                    expectedClaim, jwt.getClaims().keySet());
-            throw new IllegalArgumentException(
-                    "Missing accountId claim in JWT token. Expected: '" + expectedClaim +
-                    "' or 'accountId'. This user may not be linked to a DFM account.");
+            throw new IllegalArgumentException("Missing accountId claim in JWT token");
         }
 
         return UUID.fromString(accountIdStr);

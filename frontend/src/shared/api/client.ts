@@ -12,9 +12,9 @@ import axios from 'axios'
  */
 function getApiBaseUrl(): string {
   if (import.meta.env.PROD) {
-    return window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || ''
+    return window._env_?.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || '/api'
   }
-  return '' // No prefix - paths in apiRoutes.ts include full path
+  return '/api' // Use Vite proxy in development
 }
 
 /**

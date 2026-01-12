@@ -36,7 +36,7 @@ import java.util.UUID;
  * @version 3.0.0
  */
 @RestController
-@RequestMapping("/v1/dfc/error")
+@RequestMapping("/api/dfc/error")
 @Tag(name = "Client - Error Logging", description = "Error logging endpoints for Data Forge Client")
 public class ErrorLogController {
 
