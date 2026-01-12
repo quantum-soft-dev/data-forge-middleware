@@ -25,7 +25,7 @@ import java.util.Map;
  * @version 1.0.0
  */
 @RestController
-@RequestMapping("/api/v1/auth")
+@RequestMapping("/v1/api/auth")
 public class AuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);

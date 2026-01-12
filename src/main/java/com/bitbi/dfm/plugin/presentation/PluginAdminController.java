@@ -43,7 +43,7 @@ import java.util.UUID;
  * <p>User Story 6 (Phase 8) - Admin Views Plugin Audit Trail</p>
  */
 @RestController
-@RequestMapping("/api/v1/admin/plugins")
+@RequestMapping("/v1/api/admin/plugins")
 @PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Plugin Administration", description = "Admin endpoints for plugin management and audit")
 @SecurityRequirement(name = "oauth2")

@@ -28,7 +28,7 @@ import java.util.UUID;
  * @version 3.0.0
  */
 @RestController
-@RequestMapping("/api/dfc/batch")
+@RequestMapping("/v1/dfc/batch")
 public class BatchController {
 
     private static final Logger logger = LoggerFactory.getLogger(BatchController.class);

@@ -29,7 +29,7 @@ public final class ApiRoutes {
      * are under this base path and use Custom JWT authentication.
      * </p>
      */
-    public static final String DEVICE_API_BASE = "/api/v1/device";
+    public static final String DEVICE_API_BASE = "/v1/api/device";
 
     // Device Authentication
     /**
@@ -194,7 +194,7 @@ public final class ApiRoutes {
      * are under this base path and use Auth0 OAuth2 authentication.
      * </p>
      */
-    public static final String ADMIN_API_BASE = "/api/v1";
+    public static final String ADMIN_API_BASE = "/v1/api";
 
     // Accounts
     /**

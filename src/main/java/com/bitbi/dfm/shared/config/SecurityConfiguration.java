@@ -33,14 +33,14 @@ import java.util.stream.Collectors;
  *
  * <p><b>Unified API Structure (Post-Migration):</b></p>
  * <ul>
- *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication only (Device API)</li>
- *   <li><b>Order 2:</b> /api/v1/** → Keycloak OAuth2 authentication only (UI/Admin API)</li>
+ *   <li><b>Order 1:</b> /v1/api/device/** → Custom JWT authentication only (Device API)</li>
+ *   <li><b>Order 2:</b> /v1/api/** → Keycloak OAuth2 authentication only (UI/Admin API)</li>
  *   <li><b>Order 3:</b> Default → Public endpoints + deny all others</li>
  * </ul>
  *
  * <p><b>Legacy API Support (Pre-Migration):</b></p>
  * <ul>
- *   <li>/api/dfc/** → Custom JWT (legacy Device API paths)</li>
+ *   <li>/v1/dfc/** → Custom JWT (legacy Device API paths)</li>
  *   <li>/api/admin/** → Keycloak OAuth2 with ROLE_ADMIN (legacy Admin paths)</li>
  *   <li>/api/user/**, /api/sites/**, /api/account/** → Keycloak OAuth2 (legacy User paths)</li>
  * </ul>
@@ -84,7 +84,7 @@ public class SecurityConfiguration {
      * Device API filter chain (NEW unified structure).
      * <p>
      * <b>Order 1</b>: Highest priority - evaluated FIRST<br>
-     * <b>Matches</b>: /api/v1/device/**<br>
+     * <b>Matches</b>: /v1/api/device/**<br>
      * <b>Authentication</b>: Custom JWT Bearer tokens only (JwtAuthenticationFilter)
      * </p>
      * <p>
@@ -98,11 +98,11 @@ public class SecurityConfiguration {
     @Order(1)
     public SecurityFilterChain deviceApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/device/**")
+            .securityMatcher("/v1/api/device/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint with Basic Auth
+                .requestMatchers("/v1/api/device/auth/token").permitAll() // Public token endpoint with Basic Auth
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
@@ -120,11 +120,11 @@ public class SecurityConfiguration {
      * Legacy JWT filter chain for old Data Forge Client endpoints.
      * <p>
      * <b>Order 2</b>: Second priority<br>
-     * <b>Matches</b>: /api/dfc/**<br>
+     * <b>Matches</b>: /v1/dfc/**<br>
      * <b>Authentication</b>: JWT Bearer tokens only (custom JwtAuthenticationFilter)
      * </p>
      * <p>
-     * <b>DEPRECATED</b>: This filter chain supports legacy /api/dfc/** paths during
+     * <b>DEPRECATED</b>: This filter chain supports legacy /v1/dfc/** paths during
      * migration period. Will return 410 Gone after migration via DeprecatedEndpointFilter.
      * </p>
      *
@@ -135,7 +135,7 @@ public class SecurityConfiguration {
     @Deprecated(since = "4.0.0", forRemoval = true)
     public SecurityFilterChain legacyJwtFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/dfc/**")
+            .securityMatcher("/v1/dfc/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -156,7 +156,7 @@ public class SecurityConfiguration {
      * Bit BI Plugin API filter chain.
      * <p>
      * <b>Order 3</b>: Third priority - evaluated AFTER legacy JWT filter chain<br>
-     * <b>Matches</b>: /api/v1/plugins/bit-bi/sql-changes, /api/v1/plugins/bit-bi/sites, /api/v1/plugins/bit-bi/tables<br>
+     * <b>Matches</b>: /v1/api/plugins/bit-bi/sql-changes, /v1/api/plugins/bit-bi/sites, /v1/api/plugins/bit-bi/tables<br>
      * <b>Authentication</b>: Plugin API Key (X-Plugin-Api-Key header)
      * </p>
      * <p>
@@ -166,7 +166,7 @@ public class SecurityConfiguration {
      * </p>
      * <p>
      * <b>IMPORTANT:</b> Only specific Bit BI API endpoints use Plugin API Key auth.
-     * The /api/v1/plugins/bit-bi/activate and /api/v1/plugins/bit-bi/deactivate
+     * The /v1/api/plugins/bit-bi/activate and /v1/api/plugins/bit-bi/deactivate
      * endpoints use OAuth2 (handled by Order 4 filter chain).
      * </p>
      *
@@ -177,7 +177,7 @@ public class SecurityConfiguration {
     @Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/tables")
+            .securityMatcher("/v1/api/plugins/bit-bi/sql-changes", "/v1/api/plugins/bit-bi/sites", "/v1/api/plugins/bit-bi/tables")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -198,7 +198,7 @@ public class SecurityConfiguration {
      * UI/Admin API filter chain (NEW unified structure).
      * <p>
      * <b>Order 4</b>: Fourth priority - evaluated AFTER Bit BI Plugin API filter chain<br>
-     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/** and /api/v1/plugins/bit-bi/**)<br>
+     * <b>Matches</b>: /v1/api/** (excluding /v1/api/device/** and /v1/api/plugins/bit-bi/**)<br>
      * <b>Authentication</b>: Keycloak OAuth2 Resource Server only
      * </p>
      * <p>
@@ -209,12 +209,12 @@ public class SecurityConfiguration {
      * <b>Authorization</b>:
      * </p>
      * <ul>
-     *   <li>/api/v1/accounts/** → Requires ROLE_ADMIN</li>
-     *   <li>/api/v1/sites/** → Requires ROLE_ADMIN</li>
-     *   <li>/api/v1/batches/** → Requires ROLE_ADMIN</li>
-     *   <li>/api/v1/errors/** → Requires ROLE_ADMIN</li>
-     *   <li>/api/v1/history/** → Requires authenticated user (any role)</li>
-     *   <li>/api/v1/comparisons/** → Requires authenticated user (any role)</li>
+     *   <li>/v1/api/accounts/** → Requires ROLE_ADMIN</li>
+     *   <li>/v1/api/sites/** → Requires ROLE_ADMIN</li>
+     *   <li>/v1/api/batches/** → Requires ROLE_ADMIN</li>
+     *   <li>/v1/api/errors/** → Requires ROLE_ADMIN</li>
+     *   <li>/v1/api/history/** → Requires authenticated user (any role)</li>
+     *   <li>/v1/api/comparisons/** → Requires authenticated user (any role)</li>
      * </ul>
      *
      * @since 4.0.0 (API Unification)
@@ -223,22 +223,22 @@ public class SecurityConfiguration {
     @Order(4)
     public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/**")
+            .securityMatcher("/v1/api/**")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (already handled by Order 3)
-                .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
-                .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
-                .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
-                .requestMatchers("/api/v1/errors/**").hasRole("ADMIN")
-                .requestMatchers("/api/v1/admin/plugins/**").hasRole("ADMIN") // Plugin admin endpoints
-                .requestMatchers("/api/v1/plugins/**").authenticated() // Plugin activation endpoints (any authenticated user)
-                .requestMatchers("/api/v1/account/plugins/**").authenticated() // Account plugins list
-                .requestMatchers("/api/v1/account/errors/**").authenticated() // User global errors (Dashboard)
-                .requestMatchers("/api/v1/history/**").authenticated() // Any authenticated user
-                .requestMatchers("/api/v1/comparisons/**").authenticated() // Any authenticated user
+                .requestMatchers("/v1/api/device/**").denyAll() // Explicitly deny (already handled by Order 1)
+                .requestMatchers("/v1/api/plugins/bit-bi/sql-changes", "/v1/api/plugins/bit-bi/sites", "/v1/api/plugins/bit-bi/tables").denyAll() // Explicitly deny (already handled by Order 3)
+                .requestMatchers("/v1/api/accounts/**").hasRole("ADMIN")
+                .requestMatchers("/v1/api/sites/**").hasRole("ADMIN")
+                .requestMatchers("/v1/api/batches/**").hasRole("ADMIN")
+                .requestMatchers("/v1/api/errors/**").hasRole("ADMIN")
+                .requestMatchers("/v1/api/admin/plugins/**").hasRole("ADMIN") // Plugin admin endpoints
+                .requestMatchers("/v1/api/plugins/**").authenticated() // Plugin activation endpoints (any authenticated user)
+                .requestMatchers("/v1/api/account/plugins/**").authenticated() // Account plugins list
+                .requestMatchers("/v1/api/account/errors/**").authenticated() // User global errors (Dashboard)
+                .requestMatchers("/v1/api/history/**").authenticated() // Any authenticated user
+                .requestMatchers("/v1/api/comparisons/**").authenticated() // Any authenticated user
                 .anyRequest().authenticated() // Default: require authentication
             )
             .oauth2ResourceServer(oauth2 -> oauth2
@@ -305,7 +305,7 @@ public class SecurityConfiguration {
      * via DeprecatedEndpointFilter.
      * </p>
      *
-     * @deprecated Legacy paths - user endpoints migrated to /api/v1/history/**
+     * @deprecated Legacy paths - user endpoints migrated to /v1/api/history/**
      */
     @Bean
     @Order(6)
@@ -338,8 +338,8 @@ public class SecurityConfiguration {
      * <b>Public access</b>:
      * </p>
      * <ul>
-     *   <li>/api/v1/device/auth/token (POST) - NEW Device API token endpoint</li>
-     *   <li>/api/v1/auth/token (POST) - Legacy token endpoint (deprecated)</li>
+     *   <li>/v1/api/device/auth/token (POST) - NEW Device API token endpoint</li>
+     *   <li>/v1/api/auth/token (POST) - Legacy token endpoint (deprecated)</li>
      *   <li>/actuator/health, /actuator/info - Health checks</li>
      *   <li>/swagger-ui/**, /v3/api-docs/** - API documentation</li>
      * </ul>
@@ -354,8 +354,8 @@ public class SecurityConfiguration {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/api/v1/device/auth/token").permitAll() // NEW Device API token endpoint
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint
+                .requestMatchers(HttpMethod.POST, "/v1/api/device/auth/token").permitAll() // NEW Device API token endpoint
+                .requestMatchers(HttpMethod.POST, "/v1/api/auth/token").permitAll() // Legacy token endpoint
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()

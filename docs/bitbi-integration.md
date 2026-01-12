@@ -1,7 +1,7 @@
 # Bit BI Plugin Integration Guide
 
-**Document Version**: 1.0.0
-**Last Updated**: 2025-12-23
+**Document Version**: 1.1.0
+**Last Updated**: 2025-01-12
 **Based on**: PRD-013 (Plugin System), PRD-001 (SQL Generation Extension)
 
 ## Table of Contents
@@ -13,11 +13,12 @@
 5. [Plugin Activation Flow](#plugin-activation-flow)
 6. [Plugin API Endpoints](#plugin-api-endpoints)
 7. [SQL Generation Feature](#sql-generation-feature)
-8. [API Reference](#api-reference)
-9. [Error Handling](#error-handling)
-10. [Integration Nuances](#integration-nuances)
-11. [Best Practices](#best-practices)
-12. [OpenAPI Specification](#openapi-specification)
+8. [CSV File Initialization](#csv-file-initialization)
+9. [API Reference](#api-reference)
+10. [Error Handling](#error-handling)
+11. [Integration Nuances](#integration-nuances)
+12. [Best Practices](#best-practices)
+13. [OpenAPI Specification](#openapi-specification)
 
 ---
 
@@ -60,7 +61,8 @@ Data Forge Middleware (DFM) provides an extensible plugin system that allows thi
 |---------|-------------|
 | OAuth2 Plugin Activation | Link Bit BI tenant to DFM account |
 | Plugin API Key | Authenticate API requests without OAuth tokens |
-| SQL Change Tracking | Automatic INSERT/UPDATE/DELETE generation |
+| CSV File Initialization | Download baseline CSV files for initial data sync |
+| SQL Change Tracking | Automatic INSERT/UPDATE/DELETE generation (after baseline) |
 | Multi-site Support | Access data for all sites under an account |
 
 ---
@@ -74,36 +76,50 @@ Data Forge Middleware (DFM) provides an extensible plugin system that allows thi
 │   Application   │  Plugin API     │   Middleware         │
 │                 │ ◄────────────►  │                      │
 └─────────────────┘   (API Key)     └──────────────────────┘
-                                              │
-                                              ▼
-                                    ┌──────────────────────┐
-                                    │    PostgreSQL DB     │
-                                    │  ─────────────────   │
-                                    │  account_plugins     │
-                                    │  plugin_sql_gen      │
-                                    │  plugin_audit_logs   │
-                                    └──────────────────────┘
-                                              │
-                                              ▼
-                                    ┌──────────────────────┐
-                                    │      AWS S3          │
-                                    │  ─────────────────   │
-                                    │  plugins/bit-bi/     │
-                                    │  {accountId}/        │
-                                    │  {siteName}/*.sql    │
-                                    └──────────────────────┘
+        │                                     │
+        │  1. Download CSV files              │
+        │     (initialization)                ▼
+        │                           ┌──────────────────────┐
+        │  2. Fetch SQL changes     │    PostgreSQL DB     │
+        │     (incremental sync)    │  ─────────────────   │
+        │                           │  account_plugins     │
+        │                           │  plugin_sql_gen      │
+        │                           │  plugin_audit_logs   │
+        │                           │  uploaded_files      │
+        │                           └──────────────────────┘
+        │                                     │
+        ▼                                     ▼
+┌─────────────────────────────────────────────────────────┐
+│                        AWS S3                           │
+│  ─────────────────────────────────────────────────────  │
+│  {accountId}/{domain}/.../*.csv.gz   (CSV files)        │
+│  plugins/bit-bi/{accountId}/{siteName}/*.sql (SQL)      │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### Data Flow
+
+#### Initial Setup (One-time)
 
 1. **User initiates OAuth flow** from Bit BI
 2. **User authenticates** via Auth0 (DFM identity provider)
 3. **Bit BI receives** authorization code and exchanges for tokens
 4. **Bit BI calls** plugin activation endpoint with `tenantId`
-5. **DFM generates** Plugin API Key and returns it
+5. **DFM generates** Plugin API Key and sets `baseline_batch_id`
 6. **Bit BI stores** API Key for subsequent API calls
-7. **Batch uploads** trigger automatic SQL generation
-8. **Bit BI fetches** SQL changes via Plugin API
+
+#### Initialization (After Activation)
+
+7. **Bit BI lists sites** via `/sites` endpoint
+8. **Bit BI lists CSV files** for each site via `/sites/{siteId}/files`
+9. **Bit BI downloads CSV files** via `/sites/{siteId}/files/{fileName}`
+10. **Bit BI imports** CSV data into local database
+
+#### Incremental Sync (Ongoing)
+
+11. **Batch uploads** trigger automatic SQL generation (deltas only)
+12. **Bit BI polls** for SQL changes via `/sql-changes` endpoint
+13. **Bit BI applies** SQL statements to local database
 
 ---
 
@@ -404,6 +420,224 @@ For the first batch uploaded to a site (no previous batch exists):
 
 ---
 
+## CSV File Initialization
+
+When the Bit BI plugin is activated, clients should download CSV files to initialize their local database before receiving SQL delta updates. This ensures data consistency from the start.
+
+### Baseline Batch Concept
+
+The **baseline batch** is the reference point for SQL delta generation:
+
+- **On activation**: The latest completed batch becomes the `baseline_batch_id`
+- **On reinit**: A new baseline is set to the latest completed batch
+- **No existing batches**: The first completed batch after activation becomes the baseline
+
+> **Important**: No SQL is generated for the baseline batch. Clients must download CSV files directly.
+
+### Initialization Flow
+
+```
+┌─────────────────┐                    ┌─────────────────┐
+│    Bit BI       │                    │      DFM        │
+└────────┬────────┘                    └────────┬────────┘
+         │                                      │
+         │  1. Activate Plugin                  │
+         │  ─────────────────────────────────►  │
+         │                                      │ Sets baseline_batch_id
+         │  ◄─────────────────────────────────  │
+         │     API Key + baseline info          │
+         │                                      │
+         │  2. List Sites                       │
+         │  ─────────────────────────────────►  │
+         │  ◄─────────────────────────────────  │
+         │     Site list                        │
+         │                                      │
+         │  3. List Files (per site)            │
+         │  ─────────────────────────────────►  │
+         │  ◄─────────────────────────────────  │
+         │     File list                        │
+         │                                      │
+         │  4. Download CSV Files               │
+         │  ─────────────────────────────────►  │
+         │  ◄─────────────────────────────────  │
+         │     CSV content (gzip/plain)         │
+         │                                      │
+         │  5. Import to local DB               │
+         │  (client-side)                       │
+         │                                      │
+         │  ═══════════════════════════════════ │
+         │     Initialization Complete          │
+         │  ═══════════════════════════════════ │
+         │                                      │
+         │  6. Poll for SQL Changes             │
+         │  ─────────────────────────────────►  │
+         │  ◄─────────────────────────────────  │
+         │     SQL delta statements             │
+         ▼                                      ▼
+```
+
+### When to Download CSV Files
+
+| Scenario | Action Required |
+|----------|----------------|
+| New plugin activation | Download CSV files for all sites |
+| Plugin reinit (data reset) | Re-download all CSV files |
+| New site added | Download CSV files for new site only |
+| Regular batch upload | Fetch SQL changes (no CSV download) |
+
+### List Files for a Site
+
+Retrieve the list of available CSV files for a site from the latest (baseline) batch.
+
+```bash
+curl -X GET "https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/sites/a1b2c3d4-e5f6-7890-abcd-ef1234567890/files" \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6" \
+  -H "Accept: application/json"
+```
+
+**Response (200 OK)**:
+```json
+{
+  "files": [
+    {
+      "fileName": "customers.csv.gz",
+      "fileSize": 15234,
+      "uploadedAt": "2025-01-15T10:30:00Z",
+      "contentType": "application/gzip"
+    },
+    {
+      "fileName": "orders.csv.gz",
+      "fileSize": 45678,
+      "uploadedAt": "2025-01-15T10:30:00Z",
+      "contentType": "application/gzip"
+    },
+    {
+      "fileName": "products.csv",
+      "fileSize": 8912,
+      "uploadedAt": "2025-01-15T10:30:00Z",
+      "contentType": "text/csv"
+    }
+  ]
+}
+```
+
+### Download a CSV File
+
+Download a specific CSV file from S3 (streamed through DFM).
+
+```bash
+curl -X GET "https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/sites/a1b2c3d4-e5f6-7890-abcd-ef1234567890/files/customers.csv.gz" \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6" \
+  -o customers.csv.gz
+```
+
+**Response Headers**:
+```
+HTTP/1.1 200 OK
+Content-Type: application/gzip
+Content-Disposition: attachment; filename="customers.csv.gz"
+Content-Length: 15234
+```
+
+**Content Types**:
+
+| File Extension | Content-Type |
+|---------------|--------------|
+| `.csv.gz` | `application/gzip` |
+| `.csv` | `text/csv` |
+
+### Python Example: Full Initialization
+
+```python
+import requests
+import gzip
+import csv
+from io import StringIO
+
+class BitBiInitializer:
+    def __init__(self, api_key, base_url="https://dev.dfm.bitbi.io"):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.headers = {"X-Plugin-Api-Key": api_key}
+
+    def initialize_all_sites(self):
+        """Download and import CSV files for all sites."""
+        sites = self._list_sites()
+
+        for site in sites:
+            print(f"Initializing site: {site['displayName']}")
+            self._initialize_site(site['id'])
+
+    def _list_sites(self):
+        response = requests.get(
+            f"{self.base_url}/api/v1/plugins/bit-bi/sites",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()["sites"]
+
+    def _initialize_site(self, site_id):
+        # List files for the site
+        response = requests.get(
+            f"{self.base_url}/api/v1/plugins/bit-bi/sites/{site_id}/files",
+            headers=self.headers
+        )
+        response.raise_for_status()
+        files = response.json()["files"]
+
+        for file_info in files:
+            self._download_and_import(site_id, file_info)
+
+    def _download_and_import(self, site_id, file_info):
+        file_name = file_info["fileName"]
+        print(f"  Downloading: {file_name} ({file_info['fileSize']} bytes)")
+
+        # Download file
+        response = requests.get(
+            f"{self.base_url}/api/v1/plugins/bit-bi/sites/{site_id}/files/{file_name}",
+            headers=self.headers
+        )
+        response.raise_for_status()
+
+        # Decompress if gzipped
+        if file_name.endswith('.gz'):
+            content = gzip.decompress(response.content).decode('utf-8')
+        else:
+            content = response.text
+
+        # Parse CSV and import to database
+        reader = csv.DictReader(StringIO(content))
+        table_name = self._derive_table_name(file_name)
+
+        for row in reader:
+            self._insert_row(table_name, row)
+
+    def _derive_table_name(self, file_name):
+        """Derive table name from file name (matches DFM SQL generation)."""
+        name = file_name.replace('.csv.gz', '').replace('.csv', '')
+        return name.lower().replace('-', '_')
+
+    def _insert_row(self, table_name, row):
+        # Implement database insert logic
+        pass
+
+
+# Usage
+initializer = BitBiInitializer("plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6")
+initializer.initialize_all_sites()
+```
+
+### Error Handling
+
+| Error | Status | Cause |
+|-------|--------|-------|
+| Site not found | 404 | Invalid site ID or site deleted |
+| File not found | 404 | File name doesn't exist for site |
+| Site access denied | 403 | Site doesn't belong to account |
+| No files available | 200 | Empty file list (no uploads yet) |
+
+---
+
 ## API Reference
 
 ### OAuth2 Endpoints (Authorization: Bearer token)
@@ -497,6 +731,42 @@ Get SQL changes for a site.
 - `since` (required) - ISO8601 timestamp
 
 **Response (200)**: Plain text SQL statements
+
+#### GET /api/v1/plugins/bit-bi/sites/{siteId}/files
+
+List CSV files available for a site (from baseline batch).
+
+**Path Parameters**:
+- `siteId` (required) - Site UUID
+
+**Response (200)**:
+```json
+{
+  "files": [
+    {
+      "fileName": "string",
+      "fileSize": 12345,
+      "uploadedAt": "iso8601",
+      "contentType": "application/gzip | text/csv"
+    }
+  ]
+}
+```
+
+#### GET /api/v1/plugins/bit-bi/sites/{siteId}/files/{fileName}
+
+Download a CSV file from S3.
+
+**Path Parameters**:
+- `siteId` (required) - Site UUID
+- `fileName` (required) - File name (e.g., `customers.csv.gz`)
+
+**Response (200)**: Binary file content
+
+**Response Headers**:
+- `Content-Type`: `application/gzip` or `text/csv`
+- `Content-Disposition`: `attachment; filename="{fileName}"`
+- `Content-Length`: File size in bytes
 
 ---
 
@@ -1065,6 +1335,152 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/v1/plugins/bit-bi/sites/{siteId}/files:
+    get:
+      tags:
+        - Plugin API
+      summary: List CSV files for a site
+      description: |
+        Returns a list of CSV files available for download from the baseline batch.
+        Use this endpoint during initialization to get the list of files to download.
+      operationId: listSiteFiles
+      security:
+        - PluginApiKey: []
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          description: UUID of the site
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: File list retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileListResponse'
+              example:
+                files:
+                  - fileName: "customers.csv.gz"
+                    fileSize: 15234
+                    uploadedAt: "2025-01-15T10:30:00Z"
+                    contentType: "application/gzip"
+                  - fileName: "orders.csv.gz"
+                    fileSize: 45678
+                    uploadedAt: "2025-01-15T10:30:00Z"
+                    contentType: "application/gzip"
+        '401':
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Site does not belong to account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/plugins/bit-bi/sites/{siteId}/files/{fileName}:
+    get:
+      tags:
+        - Plugin API
+      summary: Download a CSV file
+      description: |
+        Downloads a CSV file from S3 (streamed through DFM).
+        Files may be gzip-compressed (.csv.gz) or plain text (.csv).
+      operationId: downloadSiteFile
+      security:
+        - PluginApiKey: []
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          description: UUID of the site
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: fileName
+          in: path
+          required: true
+          description: Name of the file to download
+          schema:
+            type: string
+          example: "customers.csv.gz"
+      responses:
+        '200':
+          description: File content
+          headers:
+            Content-Disposition:
+              description: Attachment with filename
+              schema:
+                type: string
+              example: 'attachment; filename="customers.csv.gz"'
+            Content-Length:
+              description: File size in bytes
+              schema:
+                type: integer
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Site does not belong to account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Site or file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/account/plugins:
     get:
       tags:
@@ -1224,6 +1640,42 @@ components:
           description: Human-readable site name
           example: "Example Store"
 
+    FileListResponse:
+      type: object
+      description: Response containing list of CSV files available for a site
+      properties:
+        files:
+          type: array
+          description: List of files available for download
+          items:
+            $ref: '#/components/schemas/FileDto'
+
+    FileDto:
+      type: object
+      description: CSV file metadata
+      properties:
+        fileName:
+          type: string
+          description: Original file name
+          example: "customers.csv.gz"
+        fileSize:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 15234
+        uploadedAt:
+          type: string
+          format: date-time
+          description: When the file was uploaded
+          example: "2025-01-15T10:30:00Z"
+        contentType:
+          type: string
+          description: MIME type of the file
+          enum:
+            - application/gzip
+            - text/csv
+          example: "application/gzip"
+
     AccountPluginListResponse:
       type: object
       properties:
@@ -1311,6 +1763,15 @@ components:
 ---
 
 ## Changelog
+
+### v1.1.0 (2025-01-12)
+- Added CSV file initialization feature (017-csv-file-initialization)
+- New endpoints for file operations:
+  - `GET /sites/{siteId}/files` - List CSV files for a site
+  - `GET /sites/{siteId}/files/{fileName}` - Download CSV file
+- Introduced baseline batch concept for initial data synchronization
+- SQL generation now produces deltas only (after baseline batch)
+- Updated architecture diagram and data flow documentation
 
 ### v1.0.0 (2025-12-23)
 - Initial documentation release

@@ -6,8 +6,8 @@
  * provides compile-time safety for API endpoint references.
  *
  * The API is structured into two main groups:
- * - Device API (/api/v1/device/*): For client devices using Custom JWT authentication
- * - UI/Admin API (/api/v1/*): For web interface using Keycloak OAuth2 authentication
+ * - Device API (/v1/api/device/*): For client devices using Custom JWT authentication
+ * - UI/Admin API (/v1/api/*): For web interface using Auth0 OAuth2 authentication
  *
  * @see /src/main/java/com/bitbi/dfm/shared/api/ApiRoutes.java
  * @since 1.0.0
@@ -20,7 +20,7 @@
  * All device-facing endpoints (IoT devices, mobile apps, data collection clients)
  * are under this base path and use Custom JWT authentication.
  */
-export const DEVICE_API_BASE = '/v1/device';
+export const DEVICE_API_BASE = '/v1/api/device';
 
 // Device Authentication
 export const DEVICE_AUTH = `${DEVICE_API_BASE}/auth`;
@@ -50,9 +50,9 @@ export const DEVICE_ERRORS_GET = (errorId: string) => `${DEVICE_ERRORS}/${errorI
 /**
  * Base path for UI/Admin API endpoints.
  * All admin and user-facing endpoints (web interface, admin dashboard)
- * are under this base path and use Keycloak OAuth2 authentication.
+ * are under this base path and use Auth0 OAuth2 authentication.
  */
-export const ADMIN_API_BASE = '/v1';
+export const ADMIN_API_BASE = '/v1/api';
 
 // Accounts
 export const ACCOUNTS = `${ADMIN_API_BASE}/accounts`;
