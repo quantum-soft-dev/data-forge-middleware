@@ -1,68 +1,55 @@
 /**
  * Device Authorization types (RFC 8628 Device Code Flow).
  *
- * @see docs/016-device-authorization-grant.md
- * @version 1.0.0
+ * Adapted for automatic site creation:
+ * - Device requests authorization with siteName/siteDescription
+ * - User approves → site is created automatically
+ * - Device receives credentials via polling
+ *
+ * @see docs/client-integration.md
+ * @version 2.0.0
  */
 
 /**
- * Device code status enum matching backend DeviceCodeStatus.
+ * Device authorization status enum matching backend DeviceAuthorizationStatus.
  */
-export type DeviceCodeStatus = 'PENDING' | 'APPROVED' | 'EXPIRED' | 'DENIED';
+export type DeviceAuthorizationStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
 
 /**
- * Client metadata attached to device authorization request.
+ * Response from GET /api/v1/device/verify?code=XXX
+ * Contains authorization info for user to confirm/deny.
  */
-export interface ClientMetadata {
-  deviceType?: string;
-  deviceName?: string;
-  osVersion?: string;
-  appVersion?: string;
-}
-
-/**
- * Response from GET /api/v1/device/confirm?user_code=xxx
- * Contains device code info for user to confirm/deny.
- */
-export interface DeviceCodeInfoResponse {
+export interface DeviceVerifyInfoResponse {
   userCode: string;
-  status: DeviceCodeStatus;
-  clientMetadata?: ClientMetadata;
+  siteName: string;
+  siteDescription: string | null;
   expiresAt: string;
-  createdAt: string;
 }
 
 /**
- * Request to confirm device authorization.
- * POST /api/v1/device/confirm
+ * Request to approve/deny device authorization.
+ * POST /api/v1/device/verify
  */
-export interface ConfirmDeviceRequest {
+export interface DeviceVerifyRequest {
   userCode: string;
-  siteId: string;
+  action: 'approve' | 'deny';
 }
 
 /**
- * Response after successful device authorization confirmation.
+ * Response after successful device verification.
  */
-export interface ConfirmDeviceResponse {
-  message: string;
-  siteId: string;
-  siteDomain: string;
-}
-
-/**
- * Site option for dropdown selection during device confirmation.
- */
-export interface SiteOption {
-  id: string;
-  domain: string;
-  isActive: boolean;
+export interface DeviceVerifyResponse {
+  success: boolean;
+  siteId: string | null;
+  siteName: string | null;
 }
 
 /**
  * Error response for device authorization operations.
+ * Follows OAuth 2.0 error format.
  */
 export interface DeviceAuthError {
   error: string;
   error_description?: string;
+  interval?: number;
 }

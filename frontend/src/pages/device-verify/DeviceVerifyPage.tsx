@@ -2,18 +2,18 @@
  * DeviceVerifyPage - Device authorization verification page.
  *
  * Allows users to verify and authorize device authorization requests.
- * Part of the Device Code Flow (RFC 8628).
+ * Part of the Device Code Flow (RFC 8628) with automatic site creation.
  *
  * States:
- * 1. Input - Enter user_code (or auto-fill from URL ?user_code=xxx)
- * 2. Confirm - Show device info + select Site from dropdown
- * 3. Success - "Device authorized" confirmation
+ * 1. Input - Enter user_code (or auto-fill from URL ?code=xxx)
+ * 2. Confirm - Show siteName/siteDescription, approve or deny
+ * 3. Success - "Site created and device authorized" confirmation
  * 4. Denied - "Authorization denied" message
  *
  * Route: /device-verify
  *
- * @see docs/016-device-authorization-grant.md
- * @version 1.0.0
+ * @see docs/client-integration.md
+ * @version 2.0.0
  */
 
 import { useState, useEffect } from 'react';
@@ -22,105 +22,85 @@ import { Header } from '@/widgets/header/Header';
 import { Button } from '@/shared/ui/ui/button';
 import { Input } from '@/shared/ui/ui/input';
 import { Label } from '@/shared/ui/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/shared/ui/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
-import { Badge } from '@/shared/ui/ui/badge';
 import {
-  useDeviceCodeInfo,
-  useConfirmDevice,
-  useDenyDevice,
-  type DeviceCodeStatus,
+  useVerifyInfo,
+  useApproveAuthorization,
+  useDenyAuthorization,
 } from '@/features/device-auth';
-import { useSites } from '@/features/site-crud/model/queries';
-import { AlertTriangle, CheckCircle2, XCircle, Smartphone, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, XCircle, Smartphone, Loader2, Server } from 'lucide-react';
 
 type PageState = 'input' | 'confirm' | 'success' | 'denied' | 'expired' | 'error';
 
 export default function DeviceVerifyPage() {
-  const search = useSearch({ from: '/device-verify' }) as { user_code?: string };
-  const userCodeFromUrl = search?.user_code || '';
+  const search = useSearch({ from: '/device-verify' }) as { code?: string };
+  const userCodeFromUrl = search?.code || '';
 
   const [userCode, setUserCode] = useState(userCodeFromUrl);
-  const [selectedSiteId, setSelectedSiteId] = useState<string>('');
   const [pageState, setPageState] = useState<PageState>(userCodeFromUrl ? 'confirm' : 'input');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [createdSiteName, setCreatedSiteName] = useState<string | null>(null);
 
-  // Fetch device code info when user code is provided
+  // Fetch verification info when user code is provided
   const {
-    data: deviceCodeInfo,
-    isLoading: isLoadingDeviceCode,
-    error: deviceCodeError,
-    refetch: refetchDeviceCode,
-  } = useDeviceCodeInfo(userCode, { enabled: userCode.length >= 8 });
-
-  // Fetch user's sites for selection
-  const { data: sites, isLoading: isLoadingSites } = useSites();
+    data: verifyInfo,
+    isLoading: isLoadingVerifyInfo,
+    error: verifyInfoError,
+    refetch: refetchVerifyInfo,
+  } = useVerifyInfo(userCode, { enabled: userCode.length >= 8 && pageState !== 'success' && pageState !== 'denied' });
 
   // Mutations
-  const confirmMutation = useConfirmDevice();
-  const denyMutation = useDenyDevice();
+  const approveMutation = useApproveAuthorization();
+  const denyMutation = useDenyAuthorization();
 
-  // Update page state based on device code status
+  // Handle verification info error
   useEffect(() => {
-    if (deviceCodeInfo) {
-      const status = deviceCodeInfo.status;
-      if (status === 'APPROVED') {
-        setPageState('success');
-      } else if (status === 'DENIED') {
-        setPageState('denied');
-      } else if (status === 'EXPIRED') {
-        setPageState('expired');
-      } else if (status === 'PENDING') {
-        setPageState('confirm');
-      }
-    }
-  }, [deviceCodeInfo]);
-
-  // Handle device code error
-  useEffect(() => {
-    if (deviceCodeError) {
+    if (verifyInfoError) {
       setPageState('error');
-      setErrorMessage('Device code not found or expired. Please check the code and try again.');
+      const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string } } })
+        ?.response?.data?.error_description;
+      setErrorMessage(errorMsg || 'Device code not found or expired. Please check the code and try again.');
     }
-  }, [deviceCodeError]);
+  }, [verifyInfoError]);
+
+  // Update page state when verify info is loaded
+  useEffect(() => {
+    if (verifyInfo && pageState === 'input') {
+      setPageState('confirm');
+    }
+  }, [verifyInfo, pageState]);
 
   const handleCodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (userCode.length >= 8) {
-      refetchDeviceCode();
+      setErrorMessage('');
+      refetchVerifyInfo();
     }
   };
 
-  const handleConfirm = async () => {
-    if (!selectedSiteId) {
-      setErrorMessage('Please select a site');
-      return;
-    }
-
+  const handleApprove = async () => {
     try {
-      await confirmMutation.mutateAsync({
-        userCode,
-        siteId: selectedSiteId,
-      });
+      setErrorMessage('');
+      const result = await approveMutation.mutateAsync(userCode);
+      setCreatedSiteName(result.siteName);
       setPageState('success');
     } catch (error) {
-      setErrorMessage('Failed to authorize device. Please try again.');
+      const errorMsg = (error as { response?: { data?: { error_description?: string } } })
+        ?.response?.data?.error_description;
+      setErrorMessage(errorMsg || 'Failed to authorize device. Please try again.');
     }
   };
 
   const handleDeny = async () => {
     try {
+      setErrorMessage('');
       await denyMutation.mutateAsync(userCode);
       setPageState('denied');
     } catch (error) {
-      setErrorMessage('Failed to deny authorization. Please try again.');
+      const errorMsg = (error as { response?: { data?: { error_description?: string } } })
+        ?.response?.data?.error_description;
+      setErrorMessage(errorMsg || 'Failed to deny authorization. Please try again.');
     }
   };
 
@@ -136,23 +116,29 @@ export default function DeviceVerifyPage() {
   const handleUserCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const formatted = formatUserCode(e.target.value);
     setUserCode(formatted);
+    setErrorMessage('');
   };
 
-  const activeSites = sites?.filter((site) => site.isActive) || [];
+  const formatExpiresAt = (expiresAt: string) => {
+    const date = new Date(expiresAt);
+    const now = new Date();
+    const diffMs = date.getTime() - now.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
 
-  const getStatusBadge = (status: DeviceCodeStatus) => {
-    switch (status) {
-      case 'PENDING':
-        return <Badge variant="secondary">Pending</Badge>;
-      case 'APPROVED':
-        return <Badge variant="default" className="bg-green-500">Approved</Badge>;
-      case 'DENIED':
-        return <Badge variant="destructive">Denied</Badge>;
-      case 'EXPIRED':
-        return <Badge variant="outline">Expired</Badge>;
-      default:
-        return null;
+    if (diffMins <= 0) {
+      return 'Expired';
     }
+    if (diffMins < 60) {
+      return `Expires in ${diffMins} minute${diffMins === 1 ? '' : 's'}`;
+    }
+    return `Expires at ${date.toLocaleTimeString()}`;
+  };
+
+  const handleReset = () => {
+    setUserCode('');
+    setPageState('input');
+    setErrorMessage('');
+    setCreatedSiteName(null);
   };
 
   return (
@@ -165,7 +151,7 @@ export default function DeviceVerifyPage() {
           <Smartphone className="mx-auto h-12 w-12 text-gray-400 mb-4" />
           <h1 className="text-3xl font-bold text-gray-900">Device Authorization</h1>
           <p className="mt-2 text-gray-600">
-            Authorize a device to access your Data Forge account
+            Authorize a device to connect to Data Forge
           </p>
         </div>
 
@@ -192,12 +178,15 @@ export default function DeviceVerifyPage() {
                     autoFocus
                   />
                 </div>
+                {errorMessage && (
+                  <p className="text-sm text-red-500">{errorMessage}</p>
+                )}
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={userCode.length < 8 || isLoadingDeviceCode}
+                  disabled={userCode.length < 8 || isLoadingVerifyInfo}
                 >
-                  {isLoadingDeviceCode ? (
+                  {isLoadingVerifyInfo ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Verifying...
@@ -212,76 +201,51 @@ export default function DeviceVerifyPage() {
         )}
 
         {/* Confirm state */}
-        {pageState === 'confirm' && deviceCodeInfo && (
+        {pageState === 'confirm' && verifyInfo && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                Authorize Device
-                {getStatusBadge(deviceCodeInfo.status)}
-              </CardTitle>
+              <CardTitle>Authorize Device</CardTitle>
               <CardDescription>
-                A device is requesting access to your account
+                A device is requesting to create a new site
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Device info */}
-              {deviceCodeInfo.clientMetadata && (
-                <div className="rounded-lg bg-gray-100 p-4 space-y-2">
-                  <h4 className="font-medium text-sm text-gray-700">Device Information</h4>
-                  <div className="text-sm space-y-1">
-                    {deviceCodeInfo.clientMetadata.deviceName && (
-                      <p><span className="text-gray-500">Device:</span> {deviceCodeInfo.clientMetadata.deviceName}</p>
-                    )}
-                    {deviceCodeInfo.clientMetadata.deviceType && (
-                      <p><span className="text-gray-500">Type:</span> {deviceCodeInfo.clientMetadata.deviceType}</p>
-                    )}
-                    {deviceCodeInfo.clientMetadata.osVersion && (
-                      <p><span className="text-gray-500">OS:</span> {deviceCodeInfo.clientMetadata.osVersion}</p>
-                    )}
-                    {deviceCodeInfo.clientMetadata.appVersion && (
-                      <p><span className="text-gray-500">App Version:</span> {deviceCodeInfo.clientMetadata.appVersion}</p>
-                    )}
+              {/* Site info to be created */}
+              <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Server className="h-5 w-5 text-blue-600" />
+                  <h4 className="font-medium text-blue-900">New Site Details</h4>
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <span className="text-sm text-blue-700">Site Name:</span>
+                    <p className="font-medium text-blue-900">{verifyInfo.siteName}</p>
+                  </div>
+                  {verifyInfo.siteDescription && (
+                    <div>
+                      <span className="text-sm text-blue-700">Description:</span>
+                      <p className="text-blue-900">{verifyInfo.siteDescription}</p>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-sm text-blue-700">Authorization:</span>
+                    <p className="text-blue-900">{formatExpiresAt(verifyInfo.expiresAt)}</p>
                   </div>
                 </div>
-              )}
+              </div>
 
-              {/* Warning */}
-              <Alert variant="destructive" className="bg-amber-50 border-amber-200">
+              {/* Info about what will happen */}
+              <Alert className="bg-amber-50 border-amber-200">
                 <AlertTriangle className="h-4 w-4 text-amber-600" />
-                <AlertTitle className="text-amber-800">Important</AlertTitle>
+                <AlertTitle className="text-amber-800">What happens when you approve</AlertTitle>
                 <AlertDescription className="text-amber-700">
-                  Authorizing this device will generate new credentials for the selected site.
-                  Any previously connected device will be disconnected.
+                  <ul className="list-disc ml-4 mt-2 space-y-1">
+                    <li>A new site &quot;{verifyInfo.siteName}&quot; will be created in your account</li>
+                    <li>The device will receive credentials to connect</li>
+                    <li>The device can start uploading data immediately</li>
+                  </ul>
                 </AlertDescription>
               </Alert>
-
-              {/* Site selection */}
-              <div className="space-y-2">
-                <Label htmlFor="site">Select Site</Label>
-                {isLoadingSites ? (
-                  <div className="flex items-center gap-2 text-sm text-gray-500">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading sites...
-                  </div>
-                ) : activeSites.length === 0 ? (
-                  <p className="text-sm text-red-500">
-                    No active sites found. Please create and activate a site first.
-                  </p>
-                ) : (
-                  <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
-                    <SelectTrigger id="site">
-                      <SelectValue placeholder="Choose a site..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {activeSites.map((site) => (
-                        <SelectItem key={site.id} value={site.id}>
-                          {site.domain}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
 
               {errorMessage && (
                 <p className="text-sm text-red-500">{errorMessage}</p>
@@ -293,7 +257,7 @@ export default function DeviceVerifyPage() {
                   variant="outline"
                   className="flex-1"
                   onClick={handleDeny}
-                  disabled={denyMutation.isPending}
+                  disabled={denyMutation.isPending || approveMutation.isPending}
                 >
                   {denyMutation.isPending ? (
                     <>
@@ -306,18 +270,30 @@ export default function DeviceVerifyPage() {
                 </Button>
                 <Button
                   className="flex-1"
-                  onClick={handleConfirm}
-                  disabled={!selectedSiteId || confirmMutation.isPending || activeSites.length === 0}
+                  onClick={handleApprove}
+                  disabled={approveMutation.isPending || denyMutation.isPending}
                 >
-                  {confirmMutation.isPending ? (
+                  {approveMutation.isPending ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Authorizing...
+                      Creating Site...
                     </>
                   ) : (
-                    'Authorize'
+                    'Approve & Create Site'
                   )}
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Loading state for confirm */}
+        {pageState === 'confirm' && !verifyInfo && isLoadingVerifyInfo && (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-center space-y-4">
+                <Loader2 className="mx-auto h-12 w-12 text-gray-400 animate-spin" />
+                <p className="text-gray-600">Loading authorization details...</p>
               </div>
             </CardContent>
           </Card>
@@ -330,16 +306,23 @@ export default function DeviceVerifyPage() {
               <div className="text-center space-y-4">
                 <CheckCircle2 className="mx-auto h-16 w-16 text-green-500" />
                 <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Device Authorized</h2>
+                  <h2 className="text-xl font-semibold text-gray-900">Site Created Successfully</h2>
                   <p className="mt-2 text-gray-600">
-                    The device has been successfully authorized and can now upload data.
+                    {createdSiteName ? (
+                      <>Site &quot;{createdSiteName}&quot; has been created and the device is now authorized.</>
+                    ) : (
+                      <>The site has been created and the device is now authorized.</>
+                    )}
+                  </p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    The device will automatically receive its credentials.
                   </p>
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => window.location.href = '/dashboard'}
+                  onClick={() => window.location.href = '/sites'}
                 >
-                  Go to Dashboard
+                  Go to My Sites
                 </Button>
               </div>
             </CardContent>
@@ -356,6 +339,7 @@ export default function DeviceVerifyPage() {
                   <h2 className="text-xl font-semibold text-gray-900">Authorization Denied</h2>
                   <p className="mt-2 text-gray-600">
                     The device authorization request has been denied.
+                    No site was created.
                   </p>
                 </div>
                 <Button
@@ -383,11 +367,7 @@ export default function DeviceVerifyPage() {
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setUserCode('');
-                    setPageState('input');
-                    setErrorMessage('');
-                  }}
+                  onClick={handleReset}
                 >
                   Enter New Code
                 </Button>
@@ -408,11 +388,7 @@ export default function DeviceVerifyPage() {
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setUserCode('');
-                    setPageState('input');
-                    setErrorMessage('');
-                  }}
+                  onClick={handleReset}
                 >
                   Try Again
                 </Button>

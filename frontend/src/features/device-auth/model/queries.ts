@@ -1,40 +1,39 @@
 /**
  * TanStack Query hooks for device authorization.
  *
- * Provides React hooks for device authorization flow.
+ * Provides React hooks for device authorization verification flow.
  *
- * @see docs/016-device-authorization-grant.md
- * @version 1.0.0
+ * @see docs/client-integration.md
+ * @version 2.0.0
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  getDeviceCodeInfo,
-  confirmDeviceAuthorization,
-  denyDeviceAuthorization,
+  getVerifyInfo,
+  approveAuthorization,
+  denyAuthorization,
 } from '../api/deviceAuthApi';
-import type { ConfirmDeviceRequest } from './types';
 
 /**
  * Query keys factory for cache management.
  */
 export const deviceAuthKeys = {
   all: ['deviceAuth'] as const,
-  codeInfo: (userCode: string) => [...deviceAuthKeys.all, 'codeInfo', userCode] as const,
+  verifyInfo: (userCode: string) => [...deviceAuthKeys.all, 'verifyInfo', userCode] as const,
 };
 
 /**
- * Fetch device code information for a given user code.
+ * Fetch authorization info for a given user code.
  *
- * @param userCode - The user code to look up
+ * @param userCode - The user code to look up (e.g., "ABCD-1234")
  * @param options - Query options
- * @returns Query result with device code info
+ * @returns Query result with authorization info (siteName, siteDescription, expiresAt)
  */
-export function useDeviceCodeInfo(userCode: string, options?: { enabled?: boolean }) {
+export function useVerifyInfo(userCode: string, options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: deviceAuthKeys.codeInfo(userCode),
-    queryFn: () => getDeviceCodeInfo(userCode),
-    enabled: (options?.enabled ?? true) && userCode.length > 0,
+    queryKey: deviceAuthKeys.verifyInfo(userCode),
+    queryFn: () => getVerifyInfo(userCode),
+    enabled: (options?.enabled ?? true) && userCode.length >= 8,
     retry: false, // Don't retry on 404
     staleTime: 30000, // 30 seconds
     gcTime: 60000, // 1 minute
@@ -42,18 +41,19 @@ export function useDeviceCodeInfo(userCode: string, options?: { enabled?: boolea
 }
 
 /**
- * Confirm device authorization mutation.
+ * Approve device authorization mutation.
+ * Creates site automatically on success.
  *
- * @returns Mutation for confirming device authorization
+ * @returns Mutation for approving device authorization
  */
-export function useConfirmDevice() {
+export function useApproveAuthorization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (request: ConfirmDeviceRequest) => confirmDeviceAuthorization(request),
-    onSuccess: (_data, variables) => {
-      // Invalidate device code query to update status
-      queryClient.invalidateQueries({ queryKey: deviceAuthKeys.codeInfo(variables.userCode) });
+    mutationFn: (userCode: string) => approveAuthorization(userCode),
+    onSuccess: (_data, userCode) => {
+      // Invalidate verification info query
+      queryClient.invalidateQueries({ queryKey: deviceAuthKeys.verifyInfo(userCode) });
     },
   });
 }
@@ -63,14 +63,14 @@ export function useConfirmDevice() {
  *
  * @returns Mutation for denying device authorization
  */
-export function useDenyDevice() {
+export function useDenyAuthorization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (userCode: string) => denyDeviceAuthorization(userCode),
+    mutationFn: (userCode: string) => denyAuthorization(userCode),
     onSuccess: (_data, userCode) => {
-      // Invalidate device code query to update status
-      queryClient.invalidateQueries({ queryKey: deviceAuthKeys.codeInfo(userCode) });
+      // Invalidate verification info query
+      queryClient.invalidateQueries({ queryKey: deviceAuthKeys.verifyInfo(userCode) });
     },
   });
 }

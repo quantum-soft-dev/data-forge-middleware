@@ -81,9 +81,46 @@ public class SecurityConfiguration {
     }
 
     /**
+     * Device Authorization Flow filter chain (OAuth2 protected).
+     * <p>
+     * <b>Order 0</b>: Highest priority - evaluated FIRST<br>
+     * <b>Matches</b>: /api/v1/device/verify<br>
+     * <b>Authentication</b>: Auth0 OAuth2 (user must be logged in)
+     * </p>
+     * <p>
+     * This filter chain handles the Device Authorization Flow verification endpoint.
+     * User must be authenticated via Auth0 OAuth2 to approve/deny device authorization.
+     * </p>
+     *
+     * @since 5.0.0 (Device Authorization Flow)
+     */
+    @Bean
+    @Order(0)
+    public SecurityFilterChain deviceAuthorizationVerifyFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/device/verify")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
+                    response.sendError(401, "Unauthorized - Auth0 OAuth2 authentication required for device verification");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
      * Device API filter chain (NEW unified structure).
      * <p>
-     * <b>Order 1</b>: Highest priority - evaluated FIRST<br>
+     * <b>Order 1</b>: Second priority - evaluated after device authorization verify<br>
      * <b>Matches</b>: /api/v1/device/**<br>
      * <b>Authentication</b>: Custom JWT Bearer tokens only (JwtAuthenticationFilter)
      * </p>
@@ -91,6 +128,14 @@ public class SecurityConfiguration {
      * This filter chain routes all Device API requests (IoT devices, mobile apps, data
      * collection clients) to Custom JWT authentication. Keycloak tokens will be rejected.
      * </p>
+     * <p>
+     * <b>Public endpoints</b>:
+     * </p>
+     * <ul>
+     *   <li>/api/v1/device/auth/token - Basic Auth token generation</li>
+     *   <li>/api/v1/device/authorize - Device Authorization Flow initiation</li>
+     *   <li>/api/v1/device/token - Device Authorization Flow polling</li>
+     * </ul>
      *
      * @since 4.0.0 (API Unification)
      */
@@ -103,6 +148,8 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint with Basic Auth
+                .requestMatchers(HttpMethod.POST, "/api/v1/device/authorize").permitAll() // Device Authorization Flow - initiate
+                .requestMatchers(HttpMethod.POST, "/api/v1/device/token").permitAll() // Device Authorization Flow - poll
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

@@ -185,6 +185,52 @@ public final class ApiRoutes {
      */
     public static final String DEVICE_ERRORS_GET = DEVICE_ERRORS + "/{errorId}";
 
+    // ==================== Device Authorization Flow ====================
+
+    /**
+     * Base path for Device Authorization Flow endpoints.
+     * <p>
+     * Implements RFC 8628 Device Authorization Grant adapted for site creation.
+     * Public endpoints: /authorize, /token
+     * Protected endpoints (Auth0): /verify
+     * </p>
+     */
+    public static final String DEVICE_AUTHORIZATION = DEVICE_API_BASE;
+
+    /**
+     * Initiate device authorization endpoint.
+     * <p>
+     * Method: POST<br>
+     * Authentication: None (public)<br>
+     * Request Body: DeviceAuthorizationRequestDto (siteName, siteDescription)<br>
+     * Returns: DeviceAuthorizationResponseDto (deviceCode, userCode, verificationUri)
+     * </p>
+     */
+    public static final String DEVICE_AUTHORIZATION_AUTHORIZE = DEVICE_AUTHORIZATION + "/authorize";
+
+    /**
+     * Poll for token endpoint.
+     * <p>
+     * Method: POST<br>
+     * Authentication: None (public)<br>
+     * Request Body: DeviceTokenRequestDto (deviceCode)<br>
+     * Returns: DeviceTokenResponseDto or DeviceTokenErrorDto
+     * </p>
+     */
+    public static final String DEVICE_AUTHORIZATION_TOKEN = DEVICE_AUTHORIZATION + "/token";
+
+    /**
+     * Verification page endpoint.
+     * <p>
+     * Methods: GET (info), POST (approve/deny), DELETE (deny)<br>
+     * Authentication: Auth0 OAuth2<br>
+     * GET Query Param: code (userCode)<br>
+     * POST Body: DeviceVerifyRequestDto (userCode, action)<br>
+     * DELETE Query Param: code (userCode)
+     * </p>
+     */
+    public static final String DEVICE_AUTHORIZATION_VERIFY = DEVICE_AUTHORIZATION + "/verify";
+
     // ==================== UI/Admin API ====================
 
     /**

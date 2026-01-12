@@ -145,7 +145,13 @@ export const ADMIN_PLUGIN_HISTORY_SUMMARY = (pluginId: string, accountId: string
 /**
  * Device Authorization endpoints for Device Code Flow.
  * Allows headless devices to authorize through browser.
+ *
+ * Flow:
+ * 1. Device calls /authorize (public) → receives deviceCode, userCode
+ * 2. User opens /verify?code=XXX → sees site info, approves/denies
+ * 3. On approve → site is created automatically
+ * 4. Device polls /token (public) → receives credentials when approved
  */
 export const DEVICE_AUTHORIZATION = `${DEVICE_API_BASE}/authorize`;
 export const DEVICE_AUTHORIZATION_TOKEN = `${DEVICE_API_BASE}/token`;
-export const DEVICE_AUTHORIZATION_CONFIRM = `${DEVICE_API_BASE}/confirm`;
+export const DEVICE_AUTHORIZATION_VERIFY = `${DEVICE_API_BASE}/verify`;
