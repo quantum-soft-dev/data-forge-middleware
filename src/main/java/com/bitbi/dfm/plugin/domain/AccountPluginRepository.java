@@ -105,4 +105,13 @@ public interface AccountPluginRepository {
      * @return page of active plugin activations for the specified plugin
      */
     Page<AccountPlugin> findByPluginIdAndActiveTrue(String pluginId, Pageable pageable);
+
+    /**
+     * Updates only the last_used_at timestamp for an account-plugin activation.
+     * Uses atomic UPDATE query to avoid overwriting concurrent changes to other fields
+     * (e.g., baseline_batch_id set by SqlGenerationService).
+     *
+     * @param id the account plugin ID
+     */
+    void updateLastUsedAtById(Long id);
 }

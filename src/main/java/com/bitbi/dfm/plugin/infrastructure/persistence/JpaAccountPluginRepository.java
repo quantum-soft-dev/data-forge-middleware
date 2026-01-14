@@ -5,6 +5,7 @@ import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -71,4 +72,13 @@ public interface JpaAccountPluginRepository extends JpaRepository<AccountPlugin,
 
     @Override
     Page<AccountPlugin> findByPluginIdAndActiveTrue(String pluginId, Pageable pageable);
+
+    /**
+     * Updates only the last_used_at and updated_at timestamps for an account-plugin.
+     * Uses atomic UPDATE to avoid overwriting concurrent changes to other fields.
+     */
+    @Override
+    @Modifying
+    @Query("UPDATE AccountPlugin ap SET ap.lastUsedAt = CURRENT_TIMESTAMP, ap.updatedAt = CURRENT_TIMESTAMP WHERE ap.id = :id")
+    void updateLastUsedAtById(@Param("id") Long id);
 }

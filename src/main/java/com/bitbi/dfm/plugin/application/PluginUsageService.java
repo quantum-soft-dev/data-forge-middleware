@@ -30,6 +30,9 @@ public class PluginUsageService {
      * Updates the last_used_at timestamp for the account-plugin activation.
      * Called after successful event dispatch (FR-018).
      *
+     * <p>Uses atomic UPDATE query to avoid overwriting concurrent changes
+     * to other fields (e.g., baseline_batch_id set by SqlGenerationService).</p>
+     *
      * <p>This method is transactional and should be called from external classes
      * to ensure Spring AOP proxy applies the transaction boundary.</p>
      *
@@ -38,8 +41,9 @@ public class PluginUsageService {
     @Transactional
     public void updateLastUsedAt(AccountPlugin accountPlugin) {
         try {
-            accountPlugin.recordUsage();
-            accountPluginRepository.save(accountPlugin);
+            // Use atomic UPDATE query instead of save() to avoid overwriting
+            // concurrent changes to other fields (e.g., baseline_batch_id)
+            accountPluginRepository.updateLastUsedAtById(accountPlugin.getId());
             log.debug("Updated last_used_at for plugin {} / account {}",
                     accountPlugin.getPluginId(), accountPlugin.getAccountId());
         } catch (Exception e) {
