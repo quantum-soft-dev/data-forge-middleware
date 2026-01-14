@@ -247,7 +247,7 @@ public class AccountPluginsController {
     }
 
     /**
-     * Reinitializes plugin SQL state by clearing all history and regenerating from latest batch.
+     * Reinitializes plugin by clearing all SQL history and setting new baseline batch.
      *
      * <p>Feature 015: Plugin Reinit Option - User Story 2</p>
      *
@@ -255,25 +255,33 @@ public class AccountPluginsController {
      * <ol>
      *   <li>All existing SQL generation records are deleted</li>
      *   <li>All S3 SQL files for this plugin are deleted</li>
-     *   <li>New SQL is generated from the latest completed batch (async)</li>
+     *   <li>Latest completed batch is set as new baseline</li>
      *   <li>API key and plugin configuration remain unchanged</li>
      * </ol>
+     *
+     * <p><strong>Important:</strong> SQL is NOT generated during reinit.
+     * Client must download CSV files via /sites/{siteId}/files endpoint
+     * for the baseline data. SQL generation resumes for future batches.</p>
      *
      * @param pluginId the plugin identifier (e.g., "bit-bi")
      * @return the reinit result
      */
     @PostMapping("/{pluginId}/reinit")
     @Operation(
-        summary = "Reinitialize plugin SQL state",
+        summary = "Reinitialize plugin by resetting baseline",
         description = """
-            Clears all existing SQL generation history for the plugin and triggers
-            regeneration from the most recent completed batch.
+            Clears all existing SQL generation history for the plugin and sets
+            the latest completed batch as the new baseline.
 
             **What happens:**
             1. All existing SQL generation records are deleted
             2. All S3 SQL files for this plugin are deleted
-            3. New SQL is generated from the latest completed batch (async)
+            3. Latest completed batch is set as new baseline
             4. API key and plugin configuration remain unchanged
+
+            **Important:** SQL is NOT generated during reinit.
+            Client must download CSV files via /sites/{siteId}/files endpoint
+            for the baseline data. SQL generation resumes for future batches.
 
             **Use cases:**
             - Data has drifted and you need a fresh baseline
@@ -284,7 +292,7 @@ public class AccountPluginsController {
     @ApiResponses({
         @ApiResponse(
             responseCode = "202",
-            description = "Reinit accepted - SQL generation continues asynchronously",
+            description = "Reinit completed - baseline reset, client should download CSV files",
             content = @Content(
                 mediaType = "application/json",
                 schema = @Schema(implementation = ReinitResultDto.class)
