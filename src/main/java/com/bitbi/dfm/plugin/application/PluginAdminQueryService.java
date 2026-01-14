@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.presentation.dto.AdminAccountPluginDto;
 import com.bitbi.dfm.plugin.presentation.dto.BatchWithoutSqlDto;
+import com.bitbi.dfm.plugin.presentation.dto.BatchWithSqlStatusDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginAuditLogEntryDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginConfigResponseDto;
 import com.bitbi.dfm.site.domain.Site;
@@ -307,5 +308,75 @@ public class PluginAdminQueryService {
                     );
                 })
                 .toList();
+    }
+
+    // ==================== Batches With SQL Status (User-facing) ====================
+
+    /**
+     * Finds all completed batches for an account with their SQL generation status.
+     * Returns all batches (with or without SQL) along with their status.
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account identifier
+     * @param pageable  pagination parameters
+     * @return page of batches with SQL status
+     */
+    public Page<BatchWithSqlStatusDto> findBatchesWithSqlStatus(String pluginId, UUID accountId, Pageable pageable) {
+        log.debug("Finding batches with SQL status for plugin={}, account={}", pluginId, accountId);
+
+        // Find the account-plugin activation
+        AccountPlugin accountPlugin = accountPluginRepository
+                .findByAccountIdAndPluginId(accountId, pluginId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Plugin " + pluginId + " is not activated for account " + accountId));
+
+        // Get set of batch IDs that have SQL generated, mapped to generation ID
+        java.util.Map<UUID, UUID> batchToGenerationMap = sqlGenerationRepository
+                .findByAccountPluginId(accountPlugin.getId(), false,
+                        org.springframework.data.domain.PageRequest.of(0, Integer.MAX_VALUE))
+                .getContent().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        PluginSqlGeneration::getSourceBatchId,
+                        PluginSqlGeneration::getId,
+                        (existing, replacement) -> existing // keep first if duplicates
+                ));
+
+        // Get baseline batch ID
+        UUID baselineBatchId = accountPlugin.getBaselineBatchId();
+
+        // Get all completed batches for the account
+        Page<Batch> completedBatches = batchRepository.findCompletedByAccountId(accountId, pageable);
+
+        // Map to DTO with SQL status
+        List<BatchWithSqlStatusDto> batchesWithStatus = completedBatches.getContent().stream()
+                .map(batch -> {
+                    boolean isBaseline = batch.getId().equals(baselineBatchId);
+                    boolean hasSql = batchToGenerationMap.containsKey(batch.getId());
+                    UUID generationId = batchToGenerationMap.get(batch.getId());
+
+                    // Get site domain
+                    String siteDomain = siteRepository.findById(batch.getSiteId())
+                            .map(Site::getDomain)
+                            .orElse("unknown");
+
+                    return BatchWithSqlStatusDto.of(
+                            batch.getId(),
+                            batch.getSiteId(),
+                            siteDomain,
+                            batch.getStatus().name(),
+                            batch.getCompletedAt() != null
+                                    ? batch.getCompletedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
+                                    : null,
+                            batch.getUploadedFilesCount(),
+                            batch.getTotalSize(),
+                            isBaseline,
+                            hasSql,
+                            generationId
+                    );
+                })
+                .toList();
+
+        return new org.springframework.data.domain.PageImpl<>(
+                batchesWithStatus, pageable, completedBatches.getTotalElements());
     }
 }

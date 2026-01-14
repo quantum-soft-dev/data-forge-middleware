@@ -1,14 +1,17 @@
 package com.bitbi.dfm.plugin.presentation;
 
+import com.bitbi.dfm.plugin.application.PluginAdminQueryService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
 import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
+import com.bitbi.dfm.plugin.application.SqlGenerationService;
+import com.bitbi.dfm.plugin.domain.AccountPlugin;
+import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
+import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
-import com.bitbi.dfm.plugin.presentation.dto.AccountPluginListResponseDto;
-import com.bitbi.dfm.plugin.presentation.dto.ReinitResultDto;
-import com.bitbi.dfm.plugin.presentation.dto.UserPluginLogDto;
-import com.bitbi.dfm.plugin.presentation.dto.UserPluginLogPageResponseDto;
+import com.bitbi.dfm.plugin.presentation.dto.*;
+import jakarta.validation.Valid;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import io.swagger.v3.oas.annotations.Operation;
@@ -61,21 +64,30 @@ public class AccountPluginsController {
     private static final Logger log = LoggerFactory.getLogger(AccountPluginsController.class);
 
     private final PluginQueryService pluginQueryService;
+    private final PluginAdminQueryService pluginAdminQueryService;
     private final PluginAuditLogRepository auditLogRepository;
     private final PluginHistoryService pluginHistoryService;
     private final PluginRateLimiterService rateLimiterService;
+    private final SqlGenerationService sqlGenerationService;
+    private final AccountPluginRepository accountPluginRepository;
     private final AuthorizationHelper authorizationHelper;
 
     public AccountPluginsController(
             PluginQueryService pluginQueryService,
+            PluginAdminQueryService pluginAdminQueryService,
             PluginAuditLogRepository auditLogRepository,
             PluginHistoryService pluginHistoryService,
             PluginRateLimiterService rateLimiterService,
+            SqlGenerationService sqlGenerationService,
+            AccountPluginRepository accountPluginRepository,
             AuthorizationHelper authorizationHelper) {
         this.pluginQueryService = pluginQueryService;
+        this.pluginAdminQueryService = pluginAdminQueryService;
         this.auditLogRepository = auditLogRepository;
         this.pluginHistoryService = pluginHistoryService;
         this.rateLimiterService = rateLimiterService;
+        this.sqlGenerationService = sqlGenerationService;
+        this.accountPluginRepository = accountPluginRepository;
         this.authorizationHelper = authorizationHelper;
     }
 
@@ -351,5 +363,354 @@ public class AccountPluginsController {
         // Return 202 Accepted - SQL generation continues asynchronously in background
         // Client can poll /sql-changes to check when generation completes
         return ResponseEntity.accepted().body(result);
+    }
+
+    // ==================== Batch SQL Management (User-facing) ====================
+
+    /**
+     * Lists all completed batches with their SQL generation status.
+     *
+     * @param pluginId the plugin identifier
+     * @param page page number
+     * @param size page size
+     * @return paginated list of batches with SQL status
+     */
+    @GetMapping("/{pluginId}/batches")
+    @Operation(
+        summary = "List batches with SQL status",
+        description = """
+            Returns all completed batches for your account with their SQL generation status.
+
+            Each batch shows:
+            - `isBaseline=true`: Baseline batch - SQL is NOT generated
+            - `hasSql=true`: SQL has been generated
+            - `hasSql=false`: SQL has NOT been generated yet
+
+            Use this to identify which batches need SQL generation.
+            """
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "List of batches with SQL status",
+            content = @Content(schema = @Schema(implementation = BatchWithSqlStatusDto.class))
+        ),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Plugin not activated for this account")
+    })
+    public ResponseEntity<Page<BatchWithSqlStatusDto>> listBatches(
+            @Parameter(description = "Plugin identifier", example = "bit-bi")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size (max 100)")
+            @RequestParam(defaultValue = "20") int size) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.debug("Listing batches for plugin {} account {}", pluginId, accountId);
+
+        int effectiveSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
+
+        try {
+            Page<BatchWithSqlStatusDto> batches = pluginAdminQueryService.findBatchesWithSqlStatus(
+                    pluginId, accountId, pageable);
+            return ResponseEntity.ok(batches);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to list batches: {}", e.getMessage());
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Generates SQL for a specific batch.
+     *
+     * @param pluginId the plugin identifier
+     * @param request the generation request
+     * @return the generation result
+     */
+    @PostMapping("/{pluginId}/generate-sql")
+    @Operation(
+        summary = "Generate SQL for a batch",
+        description = """
+            Triggers SQL generation for a specific batch.
+
+            **Options:**
+            - `forceFullGeneration=false` (default): Generates diff with previous batch
+            - `forceFullGeneration=true`: Generates all INSERTs (full initialization)
+
+            **Note:** SQL cannot be generated for the baseline batch.
+            """
+    )
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "SQL generation completed or skipped",
+            content = @Content(schema = @Schema(implementation = ManualSqlGenerationResultDto.class))
+        ),
+        @ApiResponse(responseCode = "400", description = "Invalid request or batch not found"),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Plugin not activated for this account")
+    })
+    public ResponseEntity<?> generateSql(
+            @Parameter(description = "Plugin identifier", example = "bit-bi")
+            @PathVariable String pluginId,
+
+            @Valid @RequestBody ManualSqlGenerationRequestDto request) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.info("Generate SQL requested: plugin={}, account={}, batch={}, forceFullGeneration={}",
+                pluginId, accountId, request.batchId(), request.forceFullGeneration());
+
+        // Find the account-plugin
+        AccountPlugin accountPlugin = accountPluginRepository.findByAccountIdAndPluginId(accountId, pluginId)
+                .orElse(null);
+        if (accountPlugin == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        if (!accountPlugin.isActive()) {
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of("error", "BAD_REQUEST", "message", "Plugin is not active"));
+        }
+
+        try {
+            java.util.Optional<PluginSqlGeneration> generationOpt = sqlGenerationService.generateSqlForBatch(
+                    request.batchId(), accountPlugin.getId(), request.forceFullGeneration());
+
+            if (generationOpt.isPresent()) {
+                PluginSqlGeneration generation = generationOpt.get();
+                log.info("SQL generation completed: batch={}, generation={}", request.batchId(), generation.getId());
+                return ResponseEntity.ok(ManualSqlGenerationResultDto.fromGeneration(generation, request.forceFullGeneration()));
+            } else {
+                log.info("SQL generation skipped for batch={}", request.batchId());
+                return ResponseEntity.ok(ManualSqlGenerationResultDto.skipped(
+                        request.batchId(), null, "SQL generation skipped - batch is baseline or SQL already exists"));
+            }
+        } catch (IllegalArgumentException e) {
+            log.warn("SQL generation failed: {}", e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of("error", "BAD_REQUEST", "message", e.getMessage()));
+        } catch (Exception e) {
+            log.error("SQL generation error: batch={}", request.batchId(), e);
+            return ResponseEntity.internalServerError()
+                    .body(java.util.Map.of("error", "INTERNAL_ERROR", "message", "SQL generation failed: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Lists SQL generations for this account.
+     */
+    @GetMapping("/{pluginId}/generations")
+    @Operation(
+        summary = "List SQL generations",
+        description = "Returns paginated list of SQL generation records for your account"
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "List of SQL generations"),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Plugin not activated")
+    })
+    public ResponseEntity<SqlGenerationListResponseDto> listGenerations(
+            @PathVariable String pluginId,
+
+            @RequestParam(defaultValue = "false") boolean includeSuperseded,
+
+            @RequestParam(defaultValue = "0") int page,
+
+            @RequestParam(defaultValue = "20") int size) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.debug("Listing generations for plugin {} account {}", pluginId, accountId);
+
+        int effectiveSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        try {
+            Page<SqlGenerationSummaryDto> generations = pluginHistoryService.listGenerations(
+                    pluginId, accountId, includeSuperseded, pageable);
+            return ResponseEntity.ok(SqlGenerationListResponseDto.fromPage(generations));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Gets paginated SQL content for a generation.
+     */
+    @GetMapping("/{pluginId}/generations/{generationId}/content")
+    @Operation(
+        summary = "Get SQL content (paginated)",
+        description = "Returns paginated SQL statements from a generation"
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Paginated SQL content"),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<SqlContentPageDto> getSqlContent(
+            @PathVariable String pluginId,
+            @PathVariable UUID generationId,
+
+            @RequestParam(defaultValue = "0") int page,
+
+            @RequestParam(defaultValue = "100") int size) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.debug("Getting SQL content for generation {} account {}", generationId, accountId);
+
+        int effectiveSize = Math.min(size, 100);
+
+        try {
+            SqlContentPageDto content = pluginHistoryService.getSqlContent(
+                    pluginId, accountId, generationId, page, effectiveSize);
+            return ResponseEntity.ok(content);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Downloads the complete SQL file.
+     */
+    @GetMapping("/{pluginId}/generations/{generationId}/download")
+    @Operation(
+        summary = "Download SQL file",
+        description = "Returns the complete SQL file as a download"
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "SQL file download"),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<String> downloadSqlFile(
+            @PathVariable String pluginId,
+            @PathVariable UUID generationId) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.debug("Downloading SQL file for generation {} account {}", generationId, accountId);
+
+        try {
+            String sqlContent = pluginHistoryService.downloadSqlFile(pluginId, accountId, generationId);
+
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.add(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"generation-" + generationId + ".sql\"");
+            headers.add(org.springframework.http.HttpHeaders.CONTENT_TYPE, "text/plain;charset=UTF-8");
+
+            return ResponseEntity.ok().headers(headers).body(sqlContent);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Regenerates SQL for a generation.
+     */
+    @PostMapping("/{pluginId}/generations/{generationId}/regenerate")
+    @Operation(
+        summary = "Regenerate SQL",
+        description = "Regenerates SQL for a batch. Original generation is marked as superseded."
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Regeneration completed"),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Generation not found"),
+        @ApiResponse(responseCode = "409", description = "Generation already superseded")
+    })
+    public ResponseEntity<?> regenerateSql(
+            @PathVariable String pluginId,
+            @PathVariable UUID generationId) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+        log.info("Regenerate SQL requested: plugin={}, account={}, generation={}", pluginId, accountId, generationId);
+
+        try {
+            RegenerateResultDto result = pluginHistoryService.regenerateSql(pluginId, accountId, generationId);
+            log.info("SQL regenerated: original={}, new={}", generationId, result.newGenerationId());
+            return ResponseEntity.ok(result);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(409)
+                    .body(java.util.Map.of("error", "CONFLICT", "message", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Deletes a SQL generation.
+     */
+    @DeleteMapping("/{pluginId}/generations/{generationId}")
+    @Operation(
+        summary = "Delete SQL generation",
+        description = "Deletes a SQL generation and its S3 file. Requires confirmation."
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Generation deleted"),
+        @ApiResponse(responseCode = "400", description = "Confirmation required"),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<?> deleteGeneration(
+            @PathVariable String pluginId,
+            @PathVariable UUID generationId,
+
+            @Parameter(description = "Must be 'true' to confirm deletion")
+            @RequestParam(required = false) Boolean confirm) {
+
+        Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
+        if (accountIdOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        UUID accountId = accountIdOpt.get();
+
+        if (confirm == null || !confirm) {
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of("error", "BAD_REQUEST",
+                            "message", "Confirmation required. Set confirm=true to proceed."));
+        }
+
+        log.info("Delete generation requested: plugin={}, account={}, generation={}", pluginId, accountId, generationId);
+
+        try {
+            DeleteGenerationResultDto result = pluginHistoryService.deleteGeneration(pluginId, accountId, generationId);
+            log.info("Generation deleted: {}", generationId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
     }
 }
