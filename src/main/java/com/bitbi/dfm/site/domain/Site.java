@@ -130,6 +130,24 @@ public class Site {
     }
 
     /**
+     * Update client secret hash.
+     * <p>
+     * Used when reconnecting to an existing site via Device Flow.
+     * Previous secrets become invalid immediately.
+     * </p>
+     *
+     * @param newClientSecretHash bcrypt-hashed new secret
+     */
+    public void updateClientSecretHash(String newClientSecretHash) {
+        Objects.requireNonNull(newClientSecretHash, "ClientSecretHash cannot be null");
+        if (newClientSecretHash.isBlank()) {
+            throw new IllegalArgumentException("ClientSecretHash cannot be blank");
+        }
+        this.clientSecretHash = newClientSecretHash;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
      * Extract display domain from composite domain (accountId_domain format).
      * Domain is stored as "uuid_domain" per FR-019.
      *

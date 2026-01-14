@@ -133,6 +133,53 @@ public class SiteService {
     }
 
     /**
+     * Get existing site or create new one, regenerating credentials in both cases.
+     * <p>
+     * Used by Device Flow when user approves authorization:
+     * - If site exists: Regenerate secret (old clients lose access)
+     * - If site doesn't exist: Create new site
+     * </p>
+     *
+     * @param accountId   account identifier
+     * @param domain      site domain (without accountId prefix)
+     * @param displayName site display name
+     * @return SiteCreationResult with site and new plaintext clientSecret
+     */
+    public SiteCreationResult getOrCreateSiteWithNewCredentials(UUID accountId, String domain, String displayName) {
+        logger.info("GetOrCreate site with new credentials: accountId={}, domain={}", accountId, domain);
+
+        // Create composite domain: accountId_domain (FR-019)
+        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+
+        java.util.Optional<Site> existingSite = siteRepository.findByDomain(compositeDomain);
+
+        if (existingSite.isPresent()) {
+            Site site = existingSite.get();
+
+            // Reactivate if deactivated
+            if (!site.getIsActive()) {
+                site.activate();
+                logger.info("Reactivated deactivated site: siteId={}", site.getId());
+            }
+
+            // Generate new credentials
+            String[] secretPair = SiteCredentials.generateWithHash(compositeDomain);
+            String plaintextSecret = secretPair[0];
+            String hashedSecret = secretPair[1];
+
+            site.updateClientSecretHash(hashedSecret);
+            Site saved = siteRepository.save(site);
+
+            logger.info("Regenerated credentials for existing site: siteId={}, domain={}",
+                        saved.getId(), saved.getDomain());
+            return new SiteCreationResult(saved, plaintextSecret);
+        }
+
+        // Site doesn't exist - create new one
+        return createSite(accountId, domain, displayName);
+    }
+
+    /**
      * Get site by ID.
      *
      * @param siteId site identifier

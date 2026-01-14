@@ -260,8 +260,8 @@ public class DeviceAuthorizationService {
             throw new AuthorizationAlreadyProcessedException("Authorization already processed");
         }
 
-        // Create site
-        SiteService.SiteCreationResult siteResult = siteService.createSite(
+        // Get or create site with new credentials
+        SiteService.SiteCreationResult siteResult = siteService.getOrCreateSiteWithNewCredentials(
                 accountId,
                 authorization.getSiteName(),
                 authorization.getSiteDescription() != null
