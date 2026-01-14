@@ -196,3 +196,168 @@ export interface PluginLogFilters {
   /** Page size (1-100) */
   size?: number
 }
+
+// ==================== Batch SQL Status Types ====================
+
+/**
+ * Batch with SQL generation status.
+ * Maps to BatchWithSqlStatusDto.java
+ */
+export interface BatchSqlStatus {
+  /** Unique batch identifier */
+  batchId: string
+  /** Site identifier */
+  siteId: string
+  /** Site domain name */
+  siteDomain: string
+  /** Batch status (e.g., "COMPLETED") */
+  status: string
+  /** When the batch was completed (ISO 8601) */
+  completedAt: string | null
+  /** Number of files in the batch */
+  fileCount: number
+  /** Total size of files in bytes */
+  totalSizeBytes: number
+  /** Whether this is the baseline batch (SQL shouldn't be generated) */
+  isBaseline: boolean
+  /** Whether SQL has been generated for this batch */
+  hasSql: boolean
+  /** SQL generation ID if SQL exists */
+  generationId: string | null
+}
+
+/**
+ * Paginated response for batch SQL status list.
+ */
+export interface BatchSqlStatusPageResponse {
+  /** List of batches with SQL status */
+  content: BatchSqlStatus[]
+  /** Current page number (0-indexed) */
+  page: number
+  /** Page size */
+  size: number
+  /** Total number of batches */
+  totalElements: number
+  /** Total number of pages */
+  totalPages: number
+}
+
+/**
+ * SQL generation summary for list display.
+ * Shared with plugin-history feature.
+ */
+export interface SqlGenerationSummary {
+  id: string
+  sourceBatchId: string
+  comparisonBatchId: string | null
+  siteId: string
+  siteDomain: string
+  createdAt: string
+  statementCount: number
+  insertCount: number
+  updateCount: number
+  deleteCount: number
+  fileSizeBytes: number
+  generationDurationMs: number
+  isInitialLoad: boolean
+  superseded: boolean
+  supersededBy: string | null
+}
+
+/**
+ * Paginated list response for SQL generations.
+ */
+export interface SqlGenerationListResponse {
+  content: SqlGenerationSummary[]
+  page: number
+  size: number
+  totalElements: number
+  totalPages: number
+}
+
+/**
+ * Paginated SQL content for preview.
+ */
+export interface SqlContentPage {
+  generationId: string
+  page: number
+  pageSize: number
+  totalPages: number
+  totalStatements: number
+  statements: string[]
+  hasNext: boolean
+  hasPrevious: boolean
+}
+
+/**
+ * Request for generating SQL for a batch.
+ */
+export interface GenerateSqlRequest {
+  /** Batch ID to generate SQL for */
+  batchId: string
+}
+
+/**
+ * Result of SQL generation.
+ */
+export interface GenerateSqlResult {
+  generationId: string
+  sourceBatchId: string
+  siteId: string
+  siteDomain: string
+  statementCount: number
+  insertCount: number
+  updateCount: number
+  deleteCount: number
+  generationDurationMs: number
+  createdAt: string
+}
+
+/**
+ * Result of regenerating SQL.
+ */
+export interface RegenerateSqlResult {
+  originalGenerationId: string
+  newGenerationId: string
+  statementCount: number
+  insertCount: number
+  updateCount: number
+  deleteCount: number
+  generationDurationMs: number
+  regeneratedAt: string
+}
+
+/**
+ * Result of deleting SQL generation.
+ */
+export interface DeleteGenerationResult {
+  generationId: string
+  deletedFromS3: boolean
+  deletedAt: string
+}
+
+/**
+ * Query filters for batch SQL status.
+ */
+export interface BatchSqlFilters {
+  /** Plugin ID */
+  pluginId: string
+  /** Page number (0-indexed) */
+  page?: number
+  /** Page size */
+  size?: number
+}
+
+/**
+ * Parameters for SQL content query.
+ */
+export interface SqlContentParams {
+  /** Plugin ID */
+  pluginId: string
+  /** Generation ID */
+  generationId: string
+  /** Page number (0-indexed) */
+  page?: number
+  /** Page size */
+  size?: number
+}

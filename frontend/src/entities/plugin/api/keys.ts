@@ -24,4 +24,18 @@ export const pluginKeys = {
   pluginLogs: (pluginId: string) => [...pluginKeys.all, 'logs', pluginId] as const,
   pluginLogsList: (pluginId: string, page: number) =>
     [...pluginKeys.pluginLogs(pluginId), { page }] as const,
+  // Batch SQL status (user-facing)
+  batchSql: (pluginId: string) => [...pluginKeys.all, 'batchSql', pluginId] as const,
+  batchSqlList: (pluginId: string, page: number) =>
+    [...pluginKeys.batchSql(pluginId), 'list', { page }] as const,
+  // SQL generations (user-facing)
+  userGenerations: (pluginId: string) =>
+    [...pluginKeys.all, 'userGenerations', pluginId] as const,
+  userGenerationsList: (pluginId: string, page: number, includeSuperseded: boolean) =>
+    [...pluginKeys.userGenerations(pluginId), 'list', { page, includeSuperseded }] as const,
+  // SQL content (user-facing)
+  userSqlContent: (pluginId: string, generationId: string) =>
+    [...pluginKeys.all, 'userSqlContent', pluginId, generationId] as const,
+  userSqlContentPage: (pluginId: string, generationId: string, page: number) =>
+    [...pluginKeys.userSqlContent(pluginId, generationId), { page }] as const,
 }

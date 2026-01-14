@@ -115,6 +115,22 @@ export const ADMIN_PLUGINS_AUDIT_BY_PLUGIN = (pluginId: string) => `${ADMIN_PLUG
 export const ACCOUNT_PLUGINS = `${ADMIN_API_BASE}/account/plugins`;
 export const ACCOUNT_PLUGIN_LOGS = (pluginId: string) => `${ACCOUNT_PLUGINS}/${pluginId}/logs`;
 
+// Account Plugin Batch SQL Management (User-facing)
+export const ACCOUNT_PLUGIN_BATCHES = (pluginId: string) =>
+  `${ACCOUNT_PLUGINS}/${pluginId}/batches`;
+export const ACCOUNT_PLUGIN_GENERATE_SQL = (pluginId: string) =>
+  `${ACCOUNT_PLUGINS}/${pluginId}/generate-sql`;
+export const ACCOUNT_PLUGIN_GENERATIONS = (pluginId: string) =>
+  `${ACCOUNT_PLUGINS}/${pluginId}/generations`;
+export const ACCOUNT_PLUGIN_GENERATION = (pluginId: string, generationId: string) =>
+  `${ACCOUNT_PLUGIN_GENERATIONS(pluginId)}/${generationId}`;
+export const ACCOUNT_PLUGIN_GENERATION_CONTENT = (pluginId: string, generationId: string) =>
+  `${ACCOUNT_PLUGIN_GENERATION(pluginId, generationId)}/content`;
+export const ACCOUNT_PLUGIN_GENERATION_DOWNLOAD = (pluginId: string, generationId: string) =>
+  `${ACCOUNT_PLUGIN_GENERATION(pluginId, generationId)}/download`;
+export const ACCOUNT_PLUGIN_GENERATION_REGENERATE = (pluginId: string, generationId: string) =>
+  `${ACCOUNT_PLUGIN_GENERATION(pluginId, generationId)}/regenerate`;
+
 // Plugin Activation
 export const PLUGINS = `${ADMIN_API_BASE}/plugins`;
 export const PLUGINS_ACTIVATE = (pluginId: string) => `${PLUGINS}/${pluginId}/activate`;

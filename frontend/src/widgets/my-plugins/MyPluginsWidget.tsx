@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react'
-import { Plug, FileText } from 'lucide-react'
+import { Plug, FileText, Database } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs'
 import {
@@ -18,6 +18,7 @@ import {
 } from '@/features/my-plugins'
 import { PluginList } from '@/features/my-plugins/ui/PluginList'
 import { PluginLogsTab } from '@/features/my-plugins/ui/PluginLogsTab'
+import { BatchSqlTab } from '@/features/my-plugins/ui/BatchSqlTab'
 import { PluginActivationDialog } from '@/features/my-plugins/ui/PluginActivationDialog'
 import type { AvailablePlugin, ActivatePluginRequest } from '@/features/my-plugins'
 
@@ -109,6 +110,10 @@ export function MyPluginsWidget() {
               <Plug className="h-4 w-4" />
               Plugins
             </TabsTrigger>
+            <TabsTrigger value="sql" className="flex items-center gap-1">
+              <Database className="h-4 w-4" />
+              SQL
+            </TabsTrigger>
             <TabsTrigger value="logs" className="flex items-center gap-1">
               <FileText className="h-4 w-4" />
               Logs
@@ -125,6 +130,10 @@ export function MyPluginsWidget() {
               onActivate={handleActivateClick}
               onDeactivate={handleDeactivate}
             />
+          </TabsContent>
+
+          <TabsContent value="sql">
+            <BatchSqlTab pluginId={activePluginId} />
           </TabsContent>
 
           <TabsContent value="logs">
