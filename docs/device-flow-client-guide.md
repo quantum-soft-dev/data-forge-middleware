@@ -23,7 +23,7 @@ This guide describes how to implement the Device Authorization Flow (RFC 8628) f
 
 | Environment | URL |
 |-------------|-----|
-| Production | `https://api.dataforge.com` |
+| Production | `<PRODUCTION_URL>` (TBD) |
 | Development | `https://dev.dfm.bitbi.io` |
 
 ---
@@ -52,8 +52,8 @@ This guide describes how to implement the Device Authorization Flow (RFC 8628) f
 {
   "deviceCode": "GmRhmhcxhwAzkoEqiMEg_DnyEysNkuNhszIySk9eS",
   "userCode": "WDJB-MJHT",
-  "verificationUri": "https://app.dataforge.com/device-verify",
-  "verificationUriComplete": "https://app.dataforge.com/device-verify?code=WDJB-MJHT",
+  "verificationUri": "https://dev.dfm.bitbi.io/device-verify",
+  "verificationUriComplete": "https://dev.dfm.bitbi.io/device-verify?code=WDJB-MJHT",
   "expiresIn": 900,
   "interval": 5
 }
@@ -88,7 +88,7 @@ Show the user code and verification URL to the user:
 ===================================
 
 Open this URL in your browser:
-  https://app.dataforge.com/device-verify
+  https://dev.dfm.bitbi.io/device-verify
 
 Enter this code:
   WDJB-MJHT
@@ -126,7 +126,7 @@ User has approved. Site created. Credentials returned:
   "siteId": "550e8400-e29b-41d4-a716-446655440000",
   "domain": "c823d8b8-0e6f-4242-a350-d6ef335ab4e8_warehouse-01",
   "clientSecret": "dGhpcyBpcyBhIHNlY3JldCBrZXk=",
-  "apiBaseUrl": "https://api.dataforge.com"
+  "apiBaseUrl": "https://dev.dfm.bitbi.io"
 }
 ```
 
@@ -189,7 +189,7 @@ Authorization: Basic base64(domain:clientSecret)
 ### Example: Initiate Batch Upload
 
 ```bash
-curl -X POST "https://api.dataforge.com/api/v1/device/batches" \
+curl -X POST "https://dev.dfm.bitbi.io/api/v1/device/batches" \
   -u "c823d8b8-0e6f-4242-a350-d6ef335ab4e8_warehouse-01:dGhpcyBpcyBhIHNlY3JldCBrZXk=" \
   -H "Content-Type: application/json"
 ```
@@ -221,7 +221,7 @@ def poll_for_credentials(device_code: str, interval: int, expires_in: int) -> di
         AuthorizationExpired: Codes expired
         AuthorizationError: Other error
     """
-    base_url = "https://api.dataforge.com"
+    base_url = "https://dev.dfm.bitbi.io"
     end_time = time.time() + expires_in
 
     while time.time() < end_time:
@@ -278,7 +278,7 @@ import time
 import base64
 
 class DeviceAuthClient:
-    def __init__(self, base_url: str = "https://api.dataforge.com"):
+    def __init__(self, base_url: str = "https://dev.dfm.bitbi.io"):
         self.base_url = base_url
         self.credentials = None
 
@@ -408,7 +408,7 @@ if __name__ == "__main__":
 const axios = require('axios');
 
 class DeviceAuthClient {
-  constructor(baseUrl = 'https://api.dataforge.com') {
+  constructor(baseUrl = 'https://dev.dfm.bitbi.io') {
     this.baseUrl = baseUrl;
     this.credentials = null;
   }
@@ -621,7 +621,7 @@ After successful authorization, store credentials securely:
   "siteId": "550e8400-e29b-41d4-a716-446655440000",
   "domain": "c823d8b8-0e6f-4242-a350-d6ef335ab4e8_warehouse-01",
   "clientSecret": "dGhpcyBpcyBhIHNlY3JldCBrZXk=",
-  "apiBaseUrl": "https://api.dataforge.com",
+  "apiBaseUrl": "https://dev.dfm.bitbi.io",
   "authorizedAt": "2025-01-12T10:30:00Z"
 }
 ```
