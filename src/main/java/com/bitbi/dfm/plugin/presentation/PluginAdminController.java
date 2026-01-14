@@ -2,7 +2,12 @@ package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.PluginAdminQueryService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
+import com.bitbi.dfm.plugin.application.SqlGenerationService;
+import com.bitbi.dfm.plugin.domain.AccountPlugin;
+import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginActionType;
+import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
+import jakarta.validation.Valid;
 import com.bitbi.dfm.plugin.presentation.dto.*;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -53,13 +58,19 @@ public class PluginAdminController {
 
     private final PluginAdminQueryService pluginAdminQueryService;
     private final PluginHistoryService pluginHistoryService;
+    private final SqlGenerationService sqlGenerationService;
+    private final AccountPluginRepository accountPluginRepository;
 
     public PluginAdminController(
             PluginAdminQueryService pluginAdminQueryService,
-            PluginHistoryService pluginHistoryService
+            PluginHistoryService pluginHistoryService,
+            SqlGenerationService sqlGenerationService,
+            AccountPluginRepository accountPluginRepository
     ) {
         this.pluginAdminQueryService = pluginAdminQueryService;
         this.pluginHistoryService = pluginHistoryService;
+        this.sqlGenerationService = sqlGenerationService;
+        this.accountPluginRepository = accountPluginRepository;
     }
 
     /**
@@ -540,6 +551,319 @@ public class PluginAdminController {
                             "error", "CONFLICT",
                             "message", e.getMessage()
                     ));
+        }
+    }
+
+    // ==================== Manual SQL Generation (Admin Tool) ====================
+
+    /**
+     * Manually triggers SQL generation for a specific batch.
+     *
+     * <p>This admin endpoint allows manual SQL generation for batches that may have
+     * been missed due to system issues, or to force full regeneration.</p>
+     *
+     * <p>Use cases:</p>
+     * <ul>
+     *   <li>Generate SQL for batches that failed due to bugs</li>
+     *   <li>Force full SQL generation (all INSERTs) for a batch</li>
+     *   <li>Recover from baseline_batch_id issues</li>
+     * </ul>
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param request the generation request with batchId and options
+     * @return the generation result
+     */
+    @PostMapping("/{pluginId}/accounts/{accountId}/generate-sql")
+    @Operation(
+            summary = "Manually generate SQL for a batch",
+            description = """
+                    Triggers SQL generation for a specific batch. Useful for:
+                    - Generating SQL for batches that were missed due to bugs
+                    - Forcing full SQL generation (all INSERTs) instead of diff
+                    - Recovery operations after system issues
+
+                    **Options:**
+                    - `forceFullGeneration=false` (default): Generates diff with previous batch
+                    - `forceFullGeneration=true`: Generates all INSERTs (full initialization)
+
+                    **Note:** If the batch is the baseline batch, no SQL will be generated.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "SQL generation completed or skipped",
+                    content = @Content(schema = @Schema(implementation = ManualSqlGenerationResultDto.class))
+            ),
+            @ApiResponse(responseCode = "400", description = "Invalid request"),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized (requires ROLE_ADMIN)"),
+            @ApiResponse(responseCode = "404", description = "Account-plugin or batch not found")
+    })
+    public ResponseEntity<?> generateSqlForBatch(
+            @Parameter(description = "Plugin identifier")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Account ID")
+            @PathVariable UUID accountId,
+
+            @Valid @RequestBody ManualSqlGenerationRequestDto request) {
+
+        log.info("Admin request: manual SQL generation for plugin={}, account={}, batch={}, forceFullGeneration={}",
+                pluginId, accountId, request.batchId(), request.forceFullGeneration());
+
+        // Find the account-plugin
+        AccountPlugin accountPlugin = accountPluginRepository.findByAccountIdAndPluginId(accountId, pluginId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "No plugin activation found: accountId=" + accountId + ", pluginId=" + pluginId));
+
+        // Validate plugin is active
+        if (!accountPlugin.isActive()) {
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of(
+                            "error", "BAD_REQUEST",
+                            "message", "Plugin is not active for this account"
+                    ));
+        }
+
+        try {
+            // Generate SQL for the batch
+            java.util.Optional<PluginSqlGeneration> generationOpt = sqlGenerationService.generateSqlForBatch(
+                    request.batchId(),
+                    accountPlugin.getId(),
+                    request.forceFullGeneration()
+            );
+
+            if (generationOpt.isPresent()) {
+                PluginSqlGeneration generation = generationOpt.get();
+                log.info("Manual SQL generation completed: batch={}, generation={}, statements={}",
+                        request.batchId(), generation.getId(), generation.getStatementCount());
+
+                return ResponseEntity.ok(ManualSqlGenerationResultDto.fromGeneration(
+                        generation, request.forceFullGeneration()));
+            } else {
+                // No SQL generated (baseline batch or already exists)
+                log.info("Manual SQL generation skipped for batch={} (baseline or already generated)",
+                        request.batchId());
+
+                return ResponseEntity.ok(ManualSqlGenerationResultDto.skipped(
+                        request.batchId(),
+                        null,
+                        "SQL generation skipped - batch is baseline or SQL already exists"
+                ));
+            }
+        } catch (IllegalArgumentException e) {
+            log.warn("Manual SQL generation failed: batch={}, error={}", request.batchId(), e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of(
+                            "error", "BAD_REQUEST",
+                            "message", e.getMessage()
+                    ));
+        } catch (Exception e) {
+            log.error("Manual SQL generation error: batch={}", request.batchId(), e);
+            return ResponseEntity.internalServerError()
+                    .body(java.util.Map.of(
+                            "error", "INTERNAL_ERROR",
+                            "message", "SQL generation failed: " + e.getMessage()
+                    ));
+        }
+    }
+
+    /**
+     * Lists batches that don't have SQL generation.
+     *
+     * <p>Returns all completed batches for an account, indicating which ones
+     * have SQL generated and which are baseline batches (that shouldn't have SQL).</p>
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account ID
+     * @param page      page number
+     * @param size      page size
+     * @return list of batches with their SQL status
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/batches-without-sql")
+    @Operation(
+            summary = "List batches without SQL generation",
+            description = """
+                    Returns completed batches for an account indicating their SQL generation status.
+
+                    Each batch shows:
+                    - `isBaseline=true`: Baseline batch, SQL should NOT be generated
+                    - `isBaseline=false`: Non-baseline batch that needs SQL generation
+
+                    Use this to identify batches that need manual SQL generation.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "List of batches without SQL",
+                    content = @Content(schema = @Schema(implementation = BatchWithoutSqlDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized (requires ROLE_ADMIN)"),
+            @ApiResponse(responseCode = "404", description = "Account-plugin not found")
+    })
+    public ResponseEntity<Page<BatchWithoutSqlDto>> listBatchesWithoutSql(
+            @Parameter(description = "Plugin identifier")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Account ID")
+            @PathVariable UUID accountId,
+
+            @Parameter(description = "Page number (0-indexed)")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size (max 100)")
+            @RequestParam(defaultValue = "20") int size) {
+
+        log.debug("Admin request: list batches without SQL for plugin={}, account={}, page={}, size={}",
+                pluginId, accountId, page, size);
+
+        int effectiveSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
+
+        try {
+            Page<BatchWithoutSqlDto> batches = pluginAdminQueryService.findBatchesWithoutSql(
+                    pluginId, accountId, pageable);
+
+            log.info("Found {} batches without SQL for plugin={}, account={}",
+                    batches.getTotalElements(), pluginId, accountId);
+
+            return ResponseEntity.ok(batches);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to list batches without SQL: {}", e.getMessage());
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Lists only batches that actually need SQL generation (non-baseline, no existing SQL).
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account ID
+     * @return list of batches needing SQL generation
+     */
+    @GetMapping("/{pluginId}/accounts/{accountId}/batches-needing-sql")
+    @Operation(
+            summary = "List batches needing SQL generation",
+            description = """
+                    Returns only batches that need SQL generation:
+                    - Not the baseline batch
+                    - Don't have SQL generated yet
+
+                    These are batches that should have SQL but don't, typically due to bugs or system issues.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "List of batches needing SQL",
+                    content = @Content(schema = @Schema(implementation = BatchWithoutSqlDto.class))
+            ),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized (requires ROLE_ADMIN)"),
+            @ApiResponse(responseCode = "404", description = "Account-plugin not found")
+    })
+    public ResponseEntity<List<BatchWithoutSqlDto>> listBatchesNeedingSql(
+            @Parameter(description = "Plugin identifier")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Account ID")
+            @PathVariable UUID accountId,
+
+            @Parameter(description = "Page size (max 100)")
+            @RequestParam(defaultValue = "100") int size) {
+
+        log.debug("Admin request: list batches needing SQL for plugin={}, account={}", pluginId, accountId);
+
+        int effectiveSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(0, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
+
+        try {
+            List<BatchWithoutSqlDto> batches = pluginAdminQueryService.findBatchesNeedingSql(
+                    pluginId, accountId, pageable);
+
+            log.info("Found {} batches needing SQL for plugin={}, account={}",
+                    batches.size(), pluginId, accountId);
+
+            return ResponseEntity.ok(batches);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to list batches needing SQL: {}", e.getMessage());
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * Deletes a single SQL generation and its S3 file.
+     *
+     * @param pluginId     the plugin identifier
+     * @param accountId    the account ID
+     * @param generationId the generation ID to delete
+     * @param confirm      must be true to confirm deletion
+     * @return the deletion result
+     */
+    @DeleteMapping("/{pluginId}/accounts/{accountId}/generations/{generationId}")
+    @Operation(
+            summary = "Delete a SQL generation",
+            description = """
+                    Deletes a single SQL generation record and its associated S3 file.
+
+                    Use this when:
+                    - SQL was incorrectly generated
+                    - Need to regenerate SQL from scratch for a batch
+                    - Cleaning up old generation records
+
+                    **Requires confirmation:** Set confirm=true to proceed with deletion.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Generation deleted successfully",
+                    content = @Content(schema = @Schema(implementation = DeleteGenerationResultDto.class))
+            ),
+            @ApiResponse(responseCode = "400", description = "Confirmation not provided"),
+            @ApiResponse(responseCode = "401", description = "Not authenticated"),
+            @ApiResponse(responseCode = "403", description = "Not authorized (requires ROLE_ADMIN)"),
+            @ApiResponse(responseCode = "404", description = "Generation not found")
+    })
+    public ResponseEntity<?> deleteGeneration(
+            @Parameter(description = "Plugin identifier")
+            @PathVariable String pluginId,
+
+            @Parameter(description = "Account ID")
+            @PathVariable UUID accountId,
+
+            @Parameter(description = "Generation ID to delete")
+            @PathVariable UUID generationId,
+
+            @Parameter(description = "Must be 'true' to confirm deletion")
+            @RequestParam(required = false) Boolean confirm) {
+
+        log.debug("Admin request: delete generation plugin={}, account={}, generation={}, confirm={}",
+                pluginId, accountId, generationId, confirm);
+
+        if (confirm == null || !confirm) {
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of(
+                            "error", "BAD_REQUEST",
+                            "message", "Confirmation required. Set confirm=true to proceed with deletion."
+                    ));
+        }
+
+        try {
+            DeleteGenerationResultDto result = pluginHistoryService.deleteGeneration(
+                    pluginId, accountId, generationId);
+
+            log.info("Generation deleted: plugin={}, account={}, generation={}",
+                    pluginId, accountId, generationId);
+
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to delete generation: {}", e.getMessage());
+            return ResponseEntity.notFound().build();
         }
     }
 }

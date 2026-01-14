@@ -106,10 +106,11 @@ class PluginActionTypeTest {
     }
 
     @Test
-    @DisplayName("Should have exactly 14 action types")
-    void shouldHaveFourteenActionTypes() {
+    @DisplayName("Should have exactly 15 action types")
+    void shouldHaveFifteenActionTypes() {
         // 6 existing + 3 SQL generation types + 4 history management types + 1 reinit type (Feature 015)
-        // (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_STARTED, SQL_REGENERATION_COMPLETED, SQL_REGENERATION_FAILED, REINIT)
-        assertThat(PluginActionType.values()).hasSize(14);
+        // + 1 SQL_GENERATION_DELETED (manual admin tools)
+        // (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_STARTED, SQL_REGENERATION_COMPLETED, SQL_REGENERATION_FAILED, REINIT, SQL_GENERATION_DELETED)
+        assertThat(PluginActionType.values()).hasSize(15);
     }
 }

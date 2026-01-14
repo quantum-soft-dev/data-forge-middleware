@@ -45,5 +45,8 @@ public enum PluginActionType {
     SQL_REGENERATION_FAILED,
 
     /** Plugin SQL state reinitialized (history cleared + regenerated from latest batch) */
-    REINIT
+    REINIT,
+
+    /** Single SQL generation deleted by admin */
+    SQL_GENERATION_DELETED
 }

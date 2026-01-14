@@ -126,4 +126,20 @@ public interface PluginSqlGenerationRepository {
      * @return count of generations
      */
     long countByAccountPluginId(Long accountPluginId);
+
+    /**
+     * Finds batch IDs for an account that have SQL generated.
+     * Used to identify batches without SQL generation.
+     *
+     * @param accountPluginId the account plugin ID
+     * @return set of batch IDs that have SQL generations
+     */
+    java.util.Set<UUID> findGeneratedBatchIdsByAccountPluginId(Long accountPluginId);
+
+    /**
+     * Deletes a SQL generation record.
+     *
+     * @param generation the generation to delete
+     */
+    void delete(PluginSqlGeneration generation);
 }

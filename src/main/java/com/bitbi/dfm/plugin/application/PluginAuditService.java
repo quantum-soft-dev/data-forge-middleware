@@ -600,4 +600,40 @@ public class PluginAuditService {
                     pluginId, accountId, e.getMessage());
         }
     }
+
+    /**
+     * Logs a SQL generation deletion event.
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param generationId the deleted generation ID
+     * @param batchId the batch ID associated with the generation
+     * @param deletedBytes the size of the deleted file in bytes
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logGenerationDeleted(
+            String pluginId,
+            UUID accountId,
+            UUID generationId,
+            UUID batchId,
+            Long deletedBytes) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("generationId", generationId.toString());
+            metadata.put("batchId", batchId != null ? batchId.toString() : null);
+            metadata.put("deletedBytes", deletedBytes != null ? deletedBytes : 0L);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_GENERATION_DELETED)
+                    .withMetadata(metadata);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_GENERATION_DELETED plugin={} account={} generation={}",
+                    pluginId, accountId, generationId);
+        } catch (Exception e) {
+            log.error("Failed to log generation deletion audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
 }

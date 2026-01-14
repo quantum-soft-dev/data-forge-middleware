@@ -411,6 +411,61 @@ public class PluginHistoryService {
         return RegenerateResultDto.fromEntity(original.getId(), newGeneration);
     }
 
+    // ==================== User Story: Delete Single Generation ====================
+
+    /**
+     * Deletes a single SQL generation and its S3 file.
+     *
+     * <p>This removes the SQL generation record and the associated S3 file.
+     * Use this when SQL was incorrectly generated or needs to be removed.</p>
+     *
+     * @param pluginId the plugin identifier
+     * @param accountId the account ID
+     * @param generationId the generation ID to delete
+     * @return result of the deletion including file size deleted
+     */
+    @Transactional
+    public DeleteGenerationResultDto deleteGeneration(String pluginId, UUID accountId, UUID generationId) {
+        log.info("Deleting generation: pluginId={}, accountId={}, generationId={}",
+                pluginId, accountId, generationId);
+
+        AccountPlugin accountPlugin = findAccountPlugin(accountId, pluginId);
+        PluginSqlGeneration generation = findGeneration(generationId, accountPlugin.getId());
+
+        UUID batchId = generation.getSourceBatchId();
+        UUID siteId = generation.getSiteId();
+        String s3Key = generation.getS3Key();
+        Long fileSizeBytes = generation.getFileSizeBytes();
+
+        // Delete S3 file
+        boolean s3Deleted = true;
+        if (s3Key != null && !s3Key.isBlank()) {
+            List<String> failedKeys = deleteS3Files(List.of(s3Key));
+            s3Deleted = failedKeys.isEmpty();
+            if (!s3Deleted) {
+                log.warn("Failed to delete S3 file for generation {}: {}", generationId, s3Key);
+            }
+        }
+
+        // Delete database record
+        sqlGenerationRepository.delete(generation);
+
+        // Audit log
+        auditService.logGenerationDeleted(pluginId, accountId, generationId, batchId, fileSizeBytes);
+
+        log.info("Generation deleted: generationId={}, batchId={}, s3Deleted={}",
+                generationId, batchId, s3Deleted);
+
+        return new DeleteGenerationResultDto(
+                generationId,
+                batchId,
+                siteId,
+                fileSizeBytes != null ? fileSizeBytes : 0L,
+                s3Deleted,
+                "Generation deleted successfully"
+        );
+    }
+
     // ==================== Helper Methods ====================
 
     private AccountPlugin findAccountPlugin(UUID accountId, String pluginId) {

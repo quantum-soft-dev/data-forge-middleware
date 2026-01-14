@@ -85,4 +85,14 @@ public interface BatchRepository {
      * @return Optional containing the most recent completed batch, or empty if none
      */
     Optional<Batch> findLatestCompletedByAccountId(UUID accountId);
+
+    /**
+     * Finds all completed batches for an account with pagination.
+     * Used by admin to find batches that may need SQL generation.
+     *
+     * @param accountId The account ID
+     * @param pageable pagination parameters
+     * @return Page of completed batches
+     */
+    Page<Batch> findCompletedByAccountId(UUID accountId, Pageable pageable);
 }

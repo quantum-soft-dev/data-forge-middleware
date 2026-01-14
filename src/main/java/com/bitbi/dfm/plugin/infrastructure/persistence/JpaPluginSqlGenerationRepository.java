@@ -114,4 +114,10 @@ public interface JpaPluginSqlGenerationRepository extends JpaRepository<PluginSq
      */
     @Query("SELECT COUNT(g) FROM PluginSqlGeneration g WHERE g.accountPluginId = :accountPluginId")
     long countByAccountPluginId(@Param("accountPluginId") Long accountPluginId);
+
+    /**
+     * Finds all batch IDs that have SQL generations for an account-plugin.
+     */
+    @Query("SELECT g.sourceBatchId FROM PluginSqlGeneration g WHERE g.accountPluginId = :accountPluginId")
+    java.util.Set<UUID> findGeneratedBatchIdsByAccountPluginId(@Param("accountPluginId") Long accountPluginId);
 }

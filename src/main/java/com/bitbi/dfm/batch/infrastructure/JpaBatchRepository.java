@@ -271,4 +271,24 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         LIMIT 1
         """)
     Optional<Batch> findLatestCompletedByAccountId(UUID accountId);
+
+    /**
+     * Finds all completed batches for an account with pagination.
+     * <p>
+     * Used by admin to list batches that may need SQL generation.
+     * Only considers COMPLETED or COMPLETED_WITH_WARNINGS batches.
+     * </p>
+     *
+     * @param accountId The account ID
+     * @param pageable pagination parameters
+     * @return Page of completed batches
+     */
+    @Query("""
+        SELECT b
+        FROM Batch b
+        WHERE b.accountId = :accountId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+        ORDER BY b.completedAt DESC
+        """)
+    Page<Batch> findCompletedByAccountId(UUID accountId, Pageable pageable);
 }

@@ -1,9 +1,14 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.presentation.dto.AdminAccountPluginDto;
+import com.bitbi.dfm.plugin.presentation.dto.BatchWithoutSqlDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginAuditLogEntryDto;
 import com.bitbi.dfm.plugin.presentation.dto.PluginConfigResponseDto;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -37,18 +42,24 @@ public class PluginAdminQueryService {
     private final PluginAuditLogRepository auditLogRepository;
     private final AccountPluginRepository accountPluginRepository;
     private final PluginSqlGenerationRepository sqlGenerationRepository;
+    private final BatchRepository batchRepository;
+    private final SiteRepository siteRepository;
 
     public PluginAdminQueryService(
             PluginRegistry pluginRegistry,
             PluginConfigRepository pluginConfigRepository,
             PluginAuditLogRepository auditLogRepository,
             AccountPluginRepository accountPluginRepository,
-            PluginSqlGenerationRepository sqlGenerationRepository) {
+            PluginSqlGenerationRepository sqlGenerationRepository,
+            BatchRepository batchRepository,
+            SiteRepository siteRepository) {
         this.pluginRegistry = pluginRegistry;
         this.pluginConfigRepository = pluginConfigRepository;
         this.auditLogRepository = auditLogRepository;
         this.accountPluginRepository = accountPluginRepository;
         this.sqlGenerationRepository = sqlGenerationRepository;
+        this.batchRepository = batchRepository;
+        this.siteRepository = siteRepository;
     }
 
     /**
@@ -182,5 +193,119 @@ public class PluginAdminQueryService {
             long generationCount = sqlGenerationRepository.countByAccountPluginId(ap.getId());
             return AdminAccountPluginDto.fromEntity(ap, pluginName, generationCount);
         });
+    }
+
+    // ==================== Batches Without SQL Generation (Manual SQL Feature) ====================
+
+    /**
+     * Finds completed batches for an account that don't have SQL generation.
+     * Used by admin to identify batches that may need manual SQL generation.
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account identifier
+     * @param pageable  pagination parameters
+     * @return list of batches without SQL generation
+     */
+    public Page<BatchWithoutSqlDto> findBatchesWithoutSql(String pluginId, UUID accountId, Pageable pageable) {
+        log.debug("Finding batches without SQL for plugin={}, account={}", pluginId, accountId);
+
+        // Find the account-plugin activation
+        AccountPlugin accountPlugin = accountPluginRepository
+                .findByAccountIdAndPluginId(accountId, pluginId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Plugin " + pluginId + " is not activated for account " + accountId));
+
+        // Get set of batch IDs that already have SQL generated
+        java.util.Set<UUID> generatedBatchIds = sqlGenerationRepository
+                .findGeneratedBatchIdsByAccountPluginId(accountPlugin.getId());
+
+        // Get baseline batch ID (SQL should not be generated for baseline)
+        UUID baselineBatchId = accountPlugin.getBaselineBatchId();
+
+        // Get all completed batches for the account
+        Page<Batch> completedBatches = batchRepository.findCompletedByAccountId(accountId, pageable);
+
+        // Map to DTO - only include batches without SQL
+        List<BatchWithoutSqlDto> filteredBatches = completedBatches.getContent().stream()
+                .filter(batch -> !generatedBatchIds.contains(batch.getId()))
+                .map(batch -> {
+                    boolean isBaseline = batch.getId().equals(baselineBatchId);
+
+                    // Get site domain
+                    String siteDomain = siteRepository.findById(batch.getSiteId())
+                            .map(Site::getDomain)
+                            .orElse("unknown");
+
+                    return new BatchWithoutSqlDto(
+                            batch.getId(),
+                            batch.getSiteId(),
+                            siteDomain,
+                            batch.getStatus().name(),
+                            batch.getCompletedAt() != null
+                                    ? batch.getCompletedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
+                                    : null,
+                            batch.getUploadedFilesCount(),
+                            batch.getTotalSize(),
+                            isBaseline
+                    );
+                })
+                .toList();
+
+        // Return as page - note: totalElements may not be accurate after filtering
+        return new org.springframework.data.domain.PageImpl<>(
+                filteredBatches, pageable, completedBatches.getTotalElements());
+    }
+
+    /**
+     * Finds completed batches without SQL generation (excluding baseline).
+     * Only returns batches that actually need SQL generation.
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account identifier
+     * @param pageable  pagination parameters
+     * @return list of batches without SQL generation (excluding baseline)
+     */
+    public java.util.List<BatchWithoutSqlDto> findBatchesNeedingSql(String pluginId, UUID accountId, Pageable pageable) {
+        log.debug("Finding batches needing SQL for plugin={}, account={}", pluginId, accountId);
+
+        // Find the account-plugin activation
+        AccountPlugin accountPlugin = accountPluginRepository
+                .findByAccountIdAndPluginId(accountId, pluginId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Plugin " + pluginId + " is not activated for account " + accountId));
+
+        // Get set of batch IDs that already have SQL generated
+        java.util.Set<UUID> generatedBatchIds = sqlGenerationRepository
+                .findGeneratedBatchIdsByAccountPluginId(accountPlugin.getId());
+
+        // Get baseline batch ID
+        UUID baselineBatchId = accountPlugin.getBaselineBatchId();
+
+        // Get all completed batches for the account
+        Page<Batch> completedBatches = batchRepository.findCompletedByAccountId(accountId, pageable);
+
+        // Filter to only batches without SQL and not baseline
+        return completedBatches.stream()
+                .filter(batch -> !generatedBatchIds.contains(batch.getId()))
+                .filter(batch -> !batch.getId().equals(baselineBatchId))
+                .map(batch -> {
+                    String siteDomain = siteRepository.findById(batch.getSiteId())
+                            .map(Site::getDomain)
+                            .orElse("unknown");
+
+                    return new BatchWithoutSqlDto(
+                            batch.getId(),
+                            batch.getSiteId(),
+                            siteDomain,
+                            batch.getStatus().name(),
+                            batch.getCompletedAt() != null
+                                    ? batch.getCompletedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
+                                    : null,
+                            batch.getUploadedFilesCount(),
+                            batch.getTotalSize(),
+                            false // not baseline since we filtered
+                    );
+                })
+                .toList();
     }
 }
