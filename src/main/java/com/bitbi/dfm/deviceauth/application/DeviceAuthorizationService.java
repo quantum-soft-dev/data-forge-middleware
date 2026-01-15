@@ -338,7 +338,9 @@ public class DeviceAuthorizationService {
     // --- Private helpers ---
 
     private String generateDeviceCode() {
-        byte[] bytes = new byte[deviceCodeLength / 2];
+        // Base64 produces 4 chars per 3 bytes, so we need ceil(length * 3/4) bytes
+        // Using full deviceCodeLength bytes ensures we always have enough chars
+        byte[] bytes = new byte[deviceCodeLength];
         SECURE_RANDOM.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
                 .substring(0, deviceCodeLength);
