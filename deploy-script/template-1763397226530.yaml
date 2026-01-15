@@ -762,6 +762,10 @@ Resources:
               Value: !Ref Auth0ClaimsNamespace
             - Name: PLUGIN_BITBI_CLIENT_ID
               Value: !Ref PluginBitbiClientId
+            - Name: DEVICE_AUTH_VERIFICATION_URI
+              Value: !Sub 'https://${DomainName}/device-verify'
+            - Name: APP_API_BASE_URL
+              Value: !Sub 'https://${DomainName}'
           Secrets:
             - Name: DB_USERNAME
               ValueFrom: !Sub '${AppDBCredentialsSecret}:username::'
