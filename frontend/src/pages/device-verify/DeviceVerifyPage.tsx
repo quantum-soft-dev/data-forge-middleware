@@ -57,9 +57,21 @@ export default function DeviceVerifyPage() {
   // Handle verification info error
   useEffect(() => {
     if (verifyInfoError) {
+      const status = (verifyInfoError as { response?: { status?: number } })?.response?.status;
+      const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string; message?: string } } })
+        ?.response?.data?.error_description ||
+        (verifyInfoError as { response?: { data?: { message?: string } } })?.response?.data?.message;
+
+      // 400 = Authorization already processed (approved or denied)
+      if (status === 400) {
+        setPageState('success');
+        setCreatedSiteName(null); // We don't know the site name, but it was likely already created
+        setErrorMessage('');
+        return;
+      }
+
+      // 404 = Not found or expired
       setPageState('error');
-      const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string } } })
-        ?.response?.data?.error_description;
       setErrorMessage(errorMsg || 'Device code not found or expired. Please check the code and try again.');
     }
   }, [verifyInfoError]);
@@ -306,16 +318,20 @@ export default function DeviceVerifyPage() {
               <div className="text-center space-y-4">
                 <CheckCircle2 className="mx-auto h-16 w-16 text-green-500" />
                 <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Site Created Successfully</h2>
+                  <h2 className="text-xl font-semibold text-gray-900">
+                    {createdSiteName ? 'Site Created Successfully' : 'Authorization Complete'}
+                  </h2>
                   <p className="mt-2 text-gray-600">
                     {createdSiteName ? (
                       <>Site &quot;{createdSiteName}&quot; has been created and the device is now authorized.</>
                     ) : (
-                      <>The site has been created and the device is now authorized.</>
+                      <>This authorization has been completed. The device should now be connected.</>
                     )}
                   </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    The device will automatically receive its credentials.
+                    {createdSiteName
+                      ? 'The device will automatically receive its credentials.'
+                      : 'You can close this page.'}
                   </p>
                 </div>
                 <Button
