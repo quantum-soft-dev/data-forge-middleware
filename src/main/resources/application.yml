@@ -144,6 +144,17 @@ plugins:
     # Auth0 client ID for Bit BI application (for client verification)
     client-id: ${PLUGIN_BITBI_CLIENT_ID:BITBI_CLIENT_ID_PLACEHOLDER}
 
+# Device Authorization Flow Configuration
+device-authorization:
+  verification-uri: ${DEVICE_AUTH_VERIFICATION_URI:https://app.dataforge.com/device-verify}
+  expiration-minutes: ${DEVICE_AUTH_EXPIRATION_MINUTES:15}
+  polling-interval-seconds: ${DEVICE_AUTH_POLLING_INTERVAL_SECONDS:5}
+  device-code-length: ${DEVICE_AUTH_DEVICE_CODE_LENGTH:64}
+
+# Application base URL (used for API callbacks)
+app:
+  api-base-url: ${APP_API_BASE_URL:https://api.dataforge.com}
+
 # OpenAPI Configuration
 springdoc:
   api-docs:

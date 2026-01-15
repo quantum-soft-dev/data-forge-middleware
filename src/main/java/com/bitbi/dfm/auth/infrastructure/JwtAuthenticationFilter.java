@@ -55,6 +55,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // Filter is already registered only for these paths in SecurityConfiguration
         // This check is redundant but kept for safety
         String path = request.getRequestURI();
+
+        // Skip OAuth2-protected endpoints (Device Authorization Flow verification)
+        // These use Auth0 OAuth2, not custom JWT
+        if (path.startsWith("/api/v1/device/verify")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         if (!path.startsWith("/api/dfc/") && !path.startsWith("/api/v1/device/")) {
             filterChain.doFilter(request, response);
             return;

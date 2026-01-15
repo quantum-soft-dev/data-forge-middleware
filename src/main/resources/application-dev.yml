@@ -62,6 +62,14 @@ springdoc:
     operationsSorter: alpha
     tagsSorter: alpha
 
+# Device Authorization Flow Configuration (dev environment)
+device-authorization:
+  verification-uri: https://dev.dfm.bitbi.io/device-verify
+
+# Application base URL (dev environment)
+app:
+  api-base-url: https://dev.dfm.bitbi.io
+
 logging:
   level:
     root: INFO
