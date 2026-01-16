@@ -27,11 +27,15 @@ import static org.testcontainers.containers.localstack.LocalStackContainer.Servi
  * parallel test execution.
  * </p>
  * <p>
+ * <b>CI Environment</b>: In CI (GitHub Actions), external services are provided
+ * via workflow services. The manager detects this and skips Testcontainers startup.
+ * </p>
+ * <p>
  * All integration tests should extend this class to inherit Testcontainers setup.
  * </p>
  *
  * @author Data Forge Team
- * @version 2.0.0
+ * @version 2.1.0
  * @since Phase 11 - Testcontainers Singleton Configuration
  */
 @SpringBootTest(properties = {
@@ -51,31 +55,79 @@ public abstract class AbstractIntegrationTest {
 
     /**
      * PostgreSQL container reference from singleton manager.
+     * May be null if using external services (CI environment).
      */
     protected static final PostgreSQLContainer<?> postgresContainer = containersManager.getPostgresContainer();
 
     /**
      * Redis container reference from singleton manager.
+     * May be null if using external services (CI environment).
      */
     protected static final GenericContainer<?> redisContainer = containersManager.getRedisContainer();
 
     /**
      * LocalStack container reference from singleton manager.
+     * May be null if using external services (CI environment).
      */
     protected static final LocalStackContainer localStackContainer = containersManager.getLocalStackContainer();
 
     /**
-     * Configure Spring properties dynamically from Testcontainers.
+     * Configure Spring properties dynamically from Testcontainers or external services.
      * <p>
      * This method is called BEFORE Spring context initialization, allowing
      * Spring Boot to use the dynamically allocated ports and connection strings
-     * from Testcontainers.
+     * from Testcontainers or external services (in CI environment).
      * </p>
      *
      * @param registry the dynamic property registry
      */
     @DynamicPropertySource
     static void configureTestProperties(DynamicPropertyRegistry registry) {
+        if (containersManager.isUsingExternalServices()) {
+            // CI environment - use external services at localhost
+            configureExternalServices(registry);
+        } else {
+            // Local environment - use Testcontainers
+            configureTestcontainers(registry);
+        }
+
+        // Common configuration
+        registry.add("auth0.enabled", () -> "false");
+    }
+
+    /**
+     * Configure properties for CI environment with external services.
+     */
+    private static void configureExternalServices(DynamicPropertyRegistry registry) {
+        // PostgreSQL configuration (from CI workflow services)
+        registry.add("spring.datasource.url", () -> "jdbc:postgresql://localhost:5432/dataforge_test");
+        registry.add("spring.datasource.username", () -> "dataforge");
+        registry.add("spring.datasource.password", () -> "dataforge_test_password");
+        registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
+
+        // Redis configuration (from CI workflow services)
+        registry.add("spring.data.redis.host", () -> "localhost");
+        registry.add("spring.data.redis.port", () -> 6379);
+        registry.add("spring.data.redis.password", () -> ""); // CI Redis has no password
+
+        // S3 / LocalStack configuration (from CI workflow services)
+        registry.add("s3.endpoint", () -> "http://localhost:4566");
+        registry.add("s3.region", () -> "us-east-1");
+        registry.add("s3.access-key", () -> "test");
+        registry.add("s3.secret-key", () -> "test");
+        registry.add("s3.bucket.name", () -> "data-forge-test-bucket");
+
+        // AWS SDK configuration (alternative property names)
+        registry.add("aws.s3.endpoint", () -> "http://localhost:4566");
+        registry.add("aws.s3.region", () -> "us-east-1");
+        registry.add("aws.accessKeyId", () -> "test");
+        registry.add("aws.secretAccessKey", () -> "test");
+    }
+
+    /**
+     * Configure properties for local environment with Testcontainers.
+     */
+    private static void configureTestcontainers(DynamicPropertyRegistry registry) {
         // PostgreSQL configuration
         registry.add("spring.datasource.url", postgresContainer::getJdbcUrl);
         registry.add("spring.datasource.username", postgresContainer::getUsername);
@@ -92,16 +144,13 @@ public abstract class AbstractIntegrationTest {
         registry.add("s3.region", localStackContainer::getRegion);
         registry.add("s3.access-key", localStackContainer::getAccessKey);
         registry.add("s3.secret-key", localStackContainer::getSecretKey);
-        registry.add("s3.bucket.name", () -> "data-forge-test-bucket"); // Match application-test.yml and TestContainersManager
+        registry.add("s3.bucket.name", () -> "data-forge-test-bucket");
 
         // AWS SDK configuration (alternative property names)
         registry.add("aws.s3.endpoint", () -> localStackContainer.getEndpointOverride(S3).toString());
         registry.add("aws.s3.region", localStackContainer::getRegion);
         registry.add("aws.accessKeyId", localStackContainer::getAccessKey);
         registry.add("aws.secretAccessKey", localStackContainer::getSecretKey);
-
-        // Disable external services
-        registry.add("auth0.enabled", () -> "false");
     }
 
     /**
