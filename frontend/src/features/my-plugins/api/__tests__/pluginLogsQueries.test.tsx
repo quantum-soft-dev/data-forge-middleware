@@ -84,7 +84,10 @@ describe('pluginLogsQueries', () => {
     it('should fetch plugin logs successfully', async () => {
       vi.mocked(api.fetchPluginLogs).mockResolvedValue(mockResponse)
 
-      const { result } = renderHook(() => usePluginLogsQuery('bit-bi', 0), { wrapper })
+      const { result } = renderHook(
+        () => usePluginLogsQuery({ pluginId: 'bit-bi', page: 0 }),
+        { wrapper }
+      )
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
@@ -100,7 +103,10 @@ describe('pluginLogsQueries', () => {
       }
       vi.mocked(api.fetchPluginLogs).mockResolvedValue(page2Response)
 
-      const { result } = renderHook(() => usePluginLogsQuery('bit-bi', 1), { wrapper })
+      const { result } = renderHook(
+        () => usePluginLogsQuery({ pluginId: 'bit-bi', page: 1 }),
+        { wrapper }
+      )
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
@@ -112,7 +118,10 @@ describe('pluginLogsQueries', () => {
       const mockError = new Error('Failed to fetch plugin logs')
       vi.mocked(api.fetchPluginLogs).mockRejectedValue(mockError)
 
-      const { result } = renderHook(() => usePluginLogsQuery('bit-bi', 0), { wrapper })
+      const { result } = renderHook(
+        () => usePluginLogsQuery({ pluginId: 'bit-bi', page: 0 }),
+        { wrapper }
+      )
 
       await waitFor(() => expect(result.current.isError).toBe(true))
 
@@ -122,12 +131,20 @@ describe('pluginLogsQueries', () => {
     it('should have correct query key for cache invalidation', async () => {
       vi.mocked(api.fetchPluginLogs).mockResolvedValue(mockResponse)
 
-      const { result } = renderHook(() => usePluginLogsQuery('bit-bi', 0), { wrapper })
+      const { result } = renderHook(
+        () => usePluginLogsQuery({ pluginId: 'bit-bi', page: 0 }),
+        { wrapper }
+      )
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-      // Verify query is cached with correct key
-      const cachedData = queryClient.getQueryData(['plugins', 'logs', 'bit-bi', { page: 0 }])
+      // Verify query is cached with correct key (now includes all filter params)
+      const cachedData = queryClient.getQueryData([
+        'plugins',
+        'logs',
+        'bit-bi',
+        { page: 0, size: 20, siteId: undefined, from: undefined, to: undefined },
+      ])
       expect(cachedData).toEqual(mockResponse)
     })
 
@@ -135,7 +152,7 @@ describe('pluginLogsQueries', () => {
       vi.mocked(api.fetchPluginLogs).mockResolvedValue(mockResponse)
 
       const { result, rerender } = renderHook(
-        ({ pluginId }) => usePluginLogsQuery(pluginId, 0),
+        ({ pluginId }) => usePluginLogsQuery({ pluginId, page: 0 }),
         { wrapper, initialProps: { pluginId: 'bit-bi' } }
       )
 
@@ -172,7 +189,10 @@ describe('pluginLogsQueries', () => {
       }
       vi.mocked(api.fetchPluginLogs).mockResolvedValue(responseWithError)
 
-      const { result } = renderHook(() => usePluginLogsQuery('bit-bi', 0), { wrapper })
+      const { result } = renderHook(
+        () => usePluginLogsQuery({ pluginId: 'bit-bi', page: 0 }),
+        { wrapper }
+      )
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
@@ -183,7 +203,10 @@ describe('pluginLogsQueries', () => {
     it('should not fetch when pluginId is empty', async () => {
       vi.mocked(api.fetchPluginLogs).mockResolvedValue(mockResponse)
 
-      const { result } = renderHook(() => usePluginLogsQuery('', 0), { wrapper })
+      const { result } = renderHook(
+        () => usePluginLogsQuery({ pluginId: '', page: 0 }),
+        { wrapper }
+      )
 
       // Query should be disabled when pluginId is empty
       expect(result.current.isFetching).toBe(false)

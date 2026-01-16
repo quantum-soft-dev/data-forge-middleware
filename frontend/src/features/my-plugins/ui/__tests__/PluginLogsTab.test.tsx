@@ -228,7 +228,14 @@ describe('PluginLogsTab', () => {
 
     renderWithProvider(<PluginLogsTab pluginId="bit-bi" />)
 
-    expect(pluginLogsQueries.usePluginLogsQuery).toHaveBeenCalledWith('bit-bi', 0)
+    expect(pluginLogsQueries.usePluginLogsQuery).toHaveBeenCalledWith({
+      pluginId: 'bit-bi',
+      page: 0,
+      size: 20,
+      siteId: undefined,
+      from: undefined,
+      to: undefined,
+    })
   })
 
   it('should filter out technical events from visible logs', () => {
