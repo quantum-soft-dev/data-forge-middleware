@@ -310,6 +310,13 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
           AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
           AND (CAST(:siteId AS UUID) IS NULL OR b.site_id = :siteId)
         ORDER BY b.completed_at DESC
-        """, nativeQuery = true)
+        """,
+        countQuery = """
+        SELECT COUNT(*) FROM batches b
+        WHERE b.account_id = :accountId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+          AND (CAST(:siteId AS UUID) IS NULL OR b.site_id = :siteId)
+        """,
+        nativeQuery = true)
     Page<Batch> findCompletedByAccountIdAndOptionalSiteId(UUID accountId, UUID siteId, Pageable pageable);
 }
