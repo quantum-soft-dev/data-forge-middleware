@@ -124,9 +124,16 @@ docker-compose up postgres localstack     # Start dependencies
 
 #### User-Facing Plugin Logs
 - **Endpoint**: `GET /api/v1/account/plugins/{pluginId}/logs`
-- **Frontend**: Logs tab in My Plugins widget (Dashboard)
-- **Data**: Action type, success/failure status, error messages, SQL generation statistics
+- **Filters**: `siteId`, `from`, `to` (ISO 8601), `page`, `size` (max 100)
+- **Frontend**: Logs tab in My Plugins widget (Dashboard) with site filter, date range, page size selector
+- **Data**: Action type, success/failure status, error messages, SQL generation statistics, siteId, siteDomain
 - **Security**: Excludes sensitive data (IP, user agent, client IDs)
+
+#### User-Facing Batch SQL Status
+- **Endpoint**: `GET /api/v1/account/plugins/{pluginId}/batches`
+- **Filters**: `siteId`, `page`, `size` (max 100)
+- **Frontend**: SQL tab in My Plugins widget (Dashboard) with site filter, page size selector
+- **Data**: Batch info, site domain, SQL generation status (isBaseline, hasSql, generationId)
 
 ### Bit BI Plugin API Endpoints
 | Endpoint | Method | Description |
@@ -194,6 +201,7 @@ pages/{feature}/            # Route pages
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 
 ## Recent Changes
+- 018-plugin-filtering: Added filtering (siteId, from, to) and siteDomain to plugin logs API, siteId filter to batches API, frontend PluginTabFilters component with site dropdown, date range, and page size (20, 30, 50, 100)
 - 017-csv-file-initialization: Added baseline_batch_id to account_plugins, new /sites/{siteId}/files endpoints for CSV download, SQL generation skipped for baseline batch
 - 016-global-error-handling: Added severity and isRead to ErrorLog, GlobalErrorUserController with user-facing endpoints, frontend GlobalErrorsWidget on Dashboard
 - 014-plugin-history: Added Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3)

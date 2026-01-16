@@ -7,6 +7,26 @@
 
 import type { AuditLogFilters } from '../model/types'
 
+/**
+ * Filter options for plugin logs query.
+ */
+interface PluginLogQueryFilters {
+  page?: number
+  size?: number
+  siteId?: string
+  from?: string
+  to?: string
+}
+
+/**
+ * Filter options for batch SQL query.
+ */
+interface BatchSqlQueryFilters {
+  page?: number
+  size?: number
+  siteId?: string
+}
+
 export const pluginKeys = {
   all: ['plugins'] as const,
   lists: () => [...pluginKeys.all, 'list'] as const,
@@ -22,12 +42,12 @@ export const pluginKeys = {
     [...pluginKeys.accountPlugins(), { includeInactive }] as const,
   // Plugin logs (user-facing)
   pluginLogs: (pluginId: string) => [...pluginKeys.all, 'logs', pluginId] as const,
-  pluginLogsList: (pluginId: string, page: number) =>
-    [...pluginKeys.pluginLogs(pluginId), { page }] as const,
+  pluginLogsList: (pluginId: string, filters: PluginLogQueryFilters) =>
+    [...pluginKeys.pluginLogs(pluginId), filters] as const,
   // Batch SQL status (user-facing)
   batchSql: (pluginId: string) => [...pluginKeys.all, 'batchSql', pluginId] as const,
-  batchSqlList: (pluginId: string, page: number) =>
-    [...pluginKeys.batchSql(pluginId), 'list', { page }] as const,
+  batchSqlList: (pluginId: string, filters: BatchSqlQueryFilters) =>
+    [...pluginKeys.batchSql(pluginId), 'list', filters] as const,
   // SQL generations (user-facing)
   userGenerations: (pluginId: string) =>
     [...pluginKeys.all, 'userGenerations', pluginId] as const,

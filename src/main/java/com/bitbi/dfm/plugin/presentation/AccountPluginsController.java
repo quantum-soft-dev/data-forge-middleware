@@ -14,6 +14,8 @@ import com.bitbi.dfm.plugin.presentation.dto.*;
 import jakarta.validation.Valid;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -29,16 +31,23 @@ import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * REST controller for viewing account plugin integrations.
@@ -71,6 +80,7 @@ public class AccountPluginsController {
     private final SqlGenerationService sqlGenerationService;
     private final AccountPluginRepository accountPluginRepository;
     private final AuthorizationHelper authorizationHelper;
+    private final SiteRepository siteRepository;
 
     public AccountPluginsController(
             PluginQueryService pluginQueryService,
@@ -80,7 +90,8 @@ public class AccountPluginsController {
             PluginRateLimiterService rateLimiterService,
             SqlGenerationService sqlGenerationService,
             AccountPluginRepository accountPluginRepository,
-            AuthorizationHelper authorizationHelper) {
+            AuthorizationHelper authorizationHelper,
+            SiteRepository siteRepository) {
         this.pluginQueryService = pluginQueryService;
         this.pluginAdminQueryService = pluginAdminQueryService;
         this.auditLogRepository = auditLogRepository;
@@ -89,6 +100,7 @@ public class AccountPluginsController {
         this.sqlGenerationService = sqlGenerationService;
         this.accountPluginRepository = accountPluginRepository;
         this.authorizationHelper = authorizationHelper;
+        this.siteRepository = siteRepository;
     }
 
     /**
@@ -182,6 +194,9 @@ public class AccountPluginsController {
      * @param pluginId the plugin identifier (e.g., "bit-bi")
      * @param page page number (0-indexed)
      * @param size page size (1-100)
+     * @param siteId optional filter by site ID
+     * @param from optional filter by start date (inclusive)
+     * @param to optional filter by end date (exclusive)
      * @return paginated list of log entries
      */
     @GetMapping("/{pluginId}/logs")
@@ -194,6 +209,10 @@ public class AccountPluginsController {
             - Plugin activation/deactivation
             - SQL generation started/completed/failed
             - Event dispatch success/failure
+
+            **Filtering:**
+            - siteId: Filter by site (for SQL-related events)
+            - from/to: Filter by date range (ISO 8601 format)
 
             **Security:**
             - Only returns logs for the authenticated account
@@ -230,7 +249,21 @@ public class AccountPluginsController {
             @RequestParam(defaultValue = "20")
             @Min(value = 1, message = "Size must be at least 1")
             @Max(value = 100, message = "Size must not exceed 100")
-            int size) {
+            int size,
+
+            @Parameter(description = "Filter by site ID")
+            @RequestParam(required = false)
+            UUID siteId,
+
+            @Parameter(description = "Filter by start date (inclusive, ISO 8601)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+            Instant from,
+
+            @Parameter(description = "Filter by end date (exclusive, ISO 8601)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+            Instant to) {
 
         // Get authenticated account ID
         Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
@@ -243,19 +276,68 @@ public class AccountPluginsController {
         }
 
         UUID accountId = accountIdOpt.get();
-        log.info("Listing logs for plugin {} account {}, page={}, size={}",
-                pluginId, accountId, page, size);
+        log.info("Listing logs for plugin {} account {}, page={}, size={}, siteId={}, from={}, to={}",
+                pluginId, accountId, page, size, siteId, from, to);
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "occurredAt"));
 
-        Page<PluginAuditLog> logsPage = auditLogRepository.findByPluginIdAndAccountId(
-                pluginId, accountId, pageable);
+        // Use filtered query if any filter is present, otherwise use simple query
+        Page<PluginAuditLog> logsPage;
+        if (siteId != null || from != null || to != null) {
+            logsPage = auditLogRepository.findByPluginIdAndAccountIdWithFilters(
+                    pluginId, accountId, siteId, from, to, pageable);
+        } else {
+            logsPage = auditLogRepository.findByPluginIdAndAccountId(pluginId, accountId, pageable);
+        }
 
-        Page<UserPluginLogDto> dtoPage = logsPage.map(UserPluginLogDto::fromEntity);
+        // Collect all unique siteIds from the logs for bulk lookup
+        Set<UUID> siteIds = logsPage.getContent().stream()
+                .map(log -> extractSiteIdFromMetadata(log.getMetadata()))
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+
+        // Bulk fetch all sites
+        Map<UUID, Site> sitesById = siteRepository.findAllById(siteIds).stream()
+                .collect(Collectors.toMap(Site::getId, Function.identity()));
+
+        // Map logs to DTOs with site domain information
+        List<UserPluginLogDto> dtos = logsPage.getContent().stream()
+                .map(auditLog -> {
+                    UUID logSiteId = extractSiteIdFromMetadata(auditLog.getMetadata());
+                    String siteDomain = null;
+                    if (logSiteId != null && sitesById.containsKey(logSiteId)) {
+                        siteDomain = sitesById.get(logSiteId).getDomain();
+                    }
+                    return UserPluginLogDto.fromEntityWithSite(auditLog, siteDomain);
+                })
+                .toList();
+
+        Page<UserPluginLogDto> dtoPage = new PageImpl<>(dtos, pageable, logsPage.getTotalElements());
 
         log.debug("Returning {} logs for plugin {} account {}", dtoPage.getContent().size(), pluginId, accountId);
 
         return ResponseEntity.ok(UserPluginLogPageResponseDto.fromPage(dtoPage));
+    }
+
+    /**
+     * Extracts siteId from audit log metadata.
+     */
+    private UUID extractSiteIdFromMetadata(Map<String, Object> metadata) {
+        if (metadata == null) {
+            return null;
+        }
+        Object siteIdObj = metadata.get("siteId");
+        if (siteIdObj == null) {
+            return null;
+        }
+        if (siteIdObj instanceof UUID) {
+            return (UUID) siteIdObj;
+        }
+        try {
+            return UUID.fromString(siteIdObj.toString());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**
@@ -373,6 +455,7 @@ public class AccountPluginsController {
      * @param pluginId the plugin identifier
      * @param page page number
      * @param size page size
+     * @param siteId optional filter by site ID
      * @return paginated list of batches with SQL status
      */
     @GetMapping("/{pluginId}/batches")
@@ -385,6 +468,9 @@ public class AccountPluginsController {
             - `isBaseline=true`: Baseline batch - SQL is NOT generated
             - `hasSql=true`: SQL has been generated
             - `hasSql=false`: SQL has NOT been generated yet
+
+            **Filtering:**
+            - siteId: Filter by site
 
             Use this to identify which batches need SQL generation.
             """
@@ -406,7 +492,10 @@ public class AccountPluginsController {
             @RequestParam(defaultValue = "0") int page,
 
             @Parameter(description = "Page size (max 100)")
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+
+            @Parameter(description = "Filter by site ID")
+            @RequestParam(required = false) UUID siteId) {
 
         Optional<UUID> accountIdOpt = authorizationHelper.getOptionalAuthenticatedAccountId();
         if (accountIdOpt.isEmpty()) {
@@ -414,14 +503,14 @@ public class AccountPluginsController {
         }
 
         UUID accountId = accountIdOpt.get();
-        log.debug("Listing batches for plugin {} account {}", pluginId, accountId);
+        log.debug("Listing batches for plugin {} account {} siteId={}", pluginId, accountId, siteId);
 
         int effectiveSize = Math.min(size, 100);
         Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
 
         try {
             Page<BatchWithSqlStatusDto> batches = pluginAdminQueryService.findBatchesWithSqlStatus(
-                    pluginId, accountId, pageable);
+                    pluginId, accountId, siteId, pageable);
             return ResponseEntity.ok(batches);
         } catch (IllegalArgumentException e) {
             log.warn("Failed to list batches: {}", e.getMessage());

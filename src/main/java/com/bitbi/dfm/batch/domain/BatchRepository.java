@@ -95,4 +95,15 @@ public interface BatchRepository {
      * @return Page of completed batches
      */
     Page<Batch> findCompletedByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Finds completed batches for an account optionally filtered by site.
+     * Used for user-facing batch listing with optional site filter.
+     *
+     * @param accountId The account ID
+     * @param siteId Optional site ID filter (null for all sites)
+     * @param pageable pagination parameters
+     * @return Page of completed batches
+     */
+    Page<Batch> findCompletedByAccountIdAndOptionalSiteId(UUID accountId, UUID siteId, Pageable pageable);
 }

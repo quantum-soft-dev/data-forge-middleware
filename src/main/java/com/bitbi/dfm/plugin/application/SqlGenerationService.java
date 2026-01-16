@@ -185,7 +185,19 @@ public class SqlGenerationService {
             // Phase 2: Generate SQL content (S3 reads outside transaction)
             SqlGenerationResult result = generateSqlContent(batchData);
             if (result == null) {
-                log.info("No changes detected between batches, skipping SQL file creation");
+                long durationMs = System.currentTimeMillis() - startTimeMs;
+                log.info("No changes detected between batches, skipping SQL file creation: batchId={}, duration={}ms",
+                        batchId, durationMs);
+
+                // Audit: Log SQL generation completed with zero changes
+                pluginAuditService.logSqlGenerationCompletedNoChanges(
+                        PLUGIN_ID,
+                        batchData.batch.getAccountId(),
+                        batchId,
+                        batchData.batch.getSiteId(),
+                        durationMs
+                );
+
                 return Optional.empty();
             }
 

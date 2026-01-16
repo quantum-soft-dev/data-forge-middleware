@@ -16,6 +16,7 @@ import {
   deleteGeneration,
 } from './batchSqlApi'
 import type {
+  BatchSqlFilters,
   GenerateSqlRequest,
   SqlContentParams,
 } from '../model/types'
@@ -23,10 +24,12 @@ import type {
 /**
  * Hook to fetch batches with SQL generation status.
  */
-export function useBatchSqlStatusQuery(pluginId: string, page: number = 0) {
+export function useBatchSqlStatusQuery(filters: BatchSqlFilters) {
+  const { pluginId, page = 0, size = 20, siteId } = filters
+
   return useQuery({
-    queryKey: pluginKeys.batchSqlList(pluginId, page),
-    queryFn: () => fetchBatchesWithSqlStatus({ pluginId, page }),
+    queryKey: pluginKeys.batchSqlList(pluginId, { page, size, siteId }),
+    queryFn: () => fetchBatchesWithSqlStatus(filters),
     enabled: !!pluginId,
     staleTime: 30000, // 30 seconds
   })

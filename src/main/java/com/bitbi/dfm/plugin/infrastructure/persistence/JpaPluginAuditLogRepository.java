@@ -70,4 +70,22 @@ public interface JpaPluginAuditLogRepository extends JpaRepository<PluginAuditLo
             @Param("pluginId") String pluginId,
             @Param("accountId") UUID accountId,
             Pageable pageable);
+
+    @Override
+    @Query(value = """
+        SELECT * FROM plugin_audit_logs pal
+        WHERE pal.plugin_id = :pluginId
+        AND pal.account_id = :accountId
+        AND (CAST(:siteId AS UUID) IS NULL OR pal.metadata->>'siteId' = CAST(:siteId AS VARCHAR))
+        AND (CAST(:from AS TIMESTAMPTZ) IS NULL OR pal.occurred_at >= :from)
+        AND (CAST(:to AS TIMESTAMPTZ) IS NULL OR pal.occurred_at < :to)
+        ORDER BY pal.occurred_at DESC
+        """, nativeQuery = true)
+    Page<PluginAuditLog> findByPluginIdAndAccountIdWithFilters(
+            @Param("pluginId") String pluginId,
+            @Param("accountId") UUID accountId,
+            @Param("siteId") UUID siteId,
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            Pageable pageable);
 }

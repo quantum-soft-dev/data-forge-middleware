@@ -331,6 +331,50 @@ public class PluginAuditService {
     }
 
     /**
+     * Logs successful completion of SQL generation when no changes were detected.
+     *
+     * <p>This is a success case - the batch was processed correctly, but the CSV files
+     * were identical to the previous batch, so no SQL statements were generated.</p>
+     *
+     * @param pluginId   the plugin identifier
+     * @param accountId  the account that owns the batch
+     * @param batchId    the batch that was processed
+     * @param siteId     the site the batch belongs to
+     * @param durationMs time taken to compare files
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logSqlGenerationCompletedNoChanges(
+            String pluginId,
+            UUID accountId,
+            UUID batchId,
+            UUID siteId,
+            long durationMs) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("batchId", batchId.toString());
+            metadata.put("siteId", siteId.toString());
+            metadata.put("insertCount", 0);
+            metadata.put("updateCount", 0);
+            metadata.put("deleteCount", 0);
+            metadata.put("filesProcessed", 0);
+            metadata.put("noChangesDetected", true);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.SQL_GENERATION_COMPLETED)
+                    .withMetadata(metadata)
+                    .withDuration(durationMs);
+
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: SQL_GENERATION_COMPLETED (no changes) plugin={} account={} batch={} duration={}ms",
+                    pluginId, accountId, batchId, durationMs);
+        } catch (Exception e) {
+            log.error("Failed to log SQL generation completed (no changes) audit: plugin={} batch={} error={}",
+                    pluginId, batchId, e.getMessage());
+        }
+    }
+
+    /**
      * Logs a failed SQL generation attempt.
      *
      * @param pluginId     the plugin identifier

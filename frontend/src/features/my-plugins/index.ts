@@ -19,6 +19,9 @@ export type {
   PluginLogPageResponse,
   PluginLogFilters,
   SqlGenerationMetadata,
+  // Batch SQL Types
+  BatchSqlFilters,
+  BatchSqlStatus,
 } from './model/types'
 
 // API Functions
@@ -54,3 +57,6 @@ export { PluginCard } from './ui/PluginCard'
 export { PluginList } from './ui/PluginList'
 export { PluginActivationDialog } from './ui/PluginActivationDialog'
 export { PluginLogsTab } from './ui/PluginLogsTab'
+export { PluginTabFilters, type LogsFilterState, type SqlFilterState } from './ui/PluginTabFilters'
+export { BatchSqlTab } from './ui/BatchSqlTab'
+export { BatchSqlTable } from './ui/BatchSqlTable'

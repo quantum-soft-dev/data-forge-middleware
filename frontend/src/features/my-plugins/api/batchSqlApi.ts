@@ -33,11 +33,15 @@ import type {
 export async function fetchBatchesWithSqlStatus(
   filters: BatchSqlFilters
 ): Promise<BatchSqlStatusPageResponse> {
-  const { pluginId, page = 0, size = 20 } = filters
+  const { pluginId, page = 0, size = 20, siteId } = filters
 
   const params = new URLSearchParams()
   params.append('page', String(page))
   params.append('size', String(size))
+
+  if (siteId) {
+    params.append('siteId', siteId)
+  }
 
   const url = `${ACCOUNT_PLUGIN_BATCHES(pluginId)}?${params.toString()}`
   const response = await apiClient.get<BatchSqlStatusPageResponse>(url)

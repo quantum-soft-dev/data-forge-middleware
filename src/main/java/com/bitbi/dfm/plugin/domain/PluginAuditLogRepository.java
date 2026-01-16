@@ -74,4 +74,24 @@ public interface PluginAuditLogRepository {
      * @return page of audit logs ordered by occurredAt DESC
      */
     Page<PluginAuditLog> findByPluginIdAndAccountId(String pluginId, UUID accountId, Pageable pageable);
+
+    /**
+     * Finds audit logs for a specific plugin and account with optional filters.
+     * Used for user-facing plugin log viewing with filtering support.
+     *
+     * @param pluginId  the plugin identifier (e.g., "bit-bi")
+     * @param accountId the account identifier
+     * @param siteId    filter by site ID in metadata (null for all)
+     * @param from      start of date range (inclusive, null for no start)
+     * @param to        end of date range (exclusive, null for no end)
+     * @param pageable  pagination parameters
+     * @return page of audit logs ordered by occurredAt DESC
+     */
+    Page<PluginAuditLog> findByPluginIdAndAccountIdWithFilters(
+            String pluginId,
+            UUID accountId,
+            UUID siteId,
+            Instant from,
+            Instant to,
+            Pageable pageable);
 }

@@ -291,4 +291,25 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         ORDER BY b.completedAt DESC
         """)
     Page<Batch> findCompletedByAccountId(UUID accountId, Pageable pageable);
+
+    /**
+     * Finds completed batches for an account optionally filtered by site.
+     * <p>
+     * Used for user-facing batch listing with optional site filter.
+     * Only considers COMPLETED or COMPLETED_WITH_WARNINGS batches.
+     * </p>
+     *
+     * @param accountId The account ID
+     * @param siteId Optional site ID filter (null for all sites)
+     * @param pageable pagination parameters
+     * @return Page of completed batches
+     */
+    @Query(value = """
+        SELECT * FROM batches b
+        WHERE b.account_id = :accountId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+          AND (CAST(:siteId AS UUID) IS NULL OR b.site_id = :siteId)
+        ORDER BY b.completed_at DESC
+        """, nativeQuery = true)
+    Page<Batch> findCompletedByAccountIdAndOptionalSiteId(UUID accountId, UUID siteId, Pageable pageable);
 }

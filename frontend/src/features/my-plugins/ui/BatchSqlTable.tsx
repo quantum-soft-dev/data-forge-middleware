@@ -26,6 +26,8 @@ interface BatchSqlTableProps {
   onRegenerateSql: (batch: BatchSqlStatus) => void
   onDeleteSql: (batch: BatchSqlStatus) => void
   pendingBatchId?: string | null
+  /** True when filters are applied (for empty state message) */
+  hasFilters?: boolean
 }
 
 /**
@@ -185,6 +187,7 @@ export function BatchSqlTable({
   onRegenerateSql,
   onDeleteSql,
   pendingBatchId,
+  hasFilters = false,
 }: BatchSqlTableProps) {
   if (isLoading) {
     return (
@@ -201,7 +204,9 @@ export function BatchSqlTable({
         <Database className="mx-auto h-12 w-12 text-gray-400" />
         <p className="mt-4 text-sm text-gray-500">No completed batches</p>
         <p className="text-xs text-gray-400">
-          Completed batches will appear here for SQL generation.
+          {hasFilters
+            ? 'Try adjusting your filters.'
+            : 'Completed batches will appear here for SQL generation.'}
         </p>
       </div>
     )

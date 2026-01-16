@@ -322,7 +322,21 @@ public class PluginAdminQueryService {
      * @return page of batches with SQL status
      */
     public Page<BatchWithSqlStatusDto> findBatchesWithSqlStatus(String pluginId, UUID accountId, Pageable pageable) {
-        log.debug("Finding batches with SQL status for plugin={}, account={}", pluginId, accountId);
+        return findBatchesWithSqlStatus(pluginId, accountId, null, pageable);
+    }
+
+    /**
+     * Finds completed batches for an account with their SQL generation status,
+     * optionally filtered by site.
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account identifier
+     * @param siteId    optional site ID filter (null for all sites)
+     * @param pageable  pagination parameters
+     * @return page of batches with SQL status
+     */
+    public Page<BatchWithSqlStatusDto> findBatchesWithSqlStatus(String pluginId, UUID accountId, UUID siteId, Pageable pageable) {
+        log.debug("Finding batches with SQL status for plugin={}, account={}, siteId={}", pluginId, accountId, siteId);
 
         // Find the account-plugin activation
         AccountPlugin accountPlugin = accountPluginRepository
@@ -344,8 +358,9 @@ public class PluginAdminQueryService {
         // Get baseline batch ID
         UUID baselineBatchId = accountPlugin.getBaselineBatchId();
 
-        // Get all completed batches for the account
-        Page<Batch> completedBatches = batchRepository.findCompletedByAccountId(accountId, pageable);
+        // Get completed batches for the account (optionally filtered by site)
+        Page<Batch> completedBatches = batchRepository.findCompletedByAccountIdAndOptionalSiteId(
+                accountId, siteId, pageable);
 
         // Map to DTO with SQL status
         List<BatchWithSqlStatusDto> batchesWithStatus = completedBatches.getContent().stream()

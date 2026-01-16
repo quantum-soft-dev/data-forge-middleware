@@ -166,6 +166,10 @@ export interface PluginLogEntry {
   metadata?: SqlGenerationMetadata | Record<string, unknown>
   /** When the event occurred (ISO 8601) */
   occurredAt: string
+  /** Site identifier (for SQL-related events) */
+  siteId?: string
+  /** Site domain name (looked up from siteId) */
+  siteDomain?: string
 }
 
 /**
@@ -195,6 +199,12 @@ export interface PluginLogFilters {
   page?: number
   /** Page size (1-100) */
   size?: number
+  /** Filter by site ID */
+  siteId?: string
+  /** Filter by start date (inclusive, ISO 8601) */
+  from?: string
+  /** Filter by end date (exclusive, ISO 8601) */
+  to?: string
 }
 
 // ==================== Batch SQL Status Types ====================
@@ -346,6 +356,8 @@ export interface BatchSqlFilters {
   page?: number
   /** Page size */
   size?: number
+  /** Filter by site ID */
+  siteId?: string
 }
 
 /**

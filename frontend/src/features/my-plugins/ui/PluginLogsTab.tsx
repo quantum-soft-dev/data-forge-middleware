@@ -8,12 +8,17 @@
  * - Shows all plugin events (activation, SQL generation, errors)
  * - Color-coded status badges (success/failed)
  * - SQL generation statistics (INSERT/UPDATE/DELETE counts)
- * - Formatted timestamps
+ * - Site information for SQL-related events
+ * - Filtering by site and date range
+ * - Configurable page size (20, 30, 50, 100)
  */
 
-import { Loader2, FileText, AlertCircle, CheckCircle2, XCircle, Clock } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { Loader2, FileText, AlertCircle, CheckCircle2, XCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Badge } from '@/shared/ui/ui/badge'
+import { Button } from '@/shared/ui/ui/button'
 import { usePluginLogsQuery } from '../api/pluginLogsQueries'
+import { PluginTabFilters, type LogsFilterState } from './PluginTabFilters'
 import type { PluginLogEntry, PluginActionType, SqlGenerationMetadata } from '../model/types'
 
 /**
@@ -32,8 +37,6 @@ const USER_VISIBLE_ACTIONS: PluginActionType[] = [
 interface PluginLogsTabProps {
   /** Plugin identifier (e.g., "bit-bi") */
   pluginId: string
-  /** Current page number (0-indexed) */
-  page?: number
 }
 
 /**
@@ -137,12 +140,12 @@ function SqlGenerationStats({ metadata }: { metadata: SqlGenerationMetadata }) {
  * Single log entry component.
  */
 function LogEntry({ entry }: { entry: PluginLogEntry }) {
-  const { actionType, success, errorMessage, metadata, occurredAt } = entry
+  const { actionType, success, errorMessage, metadata, occurredAt, siteDomain } = entry
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {getActionIcon(actionType, success)}
           <span className="font-medium text-gray-900">
             {formatActionType(actionType)}
@@ -153,8 +156,13 @@ function LogEntry({ entry }: { entry: PluginLogEntry }) {
           >
             {success ? 'Success' : 'Failed'}
           </Badge>
+          {siteDomain && (
+            <Badge variant="outline" className="text-gray-600">
+              {siteDomain}
+            </Badge>
+          )}
         </div>
-        <span className="text-xs text-gray-500">{formatTimestamp(occurredAt)}</span>
+        <span className="text-xs text-gray-500 whitespace-nowrap ml-2">{formatTimestamp(occurredAt)}</span>
       </div>
 
       {errorMessage && (
@@ -171,59 +179,116 @@ function LogEntry({ entry }: { entry: PluginLogEntry }) {
   )
 }
 
-export function PluginLogsTab({ pluginId, page = 0 }: PluginLogsTabProps) {
-  const { data, isLoading, isError, error } = usePluginLogsQuery(pluginId, page)
+export function PluginLogsTab({ pluginId }: PluginLogsTabProps) {
+  const [page, setPage] = useState(0)
+  const [filters, setFilters] = useState<LogsFilterState>({
+    size: 20,
+  })
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-        <span className="ml-3 text-sm text-gray-500">Loading logs...</span>
-      </div>
-    )
-  }
+  const { data, isLoading, isError, error } = usePluginLogsQuery({
+    pluginId,
+    page,
+    size: filters.size,
+    siteId: filters.siteId,
+    from: filters.from,
+    to: filters.to,
+  })
 
-  if (isError) {
-    return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
-        <p className="text-sm text-red-600">
-          Failed to fetch logs: {error?.message || 'Unknown error'}
-        </p>
-      </div>
-    )
-  }
+  // Reset page when filters change
+  const handleFiltersChange = useCallback((newFilters: LogsFilterState) => {
+    setFilters(newFilters)
+    setPage(0) // Reset to first page when filters change
+  }, [])
 
-  // Filter out technical events that are not meaningful to users
-  const visibleLogs = data?.content.filter((log) =>
-    USER_VISIBLE_ACTIONS.includes(log.actionType)
-  ) ?? []
+  const handlePrevPage = useCallback(() => {
+    setPage((p) => Math.max(0, p - 1))
+  }, [])
 
-  if (!data || visibleLogs.length === 0) {
-    return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-        <FileText className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-4 text-sm text-gray-500">No log entries</p>
-        <p className="text-xs text-gray-400">
-          Plugin activity will appear here once you start using it.
-        </p>
-      </div>
-    )
-  }
+  const handleNextPage = useCallback(() => {
+    if (data && page < data.totalPages - 1) {
+      setPage((p) => p + 1)
+    }
+  }, [data, page])
 
   return (
-    <div className="space-y-4">
-      {visibleLogs.map((entry) => (
-        <LogEntry key={entry.id} entry={entry} />
-      ))}
+    <div>
+      <PluginTabFilters
+        filters={filters}
+        onFiltersChange={handleFiltersChange}
+        showDateRange={true}
+      />
 
-      {data.totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 pt-4 text-sm text-gray-500">
-          <span>
-            Page {data.page + 1} of {data.totalPages}
-          </span>
-          <span className="text-gray-400">|</span>
-          <span>{data.totalElements} total entries</span>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          <span className="ml-3 text-sm text-gray-500">Loading logs...</span>
         </div>
+      ) : isError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
+          <p className="text-sm text-red-600">
+            Failed to fetch logs: {error?.message || 'Unknown error'}
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Filter out technical events that are not meaningful to users */}
+          {(() => {
+            const visibleLogs = data?.content.filter((log) =>
+              USER_VISIBLE_ACTIONS.includes(log.actionType)
+            ) ?? []
+
+            if (!data || visibleLogs.length === 0) {
+              return (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
+                  <FileText className="mx-auto h-12 w-12 text-gray-400" />
+                  <p className="mt-4 text-sm text-gray-500">No log entries</p>
+                  <p className="text-xs text-gray-400">
+                    {filters.siteId || filters.from || filters.to
+                      ? 'Try adjusting your filters.'
+                      : 'Plugin activity will appear here once you start using it.'}
+                  </p>
+                </div>
+              )
+            }
+
+            return (
+              <div className="space-y-4">
+                {visibleLogs.map((entry) => (
+                  <LogEntry key={entry.id} entry={entry} />
+                ))}
+
+                {/* Pagination */}
+                {data.totalPages > 1 && (
+                  <div className="flex items-center justify-between border-t border-gray-200 pt-4">
+                    <div className="text-sm text-gray-500">
+                      Page {data.page + 1} of {data.totalPages} ({data.totalElements} total)
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePrevPage}
+                        disabled={page === 0}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Previous
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleNextPage}
+                        disabled={page >= data.totalPages - 1}
+                      >
+                        Next
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+        </>
       )}
     </div>
   )
