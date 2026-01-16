@@ -55,10 +55,18 @@ class BatchHistoryIntegrationTest extends AbstractIntegrationTest {
         // This is a placeholder test from Phase 3 (User Story 1)
         // The actual implementation will use BatchHistoryService.listBatchHistory()
 
-        // For now, just verify Testcontainers are working
+        // Verify database services are working (either Testcontainers or CI external services)
         assertThat(areContainersRunning()).isTrue();
-        assertThat(postgresContainer.isRunning()).isTrue();
-        assertThat(postgresContainer.getDatabaseName()).isEqualTo("dataforge_test");
+
+        // In CI environment, postgresContainer is null - external services are used instead
+        if (containersManager.isUsingExternalServices()) {
+            // CI environment - verify connection info is available
+            assertThat(containersManager.getPostgresJdbcUrl()).contains("localhost:5432");
+        } else {
+            // Local environment - verify Testcontainers
+            assertThat(postgresContainer.isRunning()).isTrue();
+            assertThat(postgresContainer.getDatabaseName()).isEqualTo("dataforge_test");
+        }
     }
 
     /**
