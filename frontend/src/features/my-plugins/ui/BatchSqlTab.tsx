@@ -27,6 +27,7 @@ import {
 import { Button } from '@/shared/ui/ui/button'
 import { BatchSqlTable } from './BatchSqlTable'
 import { SqlContentViewerDialog } from './SqlContentViewerDialog'
+import { BatchPropertiesDialog } from './BatchPropertiesDialog'
 import { PluginTabFilters, type SqlFilterState } from './PluginTabFilters'
 import {
   useBatchSqlStatusQuery,
@@ -53,6 +54,7 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
   const [selectedBatch, setSelectedBatch] = useState<BatchSqlStatus | null>(null)
   const [dialogAction, setDialogAction] = useState<DialogAction>(null)
   const [viewerOpen, setViewerOpen] = useState(false)
+  const [propertiesOpen, setPropertiesOpen] = useState(false)
   const [pendingBatchId, setPendingBatchId] = useState<string | null>(null)
 
   // Queries and mutations
@@ -110,6 +112,16 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
 
   const handleCloseViewer = useCallback(() => {
     setViewerOpen(false)
+    setSelectedBatch(null)
+  }, [])
+
+  const handleShowProperties = useCallback((batch: BatchSqlStatus) => {
+    setSelectedBatch(batch)
+    setPropertiesOpen(true)
+  }, [])
+
+  const handleCloseProperties = useCallback(() => {
+    setPropertiesOpen(false)
     setSelectedBatch(null)
   }, [])
 
@@ -213,6 +225,7 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
             onGenerateSql={handleGenerateClick}
             onRegenerateSql={handleRegenerateClick}
             onDeleteSql={handleDeleteClick}
+            onShowProperties={handleShowProperties}
             pendingBatchId={pendingBatchId}
             hasFilters={!!filters.siteId}
           />
@@ -254,6 +267,13 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
         batch={selectedBatch}
         isOpen={viewerOpen}
         onClose={handleCloseViewer}
+      />
+
+      {/* Batch Properties Dialog */}
+      <BatchPropertiesDialog
+        batch={selectedBatch}
+        isOpen={propertiesOpen}
+        onClose={handleCloseProperties}
       />
 
       {/* Generate Confirmation Dialog */}

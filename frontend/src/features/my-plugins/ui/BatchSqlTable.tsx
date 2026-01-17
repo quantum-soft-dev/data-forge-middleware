@@ -5,7 +5,7 @@
  * Allows generating, viewing, regenerating, and deleting SQL for batches.
  */
 
-import { Database, Eye, RefreshCw, Trash2, Plus, Loader2 } from 'lucide-react'
+import { Database, Eye, RefreshCw, Trash2, Plus, Loader2, Info } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -25,24 +25,18 @@ interface BatchSqlTableProps {
   onGenerateSql: (batch: BatchSqlStatus) => void
   onRegenerateSql: (batch: BatchSqlStatus) => void
   onDeleteSql: (batch: BatchSqlStatus) => void
+  onShowProperties: (batch: BatchSqlStatus) => void
   pendingBatchId?: string | null
   /** True when filters are applied (for empty state message) */
   hasFilters?: boolean
 }
 
 /**
- * Format timestamp for display.
+ * Format timestamp for display in YYYY-MM-DD HH:MM:SS format.
  */
 function formatTimestamp(isoString: string | null): string {
   if (!isoString) return '-'
-  const date = new Date(isoString)
-  return date.toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return isoString.slice(0, 19).replace('T', ' ')
 }
 
 /**
@@ -55,17 +49,11 @@ function formatFileSize(bytes: number): string {
 }
 
 /**
- * Truncate batch ID for display.
+ * Get result cell based on batch SQL status.
+ * Shows generation result: Baseline, SQL Generated with stats, Pending, or Failed.
  */
-function truncateBatchId(batchId: string): string {
-  if (batchId.length <= 12) return batchId
-  return `${batchId.slice(0, 8)}...`
-}
-
-/**
- * Get status badge based on batch SQL status.
- */
-function StatusBadge({ batch }: { batch: BatchSqlStatus }) {
+function ResultCell({ batch }: { batch: BatchSqlStatus }) {
+  // Baseline batch - no SQL needed
   if (batch.isBaseline) {
     return (
       <Badge variant="secondary" className="bg-gray-100 text-gray-600">
@@ -73,16 +61,38 @@ function StatusBadge({ batch }: { batch: BatchSqlStatus }) {
       </Badge>
     )
   }
-  if (batch.hasSql) {
+
+  // SQL generated successfully - show stats
+  if (batch.hasSql && batch.generationId) {
+    const stats: string[] = []
+    if (batch.insertCount != null && batch.insertCount > 0) {
+      stats.push(`+${batch.insertCount} ins`)
+    }
+    if (batch.updateCount != null && batch.updateCount > 0) {
+      stats.push(`~${batch.updateCount} upd`)
+    }
+    if (batch.deleteCount != null && batch.deleteCount > 0) {
+      stats.push(`-${batch.deleteCount} del`)
+    }
+
     return (
-      <Badge variant="default" className="bg-green-100 text-green-700 hover:bg-green-100">
-        Has SQL
-      </Badge>
+      <div className="flex flex-col gap-0.5">
+        <Badge variant="default" className="bg-green-100 text-green-700 hover:bg-green-100 w-fit">
+          SQL Generated
+        </Badge>
+        {stats.length > 0 && (
+          <span className="text-xs text-gray-500">
+            {stats.join(', ')}
+          </span>
+        )}
+      </div>
     )
   }
+
+  // No SQL yet - pending
   return (
     <Badge variant="outline" className="border-amber-300 text-amber-700">
-      No SQL
+      Pending
     </Badge>
   )
 }
@@ -96,6 +106,7 @@ function BatchActions({
   onGenerateSql,
   onRegenerateSql,
   onDeleteSql,
+  onShowProperties,
   isPending,
 }: {
   batch: BatchSqlStatus
@@ -103,17 +114,29 @@ function BatchActions({
   onGenerateSql: (batch: BatchSqlStatus) => void
   onRegenerateSql: (batch: BatchSqlStatus) => void
   onDeleteSql: (batch: BatchSqlStatus) => void
+  onShowProperties: (batch: BatchSqlStatus) => void
   isPending: boolean
 }) {
-  // Baseline batch - no actions
+  // Baseline batch - only show info icon
   if (batch.isBaseline) {
     return (
-      <span
-        className="text-xs text-gray-400 cursor-help"
-        title="SQL is not generated for the baseline batch. It serves as the reference point for changes."
-      >
-        Baseline batch
-      </span>
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onShowProperties(batch)}
+          className="h-8 w-8 p-0"
+          title="View batch properties"
+        >
+          <Info className="h-4 w-4" />
+        </Button>
+        <span
+          className="text-xs text-gray-400 cursor-help"
+          title="Baseline batch - no SQL needed. It serves as the reference point for changes."
+        >
+          Baseline
+        </span>
+      </div>
     )
   }
 
@@ -127,7 +150,7 @@ function BatchActions({
     )
   }
 
-  // Batch has SQL - show view, regenerate, delete
+  // Batch has SQL - show view, regenerate, delete, properties
   if (batch.hasSql && batch.generationId) {
     return (
       <div className="flex items-center gap-1">
@@ -160,22 +183,44 @@ function BatchActions({
         >
           <Trash2 className="h-4 w-4" />
         </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onShowProperties(batch)}
+          className="h-8 w-8 p-0"
+          title="View batch properties"
+        >
+          <Info className="h-4 w-4" />
+        </Button>
       </div>
     )
   }
 
-  // Batch without SQL - show generate button
+  // Batch without SQL - show generate button and properties
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => onGenerateSql(batch)}
-      className="h-8"
-      title="Generate SQL for this batch"
-    >
-      <Plus className="h-4 w-4 mr-1" />
-      Generate
-    </Button>
+    <div className="flex items-center gap-1">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onGenerateSql(batch)}
+        className="h-8"
+        title="Generate SQL for this batch"
+      >
+        <Plus className="h-4 w-4 mr-1" />
+        Generate
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => onShowProperties(batch)}
+        className="h-8 w-8 p-0"
+        title="View batch properties"
+      >
+        <Info className="h-4 w-4" />
+      </Button>
+    </div>
   )
 }
 
@@ -186,6 +231,7 @@ export function BatchSqlTable({
   onGenerateSql,
   onRegenerateSql,
   onDeleteSql,
+  onShowProperties,
   pendingBatchId,
   hasFilters = false,
 }: BatchSqlTableProps) {
@@ -218,11 +264,10 @@ export function BatchSqlTable({
         <TableHeader>
           <TableRow>
             <TableHead>Site</TableHead>
-            <TableHead>Batch ID</TableHead>
             <TableHead>Completed</TableHead>
             <TableHead>Files</TableHead>
             <TableHead>Size</TableHead>
-            <TableHead>Status</TableHead>
+            <TableHead>Result</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -230,21 +275,13 @@ export function BatchSqlTable({
           {batches.map((batch) => (
             <TableRow key={batch.batchId}>
               <TableCell className="font-medium">{batch.siteDomain}</TableCell>
-              <TableCell>
-                <span
-                  className="font-mono text-xs cursor-help"
-                  title={batch.batchId}
-                >
-                  {truncateBatchId(batch.batchId)}
-                </span>
-              </TableCell>
               <TableCell className="text-sm text-gray-500">
                 {formatTimestamp(batch.completedAt)}
               </TableCell>
               <TableCell>{batch.fileCount}</TableCell>
               <TableCell>{formatFileSize(batch.totalSizeBytes)}</TableCell>
               <TableCell>
-                <StatusBadge batch={batch} />
+                <ResultCell batch={batch} />
               </TableCell>
               <TableCell className="text-right">
                 <BatchActions
@@ -253,6 +290,7 @@ export function BatchSqlTable({
                   onGenerateSql={onGenerateSql}
                   onRegenerateSql={onRegenerateSql}
                   onDeleteSql={onDeleteSql}
+                  onShowProperties={onShowProperties}
                   isPending={pendingBatchId === batch.batchId}
                 />
               </TableCell>

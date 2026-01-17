@@ -344,14 +344,14 @@ public class PluginAdminQueryService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Plugin " + pluginId + " is not activated for account " + accountId));
 
-        // Get set of batch IDs that have SQL generated, mapped to generation ID
-        java.util.Map<UUID, UUID> batchToGenerationMap = sqlGenerationRepository
+        // Get SQL generations mapped by batch ID (includes statistics)
+        java.util.Map<UUID, PluginSqlGeneration> batchToGenerationMap = sqlGenerationRepository
                 .findByAccountPluginId(accountPlugin.getId(), false,
                         org.springframework.data.domain.PageRequest.of(0, Integer.MAX_VALUE))
                 .getContent().stream()
                 .collect(java.util.stream.Collectors.toMap(
                         PluginSqlGeneration::getSourceBatchId,
-                        PluginSqlGeneration::getId,
+                        gen -> gen,
                         (existing, replacement) -> existing // keep first if duplicates
                 ));
 
@@ -362,32 +362,49 @@ public class PluginAdminQueryService {
         Page<Batch> completedBatches = batchRepository.findCompletedByAccountIdAndOptionalSiteId(
                 accountId, siteId, pageable);
 
-        // Map to DTO with SQL status
+        // Map to DTO with SQL status and statistics
         List<BatchWithSqlStatusDto> batchesWithStatus = completedBatches.getContent().stream()
                 .map(batch -> {
                     boolean isBaseline = batch.getId().equals(baselineBatchId);
-                    boolean hasSql = batchToGenerationMap.containsKey(batch.getId());
-                    UUID generationId = batchToGenerationMap.get(batch.getId());
+                    PluginSqlGeneration generation = batchToGenerationMap.get(batch.getId());
+                    boolean hasSql = generation != null;
 
                     // Get site domain
                     String siteDomain = siteRepository.findById(batch.getSiteId())
                             .map(Site::getDisplayDomain)
                             .orElse("unknown");
 
-                    return BatchWithSqlStatusDto.of(
-                            batch.getId(),
-                            batch.getSiteId(),
-                            siteDomain,
-                            batch.getStatus().name(),
-                            batch.getCompletedAt() != null
-                                    ? batch.getCompletedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
-                                    : null,
-                            batch.getUploadedFilesCount(),
-                            batch.getTotalSize(),
-                            isBaseline,
-                            hasSql,
-                            generationId
-                    );
+                    if (hasSql) {
+                        return BatchWithSqlStatusDto.withSql(
+                                batch.getId(),
+                                batch.getSiteId(),
+                                siteDomain,
+                                batch.getStatus().name(),
+                                batch.getCompletedAt() != null
+                                        ? batch.getCompletedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
+                                        : null,
+                                batch.getUploadedFilesCount(),
+                                batch.getTotalSize(),
+                                generation.getId(),
+                                generation.getInsertCount(),
+                                generation.getUpdateCount(),
+                                generation.getDeleteCount(),
+                                generation.getCreatedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
+                        );
+                    } else {
+                        return BatchWithSqlStatusDto.withoutSql(
+                                batch.getId(),
+                                batch.getSiteId(),
+                                siteDomain,
+                                batch.getStatus().name(),
+                                batch.getCompletedAt() != null
+                                        ? batch.getCompletedAt().atZone(java.time.ZoneOffset.UTC).toInstant()
+                                        : null,
+                                batch.getUploadedFilesCount(),
+                                batch.getTotalSize(),
+                                isBaseline
+                        );
+                    }
                 })
                 .toList();
 

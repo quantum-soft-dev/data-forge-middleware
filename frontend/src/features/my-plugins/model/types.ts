@@ -234,6 +234,14 @@ export interface BatchSqlStatus {
   hasSql: boolean
   /** SQL generation ID if SQL exists */
   generationId: string | null
+  /** Number of INSERT statements (null if no SQL) */
+  insertCount: number | null
+  /** Number of UPDATE statements (null if no SQL) */
+  updateCount: number | null
+  /** Number of DELETE statements (null if no SQL) */
+  deleteCount: number | null
+  /** When SQL was generated (ISO 8601, null if no SQL) */
+  generatedAt: string | null
 }
 
 /**
