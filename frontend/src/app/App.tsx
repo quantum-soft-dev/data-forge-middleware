@@ -113,7 +113,11 @@ function App() {
         <QueryProvider>
           <AppContent />
           {/* Toast notifications */}
-          <Toaster position="top-right" />
+          <Toaster
+            position="bottom-right"
+            closeButton={true}
+            richColors={true}
+          />
         </QueryProvider>
       </Auth0Provider>
     </ErrorBoundary>
