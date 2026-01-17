@@ -76,18 +76,18 @@ public interface JpaPluginAuditLogRepository extends JpaRepository<PluginAuditLo
         SELECT * FROM plugin_audit_logs pal
         WHERE pal.plugin_id = :pluginId
         AND pal.account_id = :accountId
-        AND (:siteId IS NULL OR pal.metadata->>'siteId' = CAST(:siteId AS VARCHAR))
-        AND (:from IS NULL OR pal.occurred_at >= :from)
-        AND (:to IS NULL OR pal.occurred_at < :to)
+        AND (CAST(:siteId AS VARCHAR) IS NULL OR pal.metadata->>'siteId' = CAST(:siteId AS VARCHAR))
+        AND (CAST(:from AS TIMESTAMPTZ) IS NULL OR pal.occurred_at >= :from)
+        AND (CAST(:to AS TIMESTAMPTZ) IS NULL OR pal.occurred_at < :to)
         ORDER BY pal.occurred_at DESC
         """,
         countQuery = """
         SELECT COUNT(*) FROM plugin_audit_logs pal
         WHERE pal.plugin_id = :pluginId
         AND pal.account_id = :accountId
-        AND (:siteId IS NULL OR pal.metadata->>'siteId' = CAST(:siteId AS VARCHAR))
-        AND (:from IS NULL OR pal.occurred_at >= :from)
-        AND (:to IS NULL OR pal.occurred_at < :to)
+        AND (CAST(:siteId AS VARCHAR) IS NULL OR pal.metadata->>'siteId' = CAST(:siteId AS VARCHAR))
+        AND (CAST(:from AS TIMESTAMPTZ) IS NULL OR pal.occurred_at >= :from)
+        AND (CAST(:to AS TIMESTAMPTZ) IS NULL OR pal.occurred_at < :to)
         """,
         nativeQuery = true)
     Page<PluginAuditLog> findByPluginIdAndAccountIdWithFilters(
