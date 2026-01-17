@@ -85,7 +85,7 @@ export function PluginTabFilters({
   }
 
   const handleFromChange = (value: string) => {
-    if (showDateRange && 'from' in filters) {
+    if (showDateRange) {
       onFiltersChange({
         ...filters,
         from: value || undefined,
@@ -94,7 +94,7 @@ export function PluginTabFilters({
   }
 
   const handleToChange = (value: string) => {
-    if (showDateRange && 'to' in filters) {
+    if (showDateRange) {
       onFiltersChange({
         ...filters,
         to: value || undefined,
@@ -200,7 +200,7 @@ export function PluginTabFilters({
                 <input
                   id="filter-from"
                   type="datetime-local"
-                  value={('from' in filters && filters.from?.slice(0, 16)) || ''}
+                  value={(filters as LogsFilterState).from?.slice(0, 16) || ''}
                   onChange={(e) => {
                     const value = e.target.value
                     handleFromChange(value ? new Date(value).toISOString() : '')
@@ -219,7 +219,7 @@ export function PluginTabFilters({
                 <input
                   id="filter-to"
                   type="datetime-local"
-                  value={('to' in filters && filters.to?.slice(0, 16)) || ''}
+                  value={(filters as LogsFilterState).to?.slice(0, 16) || ''}
                   onChange={(e) => {
                     const value = e.target.value
                     handleToChange(value ? new Date(value).toISOString() : '')
