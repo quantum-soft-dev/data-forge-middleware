@@ -234,7 +234,7 @@ public class PluginAdminQueryService {
 
                     // Get site domain
                     String siteDomain = siteRepository.findById(batch.getSiteId())
-                            .map(Site::getDomain)
+                            .map(Site::getDisplayDomain)
                             .orElse("unknown");
 
                     return new BatchWithoutSqlDto(
@@ -291,7 +291,7 @@ public class PluginAdminQueryService {
                 .filter(batch -> !batch.getId().equals(baselineBatchId))
                 .map(batch -> {
                     String siteDomain = siteRepository.findById(batch.getSiteId())
-                            .map(Site::getDomain)
+                            .map(Site::getDisplayDomain)
                             .orElse("unknown");
 
                     return new BatchWithoutSqlDto(
@@ -371,7 +371,7 @@ public class PluginAdminQueryService {
 
                     // Get site domain
                     String siteDomain = siteRepository.findById(batch.getSiteId())
-                            .map(Site::getDomain)
+                            .map(Site::getDisplayDomain)
                             .orElse("unknown");
 
                     return BatchWithSqlStatusDto.of(

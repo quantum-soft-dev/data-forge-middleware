@@ -64,6 +64,7 @@ class AccountPluginsContractTest extends BaseIntegrationTest {
     @MockitoBean
     private AuthorizationHelper authorizationHelper;
 
+
     private static final String MOCK_USER_JWT_TOKEN = "mock.user.jwt.token";
     private static final UUID TEST_ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 

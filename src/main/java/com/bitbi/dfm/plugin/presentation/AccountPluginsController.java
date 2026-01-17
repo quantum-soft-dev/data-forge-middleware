@@ -279,7 +279,7 @@ public class AccountPluginsController {
         log.info("Listing logs for plugin {} account {}, page={}, size={}, siteId={}, from={}, to={}",
                 pluginId, accountId, page, size, siteId, from, to);
 
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "occurredAt"));
+        Pageable pageable = PageRequest.of(page, size);
 
         // Use filtered query if any filter is present, otherwise use simple query
         Page<PluginAuditLog> logsPage;
@@ -306,7 +306,7 @@ public class AccountPluginsController {
                     UUID logSiteId = extractSiteIdFromMetadata(auditLog.getMetadata());
                     String siteDomain = null;
                     if (logSiteId != null && sitesById.containsKey(logSiteId)) {
-                        siteDomain = sitesById.get(logSiteId).getDomain();
+                        siteDomain = sitesById.get(logSiteId).getDisplayDomain();
                     }
                     return UserPluginLogDto.fromEntityWithSite(auditLog, siteDomain);
                 })
@@ -506,7 +506,7 @@ public class AccountPluginsController {
         log.debug("Listing batches for plugin {} account {} siteId={}", pluginId, accountId, siteId);
 
         int effectiveSize = Math.min(size, 100);
-        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
+        Pageable pageable = PageRequest.of(page, effectiveSize);
 
         try {
             Page<BatchWithSqlStatusDto> batches = pluginAdminQueryService.findBatchesWithSqlStatus(
