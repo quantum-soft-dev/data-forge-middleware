@@ -722,7 +722,8 @@ public class PluginAdminController {
                 pluginId, accountId, page, size);
 
         int effectiveSize = Math.min(size, 100);
-        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
+        // Note: Sort.unsorted() because the native SQL query already has ORDER BY completed_at DESC
+        Pageable pageable = PageRequest.of(page, effectiveSize, Sort.unsorted());
 
         try {
             Page<BatchWithoutSqlDto> batches = pluginAdminQueryService.findBatchesWithoutSql(
@@ -779,7 +780,8 @@ public class PluginAdminController {
         log.debug("Admin request: list batches needing SQL for plugin={}, account={}", pluginId, accountId);
 
         int effectiveSize = Math.min(size, 100);
-        Pageable pageable = PageRequest.of(0, effectiveSize, Sort.by(Sort.Direction.DESC, "completedAt"));
+        // Note: Sort.unsorted() because the native SQL query already has ORDER BY completed_at DESC
+        Pageable pageable = PageRequest.of(0, effectiveSize, Sort.unsorted());
 
         try {
             List<BatchWithoutSqlDto> batches = pluginAdminQueryService.findBatchesNeedingSql(
