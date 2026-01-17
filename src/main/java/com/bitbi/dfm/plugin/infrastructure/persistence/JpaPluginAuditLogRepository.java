@@ -97,4 +97,19 @@ public interface JpaPluginAuditLogRepository extends JpaRepository<PluginAuditLo
             @Param("from") Instant from,
             @Param("to") Instant to,
             Pageable pageable);
+
+    @Override
+    @Query(value = """
+        SELECT CAST(pal.metadata->>'batchId' AS UUID)
+        FROM plugin_audit_logs pal
+        WHERE pal.account_id = :accountId
+          AND pal.plugin_id = :pluginId
+          AND pal.action_type = 'SQL_GENERATION_COMPLETED'
+          AND (pal.metadata->>'noChangesDetected')::boolean = true
+          AND CAST(pal.metadata->>'batchId' AS UUID) IN :batchIds
+        """, nativeQuery = true)
+    java.util.Set<UUID> findNoChangesBatchIds(
+            @Param("accountId") UUID accountId,
+            @Param("pluginId") String pluginId,
+            @Param("batchIds") java.util.List<UUID> batchIds);
 }

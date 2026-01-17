@@ -242,6 +242,8 @@ export interface BatchSqlStatus {
   deleteCount: number | null
   /** When SQL was generated (ISO 8601, null if no SQL) */
   generatedAt: string | null
+  /** Whether no changes were detected when generation was attempted */
+  noChangesDetected: boolean
 }
 
 /**
@@ -319,15 +321,25 @@ export interface GenerateSqlRequest {
  * Result of SQL generation.
  */
 export interface GenerateSqlResult {
-  generationId: string
-  sourceBatchId: string
-  siteId: string
-  siteDomain: string
-  statementCount: number
+  /** Whether SQL was actually generated (false if skipped) */
+  generated: boolean
+  /** Generation ID (null if skipped) */
+  generationId: string | null
+  /** Batch ID that was processed */
+  batchId: string
+  /** Site ID */
+  siteId: string | null
+  /** Number of INSERT statements */
   insertCount: number
+  /** Number of UPDATE statements */
   updateCount: number
+  /** Number of DELETE statements */
   deleteCount: number
-  generationDurationMs: number
+  /** Total SQL statements */
+  statementCount: number
+  /** Message describing the result */
+  message: string
+  /** Generation timestamp */
   createdAt: string
 }
 

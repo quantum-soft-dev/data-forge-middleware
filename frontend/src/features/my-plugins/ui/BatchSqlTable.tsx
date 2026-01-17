@@ -50,7 +50,7 @@ function formatFileSize(bytes: number): string {
 
 /**
  * Get result cell based on batch SQL status.
- * Shows generation result: Baseline, SQL Generated with stats, Pending, or Failed.
+ * Shows generation result: Baseline, SQL Generated with stats, No Changes, or Pending.
  */
 function ResultCell({ batch }: { batch: BatchSqlStatus }) {
   // Baseline batch - no SQL needed
@@ -86,6 +86,15 @@ function ResultCell({ batch }: { batch: BatchSqlStatus }) {
           </span>
         )}
       </div>
+    )
+  }
+
+  // No changes detected - generation was attempted but no differences found
+  if (batch.noChangesDetected) {
+    return (
+      <Badge variant="secondary" className="bg-gray-100 text-gray-600">
+        No Changes
+      </Badge>
     )
   }
 
@@ -193,6 +202,29 @@ function BatchActions({
         >
           <Info className="h-4 w-4" />
         </Button>
+      </div>
+    )
+  }
+
+  // No changes detected - show only properties (no regenerate needed)
+  if (batch.noChangesDetected) {
+    return (
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onShowProperties(batch)}
+          className="h-8 w-8 p-0"
+          title="View batch properties"
+        >
+          <Info className="h-4 w-4" />
+        </Button>
+        <span
+          className="text-xs text-gray-400 cursor-help"
+          title="No changes detected between this batch and the previous one."
+        >
+          No changes
+        </span>
       </div>
     )
   }

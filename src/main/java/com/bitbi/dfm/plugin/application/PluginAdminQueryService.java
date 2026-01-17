@@ -362,12 +362,22 @@ public class PluginAdminQueryService {
         Page<Batch> completedBatches = batchRepository.findCompletedByAccountIdAndOptionalSiteId(
                 accountId, siteId, pageable);
 
+        // Get batch IDs that had "no changes detected" from audit logs
+        List<UUID> batchIds = completedBatches.getContent().stream()
+                .map(Batch::getId)
+                .toList();
+
+        java.util.Set<UUID> noChangesBatchIds = batchIds.isEmpty()
+                ? java.util.Collections.emptySet()
+                : auditLogRepository.findNoChangesBatchIds(accountId, pluginId, batchIds);
+
         // Map to DTO with SQL status and statistics
         List<BatchWithSqlStatusDto> batchesWithStatus = completedBatches.getContent().stream()
                 .map(batch -> {
                     boolean isBaseline = batch.getId().equals(baselineBatchId);
                     PluginSqlGeneration generation = batchToGenerationMap.get(batch.getId());
                     boolean hasSql = generation != null;
+                    boolean noChangesDetected = noChangesBatchIds.contains(batch.getId());
 
                     // Get site domain
                     String siteDomain = siteRepository.findById(batch.getSiteId())
@@ -402,7 +412,8 @@ public class PluginAdminQueryService {
                                         : null,
                                 batch.getUploadedFilesCount(),
                                 batch.getTotalSize(),
-                                isBaseline
+                                isBaseline,
+                                noChangesDetected
                         );
                     }
                 })

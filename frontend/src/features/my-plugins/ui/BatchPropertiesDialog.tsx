@@ -70,6 +70,8 @@ export function BatchPropertiesDialog({
     sqlStatus = 'Baseline (No SQL Required)'
   } else if (batch.hasSql) {
     sqlStatus = 'Generated'
+  } else if (batch.noChangesDetected) {
+    sqlStatus = 'No Changes Detected'
   }
 
   return (
@@ -133,7 +135,13 @@ export function BatchPropertiesDialog({
                 </div>
               )}
 
-              {!batch.hasSql && !batch.isBaseline && (
+              {batch.noChangesDetected && (
+                <div className="mt-2 text-xs text-gray-500 italic">
+                  SQL generation was attempted but no changes were detected between this batch and the previous one.
+                </div>
+              )}
+
+              {!batch.hasSql && !batch.isBaseline && !batch.noChangesDetected && (
                 <div className="mt-2 text-xs text-gray-500 italic">
                   SQL has not been generated for this batch yet. Use the Generate button to create SQL statements.
                 </div>

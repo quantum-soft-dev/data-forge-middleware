@@ -134,9 +134,15 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
       { pluginId, request: { batchId: selectedBatch.batchId } },
       {
         onSuccess: (result) => {
-          toast.success('SQL Generated', {
-            description: `Generated ${result.statementCount} statements (${result.insertCount} INSERT, ${result.updateCount} UPDATE, ${result.deleteCount} DELETE)`,
-          })
+          if (result.generated) {
+            toast.success('SQL Generated', {
+              description: `Generated ${result.statementCount} statements (${result.insertCount} INSERT, ${result.updateCount} UPDATE, ${result.deleteCount} DELETE)`,
+            })
+          } else {
+            toast.info('Generation Skipped', {
+              description: result.message || 'No SQL was generated for this batch',
+            })
+          }
           handleCloseDialog()
         },
         onError: (err) => {

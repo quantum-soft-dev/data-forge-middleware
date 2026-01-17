@@ -94,4 +94,15 @@ public interface PluginAuditLogRepository {
             Instant from,
             Instant to,
             Pageable pageable);
+
+    /**
+     * Finds batch IDs that had "no changes detected" during SQL generation.
+     * Used for displaying "No Changes" status in SQL tab.
+     *
+     * @param accountId the account identifier
+     * @param pluginId  the plugin identifier
+     * @param batchIds  list of batch IDs to check
+     * @return set of batch IDs that had no changes detected
+     */
+    java.util.Set<UUID> findNoChangesBatchIds(UUID accountId, String pluginId, java.util.List<UUID> batchIds);
 }

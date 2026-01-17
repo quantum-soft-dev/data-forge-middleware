@@ -51,7 +51,10 @@ public record BatchWithSqlStatusDto(
         Integer deleteCount,
 
         @Schema(description = "When SQL was generated (null if no SQL)")
-        Instant generatedAt
+        Instant generatedAt,
+
+        @Schema(description = "Whether no changes were detected when generation was attempted")
+        boolean noChangesDetected
 ) {
     /**
      * Creates a DTO from batch data with SQL status and statistics.
@@ -70,11 +73,12 @@ public record BatchWithSqlStatusDto(
             Integer insertCount,
             Integer updateCount,
             Integer deleteCount,
-            Instant generatedAt) {
+            Instant generatedAt,
+            boolean noChangesDetected) {
         return new BatchWithSqlStatusDto(
                 batchId, siteId, siteDomain, status, completedAt,
                 fileCount, totalSizeBytes, isBaseline, hasSql, generationId,
-                insertCount, updateCount, deleteCount, generatedAt);
+                insertCount, updateCount, deleteCount, generatedAt, noChangesDetected);
     }
 
     /**
@@ -88,11 +92,12 @@ public record BatchWithSqlStatusDto(
             Instant completedAt,
             int fileCount,
             long totalSizeBytes,
-            boolean isBaseline) {
+            boolean isBaseline,
+            boolean noChangesDetected) {
         return new BatchWithSqlStatusDto(
                 batchId, siteId, siteDomain, status, completedAt,
                 fileCount, totalSizeBytes, isBaseline, false, null,
-                null, null, null, null);
+                null, null, null, null, noChangesDetected);
     }
 
     /**
@@ -114,6 +119,6 @@ public record BatchWithSqlStatusDto(
         return new BatchWithSqlStatusDto(
                 batchId, siteId, siteDomain, status, completedAt,
                 fileCount, totalSizeBytes, false, true, generationId,
-                insertCount, updateCount, deleteCount, generatedAt);
+                insertCount, updateCount, deleteCount, generatedAt, false);
     }
 }
