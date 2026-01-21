@@ -2,6 +2,7 @@ package com.bitbi.dfm.deviceauth.domain;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Repository interface for device authorization operations.
@@ -58,4 +59,11 @@ public interface DeviceAuthorizationRepository {
      * @return number of updated records
      */
     int markExpired(Instant cutoffTime);
+
+    /**
+     * Delete all device authorizations for a site.
+     *
+     * @param siteId site identifier
+     */
+    void deleteBySiteId(UUID siteId);
 }

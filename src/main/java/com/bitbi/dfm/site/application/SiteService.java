@@ -2,6 +2,7 @@ package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
@@ -41,17 +42,20 @@ public class SiteService {
     private final ErrorLogRepository errorLogRepository;
     private final UploadedFileRepository uploadedFileRepository;
     private final S3FileStorageService s3FileStorageService;
+    private final DeviceAuthorizationRepository deviceAuthorizationRepository;
 
     public SiteService(SiteRepository siteRepository,
                        BatchRepository batchRepository,
                        ErrorLogRepository errorLogRepository,
                        UploadedFileRepository uploadedFileRepository,
-                       S3FileStorageService s3FileStorageService) {
+                       S3FileStorageService s3FileStorageService,
+                       DeviceAuthorizationRepository deviceAuthorizationRepository) {
         this.siteRepository = siteRepository;
         this.batchRepository = batchRepository;
         this.errorLogRepository = errorLogRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.s3FileStorageService = s3FileStorageService;
+        this.deviceAuthorizationRepository = deviceAuthorizationRepository;
     }
 
     /**
@@ -384,7 +388,11 @@ public class SiteService {
             }
         }
 
-        // Step 5: Delete the site itself
+        // Step 5: Delete all device authorizations for this site
+        deviceAuthorizationRepository.deleteBySiteId(siteId);
+        logger.info("Deleted device authorizations for site: {}", siteId);
+
+        // Step 6: Delete the site itself
         logger.info("Deleting site record: id={}", siteId);
         siteRepository.deleteById(siteId);
 

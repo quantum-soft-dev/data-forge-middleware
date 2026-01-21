@@ -2,6 +2,7 @@ package com.bitbi.dfm.site.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -56,6 +57,9 @@ class SiteServiceTest {
     @Mock
     private S3FileStorageService s3FileStorageService;
 
+    @Mock
+    private DeviceAuthorizationRepository deviceAuthorizationRepository;
+
     private SiteService siteService;
 
     private UUID accountId;
@@ -66,7 +70,7 @@ class SiteServiceTest {
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
         siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
-                                      uploadedFileRepository, s3FileStorageService);
+                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository);
     }
 
     @Test
@@ -227,6 +231,7 @@ class SiteServiceTest {
         verify(siteRepository).findById(siteId);
         verify(batchRepository).findBySiteId(siteId, Pageable.unpaged());
         verify(errorLogRepository).findBySiteId(siteId);
+        verify(deviceAuthorizationRepository).deleteBySiteId(siteId);
         verify(siteRepository).deleteById(siteId);
     }
 

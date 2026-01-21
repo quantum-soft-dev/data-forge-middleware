@@ -53,4 +53,9 @@ public interface JpaDeviceAuthorizationRepository
                 DeviceAuthorizationStatus.PENDING,
                 DeviceAuthorizationStatus.EXPIRED);
     }
+
+    @Override
+    @Modifying
+    @Query("DELETE FROM DeviceAuthorization d WHERE d.siteId = :siteId")
+    void deleteBySiteId(@Param("siteId") UUID siteId);
 }
