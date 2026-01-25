@@ -371,6 +371,13 @@ public class PluginAdminQueryService {
                 ? java.util.Collections.emptySet()
                 : auditLogRepository.findNoChangesBatchIds(accountId, pluginId, batchIds);
 
+        // Bulk fetch all sites to avoid N+1 queries
+        java.util.Set<UUID> siteIds = completedBatches.getContent().stream()
+                .map(Batch::getSiteId)
+                .collect(java.util.stream.Collectors.toSet());
+        java.util.Map<UUID, Site> sitesById = siteRepository.findAllById(siteIds).stream()
+                .collect(java.util.stream.Collectors.toMap(Site::getId, java.util.function.Function.identity()));
+
         // Map to DTO with SQL status and statistics
         List<BatchWithSqlStatusDto> batchesWithStatus = completedBatches.getContent().stream()
                 .map(batch -> {
@@ -379,10 +386,10 @@ public class PluginAdminQueryService {
                     boolean hasSql = generation != null;
                     boolean noChangesDetected = noChangesBatchIds.contains(batch.getId());
 
-                    // Get site domain
-                    String siteDomain = siteRepository.findById(batch.getSiteId())
-                            .map(Site::getDisplayDomain)
-                            .orElse("unknown");
+                    // Get site domain from bulk-fetched map
+                    String siteDomain = sitesById.containsKey(batch.getSiteId())
+                            ? sitesById.get(batch.getSiteId()).getDisplayDomain()
+                            : "unknown";
 
                     if (hasSql) {
                         return BatchWithSqlStatusDto.withSql(
