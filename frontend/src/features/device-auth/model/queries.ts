@@ -52,8 +52,8 @@ export function useApproveAuthorization() {
   return useMutation({
     mutationFn: (userCode: string) => approveAuthorization(userCode),
     onSuccess: (_data, userCode) => {
-      // Invalidate verification info query
-      queryClient.invalidateQueries({ queryKey: deviceAuthKeys.verifyInfo(userCode) });
+      // Remove verification info from cache (don't refetch - code is already used)
+      queryClient.removeQueries({ queryKey: deviceAuthKeys.verifyInfo(userCode) });
     },
   });
 }
@@ -69,8 +69,8 @@ export function useDenyAuthorization() {
   return useMutation({
     mutationFn: (userCode: string) => denyAuthorization(userCode),
     onSuccess: (_data, userCode) => {
-      // Invalidate verification info query
-      queryClient.invalidateQueries({ queryKey: deviceAuthKeys.verifyInfo(userCode) });
+      // Remove verification info from cache (don't refetch - code is already used)
+      queryClient.removeQueries({ queryKey: deviceAuthKeys.verifyInfo(userCode) });
     },
   });
 }
