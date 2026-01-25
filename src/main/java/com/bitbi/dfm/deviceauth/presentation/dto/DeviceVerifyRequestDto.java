@@ -32,7 +32,7 @@ public record DeviceVerifyRequestDto(
         )
         @JsonProperty("action")
         @NotBlank(message = "Action is required")
-        @Pattern(regexp = "^approve$", message = "Action must be 'approve'")
+        @Pattern(regexp = "^(approve|deny)$", message = "Action must be 'approve' or 'deny'")
         String action
 ) {
 }

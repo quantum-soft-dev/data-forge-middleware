@@ -336,7 +336,7 @@ export default function DeviceVerifyPage() {
                 </div>
                 <Button
                   variant="outline"
-                  onClick={() => window.location.href = '/sites'}
+                  onClick={() => window.location.href = '/account/sites'}
                 >
                   Go to My Sites
                 </Button>
