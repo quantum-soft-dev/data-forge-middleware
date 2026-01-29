@@ -198,6 +198,51 @@ public class Auth0ManagementApiClient {
     }
 
     /**
+     * Create a new user in Auth0 with a specified password.
+     * <p>
+     * Creates a user with the given password and optionally sends a verification email.
+     * The user will be able to log in immediately with the provided password.
+     * </p>
+     * <p>
+     * This method includes automatic retry on token expiration (401 errors).
+     * </p>
+     *
+     * @param email            user's email address (must be unique)
+     * @param name             user's display name
+     * @param password         user's initial password
+     * @param sendVerifyEmail  if true, sends verification email to user
+     * @return created Auth0 User object with ID
+     * @throws Auth0Exception if user creation fails (e.g., duplicate email, invalid password)
+     */
+    public User createUserWithPassword(String email, String name, String password, boolean sendVerifyEmail) throws Auth0Exception {
+        logger.info("Creating Auth0 user with password: email={}, name={}, verifyEmail={}", email, name, sendVerifyEmail);
+
+        try {
+            return executeWithRetry(mgmt -> {
+                User user = new User(DATABASE_CONNECTION);
+                user.setEmail(email);
+                user.setName(name);
+                user.setPassword(password.toCharArray());
+                user.setVerifyEmail(sendVerifyEmail);
+                user.setBlocked(false);
+
+                User createdUser = mgmt.users().create(user).execute().getBody();
+
+                if (createdUser == null || createdUser.getId() == null) {
+                    throw new Auth0Exception("User creation returned null response");
+                }
+
+                logger.info("Auth0 user created successfully with password: userId={}, email={}", createdUser.getId(), email);
+                return createdUser;
+            }, "createUserWithPassword");
+
+        } catch (Auth0Exception e) {
+            logger.error("Failed to create Auth0 user with password: email={}, error={}", email, e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
      * Generate a password change ticket for a user.
      * <p>
      * Returns a URL that the user can visit to set their password via Auth0 Universal Login.

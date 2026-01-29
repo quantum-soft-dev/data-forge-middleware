@@ -1,9 +1,7 @@
 package com.bitbi.dfm.account.application;
 
-import com.auth0.client.mgmt.ManagementAPI;
 import com.auth0.exception.Auth0Exception;
 import com.auth0.json.mgmt.users.User;
-import com.auth0.net.Request;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountAuth0LinkedEvent;
 import com.bitbi.dfm.account.domain.AccountRepository;
@@ -15,7 +13,6 @@ import com.bitbi.dfm.shared.exception.Auth0ServiceUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.retry.annotation.Backoff;
@@ -59,21 +56,15 @@ public class AccountSyncService {
 
     private static final Logger logger = LoggerFactory.getLogger(AccountSyncService.class);
 
-    private final ManagementAPI managementAPI;
     private final AccountRepository accountRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final Auth0ManagementApiClient auth0ManagementApiClient;
 
-    @Value("${auth0.database-connection}")
-    private String databaseConnection;
-
     public AccountSyncService(
-        ManagementAPI managementAPI,
         AccountRepository accountRepository,
         ApplicationEventPublisher eventPublisher,
         Auth0ManagementApiClient auth0ManagementApiClient
     ) {
-        this.managementAPI = managementAPI;
         this.accountRepository = accountRepository;
         this.eventPublisher = eventPublisher;
         this.auth0ManagementApiClient = auth0ManagementApiClient;
@@ -122,11 +113,11 @@ public class AccountSyncService {
         String auth0UserId = null;
 
         try {
-            // PHASE 1: Create user in Auth0
+            // PHASE 1: Create user in Auth0 (with automatic retry on token expiration)
             logger.info("Creating Auth0 user for email: {}", email);
             String temporaryPassword = generateSecurePassword();
 
-            User auth0User = createAuth0User(email, name, temporaryPassword);
+            User auth0User = auth0ManagementApiClient.createUserWithPassword(email, name, temporaryPassword, true);
             auth0UserId = auth0User.getId();
 
             MDC.put("auth0UserId", auth0UserId);
@@ -143,7 +134,12 @@ public class AccountSyncService {
 
             // PHASE 3: Update Auth0 user with PostgreSQL accountId (bidirectional mapping)
             try {
-                updateAuth0UserMetadata(auth0UserId, accountId);
+                Map<String, Object> appMetadata = Map.of(
+                    "accountId", accountId.toString(),
+                    "created_by", "admin_api",
+                    "sync_timestamp", Instant.now().toString()
+                );
+                auth0ManagementApiClient.updateUserMetadata(Auth0UserId.of(auth0UserId), appMetadata);
                 logger.info("Auth0 user metadata updated with accountId: {}", accountId);
             } catch (Exception ex) {
                 // Non-critical error - account creation succeeded, metadata update failed
@@ -174,7 +170,7 @@ public class AccountSyncService {
             // Compensating transaction: Delete Auth0 user if PostgreSQL creation failed
             if (auth0UserId != null) {
                 try {
-                    deleteAuth0User(auth0UserId);
+                    auth0ManagementApiClient.deleteUser(Auth0UserId.of(auth0UserId));
                     logger.warn("Compensating transaction: Deleted orphaned Auth0 user: {}", auth0UserId);
                 } catch (Exception deleteEx) {
                     logger.error("CRITICAL: Failed to delete orphaned Auth0 user: {} - Manual cleanup required!",
@@ -189,7 +185,7 @@ public class AccountSyncService {
             // Compensating transaction: Delete Auth0 user if PostgreSQL creation failed
             if (auth0UserId != null) {
                 try {
-                    deleteAuth0User(auth0UserId);
+                    auth0ManagementApiClient.deleteUser(Auth0UserId.of(auth0UserId));
                     logger.warn("Compensating transaction: Deleted orphaned Auth0 user: {}", auth0UserId);
                 } catch (Exception deleteEx) {
                     logger.error("CRITICAL: Failed to delete orphaned Auth0 user: {} - Manual cleanup required!",
@@ -202,58 +198,6 @@ public class AccountSyncService {
             MDC.remove("auth0UserId");
             MDC.remove("accountId");
         }
-    }
-
-    /**
-     * Create user in Auth0 with temporary password.
-     *
-     * @param email User's email
-     * @param name User's name
-     * @param temporaryPassword Generated temporary password
-     * @return Created Auth0 user
-     * @throws Auth0Exception if Auth0 API call fails
-     */
-    private User createAuth0User(String email, String name, String temporaryPassword) throws Auth0Exception {
-        User user = new User();
-        user.setEmail(email);
-        user.setName(name);
-        user.setConnection(databaseConnection);
-        user.setPassword(temporaryPassword);
-        user.setVerifyEmail(true); // Send verification email to user
-
-        Request<User> request = managementAPI.users().create(user);
-        return request.execute().getBody();
-    }
-
-    /**
-     * Update Auth0 user app_metadata with PostgreSQL accountId.
-     *
-     * @param auth0UserId Auth0 user ID
-     * @param accountId PostgreSQL account UUID
-     * @throws Auth0Exception if Auth0 API call fails
-     */
-    private void updateAuth0UserMetadata(String auth0UserId, UUID accountId) throws Auth0Exception {
-        User updateRequest = new User();
-        Map<String, Object> appMetadata = Map.of(
-            "accountId", accountId.toString(),
-            "created_by", "admin_api",
-            "sync_timestamp", Instant.now().toString()
-        );
-        updateRequest.setAppMetadata(appMetadata);
-
-        Request<User> request = managementAPI.users().update(auth0UserId, updateRequest);
-        request.execute();
-    }
-
-    /**
-     * Delete Auth0 user (compensating transaction).
-     *
-     * @param auth0UserId Auth0 user ID to delete
-     * @throws Auth0Exception if Auth0 API call fails
-     */
-    private void deleteAuth0User(String auth0UserId) throws Auth0Exception {
-        Request<Void> request = managementAPI.users().delete(auth0UserId);
-        request.execute();
     }
 
     /**
@@ -358,9 +302,9 @@ public class AccountSyncService {
             accountRepository.deleteById(accountId);
             logger.info("PostgreSQL account deleted successfully: accountId={}", accountId);
 
-            // PHASE 2: Delete user from Auth0
+            // PHASE 2: Delete user from Auth0 (with automatic retry on token expiration)
             try {
-                deleteAuth0User(auth0UserId);
+                auth0ManagementApiClient.deleteUser(Auth0UserId.of(auth0UserId));
                 logger.info("Auth0 user deleted successfully: auth0UserId={}", auth0UserId);
             } catch (Exception ex) {
                 // Critical error: Account deleted from PostgreSQL but Auth0 user still exists
