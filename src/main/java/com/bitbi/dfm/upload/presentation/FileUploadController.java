@@ -66,10 +66,18 @@ public class FileUploadController {
     @PostMapping("/{batchId}/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(
             @PathVariable("batchId") UUID batchId,
-            @RequestParam("files") MultipartFile[] files,
+            @RequestParam(value = "files", required = false) MultipartFile[] files,
             @RequestHeader("Authorization") String authHeader) {
 
         try {
+            // Validate file parameter early (before authentication to give better error message)
+            if (files == null || files.length == 0) {
+                logger.warn("File upload attempt with no files: batchId={}", batchId);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(createErrorResponse(HttpStatus.BAD_REQUEST,
+                                "No file provided. Please include 'files' parameter."));
+            }
+
             UUID siteId = extractSiteId(authHeader); // Validate authentication
 
             // ✅ SECURITY FIX: Verify batch ownership before upload
@@ -98,11 +106,6 @@ public class FileUploadController {
             }
 
             logger.info("Uploading {} files to batch: batchId={}, siteId={}", files.length, batchId, siteId);
-
-            if (files.length == 0) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(createErrorResponse(HttpStatus.BAD_REQUEST, "No files provided"));
-            }
 
             java.util.List<Map<String, Object>> uploadedFiles = new java.util.ArrayList<>();
 
