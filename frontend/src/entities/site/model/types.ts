@@ -14,6 +14,7 @@
  * @property domain - Site domain name for display (e.g., "example.com", without accountId prefix)
  * @property name - Display name for the site
  * @property isActive - Activation status (true = active, false = inactive/deleted)
+ * @property retentionDays - Retention period in days for batch cleanup
  * @property createdAt - Creation timestamp (ISO 8601 string)
  */
 export interface Site {
@@ -22,6 +23,7 @@ export interface Site {
   domain: string; // Display domain only (FR-019)
   name: string;
   isActive: boolean;
+  retentionDays: number;
   createdAt: string;
 }
 
@@ -67,4 +69,5 @@ export enum AdminActionType {
   DEACTIVATE_SITE = 'DEACTIVATE_SITE',
   ACTIVATE_SITE = 'ACTIVATE_SITE',
   DELETE_SITE = 'DELETE_SITE',
+  UPDATE_SITE_RETENTION = 'UPDATE_SITE_RETENTION',
 }

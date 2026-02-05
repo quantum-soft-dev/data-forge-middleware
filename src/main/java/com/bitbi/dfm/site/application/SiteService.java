@@ -273,6 +273,25 @@ public class SiteService {
     }
 
     /**
+     * Update site retention policy (days).
+     *
+     * @param siteId site identifier
+     * @param retentionDays retention period in days
+     * @return updated site
+     * @throws SiteNotFoundException if site not found
+     */
+    public Site updateRetentionDays(UUID siteId, int retentionDays) {
+        logger.info("Updating site retention policy: id={}, retentionDays={}", siteId, retentionDays);
+
+        Site site = getSite(siteId);
+        site.updateRetentionDays(retentionDays);
+        Site saved = siteRepository.save(site);
+
+        logger.info("Site retention policy updated: siteId={}, retentionDays={}", siteId, retentionDays);
+        return saved;
+    }
+
+    /**
      * Deactivate site (soft delete).
      *
      * @param siteId site identifier

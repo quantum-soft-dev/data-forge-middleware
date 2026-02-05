@@ -20,6 +20,7 @@ import { CreateSiteForm } from '@/features/site-crud/ui/CreateSiteForm'
 import { SiteList } from '@/widgets/site-list/SiteList'
 import { Separator } from '@/shared/ui/ui/separator'
 import { useAccountQuery } from '@/features/user-management/api/userQueries'
+import { BatchCleanupPanel } from '@/features/batch-cleanup/ui/BatchCleanupPanel'
 
 export default function UserSitesPage() {
   const { id: accountId } = useParams({ from: '/admin/users/$id/sites' })
@@ -87,6 +88,13 @@ export default function UserSitesPage() {
         <section className="mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">Create New Site</h2>
           <CreateSiteForm accountId={accountId} />
+        </section>
+
+        <Separator className="my-8" />
+
+        {/* Batch cleanup panel */}
+        <section className="mb-8">
+          <BatchCleanupPanel accountId={accountId} />
         </section>
 
         <Separator className="my-8" />

@@ -1,0 +1,212 @@
+package com.bitbi.dfm.batch.application;
+
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
+import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
+import com.bitbi.dfm.plugin.infrastructure.persistence.JpaPluginSqlGenerationRepository;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.upload.infrastructure.JpaUploadedFileRepository;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+
+@Service
+public class BatchRetentionService {
+
+    private static final Logger logger = LoggerFactory.getLogger(BatchRetentionService.class);
+    private static final int DEFAULT_LIMIT = 1000;
+
+    private final JpaBatchRepository batchRepository;
+    private final JpaSiteRepository siteRepository;
+    private final JpaUploadedFileRepository uploadedFileRepository;
+    private final JpaPluginSqlGenerationRepository sqlGenerationRepository;
+    private final S3FileStorageService s3FileStorageService;
+
+    public BatchRetentionService(
+            JpaBatchRepository batchRepository,
+            JpaSiteRepository siteRepository,
+            JpaUploadedFileRepository uploadedFileRepository,
+            JpaPluginSqlGenerationRepository sqlGenerationRepository,
+            S3FileStorageService s3FileStorageService) {
+        this.batchRepository = batchRepository;
+        this.siteRepository = siteRepository;
+        this.uploadedFileRepository = uploadedFileRepository;
+        this.sqlGenerationRepository = sqlGenerationRepository;
+        this.s3FileStorageService = s3FileStorageService;
+    }
+
+    public BatchCleanupSummary runCleanup(BatchCleanupRequest request) {
+        Objects.requireNonNull(request, "request cannot be null");
+        int limit = request.limit() != null && request.limit() > 0 ? request.limit() : DEFAULT_LIMIT;
+        boolean dryRun = request.dryRun() != null && request.dryRun();
+
+        List<Site> sites = resolveSites(request.siteId(), request.accountId());
+        if (sites.isEmpty()) {
+            return BatchCleanupSummary.empty();
+        }
+
+        BatchCleanupSummary summary = new BatchCleanupSummary();
+        int remaining = limit;
+
+        for (Site site : sites) {
+            if (remaining <= 0) {
+                break;
+            }
+            int retentionDays = request.retentionDays() != null ? request.retentionDays() : site.getRetentionDays();
+            LocalDateTime cutoff = request.olderThan() != null
+                    ? request.olderThan()
+                    : LocalDateTime.now().minusDays(retentionDays);
+
+            BatchCleanupSummary siteSummary = cleanupSite(site.getId(), cutoff, remaining, dryRun);
+            summary.merge(siteSummary);
+            remaining -= siteSummary.candidates;
+        }
+
+        return summary;
+    }
+
+    @Transactional
+    protected BatchCleanupSummary cleanupSite(UUID siteId, LocalDateTime cutoff, int limit, boolean dryRun) {
+        List<Batch> candidates = batchRepository.findCleanupCandidatesForSite(siteId, cutoff, limit);
+        BatchCleanupSummary summary = new BatchCleanupSummary();
+        summary.candidates = candidates.size();
+
+        for (Batch batch : candidates) {
+            UUID batchId = batch.getId();
+            try {
+                List<UploadedFileRepository.FileKeySize> uploadedKeys = uploadedFileRepository.findS3KeysByBatchId(batchId);
+                List<PluginSqlGenerationRepository.S3KeySize> sqlKeys = sqlGenerationRepository.findS3KeysByBatchId(batchId);
+
+                List<String> s3Keys = new ArrayList<>();
+                long totalBytes = 0L;
+
+                for (UploadedFileRepository.FileKeySize fileKey : uploadedKeys) {
+                    if (fileKey.getS3Key() != null) {
+                        s3Keys.add(fileKey.getS3Key());
+                    }
+                    if (fileKey.getFileSize() != null) {
+                        totalBytes += fileKey.getFileSize();
+                    }
+                }
+
+                for (PluginSqlGenerationRepository.S3KeySize sqlKey : sqlKeys) {
+                    if (sqlKey.getS3Key() != null) {
+                        s3Keys.add(sqlKey.getS3Key());
+                    }
+                    if (sqlKey.getFileSizeBytes() != null) {
+                        totalBytes += sqlKey.getFileSizeBytes();
+                    }
+                }
+
+                List<String> dedupedKeys = deduplicate(s3Keys);
+
+                if (dryRun) {
+                    summary.deletedFiles += dedupedKeys.size();
+                    summary.deletedBytes += totalBytes;
+                    continue;
+                }
+
+                DeleteObjectsResult deleteResult = s3FileStorageService.deleteObjects(dedupedKeys);
+                if (!deleteResult.errors().isEmpty()) {
+                    summary.errors.add("Batch " + batchId + " S3 delete errors: " + deleteResult.errors());
+                    continue;
+                }
+
+                sqlGenerationRepository.deleteByComparisonBatchId(batchId);
+                ((com.bitbi.dfm.batch.domain.BatchRepository) batchRepository).deleteById(batchId);
+
+                summary.deletedBatches++;
+                summary.deletedFiles += dedupedKeys.size();
+                summary.deletedBytes += totalBytes;
+            } catch (Exception e) {
+                logger.error("Failed to cleanup batch: batchId={}, error={}", batchId, e.getMessage(), e);
+                summary.errors.add("Batch " + batchId + " cleanup failed: " + e.getMessage());
+            }
+        }
+
+        return summary;
+    }
+
+    private List<Site> resolveSites(UUID siteId, UUID accountId) {
+        if (siteId != null) {
+            return ((com.bitbi.dfm.site.domain.SiteRepository) siteRepository)
+                    .findById(siteId)
+                    .map(List::of)
+                    .orElse(List.of());
+        }
+        if (accountId != null) {
+            return siteRepository.findByAccountId(accountId);
+        }
+        return siteRepository.findAll();
+    }
+
+    private List<String> deduplicate(List<String> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return List.of();
+        }
+        Set<String> deduped = new HashSet<>(keys);
+        return new ArrayList<>(deduped);
+    }
+
+    public record BatchCleanupRequest(
+            UUID siteId,
+            UUID accountId,
+            Integer retentionDays,
+            LocalDateTime olderThan,
+            Integer limit,
+            Boolean dryRun
+    ) {}
+
+    public static class BatchCleanupSummary {
+        private int candidates;
+        private int deletedBatches;
+        private int deletedFiles;
+        private long deletedBytes;
+        private final List<String> errors = new ArrayList<>();
+
+        public static BatchCleanupSummary empty() {
+            return new BatchCleanupSummary();
+        }
+
+        public void merge(BatchCleanupSummary other) {
+            this.candidates += other.candidates;
+            this.deletedBatches += other.deletedBatches;
+            this.deletedFiles += other.deletedFiles;
+            this.deletedBytes += other.deletedBytes;
+            this.errors.addAll(other.errors);
+        }
+
+        public int candidates() {
+            return candidates;
+        }
+
+        public int deletedBatches() {
+            return deletedBatches;
+        }
+
+        public int deletedFiles() {
+            return deletedFiles;
+        }
+
+        public long deletedBytes() {
+            return deletedBytes;
+        }
+
+        public List<String> errors() {
+            return errors;
+        }
+    }
+}

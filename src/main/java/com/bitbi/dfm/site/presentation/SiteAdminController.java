@@ -11,6 +11,7 @@ import com.bitbi.dfm.site.presentation.dto.SiteCreationResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteStatisticsDto;
 import com.bitbi.dfm.site.presentation.dto.UpdateSiteRequestDto;
+import com.bitbi.dfm.site.presentation.dto.UpdateSiteRetentionRequestDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -269,6 +270,75 @@ public class SiteAdminController {
         Site site = siteService.updateSite(siteId, request.displayName());
 
         SiteResponseDto response = SiteResponseDto.fromEntity(site);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get site retention policy.
+     * <p>
+     * GET /api/v1/sites/{id}/retention
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return site response with retention policy
+     */
+    @Operation(
+            summary = "Get site retention policy",
+            description = "Retrieves the retention policy (in days) for the specified site."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Retention policy retrieved successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @GetMapping(ApiRoutes.SITES_RETENTION)
+    public ResponseEntity<SiteResponseDto> getSiteRetentionPolicy(@PathVariable("id") UUID siteId) {
+        Site site = siteService.getSite(siteId);
+        SiteResponseDto response = SiteResponseDto.fromEntity(site);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Update site retention policy.
+     * <p>
+     * PATCH /api/v1/sites/{id}/retention
+     * </p>
+     *
+     * @param siteId site identifier
+     * @param request retention policy request
+     * @return updated site response
+     */
+    @Operation(
+            summary = "Update site retention policy",
+            description = "Updates the retention policy (in days) for the specified site."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Retention policy updated successfully",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Invalid input (validation error)",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PatchMapping(ApiRoutes.SITES_RETENTION)
+    public ResponseEntity<SiteResponseDto> updateSiteRetentionPolicy(
+            @PathVariable("id") UUID siteId,
+            @Valid @RequestBody UpdateSiteRetentionRequestDto request,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
+        Site site = siteService.updateRetentionDays(siteId, request.retentionDays());
+        SiteResponseDto response = SiteResponseDto.fromEntity(site);
+
+        logAdminAction(
+                AdminActionType.UPDATE_SITE_RETENTION,
+                site.getAccountId(),
+                siteId,
+                authentication,
+                httpRequest,
+                null
+        );
+
         return ResponseEntity.ok(response);
     }
 

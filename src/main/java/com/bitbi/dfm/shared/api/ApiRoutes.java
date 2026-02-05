@@ -356,6 +356,16 @@ public final class ApiRoutes {
     public static final String SITES_ID = SITES + "/{id}";
 
     /**
+     * Site retention policy endpoint.
+     * <p>
+     * Methods: GET, PATCH<br>
+     * Path Variable: {id} - Site ID<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
+     * </p>
+     */
+    public static final String SITES_RETENTION = SITES + "/{id}/retention";
+
+    /**
      * Get site statistics endpoint.
      * <p>
      * Method: GET<br>
@@ -438,6 +448,15 @@ public final class ApiRoutes {
      * </p>
      */
     public static final String BATCHES_ADMIN_ID = BATCHES_ADMIN + "/{id}";
+
+    /**
+     * Batch retention cleanup endpoint (admin).
+     * <p>
+     * Method: POST<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
+     * </p>
+     */
+    public static final String BATCHES_CLEANUP = BATCHES_ADMIN + "/cleanup";
 
     // History (User-facing)
     /**

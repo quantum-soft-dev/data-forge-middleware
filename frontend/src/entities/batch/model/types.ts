@@ -162,3 +162,26 @@ export interface ErrorSummary {
   /** Error occurrence timestamp (ISO-8601) */
   occurredAt: string;
 }
+
+/**
+ * Batch cleanup request (admin).
+ */
+export interface BatchCleanupRequest {
+  siteId?: string;
+  accountId?: string;
+  retentionDays?: number;
+  olderThan?: string;
+  limit?: number;
+  dryRun?: boolean;
+}
+
+/**
+ * Batch cleanup result summary (admin).
+ */
+export interface BatchCleanupResult {
+  candidates: number;
+  deletedBatches: number;
+  deletedFiles: number;
+  deletedBytes: number;
+  errors: string[];
+}

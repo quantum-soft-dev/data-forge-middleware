@@ -19,6 +19,7 @@ import {
   deactivateAdminSite,
   activateAdminSite,
   deleteAdminSite,
+  updateAdminSiteRetention,
   type Site,
   type CreateSiteRequest,
 } from '@/entities/site';
@@ -234,6 +235,52 @@ export function useAdminDeleteSite(accountId: string) {
   return useMutation({
     mutationFn: (siteId: string) => deleteAdminSite(accountId, siteId),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: siteKeys.list(accountId) });
+    },
+  });
+}
+
+/**
+ * Update site retention policy (admin operation).
+ *
+ * @param accountId - Account identifier
+ * @returns Mutation for updating retention days
+ */
+export function useAdminUpdateSiteRetention(accountId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      siteId,
+      retentionDays,
+    }: {
+      siteId: string;
+      retentionDays: number;
+    }): Promise<Site> => {
+      return updateAdminSiteRetention(siteId, retentionDays);
+    },
+    onMutate: async ({ siteId, retentionDays }) => {
+      await queryClient.cancelQueries({ queryKey: siteKeys.list(accountId) });
+
+      const previousSites = queryClient.getQueryData<Site[]>(siteKeys.list(accountId));
+
+      if (previousSites) {
+        queryClient.setQueryData<Site[]>(
+          siteKeys.list(accountId),
+          previousSites.map((site) =>
+            site.id === siteId ? { ...site, retentionDays } : site
+          )
+        );
+      }
+
+      return { previousSites };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousSites) {
+        queryClient.setQueryData(siteKeys.list(accountId), context.previousSites);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: siteKeys.list(accountId) });
     },
   });

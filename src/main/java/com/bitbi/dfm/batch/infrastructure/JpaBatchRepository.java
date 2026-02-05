@@ -51,6 +51,29 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
     List<Batch> findExpiredBatches(LocalDateTime cutoffTime);
 
     /**
+     * Find cleanup candidates for a site based on retention cutoff.
+     * <p>
+     * Excludes IN_PROGRESS batches and selects oldest first.
+     * Uses SKIP LOCKED to avoid concurrent cleanup collisions.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @param cutoffTime batches started before this time are eligible
+     * @param limit max number of batches to return
+     * @return list of cleanup candidates
+     */
+    @Query(value = """
+        SELECT * FROM batches
+        WHERE site_id = :siteId
+          AND status <> 'IN_PROGRESS'
+          AND started_at < :cutoffTime
+        ORDER BY started_at ASC
+        LIMIT :limit
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Batch> findCleanupCandidatesForSite(UUID siteId, LocalDateTime cutoffTime, int limit);
+
+    /**
      * Find batches by site and status with pagination.
      *
      * @param siteId site identifier

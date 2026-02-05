@@ -120,4 +120,21 @@ public interface JpaPluginSqlGenerationRepository extends JpaRepository<PluginSq
      */
     @Query("SELECT g.sourceBatchId FROM PluginSqlGeneration g WHERE g.accountPluginId = :accountPluginId")
     java.util.Set<UUID> findGeneratedBatchIdsByAccountPluginId(@Param("accountPluginId") Long accountPluginId);
+
+    /**
+     * Finds S3 keys and sizes for generations referencing a batch.
+     */
+    @Query("""
+        SELECT g.s3Key AS s3Key, g.fileSizeBytes AS fileSizeBytes
+        FROM PluginSqlGeneration g
+        WHERE g.sourceBatchId = :batchId OR g.comparisonBatchId = :batchId
+        """)
+    List<S3KeySize> findS3KeysByBatchId(@Param("batchId") UUID batchId);
+
+    /**
+     * Deletes generations where the batch is used as comparison.
+     */
+    @Modifying
+    @Query("DELETE FROM PluginSqlGeneration g WHERE g.comparisonBatchId = :batchId")
+    int deleteByComparisonBatchId(@Param("batchId") UUID batchId);
 }

@@ -137,9 +137,33 @@ public interface PluginSqlGenerationRepository {
     java.util.Set<UUID> findGeneratedBatchIdsByAccountPluginId(Long accountPluginId);
 
     /**
+     * Finds S3 keys and sizes for generations referencing a batch.
+     *
+     * @param batchId batch identifier (source or comparison)
+     * @return list of S3 key and size projections
+     */
+    List<S3KeySize> findS3KeysByBatchId(UUID batchId);
+
+    /**
+     * Deletes SQL generations where the batch is used as comparison.
+     *
+     * @param batchId comparison batch ID
+     * @return number of records deleted
+     */
+    int deleteByComparisonBatchId(UUID batchId);
+
+    /**
      * Deletes a SQL generation record.
      *
      * @param generation the generation to delete
      */
     void delete(PluginSqlGeneration generation);
+
+    /**
+     * Projection interface for S3 key and size.
+     */
+    interface S3KeySize {
+        String getS3Key();
+        Long getFileSizeBytes();
+    }
 }

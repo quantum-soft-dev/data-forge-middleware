@@ -19,6 +19,7 @@ import java.util.UUID;
  * @param domain         Site domain (display format)
  * @param name           Site display name
  * @param isActive       Whether site is active
+ * @param retentionDays  Retention period in days for batch cleanup
  * @param createdAt      Site creation timestamp
  * @param clientSecret   Plaintext client secret (ONLY shown at creation)
  * @param siteIdentifier Full identifier for Basic Auth (accountId_domain)
@@ -43,6 +44,9 @@ public record SiteCreationResponseDto(
         @Schema(description = "Whether site is active", example = "true")
         boolean isActive,
 
+        @Schema(description = "Retention period in days for batch cleanup", example = "45")
+        int retentionDays,
+
         @Schema(description = "Site creation timestamp (ISO-8601)", example = "2025-01-15T10:30:00Z")
         Instant createdAt,
 
@@ -66,6 +70,7 @@ public record SiteCreationResponseDto(
                 result.site().getDisplayDomain(), // Display domain without accountId prefix
                 result.site().getDisplayName(),
                 result.site().getIsActive(),
+                result.site().getRetentionDays(),
                 result.site().getCreatedAt().toInstant(ZoneOffset.UTC),
                 result.plaintextSecret(),
                 result.site().getDomain() // Full composite domain for auth

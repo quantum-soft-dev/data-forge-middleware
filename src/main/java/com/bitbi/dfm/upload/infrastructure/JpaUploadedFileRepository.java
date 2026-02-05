@@ -72,6 +72,15 @@ public interface JpaUploadedFileRepository extends JpaRepository<UploadedFile, U
     long countBySiteId(UUID siteId);
 
     /**
+     * Find S3 keys and sizes for files in a batch.
+     *
+     * @param batchId batch identifier
+     * @return list of key/size projections
+     */
+    @Query("SELECT f.s3Key AS s3Key, f.fileSize AS fileSize FROM UploadedFile f WHERE f.batchId = :batchId")
+    List<FileKeySize> findS3KeysByBatchId(UUID batchId);
+
+    /**
      * Finds the latest uploaded file for each unique original file name for a given account.
      * Uses a subquery to find the maximum uploaded_at per file name.
      *

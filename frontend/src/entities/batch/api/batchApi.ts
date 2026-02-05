@@ -14,14 +14,17 @@ import {
   HISTORY_FILE_DOWNLOAD,
   HISTORY_ZIP_DOWNLOAD,
   HISTORY_EXCEL_EXPORT,
-  HISTORY_ERRORS
+  HISTORY_ERRORS,
+  BATCHES_ADMIN_CLEANUP
 } from '@/shared/api/apiRoutes';
 import type {
   BatchSummary,
   BatchDetail,
   CursorPageResponse,
   PageResponse,
-  ErrorSummary
+  ErrorSummary,
+  BatchCleanupRequest,
+  BatchCleanupResult
 } from '../model/types';
 
 /**
@@ -185,5 +188,20 @@ export async function getBatchErrors(
     `${HISTORY_ERRORS(batchId)}?${params.toString()}`
   );
 
+  return response.data;
+}
+
+/**
+ * Admin: Run batch cleanup with filters.
+ *
+ * POST /api/v1/batches/cleanup
+ */
+export async function runBatchCleanup(
+  request: BatchCleanupRequest
+): Promise<BatchCleanupResult> {
+  const response = await apiClient.post<BatchCleanupResult>(
+    BATCHES_ADMIN_CLEANUP,
+    request
+  );
   return response.data;
 }
