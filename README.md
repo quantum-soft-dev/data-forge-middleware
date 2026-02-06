@@ -23,6 +23,21 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 
 ## Quick Start
 
+### Option 0: DevContainer (Local Dev Environment)
+
+This repo includes a DevContainer that starts infrastructure (PostgreSQL, Redis, LocalStack S3, Keycloak)
+via `docker-compose.dev.yml` and provides a Java 21 + Node 20 dev environment.
+
+1. Configure backend env vars in `.env` (see `.env.example`).
+2. Configure frontend env vars in `frontend/.env.local` (see `frontend/.env.local.example`).
+3. In VS Code: “Dev Containers: Reopen in Container”.
+4. Start backend: `./gradlew bootRun`
+5. Start frontend: `cd frontend && npm install && npm run dev`
+
+Notes:
+- Auth is via Auth0 (Keycloak is present in the dev compose for legacy/dev tooling, but is not the primary auth provider).
+- LocalStack bucket `dfm-uploads` is created automatically by `docker-compose.dev.yml`.
+
 ### Option 1: Development with IntelliJ IDEA (Recommended)
 
 Run infrastructure services in Docker and DFM from IDE for debugging:

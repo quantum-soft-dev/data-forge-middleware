@@ -1,0 +1,27 @@
+services:
+  devcontainer:
+    image: mcr.microsoft.com/devcontainers/java:1-21-bookworm
+    container_name: dfm-devcontainer
+    command: sleep infinity
+    volumes:
+      - ..:/workspaces/data-forge-middleware:cached
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Required for local Auth0-backed development.
+    # Keep secrets in .env (gitignored) and do not commit them.
+    env_file:
+      - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DB_URL: jdbc:postgresql://postgres:5432/dfm
+      DB_USERNAME: dfm
+      DB_PASSWORD: dfm_password
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: redis_password
+      AWS_S3_ENDPOINT: http://localstack:4566
+      AWS_S3_REGION: us-east-1
+      AWS_S3_BUCKET_NAME: dfm-uploads
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    networks:
+      - dfm-network
