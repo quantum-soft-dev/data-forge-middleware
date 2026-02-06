@@ -399,45 +399,51 @@ public class SqlGenerationService {
         int filesProcessed = 0;
 
         for (UploadedFile currentFile : data.csvFiles) {
-            String normalizedName = normalizeFileName(currentFile.getOriginalFileName());
-            String tableName = deriveTableName(normalizedName);
+            try {
+                String normalizedName = normalizeFileName(currentFile.getOriginalFileName());
+                String tableName = deriveTableName(normalizedName);
 
-            log.debug("Processing CSV file: {} -> table {}", currentFile.getOriginalFileName(), tableName);
+                log.debug("Processing CSV file: {} -> table {}", currentFile.getOriginalFileName(), tableName);
 
-            // Read current file content from S3 as raw CSV string
-            String currentCsvContent = readCsvContentFromS3(currentFile.getS3Key());
+                // Read current file content from S3 as raw CSV string
+                String currentCsvContent = readCsvContentFromS3(currentFile.getS3Key());
 
-            // Extract headers from current CSV
-            List<String> headers = extractHeaders(currentCsvContent);
-            if (headers.isEmpty()) {
-                log.warn("Empty headers in CSV file: {}", currentFile.getOriginalFileName());
-                continue;
-            }
-
-            // Read previous file content (empty if first batch)
-            String previousCsvContent = "";
-            UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
-            if (previousFile != null) {
-                previousCsvContent = readCsvContentFromS3(previousFile.getS3Key());
-            }
-
-            // Generate diffs using the new compare method (accepts raw CSV content)
-            List<CsvRowDiff> diffs = csvDiffService.compare(previousCsvContent, currentCsvContent, headers);
-
-            // Generate SQL statements
-            for (CsvRowDiff diff : diffs) {
-                String sql = sqlStatementGenerator.generate(diff, tableName, Map.of());
-                sqlContent.append(sql);
-
-                switch (diff.type()) {
-                    case ADDED -> totalInserts++;
-                    case MODIFIED -> totalUpdates++;
-                    case DELETED -> totalDeletes++;
+                // Extract headers from current CSV
+                List<String> headers = extractHeaders(currentCsvContent);
+                if (headers.isEmpty()) {
+                    log.warn("Empty headers in CSV file: {}", currentFile.getOriginalFileName());
+                    continue;
                 }
-            }
 
-            filesProcessed++;
-            meterRegistry.counter("sql.generation.files.processed").increment();
+                // Read previous file content (empty if first batch)
+                String previousCsvContent = "";
+                UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
+                if (previousFile != null) {
+                    previousCsvContent = readCsvContentFromS3(previousFile.getS3Key());
+                }
+
+                // Generate diffs using the new compare method (accepts raw CSV content)
+                List<CsvRowDiff> diffs = csvDiffService.compare(previousCsvContent, currentCsvContent, headers);
+
+                // Generate SQL statements
+                for (CsvRowDiff diff : diffs) {
+                    String sql = sqlStatementGenerator.generate(diff, tableName, Map.of());
+                    sqlContent.append(sql);
+
+                    switch (diff.type()) {
+                        case ADDED -> totalInserts++;
+                        case MODIFIED -> totalUpdates++;
+                        case DELETED -> totalDeletes++;
+                    }
+                }
+
+                filesProcessed++;
+                meterRegistry.counter("sql.generation.files.processed").increment();
+            } catch (CsvDiffService.InvalidCsvHeaderException e) {
+                log.warn("Skipping file {} due to invalid headers: {}",
+                        currentFile.getOriginalFileName(), e.getMessage());
+                meterRegistry.counter("sql.generation.files.skipped.invalid_headers").increment();
+            }
         }
 
         // Return null if no changes detected
@@ -535,7 +541,12 @@ public class SqlGenerationService {
                 while ((bytesRead = reader.read(buffer)) != -1) {
                     content.append(buffer, 0, bytesRead);
                 }
-                return content.toString();
+                String result = content.toString();
+                // Strip UTF-8 BOM if present (U+FEFF at start of file)
+                if (!result.isEmpty() && result.charAt(0) == '\uFEFF') {
+                    result = result.substring(1);
+                }
+                return result;
             }
         }
     }
