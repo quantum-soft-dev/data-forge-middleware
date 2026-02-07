@@ -4,7 +4,9 @@ services:
     container_name: dfm-devcontainer
     command: sleep infinity
     volumes:
-      - ..:/workspaces/data-forge-middleware:cached
+      # In devcontainer.json the first compose file is ../docker-compose.dev.yml (repo root),
+      # so compose resolves relative paths from the repo root (not from .devcontainer/).
+      - .:/workspaces/data-forge-middleware:cached
       - /var/run/docker.sock:/var/run/docker.sock
     # Required for local Auth0-backed development.
     # Keep secrets in .env (gitignored) and do not commit them.
