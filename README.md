@@ -39,6 +39,7 @@ Notes:
 - Auth is via Auth0 (Keycloak is present in the dev compose for legacy/dev tooling, but is not the primary auth provider).
 - LocalStack bucket `dfm-uploads` is created automatically by `docker-compose.dev.yml`.
 - Auth0 setup details: `docs/local-auth0.md`
+- If backend fails with Flyway checksum mismatch, wipe local volumes: `docker-compose -f docker-compose.dev.yml down -v` then `up -d`.
 
 ### Option 1: Development with IntelliJ IDEA (Recommended)
 

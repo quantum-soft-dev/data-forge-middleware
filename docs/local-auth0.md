@@ -138,6 +138,37 @@ Frontend:
 - Backend should start without Auth0 token validation errors.
 - Frontend login should succeed, and admin endpoints should return 200 for an ADMIN user.
 
+## Troubleshooting
+
+### Flyway Checksum Mismatch (Validate Failed)
+
+Symptom (example):
+- `FlywayValidateException: Migration checksum mismatch for migration version X`
+
+Cause:
+- Your local Postgres volume contains an older `flyway_schema_history` (created with older migration file contents).
+- Flyway refuses to migrate when applied checksums do not match current files.
+
+Fix options:
+
+1. Preferred for local dev: reset the local DB volume (destroys local data).
+   - From the repo root (host or devcontainer):
+   ```bash
+   docker-compose -f docker-compose.dev.yml down -v
+   docker-compose -f docker-compose.dev.yml up -d
+   ```
+   - Then start backend again:
+   ```bash
+   ./gradlew bootRun
+   ```
+
+2. Alternative (keeps data, not recommended unless you understand the impact): run Flyway repair.
+   - This updates checksums in `flyway_schema_history` to match current files.
+   ```bash
+   ./gradlew flywayRepair
+   ./gradlew bootRun
+   ```
+
 ## Optional: Pull Values From AWS (Secrets Manager)
 
 If the project is deployed in AWS and config is stored in Secrets Manager, you can pull most of the required values
