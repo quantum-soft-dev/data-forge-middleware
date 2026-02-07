@@ -1,6 +1,7 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/dfm
+    # Use DB_URL to support both host-run (localhost) and container-run (postgres service) setups.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/dfm}
     username: dfm
     password: dfm_password
 
@@ -37,6 +38,7 @@ auth0:
   database-connection: Username-Password-Authentication
 
 s3:
+  # Use AWS_S3_ENDPOINT to support both host-run (localhost) and container-run (localstack service) setups.
   endpoint: ${AWS_S3_ENDPOINT:http://localhost:4566}
   region: ${AWS_S3_REGION:us-east-1}
   bucket:
