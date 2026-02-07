@@ -17,6 +17,9 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // In devcontainers (and some host environments) Vite may bind only to IPv6 (::1),
+    // which breaks port forwarding to localhost. Bind to all interfaces by default.
+    host: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
