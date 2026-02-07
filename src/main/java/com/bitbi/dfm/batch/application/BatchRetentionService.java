@@ -80,6 +80,9 @@ public class BatchRetentionService {
         dbResult.summary.deletedFiles += dedupedKeys.size();
 
         if (!dryRun) {
+            // We delete from the DB first, then best-effort delete from S3.
+            // Tradeoff: if S3 deletion fails, it can leave orphaned objects (no DB references),
+            // but avoids the more harmful "DB references missing objects" state.
             DeleteObjectsResult deleteResult = s3FileStorageService.deleteObjects(dedupedKeys);
             if (!deleteResult.errors().isEmpty()) {
                 dbResult.summary.errors.add("S3 delete errors: " + deleteResult.errors());
@@ -100,32 +103,36 @@ public class BatchRetentionService {
         for (Batch batch : candidates) {
             UUID batchId = batch.getId();
             try {
+                // Collect keys/sizes first, but only add them to the global delete list after DB deletion succeeds.
+                // This avoids a "DB still has records but files are gone" state if the DB stage fails.
                 List<UploadedFileRepository.FileKeySize> uploadedKeys = uploadedFileRepository.findS3KeysByBatchId(batchId);
                 List<PluginSqlGenerationRepository.S3KeySize> sqlKeys = sqlGenerationRepository.findS3KeysByBatchId(batchId);
 
-                long totalBytes = 0L;
+                List<String> batchS3Keys = new ArrayList<>();
+                long batchBytes = 0L;
 
                 for (UploadedFileRepository.FileKeySize fileKey : uploadedKeys) {
                     if (fileKey.getS3Key() != null) {
-                        s3Keys.add(fileKey.getS3Key());
+                        batchS3Keys.add(fileKey.getS3Key());
                     }
                     if (fileKey.getFileSize() != null) {
-                        totalBytes += fileKey.getFileSize();
+                        batchBytes += fileKey.getFileSize();
                     }
                 }
 
                 for (PluginSqlGenerationRepository.S3KeySize sqlKey : sqlKeys) {
                     if (sqlKey.getS3Key() != null) {
-                        s3Keys.add(sqlKey.getS3Key());
+                        batchS3Keys.add(sqlKey.getS3Key());
                     }
                     if (sqlKey.getFileSizeBytes() != null) {
-                        totalBytes += sqlKey.getFileSizeBytes();
+                        batchBytes += sqlKey.getFileSizeBytes();
                     }
                 }
 
-                summary.deletedBytes += totalBytes;
-
                 if (dryRun) {
+                    // Dry run reports what would be removed, but doesn't perform any deletions.
+                    summary.deletedBytes += batchBytes;
+                    s3Keys.addAll(batchS3Keys);
                     continue;
                 }
 
@@ -135,6 +142,8 @@ public class BatchRetentionService {
 
                 batchRepository.deleteById(batchId);
                 summary.deletedBatches++;
+                summary.deletedBytes += batchBytes;
+                s3Keys.addAll(batchS3Keys);
             } catch (Exception e) {
                 logger.error("Failed to cleanup batch in DB: batchId={}, error={}", batchId, e.getMessage(), e);
                 summary.errors.add("Batch " + batchId + " cleanup failed: " + e.getMessage());

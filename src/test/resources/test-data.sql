@@ -18,11 +18,12 @@ DELETE FROM file_comparisons WHERE account_id IN (SELECT id FROM accounts WHERE 
 DELETE FROM admin_action_logs WHERE target_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com') OR admin_account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
+-- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted before batches
+DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM sites WHERE domain LIKE '%.example.com';
 -- Clean up plugin-related data (FK to accounts or referencing account)
 -- Note: plugin_audit_logs cleanup skipped - table is partitioned and should be empty in tests
-DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
 DELETE FROM accounts WHERE email LIKE '%@example.com';
 
 -- Test accounts
