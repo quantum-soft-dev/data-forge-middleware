@@ -138,3 +138,24 @@ Frontend:
 - Backend should start without Auth0 token validation errors.
 - Frontend login should succeed, and admin endpoints should return 200 for an ADMIN user.
 
+## Optional: Pull Values From AWS (Secrets Manager)
+
+If the project is deployed in AWS and config is stored in Secrets Manager, you can pull most of the required values
+from there instead of copying from the Auth0 UI.
+
+Common locations in this AWS account:
+- `dfm-dev/auth0/credentials` (Auth0 domain, audience, management client id/secret)
+- `dfm-dev/jwt/secret` (device API JWT secret)
+- `dfm-dev/redis/password` (Redis password)
+- `dfm-dev/db/app-credentials` (DB app username/password)
+
+Example commands:
+```bash
+aws sts get-caller-identity
+aws secretsmanager get-secret-value --secret-id dfm-dev/auth0/credentials --query SecretString --output text
+```
+
+Notes:
+- Do not paste the secret values into PRs or chat.
+- For local development, keep secrets in `.env` / `frontend/.env.local` (both gitignored).
+- If you generate helper files like `.env.aws-*` or `frontend/.env.local.aws-*`, they are also gitignored by this repo.
