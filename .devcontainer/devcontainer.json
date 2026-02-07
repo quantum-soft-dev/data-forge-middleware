@@ -10,15 +10,9 @@
   "runServices": [
     "postgres",
     "redis",
-    "localstack",
-    "keycloak"
+    "localstack"
   ],
-  "forwardPorts": [8080, 3000, 8081, 4566, 5432, 6379],
-  "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "20"
-    }
-  },
+  "forwardPorts": [8080, 3000, 4566, 5432, 6379],
   "customizations": {
     "vscode": {
       "settings": {
@@ -32,4 +26,3 @@
     }
   }
 }
-

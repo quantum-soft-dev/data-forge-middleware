@@ -1,6 +1,9 @@
 services:
   devcontainer:
-    image: mcr.microsoft.com/devcontainers/java:1-21-bookworm
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    image: dfm-devcontainer:local
     container_name: dfm-devcontainer
     command: sleep infinity
     volumes:
