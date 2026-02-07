@@ -1,7 +1,7 @@
 services:
   devcontainer:
     build:
-      context: ..
+      context: .
       dockerfile: .devcontainer/Dockerfile
     image: dfm-devcontainer:local
     container_name: dfm-devcontainer
