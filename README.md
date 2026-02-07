@@ -37,6 +37,7 @@ via `docker-compose.dev.yml` and provides a Java 21 + Node 20 dev environment.
 Notes:
 - Auth is via Auth0 (Keycloak is present in the dev compose for legacy/dev tooling, but is not the primary auth provider).
 - LocalStack bucket `dfm-uploads` is created automatically by `docker-compose.dev.yml`.
+- Auth0 setup details: `docs/local-auth0.md`
 
 ### Option 1: Development with IntelliJ IDEA (Recommended)
 
