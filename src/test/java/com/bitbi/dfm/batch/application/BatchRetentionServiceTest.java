@@ -1,13 +1,10 @@
 package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
-import com.bitbi.dfm.plugin.infrastructure.persistence.JpaPluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.infrastructure.JpaUploadedFileRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,16 +28,16 @@ import static org.mockito.Mockito.*;
 class BatchRetentionServiceTest {
 
     @Mock
-    private JpaBatchRepository batchRepository;
+    private BatchRepository batchRepository;
 
     @Mock
-    private JpaSiteRepository siteRepository;
+    private com.bitbi.dfm.site.domain.SiteRepository siteRepository;
 
     @Mock
-    private JpaUploadedFileRepository uploadedFileRepository;
+    private UploadedFileRepository uploadedFileRepository;
 
     @Mock
-    private JpaPluginSqlGenerationRepository sqlGenerationRepository;
+    private PluginSqlGenerationRepository sqlGenerationRepository;
 
     @Mock
     private S3FileStorageService s3FileStorageService;
@@ -73,8 +70,7 @@ class BatchRetentionServiceTest {
 
         when(site.getId()).thenReturn(siteId);
         when(site.getRetentionDays()).thenReturn(45);
-        when(((com.bitbi.dfm.site.domain.SiteRepository) siteRepository).findById(siteId))
-                .thenReturn(Optional.of(site));
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
         when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
                 .thenReturn(List.of(batch));
         when(batch.getId()).thenReturn(batchId);
@@ -98,7 +94,7 @@ class BatchRetentionServiceTest {
         assertThat(summary.deletedFiles()).isEqualTo(2);
         assertThat(summary.deletedBytes()).isEqualTo(300L);
         verify(s3FileStorageService, never()).deleteObjects(any());
-        verify(((com.bitbi.dfm.batch.domain.BatchRepository) batchRepository), never()).deleteById(any());
+        verify(batchRepository, never()).deleteById(any());
     }
 
     @Test
@@ -109,8 +105,7 @@ class BatchRetentionServiceTest {
 
         when(site.getId()).thenReturn(siteId);
         when(site.getRetentionDays()).thenReturn(45);
-        when(((com.bitbi.dfm.site.domain.SiteRepository) siteRepository).findById(siteId))
-                .thenReturn(Optional.of(site));
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
         when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
                 .thenReturn(List.of(batch));
         when(batch.getId()).thenReturn(batchId);
@@ -130,19 +125,19 @@ class BatchRetentionServiceTest {
         assertThat(summary.deletedBatches()).isEqualTo(1);
         verify(s3FileStorageService).deleteObjects(any());
         verify(sqlGenerationRepository).deleteByComparisonBatchId(batchId);
-        verify(((com.bitbi.dfm.batch.domain.BatchRepository) batchRepository)).deleteById(batchId);
+        verify(sqlGenerationRepository).deleteBySourceBatchId(batchId);
+        verify(batchRepository).deleteById(batchId);
     }
 
     @Test
-    @DisplayName("cleanup should skip delete when S3 deletion returns errors")
-    void cleanup_shouldSkipWhenS3Errors() {
+    @DisplayName("cleanup should still delete DB records even if S3 deletion returns errors (best-effort)")
+    void cleanup_shouldDeleteDbWhenS3Errors() {
         Site site = mock(Site.class);
         Batch batch = mock(Batch.class);
 
         when(site.getId()).thenReturn(siteId);
         when(site.getRetentionDays()).thenReturn(45);
-        when(((com.bitbi.dfm.site.domain.SiteRepository) siteRepository).findById(siteId))
-                .thenReturn(Optional.of(site));
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
         when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
                 .thenReturn(List.of(batch));
         when(batch.getId()).thenReturn(batchId);
@@ -160,8 +155,8 @@ class BatchRetentionServiceTest {
                 new BatchRetentionService.BatchCleanupRequest(siteId, null, null, null, 10, false)
         );
 
-        assertThat(summary.deletedBatches()).isEqualTo(0);
+        assertThat(summary.deletedBatches()).isEqualTo(1);
         assertThat(summary.errors()).isNotEmpty();
-        verify(((com.bitbi.dfm.batch.domain.BatchRepository) batchRepository), never()).deleteById(any());
+        verify(batchRepository).deleteById(batchId);
     }
 }

@@ -18,7 +18,8 @@ public enum AdminActionType {
     DEACTIVATE_SITE("Deactivate Site"),
     ACTIVATE_SITE("Activate Site"),
     DELETE_SITE("Delete Site"),
-    UPDATE_SITE_RETENTION("Update Site Retention Policy");
+    UPDATE_SITE_RETENTION("Update Site Retention Policy"),
+    BATCH_CLEANUP("Batch Cleanup");
 
     private final String displayName;
 

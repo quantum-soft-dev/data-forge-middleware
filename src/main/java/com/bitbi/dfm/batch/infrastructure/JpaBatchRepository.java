@@ -67,6 +67,11 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         WHERE site_id = :siteId
           AND status <> 'IN_PROGRESS'
           AND started_at < :cutoffTime
+          AND NOT EXISTS (
+              SELECT 1
+              FROM account_plugins ap
+              WHERE ap.baseline_batch_id = batches.id
+          )
         ORDER BY started_at ASC
         LIMIT :limit
         FOR UPDATE SKIP LOCKED

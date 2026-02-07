@@ -153,6 +153,17 @@ public interface PluginSqlGenerationRepository {
     int deleteByComparisonBatchId(UUID batchId);
 
     /**
+     * Deletes SQL generations where the batch is used as source.
+     * <p>
+     * Note: the database schema has ON DELETE CASCADE for source_batch_id, but this
+     * method is useful for explicit cleanup and symmetry with comparison deletion.
+     *
+     * @param batchId source batch ID
+     * @return number of records deleted
+     */
+    int deleteBySourceBatchId(UUID batchId);
+
+    /**
      * Deletes a SQL generation record.
      *
      * @param generation the generation to delete

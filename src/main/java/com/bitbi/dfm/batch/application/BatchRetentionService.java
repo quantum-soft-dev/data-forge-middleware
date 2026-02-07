@@ -1,13 +1,10 @@
 package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
+import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
-import com.bitbi.dfm.plugin.infrastructure.persistence.JpaPluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.infrastructure.JpaUploadedFileRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
 import org.slf4j.Logger;
@@ -17,10 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -29,17 +24,17 @@ public class BatchRetentionService {
     private static final Logger logger = LoggerFactory.getLogger(BatchRetentionService.class);
     private static final int DEFAULT_LIMIT = 1000;
 
-    private final JpaBatchRepository batchRepository;
-    private final JpaSiteRepository siteRepository;
-    private final JpaUploadedFileRepository uploadedFileRepository;
-    private final JpaPluginSqlGenerationRepository sqlGenerationRepository;
+    private final BatchRepository batchRepository;
+    private final com.bitbi.dfm.site.domain.SiteRepository siteRepository;
+    private final UploadedFileRepository uploadedFileRepository;
+    private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final S3FileStorageService s3FileStorageService;
 
     public BatchRetentionService(
-            JpaBatchRepository batchRepository,
-            JpaSiteRepository siteRepository,
-            JpaUploadedFileRepository uploadedFileRepository,
-            JpaPluginSqlGenerationRepository sqlGenerationRepository,
+            BatchRepository batchRepository,
+            com.bitbi.dfm.site.domain.SiteRepository siteRepository,
+            UploadedFileRepository uploadedFileRepository,
+            PluginSqlGenerationRepository sqlGenerationRepository,
             S3FileStorageService s3FileStorageService) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
@@ -78,11 +73,29 @@ public class BatchRetentionService {
         return summary;
     }
 
-    @Transactional
     protected BatchCleanupSummary cleanupSite(UUID siteId, LocalDateTime cutoff, int limit, boolean dryRun) {
+        CleanupDbResult dbResult = cleanupSiteInDb(siteId, cutoff, limit, dryRun);
+
+        List<String> dedupedKeys = deduplicate(dbResult.s3Keys);
+        dbResult.summary.deletedFiles += dedupedKeys.size();
+
+        if (!dryRun) {
+            DeleteObjectsResult deleteResult = s3FileStorageService.deleteObjects(dedupedKeys);
+            if (!deleteResult.errors().isEmpty()) {
+                dbResult.summary.errors.add("S3 delete errors: " + deleteResult.errors());
+            }
+        }
+
+        return dbResult.summary;
+    }
+
+    @Transactional
+    protected CleanupDbResult cleanupSiteInDb(UUID siteId, LocalDateTime cutoff, int limit, boolean dryRun) {
         List<Batch> candidates = batchRepository.findCleanupCandidatesForSite(siteId, cutoff, limit);
         BatchCleanupSummary summary = new BatchCleanupSummary();
         summary.candidates = candidates.size();
+
+        List<String> s3Keys = new ArrayList<>();
 
         for (Batch batch : candidates) {
             UUID batchId = batch.getId();
@@ -90,7 +103,6 @@ public class BatchRetentionService {
                 List<UploadedFileRepository.FileKeySize> uploadedKeys = uploadedFileRepository.findS3KeysByBatchId(batchId);
                 List<PluginSqlGenerationRepository.S3KeySize> sqlKeys = sqlGenerationRepository.findS3KeysByBatchId(batchId);
 
-                List<String> s3Keys = new ArrayList<>();
                 long totalBytes = 0L;
 
                 for (UploadedFileRepository.FileKeySize fileKey : uploadedKeys) {
@@ -111,39 +123,30 @@ public class BatchRetentionService {
                     }
                 }
 
-                List<String> dedupedKeys = deduplicate(s3Keys);
+                summary.deletedBytes += totalBytes;
 
                 if (dryRun) {
-                    summary.deletedFiles += dedupedKeys.size();
-                    summary.deletedBytes += totalBytes;
                     continue;
                 }
 
-                DeleteObjectsResult deleteResult = s3FileStorageService.deleteObjects(dedupedKeys);
-                if (!deleteResult.errors().isEmpty()) {
-                    summary.errors.add("Batch " + batchId + " S3 delete errors: " + deleteResult.errors());
-                    continue;
-                }
-
+                // Prevent leaving plugin SQL generations referencing a deleted comparison batch.
                 sqlGenerationRepository.deleteByComparisonBatchId(batchId);
-                ((com.bitbi.dfm.batch.domain.BatchRepository) batchRepository).deleteById(batchId);
+                sqlGenerationRepository.deleteBySourceBatchId(batchId);
 
+                batchRepository.deleteById(batchId);
                 summary.deletedBatches++;
-                summary.deletedFiles += dedupedKeys.size();
-                summary.deletedBytes += totalBytes;
             } catch (Exception e) {
-                logger.error("Failed to cleanup batch: batchId={}, error={}", batchId, e.getMessage(), e);
+                logger.error("Failed to cleanup batch in DB: batchId={}, error={}", batchId, e.getMessage(), e);
                 summary.errors.add("Batch " + batchId + " cleanup failed: " + e.getMessage());
             }
         }
 
-        return summary;
+        return new CleanupDbResult(summary, s3Keys);
     }
 
     private List<Site> resolveSites(UUID siteId, UUID accountId) {
         if (siteId != null) {
-            return ((com.bitbi.dfm.site.domain.SiteRepository) siteRepository)
-                    .findById(siteId)
+            return siteRepository.findById(siteId)
                     .map(List::of)
                     .orElse(List.of());
         }
@@ -157,9 +160,10 @@ public class BatchRetentionService {
         if (keys == null || keys.isEmpty()) {
             return List.of();
         }
-        Set<String> deduped = new HashSet<>(keys);
-        return new ArrayList<>(deduped);
+        return keys.stream().distinct().toList();
     }
+
+    protected record CleanupDbResult(BatchCleanupSummary summary, List<String> s3Keys) {}
 
     public record BatchCleanupRequest(
             UUID siteId,

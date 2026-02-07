@@ -137,4 +137,11 @@ public interface JpaPluginSqlGenerationRepository extends JpaRepository<PluginSq
     @Modifying
     @Query("DELETE FROM PluginSqlGeneration g WHERE g.comparisonBatchId = :batchId")
     int deleteByComparisonBatchId(@Param("batchId") UUID batchId);
+
+    /**
+     * Deletes generations where the batch is used as source.
+     */
+    @Modifying
+    @Query("DELETE FROM PluginSqlGeneration g WHERE g.sourceBatchId = :batchId")
+    int deleteBySourceBatchId(@Param("batchId") UUID batchId);
 }

@@ -151,4 +151,89 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         assertThat(uploadedFileRepository.countByBatchId(eligibleBatchId)).isZero();
         assertThat(errorLogRepository.countByBatchId(eligibleBatchId)).isZero();
     }
+
+    @Test
+    @Transactional
+    @DisplayName("Should NOT delete batches referenced as plugin baseline_batch_id")
+    void shouldNotDeleteBaselineBatch() {
+        UUID accountId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        UUID baselineBatchId = UUID.randomUUID();
+        UUID eligibleBatchId = UUID.randomUUID();
+
+        String compositeDomain = accountId + "_example.com";
+        String secretHash = "$2a$10$7EqJtq98hPqEX7fNZaFWoOhiN4Y7sJpX6dC";
+
+        jdbcTemplate.update(
+                "INSERT INTO accounts (id, email, name, is_active, created_at, updated_at) VALUES (?,?,?,?,NOW(),NOW())",
+                accountId,
+                "baseline-test@example.com",
+                "Baseline Test",
+                true
+        );
+
+        jdbcTemplate.update(
+                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at) VALUES (?,?,?,?,?,?,?,NOW(),NOW())",
+                siteId,
+                accountId,
+                compositeDomain,
+                secretHash,
+                "Baseline Site",
+                true,
+                45
+        );
+
+        LocalDateTime oldStartedAt = LocalDateTime.now().minusDays(60);
+
+        // Baseline batch (old but must not be deleted)
+        jdbcTemplate.update(
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                baselineBatchId,
+                siteId,
+                accountId,
+                "COMPLETED",
+                "path/baseline/",
+                0,
+                0,
+                false,
+                oldStartedAt,
+                oldStartedAt.plusMinutes(5)
+        );
+
+        // Another eligible old batch (should be deleted)
+        jdbcTemplate.update(
+                "INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count, total_size, has_errors, started_at, completed_at, created_at, version) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),0)",
+                eligibleBatchId,
+                siteId,
+                accountId,
+                "COMPLETED",
+                "path/eligible2/",
+                0,
+                0,
+                false,
+                oldStartedAt,
+                oldStartedAt.plusMinutes(5)
+        );
+
+        // account_plugins row referencing baseline batch
+        jdbcTemplate.update(
+                "INSERT INTO account_plugins (account_id, plugin_id, plugin_data, is_active, activated_at, created_at, updated_at, baseline_batch_id) VALUES (?,?,?::jsonb,?,?,NOW(),NOW(),?)",
+                accountId,
+                "bit-bi",
+                "{}",
+                true,
+                LocalDateTime.now(),
+                baselineBatchId
+        );
+
+        BatchRetentionService.BatchCleanupSummary summary = batchRetentionService.runCleanup(
+                new BatchCleanupRequest(siteId, null, null, null, 100, false)
+        );
+
+        assertThat(summary.candidates()).isEqualTo(1);
+        assertThat(summary.deletedBatches()).isEqualTo(1);
+
+        assertThat(batchRepository.existsById(baselineBatchId)).isTrue();
+        assertThat(batchRepository.existsById(eligibleBatchId)).isFalse();
+    }
 }

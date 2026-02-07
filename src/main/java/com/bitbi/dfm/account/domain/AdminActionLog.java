@@ -111,8 +111,8 @@ public class AdminActionLog {
     public static AdminActionLog successForSite(AdminActionType actionType, UUID targetAccountId,
                                                  UUID targetSiteId, UUID adminAccountId,
                                                  String ipAddress, String userAgent) {
-        return new AdminActionLog(actionType, targetAccountId, adminAccountId,
-                targetSiteId, ActionStatus.SUCCESS, null, ipAddress, userAgent);
+        return new AdminActionLog(actionType, targetAccountId, targetSiteId,
+                adminAccountId, ActionStatus.SUCCESS, null, ipAddress, userAgent);
     }
 
     /**

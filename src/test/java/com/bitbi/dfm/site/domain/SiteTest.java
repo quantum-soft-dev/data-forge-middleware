@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for Site entity.
@@ -120,6 +121,36 @@ class SiteTest {
 
             // Then
             assertThat(displayDomain).isEqualTo("roshel");
+        }
+    }
+
+    @Nested
+    @DisplayName("updateRetentionDays() - Validation")
+    class UpdateRetentionDays {
+
+        @Test
+        @DisplayName("Should accept retention days in range 1..3650")
+        void shouldAcceptValidRetentionDays() {
+            Site site = Site.createForTesting(UUID.randomUUID(), "example.com", "Example");
+            site.updateRetentionDays(1);
+            assertThat(site.getRetentionDays()).isEqualTo(1);
+
+            site.updateRetentionDays(3650);
+            assertThat(site.getRetentionDays()).isEqualTo(3650);
+        }
+
+        @Test
+        @DisplayName("Should reject retention days outside 1..3650")
+        void shouldRejectInvalidRetentionDays() {
+            Site site = Site.createForTesting(UUID.randomUUID(), "example.com", "Example");
+
+            assertThatThrownBy(() -> site.updateRetentionDays(0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("between 1 and");
+
+            assertThatThrownBy(() -> site.updateRetentionDays(3651))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("between 1 and");
         }
     }
 

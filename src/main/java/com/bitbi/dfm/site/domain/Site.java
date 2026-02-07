@@ -29,6 +29,7 @@ public class Site {
      */
     private static final int COMPOSITE_DOMAIN_PREFIX_LENGTH = 37;
     private static final int DEFAULT_RETENTION_DAYS = 45;
+    private static final int MAX_RETENTION_DAYS = 3650; // 10 years
 
     @Id
     @Column(name = "id", updatable = false, nullable = false)
@@ -120,8 +121,8 @@ public class Site {
     }
 
     public void updateRetentionDays(int retentionDays) {
-        if (retentionDays <= 0) {
-            throw new IllegalArgumentException("Retention days must be positive");
+        if (retentionDays <= 0 || retentionDays > MAX_RETENTION_DAYS) {
+            throw new IllegalArgumentException("Retention days must be between 1 and " + MAX_RETENTION_DAYS);
         }
         this.retentionDays = retentionDays;
         this.updatedAt = LocalDateTime.now();
