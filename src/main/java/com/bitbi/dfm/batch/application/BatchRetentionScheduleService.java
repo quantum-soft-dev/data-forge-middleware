@@ -5,6 +5,7 @@ import com.bitbi.dfm.settings.domain.AppSettingRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,12 +24,15 @@ public class BatchRetentionScheduleService {
     public static final String CRON_SETTING_KEY = "batch.retention.cron";
 
     private final AppSettingRepository appSettingRepository;
+    private final ApplicationEventPublisher eventPublisher;
     private final String fallbackCron;
 
     public BatchRetentionScheduleService(
             AppSettingRepository appSettingRepository,
+            ApplicationEventPublisher eventPublisher,
             @Value("${batch.retention.cron:0 0 2 * * *}") String fallbackCron) {
         this.appSettingRepository = appSettingRepository;
+        this.eventPublisher = eventPublisher;
         this.fallbackCron = fallbackCron;
     }
 
@@ -53,14 +57,15 @@ public class BatchRetentionScheduleService {
         if (cron == null || cron.isBlank()) {
             throw new IllegalArgumentException("cron cannot be blank");
         }
-        if (!isValidCron(cron)) {
-            throw new IllegalArgumentException("Invalid cron expression: " + cron);
-        }
+        validateCronOrThrow(cron);
 
         AppSetting setting = appSettingRepository.findById(CRON_SETTING_KEY)
                 .orElseGet(() -> new AppSetting(CRON_SETTING_KEY, cron));
         setting.setValue(cron);
         AppSetting saved = appSettingRepository.save(setting);
+
+        // Notify scheduler to reschedule without requiring restart.
+        eventPublisher.publishEvent(new BatchRetentionScheduleChangedEvent(saved.getValue()));
 
         return new BatchRetentionSchedule(saved.getValue(), BatchRetentionScheduleSource.DB, saved.getUpdatedAt());
     }
@@ -74,6 +79,18 @@ public class BatchRetentionScheduleService {
         }
     }
 
+    private void validateCronOrThrow(String cron) {
+        try {
+            CronExpression.parse(cron);
+        } catch (Exception e) {
+            String message = e.getMessage() != null ? e.getMessage() : "invalid format";
+            throw new IllegalArgumentException(
+                    "Invalid cron expression: " + message +
+                            ". Expected format: sec min hour day month day-of-week (e.g., '0 0 2 * * *')."
+            );
+        }
+    }
+
     public enum BatchRetentionScheduleSource {
         DB,
         CONFIG
@@ -81,4 +98,3 @@ public class BatchRetentionScheduleService {
 
     public record BatchRetentionSchedule(String cron, BatchRetentionScheduleSource source, Instant updatedAt) {}
 }
-

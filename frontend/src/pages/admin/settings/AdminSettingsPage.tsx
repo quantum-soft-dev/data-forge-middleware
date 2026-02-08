@@ -26,7 +26,7 @@ export default function AdminSettingsPage() {
   const scheduleQuery = useQuery({
     queryKey: settingsKeys.retentionSchedule(),
     queryFn: getBatchRetentionSchedule,
-    staleTime: 0,
+    staleTime: 60000, // settings change infrequently
     gcTime: 300000,
   });
 
@@ -117,7 +117,7 @@ export default function AdminSettingsPage() {
                 onClick={save}
                 disabled={scheduleQuery.isLoading || updateMutation.isPending}
               >
-                Save
+                {updateMutation.isPending ? 'Saving...' : 'Save'}
               </Button>
             </div>
 
@@ -132,4 +132,3 @@ export default function AdminSettingsPage() {
     </div>
   );
 }
-

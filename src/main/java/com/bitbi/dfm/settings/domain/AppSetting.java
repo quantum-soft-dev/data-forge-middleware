@@ -40,6 +40,9 @@ public class AppSetting {
     public AppSetting(String key, String value) {
         this.key = Objects.requireNonNull(key, "key cannot be null");
         this.value = Objects.requireNonNull(value, "value cannot be null");
+        Instant now = Instant.now();
+        this.createdAt = now;
+        this.updatedAt = now;
     }
 
     @PrePersist
@@ -64,6 +67,7 @@ public class AppSetting {
 
     public void setValue(String value) {
         this.value = Objects.requireNonNull(value, "value cannot be null");
+        this.updatedAt = Instant.now();
     }
 
     public Instant getCreatedAt() {
@@ -74,4 +78,3 @@ public class AppSetting {
         return updatedAt;
     }
 }
-
