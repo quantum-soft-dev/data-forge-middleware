@@ -42,6 +42,16 @@ export default function DeviceVerifyPage() {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [createdSiteName, setCreatedSiteName] = useState<string | null>(null);
 
+  // Sync userCode state when URL code parameter changes (e.g. navigating from one device-verify to another)
+  useEffect(() => {
+    if (userCodeFromUrl && userCodeFromUrl !== userCode) {
+      setUserCode(userCodeFromUrl);
+      setPageState('confirm');
+      setErrorMessage('');
+      setCreatedSiteName(null);
+    }
+  }, [userCodeFromUrl]);
+
   // Fetch verification info when user code is provided
   const {
     data: verifyInfo,
@@ -62,11 +72,10 @@ export default function DeviceVerifyPage() {
         ?.response?.data?.error_description ||
         (verifyInfoError as { response?: { data?: { message?: string } } })?.response?.data?.message;
 
-      // 400 = Authorization already processed (approved or denied)
+      // 400 = Authorization already processed (approved or denied) - show error, not success
       if (status === 400) {
-        setPageState('success');
-        setCreatedSiteName(null); // We don't know the site name, but it was likely already created
-        setErrorMessage('');
+        setPageState('error');
+        setErrorMessage('This authorization code has already been processed. Please start a new authorization from your device.');
         return;
       }
 
