@@ -70,6 +70,7 @@ docker-compose up postgres localstack     # Start dependencies
 - One active batch per site (query check)
 - Max 5 concurrent batches per account
 - 60-minute batch timeout (scheduled task)
+- Retention cleanup schedule is configurable by admins (cron via `/api/v1/admin/settings/batch-retention-schedule`)
 - 500MB file size limit
 
 ## Code Style

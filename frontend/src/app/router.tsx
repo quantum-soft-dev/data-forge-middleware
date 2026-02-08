@@ -17,6 +17,7 @@ const ComparisonListPage = lazy(() => import('@/pages/comparison/ComparisonListP
 const ComparisonDetailPage = lazy(() => import('@/pages/comparison/ComparisonDetailPage'))
 const PluginsAdminPage = lazy(() => import('@/pages/admin/plugins/PluginsAdminPage'))
 const PluginHistoryPage = lazy(() => import('@/pages/admin/plugins/PluginHistoryPage'))
+const AdminSettingsPage = lazy(() => import('@/pages/admin/settings/AdminSettingsPage'))
 const MyPluginsPage = lazy(() => import('@/pages/account/plugins').then(m => ({ default: m.MyPluginsPage })))
 const DeviceVerifyPage = lazy(() => import('@/pages/device-verify/DeviceVerifyPage'))
 
@@ -92,6 +93,12 @@ const pluginHistoryRoute = createRoute({
   component: () => <AuthenticationGuard component={PluginHistoryPage} />,
 })
 
+const adminSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/settings',
+  component: () => <AuthenticationGuard component={AdminSettingsPage} />,
+})
+
 // User routes - protected with UserOnlyGuard (redirects admins to /admin/users)
 const siteManagementRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -152,6 +159,7 @@ const routeTree = rootRoute.addChildren([
   userSitesRoute,
   pluginsAdminRoute,
   pluginHistoryRoute,
+  adminSettingsRoute,
   siteManagementRoute,
   uploadHistoryRoute,
   batchDetailRoute,
