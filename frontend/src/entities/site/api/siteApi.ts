@@ -17,7 +17,8 @@ import {
   SITES_CREATE,
   SITES_ACTIVATE,
   SITES_DEACTIVATE,
-  SITES_DELETE_BY_ACCOUNT
+  SITES_DELETE_BY_ACCOUNT,
+  SITES_RETENTION
 } from '@/shared/api/apiRoutes';
 import type { Site, CreateSiteRequest, CreateSiteResponse } from '../model/types';
 
@@ -166,4 +167,18 @@ export async function activateAdminSite(accountId: string, siteId: string): Prom
  */
 export async function deleteAdminSite(accountId: string, siteId: string): Promise<void> {
   await apiClient.delete(SITES_DELETE_BY_ACCOUNT(accountId, siteId));
+}
+
+/**
+ * Update site retention policy (admin operation).
+ *
+ * PATCH /api/v1/sites/{siteId}/retention
+ *
+ * @param siteId - Site identifier
+ * @param retentionDays - Retention period in days
+ * @returns Updated site entity
+ */
+export async function updateAdminSiteRetention(siteId: string, retentionDays: number): Promise<Site> {
+  const response = await apiClient.patch<Site>(SITES_RETENTION(siteId), { retentionDays });
+  return response.data;
 }

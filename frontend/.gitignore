@@ -25,6 +25,7 @@ dist-ssr
 
 # Environment files
 .env.local
+.env.local.aws-*
 .env.*.local
 
 # Test coverage

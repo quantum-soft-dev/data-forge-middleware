@@ -32,6 +32,7 @@ class SiteResponseDtoTest {
         when(site.getDisplayDomain()).thenReturn("example.com"); // Use getDisplayDomain() per FR-019
         when(site.getDisplayName()).thenReturn("Example Site");
         when(site.getIsActive()).thenReturn(true);
+        when(site.getRetentionDays()).thenReturn(45);
         when(site.getCreatedAt()).thenReturn(createdAt);
 
         // When
@@ -44,6 +45,7 @@ class SiteResponseDtoTest {
         assertEquals("example.com", dto.domain()); // domain field shows display format only
         assertEquals("Example Site", dto.name());
         assertEquals(true, dto.isActive());
+        assertEquals(45, dto.retentionDays());
         assertEquals(createdAt.toInstant(ZoneOffset.UTC), dto.createdAt());
     }
 
@@ -57,6 +59,7 @@ class SiteResponseDtoTest {
         when(site.getDisplayDomain()).thenReturn("secure.example.com"); // Use getDisplayDomain() per FR-019
         when(site.getDisplayName()).thenReturn("Secure Site");
         when(site.getIsActive()).thenReturn(true);
+        when(site.getRetentionDays()).thenReturn(30);
         when(site.getCreatedAt()).thenReturn(LocalDateTime.now());
         // Note: Site entity has clientSecretHash field which should NOT be exposed
 
@@ -66,7 +69,7 @@ class SiteResponseDtoTest {
         // Then
         assertNotNull(dto);
         // Verify DTO only contains safe fields (6 fields total)
-        assertEquals(6, dto.getClass().getRecordComponents().length);
+        assertEquals(7, dto.getClass().getRecordComponents().length);
         // Verify no clientSecret-like field exists in DTO
         assertDoesNotThrow(() -> {
             dto.id();
@@ -74,6 +77,7 @@ class SiteResponseDtoTest {
             dto.domain();
             dto.name();
             dto.isActive();
+            dto.retentionDays();
             dto.createdAt();
         });
     }

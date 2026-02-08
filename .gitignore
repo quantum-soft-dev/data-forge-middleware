@@ -43,6 +43,7 @@ target/
 .env
 *.env
 .env.local
+.env.aws-*
 application-auth0.yml
 application-dev.yml
 auth0.properties

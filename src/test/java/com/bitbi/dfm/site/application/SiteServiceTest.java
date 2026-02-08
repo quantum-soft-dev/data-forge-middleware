@@ -210,6 +210,24 @@ class SiteServiceTest {
     }
 
     @Test
+    @DisplayName("updateRetentionDays - Should update site retention policy")
+    void updateRetentionDays_ShouldUpdateRetentionPolicy() {
+        // Given
+        Site mockSite = mock(Site.class);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
+        when(siteRepository.save(mockSite)).thenReturn(mockSite);
+
+        // When
+        Site result = siteService.updateRetentionDays(siteId, 45);
+
+        // Then
+        assertThat(result).isEqualTo(mockSite);
+        verify(siteRepository).findById(siteId);
+        verify(mockSite).updateRetentionDays(45);
+        verify(siteRepository).save(mockSite);
+    }
+
+    @Test
     @DisplayName("deleteSite - Should hard delete site with cascade deletion of all related data")
     void deleteSite_ShouldHardDeleteWithCascade() {
         // Given

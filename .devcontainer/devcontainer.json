@@ -1,0 +1,28 @@
+{
+  "name": "data-forge-middleware",
+  "dockerComposeFile": [
+    "../docker-compose.dev.yml",
+    "docker-compose.yml"
+  ],
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/data-forge-middleware",
+  "shutdownAction": "stopCompose",
+  "runServices": [
+    "postgres",
+    "redis",
+    "localstack"
+  ],
+  "forwardPorts": [8080, 3000, 4566, 5432, 6379],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "java.configuration.updateBuildConfiguration": "automatic"
+      },
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}

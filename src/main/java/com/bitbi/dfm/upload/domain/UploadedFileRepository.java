@@ -62,6 +62,14 @@ public interface UploadedFileRepository {
     Optional<LatestFileInfoWithS3Key> findLatestByOriginalFileNameForSiteAndFileName(UUID siteId, String originalFileName);
 
     /**
+     * Finds S3 keys and sizes for files in a batch.
+     *
+     * @param batchId batch identifier
+     * @return list of S3 key and size projections
+     */
+    List<FileKeySize> findS3KeysByBatchId(UUID batchId);
+
+    /**
      * Projection interface for latest file info query.
      */
     interface LatestFileInfo {
@@ -79,5 +87,13 @@ public interface UploadedFileRepository {
         Long getFileSize();
         Instant getUploadedAt();
         String getS3Key();
+    }
+
+    /**
+     * Projection interface for S3 key and size.
+     */
+    interface FileKeySize {
+        String getS3Key();
+        Long getFileSize();
     }
 }

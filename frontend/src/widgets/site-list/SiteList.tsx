@@ -19,6 +19,7 @@ import {
   useAdminSites,
   useUpdateSiteStatus,
   useAdminUpdateSiteStatus,
+  useAdminUpdateSiteRetention,
   useDeleteSite,
   useAdminDeleteSite
 } from '@/features/site-crud/model/queries';
@@ -61,6 +62,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
   const adminDeleteMutation = accountId ? useAdminDeleteSite(accountId) : null;
   const deleteSiteMutation = adminDeleteMutation || userDeleteMutation;
 
+  const adminRetentionMutation = accountId ? useAdminUpdateSiteRetention(accountId) : null;
+
   const handleActivate = async (siteId: string) => {
     try {
       await updateStatusMutation.mutateAsync({ siteId, isActive: true });
@@ -85,6 +88,16 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
       toast.success('Site deleted successfully');
     } catch (error: any) {
       toast.error(error?.response?.data?.message || 'Failed to delete site');
+    }
+  };
+
+  const handleRetentionUpdate = async (siteId: string, retentionDays: number) => {
+    if (!adminRetentionMutation) return;
+    try {
+      await adminRetentionMutation.mutateAsync({ siteId, retentionDays });
+      toast.success('Retention policy updated');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Failed to update retention policy');
     }
   };
 
@@ -136,7 +149,13 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
           onDelete={handleDelete}
-          isLoading={updateStatusMutation.isPending || deleteSiteMutation.isPending}
+          onUpdateRetention={accountId ? handleRetentionUpdate : undefined}
+          showRetentionControls={!!accountId}
+          isLoading={
+            updateStatusMutation.isPending ||
+            deleteSiteMutation.isPending ||
+            (adminRetentionMutation?.isPending ?? false)
+          }
         />
       ))}
     </div>

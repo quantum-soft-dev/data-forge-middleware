@@ -8,6 +8,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.Delete;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
+import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
@@ -16,6 +21,8 @@ import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * S3-based file storage service with retry logic.
@@ -34,6 +41,7 @@ public class S3FileStorageService {
     private static final int MAX_RETRIES = 3;
     private static final long BASE_DELAY_MS = 100; // Base delay for exponential backoff
     private static final long MAX_DELAY_MS = 5000; // Maximum delay cap
+    private static final int MAX_DELETE_BATCH = 1000;
 
     private final S3Client s3Client;
     private final String bucketName;
@@ -175,6 +183,58 @@ public class S3FileStorageService {
     }
 
     /**
+     * Delete multiple files from S3 in batches (up to 1000 per request).
+     * <p>
+     * Returns a summary with deleted count and errors (if any).
+     * </p>
+     *
+     * @param s3Keys list of S3 object keys
+     * @return delete result summary
+     */
+    public DeleteObjectsResult deleteObjects(List<String> s3Keys) {
+        if (s3Keys == null || s3Keys.isEmpty()) {
+            return new DeleteObjectsResult(0, List.of());
+        }
+
+        int deletedCount = 0;
+        List<String> errors = new ArrayList<>();
+
+        for (int i = 0; i < s3Keys.size(); i += MAX_DELETE_BATCH) {
+            List<String> batch = s3Keys.subList(i, Math.min(i + MAX_DELETE_BATCH, s3Keys.size()));
+            try {
+                Delete delete = Delete.builder()
+                        .objects(batch.stream()
+                                .map(key -> ObjectIdentifier.builder().key(key).build())
+                                .toList())
+                        .build();
+
+                DeleteObjectsRequest request = DeleteObjectsRequest.builder()
+                        .bucket(bucketName)
+                        .delete(delete)
+                        .build();
+
+                DeleteObjectsResponse response = s3Client.deleteObjects(request);
+                deletedCount += response.deleted().size();
+
+                for (S3Error error : response.errors()) {
+                    errors.add(error.key() + ": " + error.code());
+                }
+            } catch (S3Exception e) {
+                logger.error("Failed to delete S3 objects batch: {}", e.getMessage(), e);
+                errors.add("S3Exception: " + e.getMessage());
+            }
+        }
+
+        if (!errors.isEmpty()) {
+            logger.warn("S3 deleteObjects completed with {} errors", errors.size());
+        } else {
+            logger.info("S3 deleteObjects completed: deleted {} objects", deletedCount);
+        }
+
+        return new DeleteObjectsResult(deletedCount, errors);
+    }
+
+    /**
      * Calculate exponential backoff delay with jitter.
      * <p>
      * Formula: min(BASE_DELAY * 2^(attempt-1) + random(0, BASE_DELAY), MAX_DELAY)
@@ -221,4 +281,12 @@ public class S3FileStorageService {
             super(message, cause);
         }
     }
+
+    /**
+     * Result summary for bulk delete operations.
+     *
+     * @param deletedCount number of successfully deleted objects
+     * @param errors list of error descriptions (key + error code/message)
+     */
+    public record DeleteObjectsResult(int deletedCount, List<String> errors) {}
 }

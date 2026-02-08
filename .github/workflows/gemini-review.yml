@@ -1,0 +1,90 @@
+name: Gemini PR Reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    paths:
+      - '**.java'
+      - '**.tsx'
+      - '**.ts'
+      - '**.sql'
+      - '**.yml'
+      - '**.gradle'
+      - '**.properties'
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gemini Code Review
+        uses: sshnaidm/gemini-code-review-action@v1
+        with:
+          gemini-key: ${{ secrets.GEMINI_API_KEY }}
+          model: gemini-2.5-flash
+          context-lines: '15'
+          add-files: 'false'
+          review-title: 'Gemini Code Review'
+          prompt: |
+            Ты эксперт по Java и Spring Boot. Это проект Data Forge Middleware — серверное приложение для:
+            - Приёма CSV/DBF файлов от клиентов через REST API (Device Code Flow OAuth)
+            - Хранения файлов в AWS S3 с batch-обработкой
+            - Генерации SQL-дельт через Plugin-систему (Bit BI)
+            - Управления аккаунтами и сайтами с мультитенантностью
+            - React SPA для администрирования
+
+            Технологии Backend: Java 21 LTS, Spring Boot 3.5, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, PostgreSQL 16 (partitioned tables), Flyway 11, AWS SDK v2 (S3), HikariCP.
+            Технологии Frontend: React 19, TypeScript 5.6, Vite 5, TanStack Query v5, React Router v6, shadcn/ui, Tailwind CSS, @auth0/auth0-react.
+
+            Архитектура: DDD (Package by Layered Feature), агрегаты: Account, Site, Batch, ErrorLog, Plugin.
+            Аутентификация: Client API — Custom JWT (HMAC-SHA256), Admin API — Auth0 OAuth2, Plugin API — API key.
+
+            Проверь код на:
+
+            ## Java / Spring Boot
+            1. Правильное использование Spring Security filter chains (multi-chain: client JWT, Auth0 OAuth2, API key)
+            2. JPA N+1 проблемы — проверь что используется JOIN FETCH в @Query
+            3. Transaction boundaries — @Transactional на уровне сервиса, не контроллера
+            4. Immutable DTOs (Java records с fromEntity() factory methods)
+            5. Optional — возвращать из репозиториев, не использовать в параметрах
+            6. Корректный error handling (400/403/404/413/500 mapping)
+
+            ## PostgreSQL / Flyway
+            7. Миграции идемпотентны и безопасны для rollback
+            8. Правильное партиционирование (monthly range для error_logs, audit_logs)
+            9. Индексы для cursor pagination запросов
+            10. Soft delete (isActive flag) — проверь что фильтруется в запросах
+
+            ## Безопасность
+            11. Мультитенантность — accountId проверяется в каждом endpoint
+            12. JWT validation (HMAC-SHA256 для client, Auth0 RS256 для admin)
+            13. Нет утечки credentials в логах (BCrypt для API keys, DPAPI)
+            14. SQL injection prevention (параметризованные запросы)
+            15. OWASP Top 10 (XSS, CSRF, injection)
+
+            ## React / TypeScript Frontend
+            16. TanStack Query — правильные queryKey, staleTime, cache invalidation
+            17. Auth0 React SDK — корректный redirect flow, token refresh
+            18. Zod validation на формах
+            19. Feature-Sliced Design (features/widgets/pages structure)
+
+            ## Производительность
+            20. Batch operations — один активный batch на site, max 5 на account
+            21. S3 upload — retry (3 attempts, 1s delay), presigned URLs (15min)
+            22. Cursor pagination для больших datasets
+            23. 60-minute batch timeout scheduled task
+
+            Формат ответа:
+            - 🔴 **Критично**: проблемы безопасности, data leaks, баги
+            - 🟡 **Рекомендация**: улучшения качества кода
+            - 🟢 **Хорошо**: отметь удачные решения
+
+            Отвечай на русском языке. Будь конкретен — указывай номера строк и предлагай исправления.

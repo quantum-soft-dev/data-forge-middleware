@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for Site entity.
@@ -123,6 +124,36 @@ class SiteTest {
         }
     }
 
+    @Nested
+    @DisplayName("updateRetentionDays() - Validation")
+    class UpdateRetentionDays {
+
+        @Test
+        @DisplayName("Should accept retention days in range 1..3650")
+        void shouldAcceptValidRetentionDays() {
+            Site site = Site.createForTesting(UUID.randomUUID(), "example.com", "Example");
+            site.updateRetentionDays(1);
+            assertThat(site.getRetentionDays()).isEqualTo(1);
+
+            site.updateRetentionDays(3650);
+            assertThat(site.getRetentionDays()).isEqualTo(3650);
+        }
+
+        @Test
+        @DisplayName("Should reject retention days outside 1..3650")
+        void shouldRejectInvalidRetentionDays() {
+            Site site = Site.createForTesting(UUID.randomUUID(), "example.com", "Example");
+
+            assertThatThrownBy(() -> site.updateRetentionDays(0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("between 1 and");
+
+            assertThatThrownBy(() -> site.updateRetentionDays(3651))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("between 1 and");
+        }
+    }
+
     /**
      * Helper method to create a Site with a specific domain for testing.
      * Uses reflection to set the domain field since Site.create() validates domain format.
@@ -136,12 +167,12 @@ class SiteTest {
         try {
             java.lang.reflect.Constructor<Site> constructor = Site.class.getDeclaredConstructor(
                     UUID.class, UUID.class, String.class, String.class,
-                    String.class, Boolean.class, LocalDateTime.class, LocalDateTime.class
+                    String.class, Boolean.class, Integer.class, LocalDateTime.class, LocalDateTime.class
             );
             constructor.setAccessible(true);
             return constructor.newInstance(
                     id, accountId, domain, "$2a$10$dummyHash",
-                    "Test Site", true, now, now
+                    "Test Site", true, 45, now, now
             );
         } catch (Exception e) {
             throw new RuntimeException("Failed to create Site for testing", e);

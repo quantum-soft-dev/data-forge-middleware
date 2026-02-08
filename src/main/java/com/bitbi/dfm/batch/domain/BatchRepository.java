@@ -22,6 +22,8 @@ public interface BatchRepository {
 
     List<Batch> findExpiredBatches(LocalDateTime cutoffTime);
 
+    List<Batch> findCleanupCandidatesForSite(UUID siteId, LocalDateTime cutoffTime, int limit);
+
     Page<Batch> findBySiteIdAndStatus(UUID siteId, BatchStatus status, Pageable pageable);
 
     Batch save(Batch batch);

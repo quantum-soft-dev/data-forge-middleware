@@ -74,6 +74,7 @@ export const SITES_USER_DEACTIVATE = (id: string) => `${SITES_USER}/${id}/deacti
 export const SITES = `${ADMIN_API_BASE}/sites`;
 export const SITES_ID = (id: string) => `${SITES}/${id}`;
 export const SITES_STATISTICS = (id: string) => `${SITES}/${id}/statistics`;
+export const SITES_RETENTION = (id: string) => `${SITES}/${id}/retention`;
 export const SITES_BY_ACCOUNT = (accountId: string) => `${ACCOUNTS}/${accountId}/sites`;
 export const SITES_CREATE = (accountId: string) => `${ACCOUNTS}/${accountId}/sites`;
 export const SITES_ACTIVATE = (accountId: string, siteId: string) => `${ACCOUNTS}/${accountId}/sites/${siteId}/activate`;
@@ -83,6 +84,7 @@ export const SITES_DELETE_BY_ACCOUNT = (accountId: string, siteId: string) => `$
 // Batches (Admin)
 export const BATCHES_ADMIN = `${ADMIN_API_BASE}/batches`;
 export const BATCHES_ADMIN_ID = (id: string) => `${BATCHES_ADMIN}/${id}`;
+export const BATCHES_ADMIN_CLEANUP = `${BATCHES_ADMIN}/cleanup`;
 
 // History (User-facing)
 export const HISTORY = `${ADMIN_API_BASE}/history`;

@@ -25,6 +25,8 @@ public interface SiteRepository {
 
     List<Site> findActiveByAccountId(UUID accountId);
 
+    List<Site> findAll();
+
     List<Site> findByAccountIdAndIsActiveTrueOrderByCreatedAtDesc(UUID accountId);
 
     Optional<Site> findByIdAndAccountId(UUID siteId, UUID accountId);

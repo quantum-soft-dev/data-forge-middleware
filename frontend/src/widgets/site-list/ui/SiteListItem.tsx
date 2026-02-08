@@ -10,7 +10,7 @@
  * Feature: 007-adding-a-site (T036, US1, US2, US3)
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/shared/ui/ui/button';
 import { Badge } from '@/shared/ui/ui/badge';
 import {
@@ -33,6 +33,8 @@ interface SiteListItemProps {
   onActivate?: (siteId: string) => void;
   onDeactivate?: (siteId: string) => void;
   onDelete?: (siteId: string) => void;
+  onUpdateRetention?: (siteId: string, retentionDays: number) => void;
+  showRetentionControls?: boolean;
   isLoading?: boolean;
 }
 
@@ -41,10 +43,17 @@ export function SiteListItem({
   onActivate,
   onDeactivate,
   onDelete,
+  onUpdateRetention,
+  showRetentionControls = false,
   isLoading = false,
 }: SiteListItemProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
+  const [retentionInput, setRetentionInput] = useState(String(site.retentionDays));
+
+  useEffect(() => {
+    setRetentionInput(String(site.retentionDays));
+  }, [site.retentionDays]);
 
   const handleStatusToggle = () => {
     if (site.isActive) {
@@ -62,6 +71,13 @@ export function SiteListItem({
   const handleDelete = () => {
     onDelete?.(site.id);
     setShowDeleteDialog(false);
+  };
+
+  const handleRetentionSave = () => {
+    if (!onUpdateRetention) return;
+    const parsedRetention = Number(retentionInput);
+    if (!Number.isFinite(parsedRetention) || parsedRetention <= 0) return;
+    onUpdateRetention(site.id, parsedRetention);
   };
 
   return (
@@ -91,6 +107,33 @@ export function SiteListItem({
               <p className="text-xs text-muted-foreground mt-1">
                 Created {format(new Date(site.createdAt), 'PPP')}
               </p>
+              {showRetentionControls && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Retention (days):</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={3650}
+                    className="h-7 w-20 rounded border border-gray-200 px-2 text-xs text-gray-900"
+                    value={retentionInput}
+                    onChange={(event) => setRetentionInput(event.target.value)}
+                    disabled={isLoading}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRetentionSave}
+                    disabled={
+                      isLoading ||
+                      !Number.isFinite(Number(retentionInput)) ||
+                      Number(retentionInput) <= 0 ||
+                      Number(retentionInput) === site.retentionDays
+                    }
+                  >
+                    Save
+                  </Button>
+                </div>
+              )}
             </div>
 
             {/* Actions */}

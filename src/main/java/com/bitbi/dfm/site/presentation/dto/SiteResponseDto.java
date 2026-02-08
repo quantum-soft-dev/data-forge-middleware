@@ -23,6 +23,7 @@ import java.util.UUID;
  * @param domain Site domain name (display format, without accountId prefix)
  * @param name Site display name
  * @param isActive Active status
+ * @param retentionDays Retention period in days for batch cleanup
  * @param createdAt Creation timestamp
  */
 public record SiteResponseDto(
@@ -31,6 +32,7 @@ public record SiteResponseDto(
     String domain,
     String name,
     Boolean isActive,
+    Integer retentionDays,
     Instant createdAt
 ) {
 
@@ -53,6 +55,7 @@ public record SiteResponseDto(
             site.getDisplayDomain(), // Use display domain without accountId prefix
             site.getDisplayName(),
             site.getIsActive(),
+            site.getRetentionDays(),
             site.getCreatedAt().toInstant(ZoneOffset.UTC)
         );
     }

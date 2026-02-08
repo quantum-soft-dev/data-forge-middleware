@@ -28,6 +28,8 @@ public class Site {
      * UUID is 36 characters + underscore (1 character) = 37 characters total.
      */
     private static final int COMPOSITE_DOMAIN_PREFIX_LENGTH = 37;
+    private static final int DEFAULT_RETENTION_DAYS = 45;
+    private static final int MAX_RETENTION_DAYS = 3650; // 10 years
 
     @Id
     @Column(name = "id", updatable = false, nullable = false)
@@ -48,6 +50,9 @@ public class Site {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
+    @Column(name = "retention_days", nullable = false)
+    private Integer retentionDays;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -55,13 +60,15 @@ public class Site {
     private LocalDateTime updatedAt;
 
     protected Site(UUID id, UUID accountId, String domain, String clientSecretHash,
-                   String displayName, Boolean isActive, LocalDateTime createdAt, LocalDateTime updatedAt) {
+                   String displayName, Boolean isActive, Integer retentionDays,
+                   LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.accountId = accountId;
         this.domain = domain;
         this.clientSecretHash = clientSecretHash;
         this.displayName = displayName;
         this.isActive = isActive;
+        this.retentionDays = retentionDays;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -86,7 +93,7 @@ public class Site {
         LocalDateTime now = LocalDateTime.now();
 
         return new Site(id, accountId, domain.toLowerCase().trim(), clientSecretHash,
-                displayName.trim(), true, now, now);
+                displayName.trim(), true, DEFAULT_RETENTION_DAYS, now, now);
     }
 
     /**
@@ -110,6 +117,14 @@ public class Site {
             throw new IllegalArgumentException("DisplayName cannot be blank");
         }
         this.displayName = newDisplayName.trim();
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void updateRetentionDays(int retentionDays) {
+        if (retentionDays <= 0 || retentionDays > MAX_RETENTION_DAYS) {
+            throw new IllegalArgumentException("Retention days must be between 1 and " + MAX_RETENTION_DAYS);
+        }
+        this.retentionDays = retentionDays;
         this.updatedAt = LocalDateTime.now();
     }
 

@@ -24,4 +24,5 @@ export {
   deactivateAdminSite,
   activateAdminSite,
   deleteAdminSite,
+  updateAdminSiteRetention,
 } from './api/siteApi';
