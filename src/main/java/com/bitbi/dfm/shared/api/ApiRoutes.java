@@ -458,6 +458,24 @@ public final class ApiRoutes {
      */
     public static final String BATCHES_CLEANUP = BATCHES_ADMIN + "/cleanup";
 
+    // Settings (Admin)
+    /**
+     * Base path for admin-managed runtime settings.
+     * <p>
+     * Requires: ROLE_ADMIN (Auth0)
+     * </p>
+     */
+    public static final String ADMIN_SETTINGS = ADMIN_API_BASE + "/admin/settings";
+
+    /**
+     * Batch retention cleanup scheduler settings.
+     * <p>
+     * Methods: GET, PUT<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)
+     * </p>
+     */
+    public static final String SETTINGS_BATCH_RETENTION_SCHEDULE = ADMIN_SETTINGS + "/batch-retention-schedule";
+
     // History (User-facing)
     /**
      * Base path for upload history endpoints.

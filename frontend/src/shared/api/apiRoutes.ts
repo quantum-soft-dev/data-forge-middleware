@@ -113,6 +113,10 @@ export const ADMIN_PLUGINS = `${ADMIN_API_BASE}/admin/plugins`;
 export const ADMIN_PLUGINS_AUDIT = `${ADMIN_PLUGINS}/audit`;
 export const ADMIN_PLUGINS_AUDIT_BY_PLUGIN = (pluginId: string) => `${ADMIN_PLUGINS}/${pluginId}/audit`;
 
+// Admin Settings
+export const ADMIN_SETTINGS = `${ADMIN_API_BASE}/admin/settings`;
+export const SETTINGS_BATCH_RETENTION_SCHEDULE = `${ADMIN_SETTINGS}/batch-retention-schedule`;
+
 // Account Plugins (User-facing)
 export const ACCOUNT_PLUGINS = `${ADMIN_API_BASE}/account/plugins`;
 export const ACCOUNT_PLUGIN_LOGS = (pluginId: string) => `${ACCOUNT_PLUGINS}/${pluginId}/logs`;
