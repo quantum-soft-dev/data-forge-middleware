@@ -33,17 +33,19 @@ describe('SiteManagementPage', () => {
     {
       id: '1',
       accountId: 'account-1',
-      domain: 'example.com',
+      siteName: 'example.com',
       name: 'Example Site',
       isActive: true,
+      retentionDays: 45,
       createdAt: '2024-01-01T00:00:00Z',
     },
     {
       id: '2',
       accountId: 'account-1',
-      domain: 'test.com',
+      siteName: 'test.com',
       name: 'Test Site',
       isActive: false,
+      retentionDays: 45,
       createdAt: '2024-01-02T00:00:00Z',
     },
   ];
@@ -168,11 +170,11 @@ describe('SiteManagementPage', () => {
       vi.mocked(siteApi.listUserSites).mockResolvedValue([mockSites[0]]);
 
       // Fill in the form
-      const domainInput = screen.getByLabelText(/domain/i);
+      const siteNameInput = screen.getByLabelText(/site name/i);
       const displayNameInput = screen.getByLabelText(/display name/i);
       const submitButton = screen.getByRole('button', { name: /create site/i });
 
-      await user.type(domainInput, 'example.com');
+      await user.type(siteNameInput, 'example.com');
       await user.type(displayNameInput, 'Example Site');
       await user.click(submitButton);
 
@@ -181,8 +183,8 @@ describe('SiteManagementPage', () => {
       await waitFor(() => {
         const siteElements = screen.getAllByText('Example Site');
         expect(siteElements.length).toBeGreaterThan(0);
-        const domainElements = screen.getAllByText('example.com');
-        expect(domainElements.length).toBeGreaterThan(0);
+        const siteNameElements = screen.getAllByText('example.com');
+        expect(siteNameElements.length).toBeGreaterThan(0);
       });
     });
 
@@ -198,11 +200,11 @@ describe('SiteManagementPage', () => {
       renderPage();
 
       // Fill in the form without password
-      const domainInput = screen.getByLabelText(/domain/i);
+      const siteNameInput = screen.getByLabelText(/site name/i);
       const displayNameInput = screen.getByLabelText(/display name/i);
       const submitButton = screen.getByRole('button', { name: /create site/i });
 
-      await user.type(domainInput, 'example.com');
+      await user.type(siteNameInput, 'example.com');
       await user.type(displayNameInput, 'Example Site');
       await user.click(submitButton);
 
