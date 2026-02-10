@@ -295,7 +295,7 @@ class SqlGenerationServiceTest {
             when(sqlStatementGenerator.generate(any(), anyString(), any()))
                     .thenReturn("INSERT INTO good_data (id, name) VALUES ('1', 'Alice');\n");
 
-            when(s3SqlFileStorageService.storeSqlFile(any(), anyString(), anyString()))
+            when(s3SqlFileStorageService.storeSqlFile(any(), any(), anyString()))
                     .thenReturn("plugins/bit-bi/test.sql");
             when(s3SqlFileStorageService.getFileSize(anyString())).thenReturn(100L);
 
@@ -309,7 +309,7 @@ class SqlGenerationServiceTest {
             // Then - should succeed with the good file, skipping the bad one
             assertThat(result).isPresent();
             // The good file should still be processed
-            verify(s3SqlFileStorageService).storeSqlFile(any(), anyString(), anyString());
+            verify(s3SqlFileStorageService).storeSqlFile(any(), any(), anyString());
             // Verify the skipped file metric was incremented
             assertThat(realRegistry.counter("sql.generation.files.skipped.invalid_headers").count()).isEqualTo(1.0);
         }

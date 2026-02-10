@@ -29,7 +29,7 @@ class SiteResponseDtoTest {
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(id);
         when(site.getAccountId()).thenReturn(accountId);
-        when(site.getDisplayDomain()).thenReturn("example.com"); // Use getDisplayDomain() per FR-019
+        when(site.getSiteName()).thenReturn("example.com");
         when(site.getDisplayName()).thenReturn("Example Site");
         when(site.getIsActive()).thenReturn(true);
         when(site.getRetentionDays()).thenReturn(45);
@@ -42,7 +42,7 @@ class SiteResponseDtoTest {
         assertNotNull(dto);
         assertEquals(id, dto.id());
         assertEquals(accountId, dto.accountId());
-        assertEquals("example.com", dto.domain()); // domain field shows display format only
+        assertEquals("example.com", dto.siteName());
         assertEquals("Example Site", dto.name());
         assertEquals(true, dto.isActive());
         assertEquals(45, dto.retentionDays());
@@ -56,7 +56,7 @@ class SiteResponseDtoTest {
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(UUID.randomUUID());
         when(site.getAccountId()).thenReturn(UUID.randomUUID());
-        when(site.getDisplayDomain()).thenReturn("secure.example.com"); // Use getDisplayDomain() per FR-019
+        when(site.getSiteName()).thenReturn("secure.example.com");
         when(site.getDisplayName()).thenReturn("Secure Site");
         when(site.getIsActive()).thenReturn(true);
         when(site.getRetentionDays()).thenReturn(30);
@@ -74,7 +74,7 @@ class SiteResponseDtoTest {
         assertDoesNotThrow(() -> {
             dto.id();
             dto.accountId();
-            dto.domain();
+            dto.siteName();
             dto.name();
             dto.isActive();
             dto.retentionDays();

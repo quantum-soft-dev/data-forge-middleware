@@ -90,7 +90,7 @@ public class SiteUserController {
         try {
             // Get authenticated account ID from JWT
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
-            logger.info("Creating site for account: accountId={}, domain={}", accountId, request.domain());
+            logger.info("Creating site for account: accountId={}, siteName={}", accountId, request.siteName());
 
             // Use provided password or generate if null/empty
             String password = (request.password() == null || request.password().isBlank())
@@ -100,7 +100,7 @@ public class SiteUserController {
             // Create site with password
             SiteService.SiteCreationResult result = siteService.createSite(
                     accountId,
-                    request.domain(),
+                    request.siteName(),
                     request.displayName(),
                     password
             );
@@ -108,7 +108,7 @@ public class SiteUserController {
             // Build response with site and plaintext password
             UserSiteCreationResponseDto response = UserSiteCreationResponseDto.fromCreationResult(result);
 
-            logger.info("Site created successfully: siteId={}, domain={}", result.site().getId(), request.domain());
+            logger.info("Site created successfully: siteId={}, siteName={}", result.site().getId(), request.siteName());
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
         } catch (AuthorizationHelper.UnauthorizedException e) {

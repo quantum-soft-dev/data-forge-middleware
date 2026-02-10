@@ -38,14 +38,14 @@ class JwtTokenProviderTest {
     @DisplayName("Should generate valid JWT token with correct claims")
     void shouldGenerateValidJwtTokenWithCorrectClaims() {
         // When
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // Then
         assertNotNull(token);
         assertNotNull(token.token());
         assertEquals(testSiteId, token.siteId());
         assertEquals(testAccountId, token.accountId());
-        assertEquals(testDomain, token.domain());
+        assertNull(token.domain()); // Auth V2: domain is not included
         assertEquals(TEST_EXPIRATION, token.getExpirationDuration());
     }
 
@@ -53,7 +53,7 @@ class JwtTokenProviderTest {
     @DisplayName("Should validate token and extract claims")
     void shouldValidateTokenAndExtractClaims() {
         // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // When
         Claims claims = jwtTokenProvider.validateToken(token.token());
@@ -63,14 +63,14 @@ class JwtTokenProviderTest {
         assertEquals(testSiteId.toString(), claims.getSubject());
         assertEquals(testSiteId.toString(), claims.get("siteId", String.class));
         assertEquals(testAccountId.toString(), claims.get("accountId", String.class));
-        assertEquals(testDomain, claims.get("domain", String.class));
+        assertNull(claims.get("domain", String.class)); // Auth V2: domain not in token
     }
 
     @Test
     @DisplayName("Should extract site ID from valid token")
     void shouldExtractSiteIdFromValidToken() {
         // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // When
         UUID extractedSiteId = jwtTokenProvider.extractSiteId(token.token());
@@ -83,7 +83,7 @@ class JwtTokenProviderTest {
     @DisplayName("Should extract account ID from valid token")
     void shouldExtractAccountIdFromValidToken() {
         // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // When
         UUID extractedAccountId = jwtTokenProvider.extractAccountId(token.token());
@@ -93,10 +93,10 @@ class JwtTokenProviderTest {
     }
 
     @Test
-    @DisplayName("Should extract domain from valid token")
-    void shouldExtractDomainFromValidToken() {
-        // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+    @DisplayName("Should extract domain from legacy token with domain")
+    void shouldExtractDomainFromLegacyToken() {
+        // Given - use deprecated method that includes domain in token
+        JwtToken token = jwtTokenProvider.generateTokenWithDomain(testSiteId, testAccountId, testDomain);
 
         // When
         String extractedDomain = jwtTokenProvider.extractDomain(token.token());
@@ -145,7 +145,7 @@ class JwtTokenProviderTest {
     @DisplayName("Should return false for non-expired token")
     void shouldReturnFalseForNonExpiredToken() {
         // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // When
         boolean isExpired = jwtTokenProvider.isExpired(token.token());
@@ -174,8 +174,8 @@ class JwtTokenProviderTest {
         UUID siteId2 = UUID.randomUUID();
 
         // When
-        JwtToken token1 = jwtTokenProvider.generateToken(siteId1, testAccountId, testDomain);
-        JwtToken token2 = jwtTokenProvider.generateToken(siteId2, testAccountId, testDomain);
+        JwtToken token1 = jwtTokenProvider.generateToken(siteId1, testAccountId);
+        JwtToken token2 = jwtTokenProvider.generateToken(siteId2, testAccountId);
 
         // Then
         assertNotEquals(token1.token(), token2.token());
@@ -185,7 +185,7 @@ class JwtTokenProviderTest {
     @DisplayName("Should include issued at timestamp in token")
     void shouldIncludeIssuedAtTimestampInToken() {
         // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // When
         Claims claims = jwtTokenProvider.validateToken(token.token());
@@ -198,7 +198,7 @@ class JwtTokenProviderTest {
     @DisplayName("Should include expiration timestamp in token")
     void shouldIncludeExpirationTimestampInToken() {
         // Given
-        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = jwtTokenProvider.generateToken(testSiteId, testAccountId);
 
         // When
         Claims claims = jwtTokenProvider.validateToken(token.token());
@@ -231,7 +231,7 @@ class JwtTokenProviderTest {
         JwtTokenProvider customProvider = new JwtTokenProvider(TEST_SECRET, customExpiration);
 
         // When
-        JwtToken token = customProvider.generateToken(testSiteId, testAccountId, testDomain);
+        JwtToken token = customProvider.generateToken(testSiteId, testAccountId);
 
         // Then
         assertEquals(customExpiration, token.getExpirationDuration());

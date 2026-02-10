@@ -25,17 +25,19 @@ describe('useUpdateSiteStatus', () => {
     {
       id: 'site-1',
       accountId: 'account-1',
-      domain: 'example.com',
-      displayName: 'Example Site',
+      siteName: 'example.com',
+      name: 'Example Site',
       isActive: true,
+      retentionDays: 45,
       createdAt: '2024-01-01T00:00:00Z',
     },
     {
       id: 'site-2',
       accountId: 'account-1',
-      domain: 'test.com',
-      displayName: 'Test Site',
+      siteName: 'test.com',
+      name: 'Test Site',
       isActive: false,
+      retentionDays: 45,
       createdAt: '2024-01-02T00:00:00Z',
     },
   ];

@@ -78,7 +78,7 @@ public record GlobalErrorResponseDto(
         return new GlobalErrorResponseDto(
                 errorLog.getId(),
                 errorLog.getSiteId(),
-                site != null ? site.getDomain() : "Unknown",
+                site != null ? site.getSiteName() : "Unknown",
                 errorLog.getType(),
                 errorLog.getTitle(),
                 errorLog.getMessage(),

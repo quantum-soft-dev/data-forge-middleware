@@ -39,14 +39,36 @@ public class JwtTokenProvider {
     }
 
     /**
-     * Generate JWT token for site authentication.
+     * Generate JWT token for site authentication (Auth V2 - no domain claim).
+     *
+     * @param siteId    site identifier
+     * @param accountId account identifier
+     * @return JWT token with claims
+     */
+    public JwtToken generateToken(UUID siteId, UUID accountId) {
+        String tokenString = Jwts.builder()
+                .subject(siteId.toString())
+                .claim("siteId", siteId.toString())
+                .claim("accountId", accountId.toString())
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + expirationSeconds * 1000))
+                .signWith(secretKey, Jwts.SIG.HS256)
+                .compact();
+
+        return JwtToken.create(tokenString, siteId, accountId, expirationSeconds);
+    }
+
+    /**
+     * Generate JWT token for site authentication (legacy with domain).
      *
      * @param siteId    site identifier
      * @param accountId account identifier
      * @param domain    site domain name
      * @return JWT token with claims
+     * @deprecated Use {@link #generateToken(UUID, UUID)} instead
      */
-    public JwtToken generateToken(UUID siteId, UUID accountId, String domain) {
+    @Deprecated
+    public JwtToken generateTokenWithDomain(UUID siteId, UUID accountId, String domain) {
         String tokenString = Jwts.builder()
                 .subject(siteId.toString())
                 .claim("siteId", siteId.toString())
@@ -57,7 +79,7 @@ public class JwtTokenProvider {
                 .signWith(secretKey, Jwts.SIG.HS256)
                 .compact();
 
-        return JwtToken.create(tokenString, siteId, accountId, domain, expirationSeconds);
+        return JwtToken.createWithDomain(tokenString, siteId, accountId, domain, expirationSeconds);
     }
 
     /**

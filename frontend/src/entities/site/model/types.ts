@@ -11,7 +11,7 @@
  *
  * @property id - Unique site identifier
  * @property accountId - Account this site belongs to
- * @property domain - Site domain name for display (e.g., "example.com", without accountId prefix)
+ * @property siteName - Site name (unique within account, unicode allowed)
  * @property name - Display name for the site
  * @property isActive - Activation status (true = active, false = inactive/deleted)
  * @property retentionDays - Retention period in days for batch cleanup
@@ -20,7 +20,7 @@
 export interface Site {
   id: string;
   accountId: string;
-  domain: string; // Display domain only (FR-019)
+  siteName: string;
   name: string;
   isActive: boolean;
   retentionDays: number;
@@ -30,27 +30,25 @@ export interface Site {
 /**
  * Request payload for creating a new site.
  *
- * @property domain - Site domain (3-255 chars, alphanumeric + dots/hyphens)
+ * @property siteName - Site name (1-255 chars, unicode allowed)
  * @property displayName - Human-readable site name (2-100 chars)
- * @property password - Site password (8+ chars, alphanumeric, optional - will be auto-generated if not provided)
+ * @property password - Site password (8+ chars, optional - will be auto-generated if not provided)
  */
 export interface CreateSiteRequest {
-  domain: string;
+  siteName: string;
   displayName: string;
   password?: string;
 }
 
 /**
- * Response from site creation endpoint.
+ * Response from site creation endpoint (Auth V2).
  *
- * @property site - Created site entity (domain is display format)
+ * @property site - Created site entity
  * @property password - Plaintext password (only returned once at creation)
- * @property siteIdentifier - Full site identifier for Basic Auth (accountId_domain format, FR-019)
  */
 export interface CreateSiteResponse {
   site: Site;
   password: string;
-  siteIdentifier: string; // accountId_domain for Basic Auth
 }
 
 /**

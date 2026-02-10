@@ -43,12 +43,12 @@ public class S3SqlFileStorageService {
      * Stores generated SQL content in S3.
      *
      * @param accountId The account ID
-     * @param siteName The site name (used in path)
+     * @param siteId    The site ID (used in path, Auth V2)
      * @param sqlContent The SQL content to store
      * @return The S3 key where the file was stored
      */
-    public String storeSqlFile(UUID accountId, String siteName, String sqlContent) {
-        String s3Key = generateS3Key(accountId, siteName);
+    public String storeSqlFile(UUID accountId, UUID siteId, String sqlContent) {
+        String s3Key = generateS3Key(accountId, siteId);
         byte[] contentBytes = sqlContent.getBytes(StandardCharsets.UTF_8);
 
         log.debug("Storing SQL file to S3: bucket={}, key={}, size={}",
@@ -222,24 +222,13 @@ public class S3SqlFileStorageService {
     }
 
     /**
-     * Generates S3 key for SQL file.
-     * Format: plugins/bit-bi/{accountId}/{siteName}/{datetime}.sql
+     * Generates S3 key for SQL file (Auth V2).
+     * Format: plugins/bit-bi/{accountId}/{siteId}/{datetime}.sql
      */
-    private String generateS3Key(UUID accountId, String siteName) {
+    private String generateS3Key(UUID accountId, UUID siteId) {
         String datetime = LocalDateTime.now().format(PATH_DATETIME_FORMATTER);
         return String.format("plugins/bit-bi/%s/%s/%s.sql",
-                accountId, sanitizeSiteName(siteName), datetime);
-    }
-
-    /**
-     * Sanitizes site name for use in S3 key.
-     * Replaces problematic characters with hyphens.
-     */
-    private String sanitizeSiteName(String siteName) {
-        if (siteName == null || siteName.isEmpty()) {
-            return "unknown-site";
-        }
-        return siteName.replaceAll("[^a-zA-Z0-9.-]", "-").toLowerCase();
+                accountId, siteId, datetime);
     }
 
     /**

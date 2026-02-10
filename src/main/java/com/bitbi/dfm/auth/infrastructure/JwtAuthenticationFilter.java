@@ -82,13 +82,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // Validate token and get site ID
             UUID siteId = tokenService.validateToken(token);
             UUID accountId = tokenService.extractAccountId(token);
-            String domain = tokenService.extractDomain(token);
 
             // Create authentication object with site ID as principal
             JwtAuthenticationToken authentication = new JwtAuthenticationToken(
                     siteId,
                     accountId,
-                    domain,
                     Collections.singletonList(new SimpleGrantedAuthority("ROLE_CLIENT"))
             );
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
@@ -96,7 +94,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // Set authentication in security context
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
-            logger.debug("JWT authentication successful: siteId={}, accountId={}, domain={}", siteId, accountId, domain);
+            logger.debug("JWT authentication successful: siteId={}, accountId={}", siteId, accountId);
 
         } catch (TokenService.InvalidTokenException e) {
             logger.warn("JWT token validation failed for path {}: {}", path, e.getMessage());
@@ -109,21 +107,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     /**
      * Custom authentication token for JWT-authenticated requests.
      * <p>
-     * Stores siteId, accountId, and domain for authorization checks.
+     * Stores siteId and accountId for authorization checks.
      * Token is pre-authenticated (created with authorities in constructor).
      * </p>
      */
     public static class JwtAuthenticationToken extends UsernamePasswordAuthenticationToken {
         private final UUID siteId;
         private final UUID accountId;
-        private final String domain;
 
-        public JwtAuthenticationToken(UUID siteId, UUID accountId, String domain, java.util.List<SimpleGrantedAuthority> authorities) {
+        public JwtAuthenticationToken(UUID siteId, UUID accountId, java.util.List<SimpleGrantedAuthority> authorities) {
             // Use constructor that accepts authorities - this automatically sets authenticated=true
             super(siteId, null, authorities);
             this.siteId = siteId;
             this.accountId = accountId;
-            this.domain = domain;
             // Do NOT call setAuthenticated(true) - already handled by super constructor
         }
 
@@ -133,10 +129,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         public UUID getAccountId() {
             return accountId;
-        }
-
-        public String getDomain() {
-            return domain;
         }
     }
 }

@@ -67,8 +67,8 @@ public class BatchLifecycleService {
      * @throws ActiveBatchExistsException   if site has active batch
      * @throws ConcurrentBatchLimitException if account exceeded concurrent batch limit
      */
-    public Batch startBatch(UUID accountId, UUID siteId, String domain) {
-        logger.info("Starting new batch: accountId={}, siteId={}, domain={}", accountId, siteId, domain);
+    public Batch startBatch(UUID accountId, UUID siteId) {
+        logger.info("Starting new batch: accountId={}, siteId={}", accountId, siteId);
 
         // Validate site is active
         Site site = siteRepository.findById(siteId)
@@ -93,7 +93,7 @@ public class BatchLifecycleService {
                     "Account exceeded concurrent batch limit: " + activeBatchCount + "/" + maxConcurrentBatches);
         }
 
-        Batch batch = Batch.start(accountId, siteId, domain);
+        Batch batch = Batch.start(accountId, siteId);
         Batch saved = batchRepository.save(batch);
 
         // Publish domain event

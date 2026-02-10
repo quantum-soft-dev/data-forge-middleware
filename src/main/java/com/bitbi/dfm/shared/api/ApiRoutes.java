@@ -47,6 +47,16 @@ public final class ApiRoutes {
      */
     public static final String DEVICE_AUTH_TOKEN = DEVICE_AUTH + "/token";
 
+    /**
+     * Device token refresh endpoint (Auth V2).
+     * <p>
+     * POST /api/v1/device/auth/refresh<br>
+     * Authentication: None (refresh token is the credential)<br>
+     * Returns: New JWT access token + rotated refresh token
+     * </p>
+     */
+    public static final String DEVICE_AUTH_REFRESH = DEVICE_AUTH + "/refresh";
+
     // Device Batches
     /**
      * Base path for device batch management endpoints.

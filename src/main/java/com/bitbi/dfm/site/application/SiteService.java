@@ -67,26 +67,24 @@ public class SiteService {
      * @return SiteCreationResult with site and plaintext clientSecret (only shown once)
      * @throws SiteAlreadyExistsException if domain already exists
      */
-    public SiteCreationResult createSite(UUID accountId, String domain, String displayName) {
-        logger.info("Creating new site: accountId={}, domain={}, displayName={}", accountId, domain, displayName);
+    public SiteCreationResult createSite(UUID accountId, String siteName, String displayName) {
+        logger.info("Creating new site: accountId={}, siteName={}, displayName={}", accountId, siteName, displayName);
 
-        // Create composite domain: accountId_domain (FR-019)
-        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+        String cleanSiteName = siteName.toLowerCase().trim();
 
-        if (siteRepository.findByDomain(compositeDomain).isPresent()) {
-            throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
+        // Check uniqueness by (accountId, siteName)
+        if (siteRepository.findByAccountIdAndSiteName(accountId, cleanSiteName).isPresent()) {
+            throw new SiteAlreadyExistsException("Site with name already exists: " + siteName);
         }
 
-        // Generate plaintext secret and bcrypt hash
-        String[] secretPair = SiteCredentials.generateWithHash(compositeDomain);
-        String plaintextSecret = secretPair[0];
-        String hashedSecret = secretPair[1];
+        // Create composite domain for backward compatibility
+        String compositeDomain = accountId.toString() + "_" + cleanSiteName;
 
-        Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
+        Site site = Site.create(accountId, compositeDomain, cleanSiteName, displayName, null);
         Site saved = siteRepository.save(site);
 
-        logger.info("Site created successfully: id={}, compositeDomain={}", saved.getId(), saved.getDomain());
-        return new SiteCreationResult(saved, plaintextSecret);
+        logger.info("Site created successfully: id={}, siteName={}", saved.getId(), saved.getSiteName());
+        return new SiteCreationResult(saved, null);
     }
 
     /**
@@ -100,31 +98,33 @@ public class SiteService {
      * @throws SiteAlreadyExistsException if domain already exists
      * @throws IllegalArgumentException if password is invalid
      */
-    public SiteCreationResult createSite(UUID accountId, String domain, String displayName, String password) {
-        logger.info("Creating new site with custom password: accountId={}, domain={}, displayName={}",
-                    accountId, domain, displayName);
+    public SiteCreationResult createSite(UUID accountId, String siteName, String displayName, String password) {
+        logger.info("Creating new site with custom password: accountId={}, siteName={}, displayName={}",
+                    accountId, siteName, displayName);
 
         if (password == null || password.length() < 8) {
             throw new IllegalArgumentException("Password must be at least 8 characters");
         }
 
-        // Create composite domain: accountId_domain (FR-019)
-        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+        String cleanSiteName = siteName.toLowerCase().trim();
 
-        if (siteRepository.findByDomain(compositeDomain).isPresent()) {
-            throw new SiteAlreadyExistsException("Site with domain already exists: " + domain);
+        if (siteRepository.findByAccountIdAndSiteName(accountId, cleanSiteName).isPresent()) {
+            throw new SiteAlreadyExistsException("Site with name already exists: " + siteName);
         }
 
         // Hash the provided password
         String[] secretPair = SiteCredentials.hashPassword(password);
         String hashedSecret = secretPair[1];
 
-        Site site = Site.create(accountId, compositeDomain, displayName, hashedSecret);
+        // Create composite domain for backward compatibility
+        String compositeDomain = accountId.toString() + "_" + cleanSiteName;
+
+        Site site = Site.create(accountId, compositeDomain, cleanSiteName, displayName, hashedSecret);
         Site saved = siteRepository.save(site);
 
-        logger.info("Site created successfully with custom password: id={}, compositeDomain={}",
-                    saved.getId(), saved.getDomain());
-        return new SiteCreationResult(saved, password); // Return original password
+        logger.info("Site created successfully with custom password: id={}, siteName={}",
+                    saved.getId(), saved.getSiteName());
+        return new SiteCreationResult(saved, password);
     }
 
     /**
@@ -149,13 +149,20 @@ public class SiteService {
      * @param displayName site display name
      * @return SiteCreationResult with site and new plaintext clientSecret
      */
-    public SiteCreationResult getOrCreateSiteWithNewCredentials(UUID accountId, String domain, String displayName) {
-        logger.info("GetOrCreate site with new credentials: accountId={}, domain={}", accountId, domain);
+    /**
+     * Get existing site or create new one (Auth V2 - no credential generation).
+     * <p>
+     * Used by Device Flow when user approves authorization:
+     * - If site exists: Reactivate if needed, return existing site
+     * - If site doesn't exist: Create new site
+     * </p>
+     */
+    public SiteCreationResult getOrCreateSite(UUID accountId, String siteName, String displayName) {
+        logger.info("GetOrCreate site: accountId={}, siteName={}", accountId, siteName);
 
-        // Create composite domain: accountId_domain (FR-019)
-        String compositeDomain = accountId.toString() + "_" + domain.toLowerCase().trim();
+        String cleanSiteName = siteName.toLowerCase().trim();
 
-        java.util.Optional<Site> existingSite = siteRepository.findByDomain(compositeDomain);
+        java.util.Optional<Site> existingSite = siteRepository.findByAccountIdAndSiteName(accountId, cleanSiteName);
 
         if (existingSite.isPresent()) {
             Site site = existingSite.get();
@@ -166,21 +173,22 @@ public class SiteService {
                 logger.info("Reactivated deactivated site: siteId={}", site.getId());
             }
 
-            // Generate new credentials
-            String[] secretPair = SiteCredentials.generateWithHash(compositeDomain);
-            String plaintextSecret = secretPair[0];
-            String hashedSecret = secretPair[1];
-
-            site.updateClientSecretHash(hashedSecret);
             Site saved = siteRepository.save(site);
 
-            logger.info("Regenerated credentials for existing site: siteId={}, domain={}",
-                        saved.getId(), saved.getDomain());
-            return new SiteCreationResult(saved, plaintextSecret);
+            logger.info("Found existing site: siteId={}, siteName={}", saved.getId(), saved.getSiteName());
+            return new SiteCreationResult(saved, null);
         }
 
         // Site doesn't exist - create new one
-        return createSite(accountId, domain, displayName);
+        return createSite(accountId, siteName, displayName);
+    }
+
+    /**
+     * @deprecated Use {@link #getOrCreateSite(UUID, String, String)} instead
+     */
+    @Deprecated
+    public SiteCreationResult getOrCreateSiteWithNewCredentials(UUID accountId, String domain, String displayName) {
+        return getOrCreateSite(accountId, domain, displayName);
     }
 
     /**
@@ -415,7 +423,7 @@ public class SiteService {
         logger.info("Deleting site record: id={}", siteId);
         siteRepository.deleteById(siteId);
 
-        logger.warn("Site and all associated data permanently deleted: id={}, domain={}", siteId, site.getDomain());
+        logger.warn("Site and all associated data permanently deleted: id={}, siteName={}", siteId, site.getSiteName());
     }
 
     /**

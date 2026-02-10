@@ -41,7 +41,10 @@ public class Site {
     @Column(name = "domain", nullable = false, unique = true, length = 255)
     private String domain;
 
-    @Column(name = "client_secret_hash", nullable = false, length = 60)
+    @Column(name = "site_name", nullable = false, length = 255)
+    private String siteName;
+
+    @Column(name = "client_secret_hash", length = 60)
     private String clientSecretHash;
 
     @Column(name = "display_name", nullable = false, length = 255)
@@ -59,12 +62,13 @@ public class Site {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
-    protected Site(UUID id, UUID accountId, String domain, String clientSecretHash,
+    protected Site(UUID id, UUID accountId, String domain, String siteName, String clientSecretHash,
                    String displayName, Boolean isActive, Integer retentionDays,
                    LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.accountId = accountId;
         this.domain = domain;
+        this.siteName = siteName;
         this.clientSecretHash = clientSecretHash;
         this.displayName = displayName;
         this.isActive = isActive;
@@ -73,27 +77,50 @@ public class Site {
         this.updatedAt = updatedAt;
     }
 
-    public static Site create(UUID accountId, String domain, String displayName, String clientSecretHash) {
+    /**
+     * Create a new site with composite domain (legacy) and siteName.
+     *
+     * @param accountId        account identifier
+     * @param domain           composite domain (accountId_siteName)
+     * @param siteName         clean site name (Unicode allowed)
+     * @param displayName      human-readable display name
+     * @param clientSecretHash bcrypt-hashed client secret (nullable for Auth V2)
+     * @return new Site entity
+     */
+    public static Site create(UUID accountId, String domain, String siteName, String displayName, String clientSecretHash) {
         Objects.requireNonNull(accountId, "AccountId cannot be null");
         Objects.requireNonNull(domain, "Domain cannot be null");
+        Objects.requireNonNull(siteName, "SiteName cannot be null");
         Objects.requireNonNull(displayName, "DisplayName cannot be null");
-        Objects.requireNonNull(clientSecretHash, "ClientSecretHash cannot be null");
 
         if (domain.isBlank()) {
             throw new IllegalArgumentException("Domain cannot be blank");
         }
+        if (siteName.isBlank()) {
+            throw new IllegalArgumentException("SiteName cannot be blank");
+        }
         if (displayName.isBlank()) {
             throw new IllegalArgumentException("DisplayName cannot be blank");
-        }
-        if (clientSecretHash.isBlank()) {
-            throw new IllegalArgumentException("ClientSecretHash cannot be blank");
         }
 
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
 
-        return new Site(id, accountId, domain.toLowerCase().trim(), clientSecretHash,
+        return new Site(id, accountId, domain.toLowerCase().trim(), siteName.trim(), clientSecretHash,
                 displayName.trim(), true, DEFAULT_RETENTION_DAYS, now, now);
+    }
+
+    /**
+     * @deprecated Use {@link #create(UUID, String, String, String, String)} instead.
+     */
+    @Deprecated
+    public static Site create(UUID accountId, String domain, String displayName, String clientSecretHash) {
+        // Extract siteName from composite domain for backward compatibility
+        String siteName = domain;
+        if (domain.length() > COMPOSITE_DOMAIN_PREFIX_LENGTH) {
+            siteName = domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
+        }
+        return create(accountId, domain, siteName, displayName, clientSecretHash);
     }
 
     /**
@@ -108,7 +135,11 @@ public class Site {
     public static Site createForTesting(UUID accountId, String domain, String displayName) {
         String[] secretPair = SiteCredentials.generateWithHash(domain);
         String hashedSecret = secretPair[1]; // Use only hash, discard plaintext
-        return create(accountId, domain, displayName, hashedSecret);
+        String siteName = domain;
+        if (domain.length() > COMPOSITE_DOMAIN_PREFIX_LENGTH) {
+            siteName = domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
+        }
+        return create(accountId, domain, siteName, displayName, hashedSecret);
     }
 
     public void updateDisplayName(String newDisplayName) {
@@ -167,10 +198,16 @@ public class Site {
      * Domain is stored as "uuid_domain" per FR-019.
      *
      * @return display domain without accountId prefix
+     * @deprecated Use {@link #getSiteName()} instead
      */
+    @Deprecated
     public String getDisplayDomain() {
+        if (siteName != null) {
+            return siteName;
+        }
+        // Fallback for legacy data
         if (domain == null || domain.length() <= COMPOSITE_DOMAIN_PREFIX_LENGTH) {
-            return domain; // Fallback for invalid format
+            return domain;
         }
         return domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
     }

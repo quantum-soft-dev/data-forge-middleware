@@ -106,10 +106,10 @@ public class SiteAdminController {
             Authentication authentication,
             HttpServletRequest httpRequest) {
 
-        logger.info("Creating site: accountId={}, domain={}, displayName={}", accountId, request.domain(), request.displayName());
+        logger.info("Creating site: accountId={}, siteName={}, displayName={}", accountId, request.siteName(), request.displayName());
 
         try {
-            SiteService.SiteCreationResult result = siteService.createSite(accountId, request.domain(), request.displayName());
+            SiteService.SiteCreationResult result = siteService.createSite(accountId, request.siteName(), request.displayName());
 
             // Log successful site creation
             logAdminAction(

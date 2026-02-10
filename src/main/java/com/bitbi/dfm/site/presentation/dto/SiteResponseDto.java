@@ -11,16 +11,10 @@ import java.util.UUID;
  *
  * Provides immutable representation of site data for API responses.
  * Excludes clientSecretHash for security.
- * Returns display domain without accountId prefix (FR-019).
- *
- * FR-001: Structured response objects
- * FR-002: Consistent field naming and types
- * FR-003: Complete information preservation (non-sensitive)
- * FR-019: Composite domain stored as accountId_domain, displayed as domain only
  *
  * @param id Unique site identifier
  * @param accountId Account this site belongs to
- * @param domain Site domain name (display format, without accountId prefix)
+ * @param siteName Site name (unique within account)
  * @param name Site display name
  * @param isActive Active status
  * @param retentionDays Retention period in days for batch cleanup
@@ -29,7 +23,7 @@ import java.util.UUID;
 public record SiteResponseDto(
     UUID id,
     UUID accountId,
-    String domain,
+    String siteName,
     String name,
     Boolean isActive,
     Integer retentionDays,
@@ -39,12 +33,6 @@ public record SiteResponseDto(
     /**
      * Convert Site domain entity to SiteResponseDto.
      *
-     * Maps all non-sensitive fields from entity to DTO, converting:
-     * - domain using getDisplayDomain() to strip accountId prefix
-     * - displayName to name
-     * - LocalDateTime timestamp to Instant (UTC)
-     * - Excludes clientSecretHash for security
-     *
      * @param site The domain entity to convert
      * @return SiteResponseDto with all fields mapped
      */
@@ -52,7 +40,7 @@ public record SiteResponseDto(
         return new SiteResponseDto(
             site.getId(),
             site.getAccountId(),
-            site.getDisplayDomain(), // Use display domain without accountId prefix
+            site.getSiteName(),
             site.getDisplayName(),
             site.getIsActive(),
             site.getRetentionDays(),

@@ -1,5 +1,8 @@
 package com.bitbi.dfm.deviceauth.application;
 
+import com.bitbi.dfm.auth.application.RefreshTokenService;
+import com.bitbi.dfm.auth.domain.JwtToken;
+import com.bitbi.dfm.auth.infrastructure.JwtTokenProvider;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorization;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationStatus;
@@ -13,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.UUID;
 
@@ -38,6 +42,8 @@ public class DeviceAuthorizationService {
 
     private final DeviceAuthorizationRepository repository;
     private final SiteService siteService;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final RefreshTokenService refreshTokenService;
 
     @Value("${device-authorization.verification-uri:https://app.dataforge.com/device-verify}")
     private String verificationUri;
@@ -55,9 +61,13 @@ public class DeviceAuthorizationService {
     private String apiBaseUrl;
 
     public DeviceAuthorizationService(DeviceAuthorizationRepository repository,
-                                      SiteService siteService) {
+                                      SiteService siteService,
+                                      JwtTokenProvider jwtTokenProvider,
+                                      RefreshTokenService refreshTokenService) {
         this.repository = repository;
         this.siteService = siteService;
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.refreshTokenService = refreshTokenService;
     }
 
     /**
@@ -115,15 +125,14 @@ public class DeviceAuthorizationService {
     }
 
     /**
-     * Poll for token (device side).
+     * Poll for token (device side) - Auth V2.
      * <p>
-     * Returns credentials if approved, or appropriate error status.
+     * Returns JWT access token + refresh token if approved, or appropriate error status.
      * </p>
      *
      * @param deviceCode the device code
      * @return token result
      */
-    @Transactional(readOnly = true)
     public TokenResult getToken(String deviceCode) {
         logger.debug("Token poll: deviceCode={}", deviceCode.substring(0, 8) + "...");
 
@@ -142,24 +151,46 @@ public class DeviceAuthorizationService {
         // Check status
         return switch (authorization.getStatus()) {
             case PENDING -> TokenResult.authorizationPending();
-            case APPROVED -> TokenResult.success(
-                    authorization.getSiteId(),
-                    authorization.getDomain(),
-                    // Note: We can't return plain secret here - it was hashed
-                    // The secret is stored in a separate field for one-time return
-                    getPlainSecretFromAuthorization(authorization),
-                    apiBaseUrl
-            );
+            case APPROVED -> {
+                UUID siteId = authorization.getSiteId();
+                UUID accountId = authorization.getAccountId();
+                String siteName = authorization.getSiteName();
+
+                // Generate JWT access token
+                JwtToken accessToken = jwtTokenProvider.generateToken(siteId, accountId);
+
+                // Generate refresh token
+                String refreshToken = refreshTokenService.generateRefreshToken(siteId);
+                Instant refreshTokenExpiresAt = Instant.now().plus(90, ChronoUnit.DAYS);
+
+                yield TokenResult.success(
+                        siteId,
+                        siteName,
+                        accessToken.token(),
+                        refreshToken,
+                        accessToken.expiresAt(),
+                        refreshTokenExpiresAt,
+                        apiBaseUrl
+                );
+            }
             case DENIED -> TokenResult.accessDenied();
             case EXPIRED -> TokenResult.expiredToken();
         };
     }
 
     /**
-     * Token polling result.
+     * Token polling result (Auth V2).
      */
     public sealed interface TokenResult {
-        record Success(UUID siteId, String domain, String clientSecret, String apiBaseUrl) implements TokenResult {
+        record Success(
+                UUID siteId,
+                String siteName,
+                String accessToken,
+                String refreshToken,
+                Instant accessTokenExpiresAt,
+                Instant refreshTokenExpiresAt,
+                String apiBaseUrl
+        ) implements TokenResult {
         }
 
         record Pending() implements TokenResult {
@@ -174,8 +205,9 @@ public class DeviceAuthorizationService {
         record InvalidGrant() implements TokenResult {
         }
 
-        static TokenResult success(UUID siteId, String domain, String clientSecret, String apiBaseUrl) {
-            return new Success(siteId, domain, clientSecret, apiBaseUrl);
+        static TokenResult success(UUID siteId, String siteName, String accessToken, String refreshToken,
+                                   Instant accessTokenExpiresAt, Instant refreshTokenExpiresAt, String apiBaseUrl) {
+            return new Success(siteId, siteName, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt, apiBaseUrl);
         }
 
         static TokenResult authorizationPending() {
@@ -260,8 +292,8 @@ public class DeviceAuthorizationService {
             throw new AuthorizationAlreadyProcessedException("Authorization already processed");
         }
 
-        // Get or create site with new credentials
-        SiteService.SiteCreationResult siteResult = siteService.getOrCreateSiteWithNewCredentials(
+        // Get or create site (Auth V2 - no credential generation)
+        SiteService.SiteCreationResult siteResult = siteService.getOrCreateSite(
                 accountId,
                 authorization.getSiteName(),
                 authorization.getSiteDescription() != null
@@ -269,19 +301,20 @@ public class DeviceAuthorizationService {
                         : authorization.getSiteName()
         );
 
+        // Revoke any existing refresh tokens for this site
+        refreshTokenService.revokeAllForSite(siteResult.site().getId());
+
         // Update authorization with site info
         authorization.setAccountId(accountId);
         authorization.setSiteId(siteResult.site().getId());
-        authorization.setDomain(siteResult.site().getDomain());
-        // Store the hashed secret (we'll use a workaround to return plain secret)
-        authorization.setClientSecretHash(encodeSecretForOneTimeReturn(siteResult.plaintextSecret()));
+        authorization.setDomain(siteResult.site().getSiteName());
         authorization.setStatus(DeviceAuthorizationStatus.APPROVED);
         authorization.setApprovedAt(Instant.now());
 
         repository.save(authorization);
 
-        logger.info("Authorization verified: userCode={}, siteId={}, domain={}",
-                userCode, siteResult.site().getId(), siteResult.site().getDomain());
+        logger.info("Authorization verified: userCode={}, siteId={}, siteName={}",
+                userCode, siteResult.site().getId(), siteResult.site().getSiteName());
 
         return new VerificationResult(
                 siteResult.site().getId(),
@@ -365,28 +398,6 @@ public class DeviceAuthorizationService {
             }
         }
         throw new RuntimeException("Failed to generate unique user code after 10 attempts");
-    }
-
-    /**
-     * Encode secret for one-time return (base64 encoded for storage).
-     * This is a workaround since we need to return the plain secret to the device.
-     */
-    private String encodeSecretForOneTimeReturn(String plainSecret) {
-        // Store base64 encoded for one-time retrieval
-        // In production, consider encrypting this
-        return "PLAIN:" + Base64.getEncoder().encodeToString(plainSecret.getBytes());
-    }
-
-    /**
-     * Get plain secret from authorization (one-time retrieval).
-     */
-    private String getPlainSecretFromAuthorization(DeviceAuthorization authorization) {
-        String stored = authorization.getClientSecretHash();
-        if (stored != null && stored.startsWith("PLAIN:")) {
-            return new String(Base64.getDecoder().decode(stored.substring(6)));
-        }
-        // Fallback - should not happen in normal flow
-        return null;
     }
 
     // --- Exceptions ---

@@ -388,7 +388,7 @@ public class PluginAdminQueryService {
 
                     // Get site domain from bulk-fetched map
                     String siteDomain = sitesById.containsKey(batch.getSiteId())
-                            ? sitesById.get(batch.getSiteId()).getDisplayDomain()
+                            ? sitesById.get(batch.getSiteId()).getSiteName()
                             : "unknown";
 
                     if (hasSql) {

@@ -187,7 +187,7 @@ public class BitBiPluginApiController {
             List<SiteDto> siteDtos = sites.stream()
                     .map(site -> new SiteDto(
                             site.getId(),
-                            site.getDomain(),
+                            site.getSiteName(),
                             site.getDisplayName()))
                     .toList();
 

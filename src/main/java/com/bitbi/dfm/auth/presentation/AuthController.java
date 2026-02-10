@@ -21,9 +21,13 @@ import java.util.Map;
  * Provides JWT token generation endpoint with Basic Auth.
  * </p>
  *
+ * @deprecated Auth V2: Use Device Flow with JWT + refresh tokens instead.
+ * Basic Auth endpoints will be removed in the next major version.
+ * See DeviceAuthController for the new refresh token endpoint.
  * @author Data Forge Team
  * @version 1.0.0
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/v1/auth")
 public class AuthController {

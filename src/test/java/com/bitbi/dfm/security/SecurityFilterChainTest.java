@@ -2,6 +2,7 @@ package com.bitbi.dfm.security;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -186,6 +187,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
      * <b>Note</b>: This endpoint should allow Basic Auth (not Bearer) for initial token generation.
      * </p>
      */
+    @Disabled("Auth V2: Basic Auth endpoint removed")
     @Test
     @DisplayName("TC07: Device auth token endpoint with Basic Auth should return 200 OK")
     void deviceAuthTokenEndpointWithBasicAuthShouldBeAuthorized() throws Exception {

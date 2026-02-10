@@ -21,6 +21,8 @@ public interface SiteRepository {
 
     Optional<Site> findByDomain(String domain);
 
+    Optional<Site> findByAccountIdAndSiteName(UUID accountId, String siteName);
+
     List<Site> findByAccountId(UUID accountId);
 
     List<Site> findActiveByAccountId(UUID accountId);

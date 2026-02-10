@@ -306,7 +306,7 @@ public class AccountPluginsController {
                     UUID logSiteId = extractSiteIdFromMetadata(auditLog.getMetadata());
                     String siteDomain = null;
                     if (logSiteId != null && sitesById.containsKey(logSiteId)) {
-                        siteDomain = sitesById.get(logSiteId).getDisplayDomain();
+                        siteDomain = sitesById.get(logSiteId).getSiteName();
                     }
                     return UserPluginLogDto.fromEntityWithSite(auditLog, siteDomain);
                 })

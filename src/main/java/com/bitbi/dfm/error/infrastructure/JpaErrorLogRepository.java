@@ -181,7 +181,7 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      * @param pageable  pagination parameters
      * @return page of global error projections with site name
      */
-    @Query("SELECT e.id AS id, e.siteId AS siteId, s.domain AS siteName, " +
+    @Query("SELECT e.id AS id, e.siteId AS siteId, s.siteName AS siteName, " +
             "e.type AS type, e.title AS title, e.severity AS severity, " +
             "e.isRead AS isRead, e.occurredAt AS occurredAt " +
             "FROM ErrorLog e " +
@@ -196,7 +196,7 @@ public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, Er
      * @param pageable  pagination parameters
      * @return page of unread global error projections with site name
      */
-    @Query("SELECT e.id AS id, e.siteId AS siteId, s.domain AS siteName, " +
+    @Query("SELECT e.id AS id, e.siteId AS siteId, s.siteName AS siteName, " +
             "e.type AS type, e.title AS title, e.severity AS severity, " +
             "e.isRead AS isRead, e.occurredAt AS occurredAt " +
             "FROM ErrorLog e " +

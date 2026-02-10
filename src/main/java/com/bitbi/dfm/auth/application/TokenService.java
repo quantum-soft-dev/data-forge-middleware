@@ -39,31 +39,63 @@ public class TokenService {
     }
 
     /**
-     * Generate JWT token for site.
+     * Generate JWT token for a site (Auth V2 - by siteId, no credentials required).
      * <p>
-     * Authenticates site using domain and clientSecret.
+     * Used internally after successful authentication (e.g., Device Flow approval).
      * </p>
+     *
+     * @param siteId site identifier
+     * @return JWT token with site claims
+     * @throws AuthenticationException if site is invalid or inactive
+     */
+    @Transactional(readOnly = true)
+    public JwtToken generateTokenForSite(UUID siteId) {
+        logger.debug("Generating token for siteId: {}", siteId);
+
+        Site site = siteRepository.findById(siteId)
+                .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
+
+        if (!site.getIsActive()) {
+            logger.warn("Site is not active: siteId={}", siteId);
+            throw new AuthenticationException("Invalid credentials");
+        }
+
+        Account account = accountRepository.findById(site.getAccountId())
+                .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
+
+        if (!account.getIsActive()) {
+            logger.warn("Parent account is not active: accountId={}, siteId={}", account.getId(), siteId);
+            throw new AuthenticationException("Invalid credentials");
+        }
+
+        JwtToken token = jwtTokenProvider.generateToken(site.getId(), site.getAccountId());
+
+        logger.info("Token generated successfully: siteId={}", siteId);
+        return token;
+    }
+
+    /**
+     * Generate JWT token for site using Basic Auth credentials (legacy).
      *
      * @param domain       site domain
      * @param clientSecret site clientSecret
      * @return JWT token with site claims
      * @throws AuthenticationException if credentials are invalid
+     * @deprecated Use Device Flow with refresh tokens instead
      */
+    @Deprecated
     @Transactional(readOnly = true)
     public JwtToken generateToken(String domain, String clientSecret) {
         logger.debug("Generating token for domain: {}", domain);
 
-        // Find site by domain
         Site site = siteRepository.findByDomain(domain)
                 .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
 
-        // Validate site is active
         if (!site.getIsActive()) {
             logger.warn("Site is not active: domain={}", domain);
             throw new AuthenticationException("Invalid credentials");
         }
 
-        // Validate parent account is active
         Account account = accountRepository.findById(site.getAccountId())
                 .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
 
@@ -72,14 +104,12 @@ public class TokenService {
             throw new AuthenticationException("Invalid credentials");
         }
 
-        // Validate clientSecret using bcrypt
         if (!site.verifySecret(clientSecret)) {
             logger.warn("Invalid clientSecret for domain: {}", domain);
             throw new AuthenticationException("Invalid credentials");
         }
 
-        // Generate JWT token
-        JwtToken token = jwtTokenProvider.generateToken(site.getId(), site.getAccountId(), domain);
+        JwtToken token = jwtTokenProvider.generateToken(site.getId(), site.getAccountId());
 
         logger.info("Token generated successfully: domain={}, siteId={}", domain, site.getId());
         return token;
@@ -137,21 +167,6 @@ public class TokenService {
     public UUID extractAccountId(String tokenString) {
         try {
             return jwtTokenProvider.extractAccountId(tokenString);
-        } catch (JwtTokenProvider.InvalidTokenException e) {
-            throw new InvalidTokenException("Invalid token format", e);
-        }
-    }
-
-    /**
-     * Extract domain from token without full validation.
-     *
-     * @param tokenString JWT token string
-     * @return domain
-     * @throws InvalidTokenException if token is malformed
-     */
-    public String extractDomain(String tokenString) {
-        try {
-            return jwtTokenProvider.extractDomain(tokenString);
         } catch (JwtTokenProvider.InvalidTokenException e) {
             throw new InvalidTokenException("Invalid token format", e);
         }

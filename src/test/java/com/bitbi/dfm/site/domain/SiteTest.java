@@ -157,21 +157,31 @@ class SiteTest {
     /**
      * Helper method to create a Site with a specific domain for testing.
      * Uses reflection to set the domain field since Site.create() validates domain format.
+     * <p>
+     * Sets siteName by extracting from composite domain (stripping UUID prefix),
+     * matching the behavior of getDisplayDomain() which returns siteName first.
+     * </p>
      */
     private Site createSiteWithDomain(String domain) {
         UUID id = UUID.randomUUID();
         UUID accountId = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
 
+        // Derive siteName the same way the production code does
+        String siteName = domain;
+        if (domain != null && domain.length() > 37) {
+            siteName = domain.substring(37);
+        }
+
         // Use reflection to create Site with specific domain
         try {
             java.lang.reflect.Constructor<Site> constructor = Site.class.getDeclaredConstructor(
-                    UUID.class, UUID.class, String.class, String.class,
+                    UUID.class, UUID.class, String.class, String.class, String.class,
                     String.class, Boolean.class, Integer.class, LocalDateTime.class, LocalDateTime.class
             );
             constructor.setAccessible(true);
             return constructor.newInstance(
-                    id, accountId, domain, "$2a$10$dummyHash",
+                    id, accountId, domain, siteName, "$2a$10$dummyHash",
                     "Test Site", true, 45, now, now
             );
         } catch (Exception e) {

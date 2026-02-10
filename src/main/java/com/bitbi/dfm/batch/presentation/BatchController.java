@@ -55,14 +55,13 @@ public class BatchController {
     public ResponseEntity<?> startBatch() {
 
         try {
-            // Get authenticated site/account/domain from security context
+            // Get authenticated site/account from security context
             UUID siteId = authorizationHelper.getAuthenticatedSiteId();
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
-            String domain = authorizationHelper.getAuthenticatedDomain();
 
-            logger.info("Starting batch: siteId={}, domain={}", siteId, domain);
+            logger.info("Starting batch: siteId={}", siteId);
 
-            Batch batch = batchLifecycleService.startBatch(accountId, siteId, domain);
+            Batch batch = batchLifecycleService.startBatch(accountId, siteId);
 
             BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);

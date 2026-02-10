@@ -33,6 +33,16 @@ public interface JpaSiteRepository extends JpaRepository<Site, UUID>, SiteReposi
     Optional<Site> findByDomain(String domain);
 
     /**
+     * Find site by account ID and site name (Auth V2 composite key).
+     *
+     * @param accountId account identifier
+     * @param siteName  clean site name
+     * @return site if found
+     */
+    @Query("SELECT s FROM Site s WHERE s.accountId = :accountId AND LOWER(s.siteName) = LOWER(:siteName)")
+    Optional<Site> findByAccountIdAndSiteName(UUID accountId, String siteName);
+
+    /**
      * Find all sites for given account.
      *
      * @param accountId account identifier

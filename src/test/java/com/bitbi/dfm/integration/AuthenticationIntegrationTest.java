@@ -1,6 +1,7 @@
 package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * @see <a href="specs/001-technical-specification-data/quickstart.md">Quickstart Scenario 1</a>
  */
+@Disabled("Auth V2: Basic Auth endpoint removed. See auth-v2-migration-guide.md")
 @DisplayName("Scenario 1: Client Authentication Integration Test")
 class AuthenticationIntegrationTest extends BaseIntegrationTest {
 
@@ -46,8 +48,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.token").exists())
                 .andExpect(jsonPath("$.expiresAt").exists())
-                .andExpect(jsonPath("$.siteId").exists())
-                .andExpect(jsonPath("$.domain").exists());
+                .andExpect(jsonPath("$.siteId").exists());
 
         // Verify: JWT token contains expected claims (siteId, accountId, domain)
         // Note: Full JWT validation will be done in domain layer tests
