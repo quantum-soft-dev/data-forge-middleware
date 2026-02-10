@@ -204,6 +204,23 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     }
 
     /**
+     * TC07b: Device auth refresh endpoint should be accessible without authentication.
+     * <p>
+     * <b>Given</b>: No Authorization header<br>
+     * <b>When</b>: POST /api/v1/device/auth/refresh with invalid body<br>
+     * <b>Then</b>: 400 Bad Request (not 401 — endpoint is public)
+     * </p>
+     */
+    @Test
+    @DisplayName("TC07b: Device auth refresh endpoint should be public (no auth required)")
+    void deviceAuthRefreshEndpointShouldBePublic() throws Exception {
+        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_REFRESH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\": \"invalid-token\"}"))
+                .andExpect(status().isBadRequest()); // 400 not 401 → endpoint is reachable
+    }
+
+    /**
      * TC08: User History API with Auth0 user token → 200 OK (authorized)
      * <p>
      * <b>Given</b>: A valid Auth0 OAuth2 token (any authenticated user, not just admin)<br>

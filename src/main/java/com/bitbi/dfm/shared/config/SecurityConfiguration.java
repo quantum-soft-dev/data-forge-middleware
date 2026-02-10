@@ -147,7 +147,8 @@ public class SecurityConfiguration {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint with Basic Auth
+                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint with Basic Auth (deprecated)
+                .requestMatchers("/api/v1/device/auth/refresh").permitAll() // Auth V2: refresh token endpoint
                 .requestMatchers(HttpMethod.POST, "/api/v1/device/authorize").permitAll() // Device Authorization Flow - initiate
                 .requestMatchers(HttpMethod.POST, "/api/v1/device/token").permitAll() // Device Authorization Flow - poll
                 .anyRequest().authenticated()

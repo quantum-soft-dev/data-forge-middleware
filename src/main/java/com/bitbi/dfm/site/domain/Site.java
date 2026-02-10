@@ -217,6 +217,9 @@ public class Site {
     }
 
     public boolean verifySecret(String providedSecret) {
+        if (clientSecretHash == null) {
+            return false; // Auth V2 sites have no client secret
+        }
         return new SiteCredentials(domain, clientSecretHash).verifySecret(providedSecret);
     }
 

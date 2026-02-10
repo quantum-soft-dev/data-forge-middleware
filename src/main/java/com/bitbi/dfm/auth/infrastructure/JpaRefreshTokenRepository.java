@@ -2,7 +2,9 @@ package com.bitbi.dfm.auth.infrastructure;
 
 import com.bitbi.dfm.auth.domain.RefreshToken;
 import com.bitbi.dfm.auth.domain.RefreshTokenRepository;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -21,6 +23,8 @@ import java.util.UUID;
 public interface JpaRefreshTokenRepository extends JpaRepository<RefreshToken, UUID>, RefreshTokenRepository {
 
     @Override
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT rt FROM RefreshToken rt WHERE rt.tokenHash = :tokenHash")
     Optional<RefreshToken> findByTokenHash(String tokenHash);
 
     @Override
