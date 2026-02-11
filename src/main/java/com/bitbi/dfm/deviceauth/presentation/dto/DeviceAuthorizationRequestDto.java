@@ -2,7 +2,6 @@ package com.bitbi.dfm.deviceauth.presentation.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -17,16 +16,12 @@ import jakarta.validation.constraints.Size;
 public record DeviceAuthorizationRequestDto(
 
         @Schema(
-                description = "Site name (alphanumeric and hyphens only)",
+                description = "Site name (Unicode allowed, no path traversal characters)",
                 example = "warehouse-01",
                 requiredMode = Schema.RequiredMode.REQUIRED
         )
         @NotBlank(message = "Site name is required")
-        @Size(max = 100, message = "Site name must be at most 100 characters")
-        @Pattern(
-                regexp = "^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$",
-                message = "Site name must contain only alphanumeric characters and hyphens, cannot start or end with hyphen"
-        )
+        @Size(max = 255, message = "Site name must be at most 255 characters")
         String siteName,
 
         @Schema(
