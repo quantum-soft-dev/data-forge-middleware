@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -103,10 +105,13 @@ public class Site {
             throw new IllegalArgumentException("DisplayName cannot be blank");
         }
 
+        // Normalize and validate site name
+        String normalizedSiteName = validateAndNormalizeSiteName(siteName);
+
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
 
-        return new Site(id, accountId, domain.toLowerCase().trim(), siteName.trim(), clientSecretHash,
+        return new Site(id, accountId, domain.toLowerCase().trim(), normalizedSiteName, clientSecretHash,
                 displayName.trim(), true, DEFAULT_RETENTION_DAYS, now, now);
     }
 
@@ -140,6 +145,36 @@ public class Site {
             siteName = domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
         }
         return create(accountId, domain, siteName, displayName, hashedSecret);
+    }
+
+    /**
+     * Validate and normalize a site name.
+     * <ul>
+     *   <li>Applies Unicode NFC normalization</li>
+     *   <li>Rejects null bytes and path traversal sequences</li>
+     *   <li>Validates UTF-8 byte length fits VARCHAR(255)</li>
+     * </ul>
+     */
+    private static String validateAndNormalizeSiteName(String siteName) {
+        // NFC normalization (é vs e + combining accent → canonical form)
+        String normalized = Normalizer.normalize(siteName.trim(), Normalizer.Form.NFC);
+
+        // Reject null bytes
+        if (normalized.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("Site name must not contain null bytes");
+        }
+
+        // Reject path traversal
+        if (normalized.contains("..") || normalized.contains("/") || normalized.contains("\\")) {
+            throw new IllegalArgumentException("Site name must not contain path traversal characters");
+        }
+
+        // Validate UTF-8 byte length (VARCHAR(255) = 255 bytes)
+        if (normalized.getBytes(StandardCharsets.UTF_8).length > 255) {
+            throw new IllegalArgumentException("Site name exceeds 255 bytes");
+        }
+
+        return normalized;
     }
 
     public void updateDisplayName(String newDisplayName) {

@@ -54,11 +54,27 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should return 400 for invalid/unknown refresh token")
-    void shouldReturn400ForInvalidRefreshToken() throws Exception {
+    @DisplayName("Should return 400 for malformed refresh token (wrong format)")
+    void shouldReturn400ForMalformedRefreshToken() throws Exception {
         String requestBody = """
                 {"refreshToken": "completely-invalid-token"}
                 """;
+
+        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_REFRESH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Should return 400 for unknown but well-formed refresh token")
+    void shouldReturn400ForUnknownRefreshToken() throws Exception {
+        // A valid 43-char Base64url token that doesn't exist in the database
+        String fakeToken = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
+
+        String requestBody = """
+                {"refreshToken": "%s"}
+                """.formatted(fakeToken);
 
         mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_REFRESH)
                         .contentType(MediaType.APPLICATION_JSON)

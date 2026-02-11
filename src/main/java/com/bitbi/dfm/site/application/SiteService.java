@@ -1,5 +1,6 @@
 package com.bitbi.dfm.site.application;
 
+import com.bitbi.dfm.auth.application.RefreshTokenService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
@@ -43,19 +44,22 @@ public class SiteService {
     private final UploadedFileRepository uploadedFileRepository;
     private final S3FileStorageService s3FileStorageService;
     private final DeviceAuthorizationRepository deviceAuthorizationRepository;
+    private final RefreshTokenService refreshTokenService;
 
     public SiteService(SiteRepository siteRepository,
                        BatchRepository batchRepository,
                        ErrorLogRepository errorLogRepository,
                        UploadedFileRepository uploadedFileRepository,
                        S3FileStorageService s3FileStorageService,
-                       DeviceAuthorizationRepository deviceAuthorizationRepository) {
+                       DeviceAuthorizationRepository deviceAuthorizationRepository,
+                       RefreshTokenService refreshTokenService) {
         this.siteRepository = siteRepository;
         this.batchRepository = batchRepository;
         this.errorLogRepository = errorLogRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.s3FileStorageService = s3FileStorageService;
         this.deviceAuthorizationRepository = deviceAuthorizationRepository;
+        this.refreshTokenService = refreshTokenService;
     }
 
     /**
@@ -317,6 +321,9 @@ public class SiteService {
 
         site.deactivate();
         siteRepository.save(site);
+
+        // Revoke all refresh tokens for this site (Auth V2)
+        refreshTokenService.revokeAllForSite(siteId);
 
         logger.info("Site deactivated successfully: id={}", siteId);
     }

@@ -1,5 +1,6 @@
 package com.bitbi.dfm.site.application;
 
+import com.bitbi.dfm.auth.application.RefreshTokenService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
@@ -60,6 +61,9 @@ class SiteServiceTest {
     @Mock
     private DeviceAuthorizationRepository deviceAuthorizationRepository;
 
+    @Mock
+    private RefreshTokenService refreshTokenService;
+
     private SiteService siteService;
 
     private UUID accountId;
@@ -70,7 +74,8 @@ class SiteServiceTest {
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
         siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
-                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository);
+                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository,
+                                      refreshTokenService);
     }
 
     @Test
@@ -109,7 +114,7 @@ class SiteServiceTest {
     }
 
     @Test
-    @DisplayName("deactivateSite - Should deactivate active site")
+    @DisplayName("deactivateSite - Should deactivate active site and revoke refresh tokens")
     void deactivateSite_ShouldDeactivateActiveSite() {
         // Given
         Site mockSite = mock(Site.class);
@@ -123,6 +128,7 @@ class SiteServiceTest {
         verify(siteRepository).findById(siteId);
         verify(mockSite).deactivate();
         verify(siteRepository).save(mockSite);
+        verify(refreshTokenService).revokeAllForSite(siteId);
     }
 
     @Test

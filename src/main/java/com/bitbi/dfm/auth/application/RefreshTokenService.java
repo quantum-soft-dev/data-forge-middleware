@@ -171,7 +171,7 @@ public class RefreshTokenService {
      * Cleanup expired and revoked tokens.
      * Runs daily.
      */
-    @Scheduled(fixedRate = 86400000) // 24 hours
+    @Scheduled(fixedDelay = 86400000, initialDelay = 3600000) // 24h between runs, 1h initial delay
     @Transactional
     public void cleanupExpiredTokens() {
         logger.debug("Running refresh token cleanup...");
