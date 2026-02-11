@@ -306,7 +306,7 @@ class ErrorAdminControllerTest {
         // Then
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getHeaders().getContentType());
-        assertEquals("text/csv", response.getHeaders().getContentType().toString());
+        assertEquals("text/csv;charset=utf-8", response.getHeaders().getContentType().toString());
     }
 
     @Test

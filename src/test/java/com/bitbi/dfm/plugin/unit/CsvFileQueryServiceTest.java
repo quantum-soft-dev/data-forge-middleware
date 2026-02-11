@@ -275,7 +275,7 @@ class CsvFileQueryServiceTest {
             CsvFileQueryService.FileDownloadResult result = service.downloadFile(accountId, siteId, "data.csv");
 
             // Then
-            assertThat(result.contentType()).isEqualTo("text/csv");
+            assertThat(result.contentType()).isEqualTo("text/csv; charset=utf-8");
         }
     }
 

@@ -180,7 +180,7 @@ public class CsvFileQueryService {
         if (lowerName.endsWith(".csv.gz") || lowerName.endsWith(".gz")) {
             return "application/gzip";
         } else if (lowerName.endsWith(".csv")) {
-            return "text/csv";
+            return "text/csv; charset=utf-8";
         }
         return "application/octet-stream";
     }

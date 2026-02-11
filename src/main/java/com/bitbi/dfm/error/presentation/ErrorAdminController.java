@@ -157,7 +157,7 @@ public class ErrorAdminController {
         }
 
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.parseMediaType("text/csv"));
+        headers.setContentType(MediaType.parseMediaType("text/csv; charset=utf-8"));
         headers.setContentDispositionFormData("attachment", "error-logs.csv");
 
         return ResponseEntity.ok()
