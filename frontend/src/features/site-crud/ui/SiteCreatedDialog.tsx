@@ -28,11 +28,10 @@ interface SiteCreatedDialogProps {
   onOpenChange: (open: boolean) => void;
   site: {
     id: string;
-    domain: string;
+    siteName: string;
     name: string;
   };
   password: string;
-  siteIdentifier: string;
   accountId: string;
 }
 
@@ -41,7 +40,6 @@ export function SiteCreatedDialog({
   onOpenChange,
   site,
   password,
-  siteIdentifier,
   accountId,
 }: SiteCreatedDialogProps) {
   const [passwordCopied, setPasswordCopied] = useState(false);
@@ -53,7 +51,7 @@ export function SiteCreatedDialog({
   // Build CLI install command
   const cliCommand = `data_exporter.exe install \`
   --account "${accountId}" \`
-  --username "${site.domain}" \`
+  --site-id "${site.id}" \`
   --password "${password}" \`
   --source-dir "c:\\data" \`
   --crontab "0 */5 * * * *" \`
@@ -88,7 +86,7 @@ export function SiteCreatedDialog({
         <AlertDialogHeader>
           <AlertDialogTitle className="text-2xl">Site Created Successfully!</AlertDialogTitle>
           <AlertDialogDescription>
-            Your site <strong>{site.domain}</strong> has been created. Save these credentials now - you won't see them again!
+            Your site <strong>{site.siteName}</strong> has been created. Save these credentials now - you won't see them again!
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -104,8 +102,8 @@ export function SiteCreatedDialog({
           {/* Site Details */}
           <div className="space-y-3">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Site Domain</p>
-              <p className="font-mono text-sm bg-muted p-2 rounded">{site.domain}</p>
+              <p className="text-sm font-medium text-muted-foreground">Site Name</p>
+              <p className="font-mono text-sm bg-muted p-2 rounded">{site.siteName}</p>
             </div>
 
             <div>
@@ -114,8 +112,8 @@ export function SiteCreatedDialog({
             </div>
 
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Site Identifier</p>
-              <p className="font-mono text-sm bg-muted p-2 rounded">{siteIdentifier}</p>
+              <p className="text-sm font-medium text-muted-foreground">Site ID</p>
+              <p className="font-mono text-sm bg-muted p-2 rounded">{site.id}</p>
             </div>
 
             <div>

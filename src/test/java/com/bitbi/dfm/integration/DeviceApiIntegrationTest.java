@@ -1,6 +1,8 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -45,23 +47,9 @@ class DeviceApiIntegrationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("Should complete full device workflow: auth → start → upload → log error → complete")
     void shouldCompleteFullDeviceWorkflow() throws Exception {
-        // STEP 1: Generate JWT token via Device Auth endpoint
-        String credentials = Base64.getEncoder()
-                .encodeToString("store-03.example.com:batch-test-secret".getBytes());
-
-        MvcResult authResult = mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
-                        .header("Authorization", "Basic " + credentials)
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").exists())
-                .andExpect(jsonPath("$.siteId").exists())
-                .andExpect(jsonPath("$.domain").value("store-03.example.com"))
-                .andReturn();
-
-        // Extract JWT token from response
-        String tokenJson = authResult.getResponse().getContentAsString();
-        String jwtToken = com.jayway.jsonpath.JsonPath.read(tokenJson, "$.token");
-        String bearerToken = "Bearer " + jwtToken;
+        // STEP 1: Generate JWT token directly (Basic Auth endpoint removed in Auth V2)
+        JwtToken jwtTokenObj = tokenService.generateToken("store-03.example.com", "batch-test-secret");
+        String bearerToken = "Bearer " + jwtTokenObj.token();
 
         // STEP 2: Start new batch
         MvcResult batchResult = mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
@@ -197,6 +185,7 @@ class DeviceApiIntegrationTest extends BaseIntegrationTest {
      * Tests that authentication endpoint properly validates credentials.
      * </p>
      */
+    @Disabled("Auth V2: Basic Auth endpoint removed")
     @Test
     @DisplayName("Should reject invalid credentials at Device Auth endpoint")
     void shouldRejectInvalidCredentialsAtDeviceAuthEndpoint() throws Exception {

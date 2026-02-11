@@ -86,25 +86,39 @@ public class Batch {
         // version is automatically managed by JPA
     }
 
-    public static Batch start(UUID accountId, UUID siteId, String domain) {
+    /**
+     * Start a new batch (Auth V2 - uses siteId in S3 path).
+     *
+     * @param accountId account identifier
+     * @param siteId    site identifier (used in S3 path)
+     * @return new batch in IN_PROGRESS status
+     */
+    public static Batch start(UUID accountId, UUID siteId) {
         Objects.requireNonNull(siteId, "SiteId cannot be null");
         Objects.requireNonNull(accountId, "AccountId cannot be null");
-        Objects.requireNonNull(domain, "Domain cannot be null");
 
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
-        String s3Path = generateS3Path(accountId, domain, now);
+        String s3Path = generateS3Path(accountId, siteId, now);
 
         return new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
                 0, 0L, false, now, null, now);
     }
 
-    private static String generateS3Path(UUID accountId, String domain, LocalDateTime timestamp) {
+    /**
+     * @deprecated Use {@link #start(UUID, UUID)} instead
+     */
+    @Deprecated
+    public static Batch start(UUID accountId, UUID siteId, String domain) {
+        return start(accountId, siteId);
+    }
+
+    private static String generateS3Path(UUID accountId, UUID siteId, LocalDateTime timestamp) {
         DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH-mm");
         String date = timestamp.format(dateFormatter);
         String time = timestamp.format(timeFormatter);
-        return String.format("%s/%s/%s/%s/", accountId, domain, date, time);
+        return String.format("%s/%s/%s/%s/", accountId, siteId, date, time);
     }
 
     public void complete() {

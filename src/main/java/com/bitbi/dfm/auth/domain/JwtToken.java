@@ -11,9 +11,12 @@ import java.util.UUID;
  * Encapsulates token string, expiration time, and claims.
  * Immutable and validated at construction time.
  * </p>
+ * <p>
+ * Auth V2: domain field is nullable (new tokens don't include domain).
+ * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
+ * @version 2.0.0
  */
 public record JwtToken(
         String token,
@@ -28,14 +31,7 @@ public record JwtToken(
 
     /**
      * Constructs JwtToken with validation.
-     *
-     * @param token     JWT token string
-     * @param issuedAt  token issue timestamp
-     * @param expiresAt token expiration timestamp
-     * @param siteId    site identifier
-     * @param accountId account identifier
-     * @param domain    site domain
-     * @throws IllegalArgumentException if any parameter is null or invalid
+     * Domain is nullable for Auth V2 tokens.
      */
     public JwtToken {
         Objects.requireNonNull(token, "Token cannot be null");
@@ -43,7 +39,7 @@ public record JwtToken(
         Objects.requireNonNull(expiresAt, "ExpiresAt cannot be null");
         Objects.requireNonNull(siteId, "SiteId cannot be null");
         Objects.requireNonNull(accountId, "AccountId cannot be null");
-        Objects.requireNonNull(domain, "Domain cannot be null");
+        // domain is nullable for Auth V2
 
         if (token.isBlank()) {
             throw new IllegalArgumentException("Token cannot be blank");
@@ -55,14 +51,38 @@ public record JwtToken(
     }
 
     /**
-     * Create new JWT token with default expiration (24 hours).
+     * Create JWT token without domain (Auth V2).
      *
-     * @param tokenString JWT token string
-     * @param siteId      site identifier
-     * @param accountId   account identifier
-     * @param domain      site domain
-     * @return new JwtToken
+     * @param tokenString       JWT token string
+     * @param siteId            site identifier
+     * @param accountId         account identifier
+     * @param expirationSeconds expiration duration in seconds
+     * @return new JwtToken without domain
      */
+    public static JwtToken create(String tokenString, UUID siteId, UUID accountId, long expirationSeconds) {
+        Instant now = Instant.now();
+        Instant expires = now.plus(expirationSeconds, ChronoUnit.SECONDS);
+        return new JwtToken(tokenString, now, expires, siteId, accountId, null);
+    }
+
+    /**
+     * Create JWT token with domain (legacy).
+     *
+     * @deprecated Use {@link #create(String, UUID, UUID, long)} instead
+     */
+    @Deprecated
+    public static JwtToken createWithDomain(String tokenString, UUID siteId, UUID accountId, String domain, long expirationSeconds) {
+        Instant now = Instant.now();
+        Instant expires = now.plus(expirationSeconds, ChronoUnit.SECONDS);
+        return new JwtToken(tokenString, now, expires, siteId, accountId, domain);
+    }
+
+    /**
+     * Create new JWT token with default expiration (24 hours) and domain (legacy).
+     *
+     * @deprecated Use {@link #create(String, UUID, UUID, long)} instead
+     */
+    @Deprecated
     public static JwtToken create(String tokenString, UUID siteId, UUID accountId, String domain) {
         Instant now = Instant.now();
         Instant expires = now.plus(DEFAULT_EXPIRATION_SECONDS, ChronoUnit.SECONDS);
@@ -70,15 +90,11 @@ public record JwtToken(
     }
 
     /**
-     * Create JWT token with custom expiration duration.
+     * Create JWT token with custom expiration duration and domain (legacy).
      *
-     * @param tokenString      JWT token string
-     * @param siteId           site identifier
-     * @param accountId        account identifier
-     * @param domain           site domain
-     * @param expirationSeconds expiration duration in seconds
-     * @return new JwtToken
+     * @deprecated Use {@link #create(String, UUID, UUID, long)} instead
      */
+    @Deprecated
     public static JwtToken create(String tokenString, UUID siteId, UUID accountId, String domain, long expirationSeconds) {
         Instant now = Instant.now();
         Instant expires = now.plus(expirationSeconds, ChronoUnit.SECONDS);
@@ -87,8 +103,6 @@ public record JwtToken(
 
     /**
      * Check if token is expired.
-     *
-     * @return true if current time is after expiresAt
      */
     public boolean isExpired() {
         return Instant.now().isAfter(expiresAt);
@@ -96,8 +110,6 @@ public record JwtToken(
 
     /**
      * Check if token is still valid.
-     *
-     * @return true if current time is before expiresAt
      */
     public boolean isValid() {
         return !isExpired();
@@ -105,8 +117,6 @@ public record JwtToken(
 
     /**
      * Get remaining validity duration in seconds.
-     *
-     * @return seconds until expiration (0 if already expired)
      */
     public long getExpiresInSeconds() {
         if (isExpired()) {
@@ -117,8 +127,6 @@ public record JwtToken(
 
     /**
      * Get total expiration duration in seconds.
-     *
-     * @return original expiration duration
      */
     public long getExpirationDuration() {
         return ChronoUnit.SECONDS.between(issuedAt, expiresAt);

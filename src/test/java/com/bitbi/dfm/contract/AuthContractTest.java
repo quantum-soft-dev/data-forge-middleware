@@ -2,6 +2,7 @@ package com.bitbi.dfm.contract;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -20,6 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * @see <a href="specs/001-technical-specification-data/contracts/auth-api.md">Authentication API Contract</a>
  */
+@Disabled("Auth V2: Basic Auth endpoint removed. See auth-v2-migration-guide.md")
 @DisplayName("Authentication API Contract Tests")
 class AuthContractTest extends BaseIntegrationTest {
 
@@ -51,8 +53,7 @@ class AuthContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.token").exists())
                 .andExpect(jsonPath("$.token").isString())
                 .andExpect(jsonPath("$.expiresAt").exists())
-                .andExpect(jsonPath("$.siteId").exists())
-                .andExpect(jsonPath("$.domain").exists());
+                .andExpect(jsonPath("$.siteId").exists());
     }
 
     /**

@@ -12,9 +12,12 @@ import java.util.Objects;
  * and determining authentication eligibility.
  * </p>
  *
+ * @deprecated Auth V2: Basic Auth credential validation is no longer used.
+ * Authentication is now handled via Device Flow with JWT + refresh tokens.
  * @author Data Forge Team
  * @version 1.0.0
  */
+@Deprecated
 @Service
 public class AuthenticationService {
 

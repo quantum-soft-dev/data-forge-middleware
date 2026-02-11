@@ -139,7 +139,7 @@ public class DeviceAuthorizationController {
 
         return switch (result) {
             case TokenResult.Success success -> {
-                logger.info("Token issued: siteId={}, domain={}", success.siteId(), success.domain());
+                logger.info("Token issued: siteId={}, siteName={}", success.siteId(), success.siteName());
                 yield ResponseEntity.ok(DeviceTokenResponseDto.fromResult(success));
             }
             case TokenResult.Pending pending -> {

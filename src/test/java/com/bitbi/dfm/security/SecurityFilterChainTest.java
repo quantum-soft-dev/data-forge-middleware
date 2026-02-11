@@ -2,6 +2,7 @@ package com.bitbi.dfm.security;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -186,6 +187,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
      * <b>Note</b>: This endpoint should allow Basic Auth (not Bearer) for initial token generation.
      * </p>
      */
+    @Disabled("Auth V2: Basic Auth endpoint removed")
     @Test
     @DisplayName("TC07: Device auth token endpoint with Basic Auth should return 200 OK")
     void deviceAuthTokenEndpointWithBasicAuthShouldBeAuthorized() throws Exception {
@@ -199,6 +201,23 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.token").exists())
                 .andExpect(jsonPath("$.expiresAt").exists())
                 .andExpect(jsonPath("$.siteId").exists());
+    }
+
+    /**
+     * TC07b: Device auth refresh endpoint should be accessible without authentication.
+     * <p>
+     * <b>Given</b>: No Authorization header<br>
+     * <b>When</b>: POST /api/v1/device/auth/refresh with invalid body<br>
+     * <b>Then</b>: 400 Bad Request (not 401 — endpoint is public)
+     * </p>
+     */
+    @Test
+    @DisplayName("TC07b: Device auth refresh endpoint should be public (no auth required)")
+    void deviceAuthRefreshEndpointShouldBePublic() throws Exception {
+        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_REFRESH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refreshToken\": \"invalid-token\"}"))
+                .andExpect(status().isBadRequest()); // 400 not 401 → endpoint is reachable
     }
 
     /**

@@ -184,7 +184,7 @@ export function PluginTabFilters({
                   <SelectItem value="all">All Sites</SelectItem>
                   {sites.map((site: Site) => (
                     <SelectItem key={site.id} value={site.id}>
-                      {site.domain}
+                      {site.siteName}
                     </SelectItem>
                   ))}
                 </SelectContent>

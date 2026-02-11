@@ -2,6 +2,7 @@ package com.bitbi.dfm.device.presentation;
 
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -33,6 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @see com.bitbi.dfm.device.presentation.DeviceAuthController
  * @see <a href="specs/010-api-unification-goal/tasks.md">Task T007</a>
  */
+@Disabled("Auth V2: Basic Auth endpoint removed. See auth-v2-migration-guide.md")
 @DisplayName("Device API - Authentication Contract Tests")
 class DeviceAuthContractTest extends BaseIntegrationTest {
 
@@ -63,9 +65,7 @@ class DeviceAuthContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.token").isString())
                 .andExpect(jsonPath("$.expiresAt").exists())
                 .andExpect(jsonPath("$.siteId").exists())
-                .andExpect(jsonPath("$.siteId").value("0199baac-f852-753f-6fc3-7c994fc38654"))
-                .andExpect(jsonPath("$.domain").exists())
-                .andExpect(jsonPath("$.domain").value("store-01.example.com"));
+                .andExpect(jsonPath("$.siteId").value("0199baac-f852-753f-6fc3-7c994fc38654"));
     }
 
     /**

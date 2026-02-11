@@ -58,14 +58,15 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at) VALUES (?,?,?,?,?,?,?,NOW(),NOW())",
+                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at, site_name) VALUES (?,?,?,?,?,?,?,NOW(),NOW(),?)",
                 siteId,
                 accountId,
                 compositeDomain,
                 secretHash,
                 "Retention Site",
                 true,
-                45
+                45,
+                "example.com"
         );
 
         LocalDateTime oldStartedAt = LocalDateTime.now().minusDays(60);
@@ -173,14 +174,15 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         );
 
         jdbcTemplate.update(
-                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at) VALUES (?,?,?,?,?,?,?,NOW(),NOW())",
+                "INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, retention_days, created_at, updated_at, site_name) VALUES (?,?,?,?,?,?,?,NOW(),NOW(),?)",
                 siteId,
                 accountId,
                 compositeDomain,
                 secretHash,
                 "Baseline Site",
                 true,
-                45
+                45,
+                "baseline.example.com"
         );
 
         LocalDateTime oldStartedAt = LocalDateTime.now().minusDays(60);

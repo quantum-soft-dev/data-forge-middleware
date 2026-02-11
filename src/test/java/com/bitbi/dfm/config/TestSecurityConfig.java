@@ -233,6 +233,9 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint
+                .requestMatchers("/api/v1/device/auth/refresh").permitAll() // Auth V2: refresh token endpoint
+                .requestMatchers("/api/v1/device/authorize").permitAll() // Device authorization
+                .requestMatchers("/api/v1/device/token").permitAll() // Device token polling
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class)

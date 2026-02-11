@@ -61,7 +61,7 @@ public record GlobalErrorSummaryDto(
         return new GlobalErrorSummaryDto(
                 errorLog.getId(),
                 errorLog.getSiteId(),
-                site != null ? site.getDomain() : "Unknown",
+                site != null ? site.getSiteName() : "Unknown",
                 errorLog.getType(),
                 errorLog.getTitle(),
                 errorLog.getSeverity(),

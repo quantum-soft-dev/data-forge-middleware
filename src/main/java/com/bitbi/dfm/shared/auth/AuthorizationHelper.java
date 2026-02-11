@@ -195,27 +195,6 @@ public class AuthorizationHelper {
     }
 
     /**
-     * Get the authenticated domain from security context.
-     *
-     * @return domain from JWT token
-     * @throws UnauthorizedException if not authenticated or not a JWT token
-     */
-    public String getAuthenticatedDomain() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        if (authentication == null || !authentication.isAuthenticated()) {
-            throw new UnauthorizedException("Not authenticated");
-        }
-
-        if (!(authentication instanceof JwtAuthenticationToken)) {
-            throw new UnauthorizedException("Invalid authentication type");
-        }
-
-        JwtAuthenticationToken jwtAuth = (JwtAuthenticationToken) authentication;
-        return jwtAuth.getDomain();
-    }
-
-    /**
      * Verify that the authenticated site matches the expected site ID.
      *
      * @param expectedSiteId expected site ID

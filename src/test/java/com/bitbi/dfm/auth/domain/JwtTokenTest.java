@@ -185,16 +185,19 @@ class JwtTokenTest {
     }
 
     @Test
-    @DisplayName("Should throw exception when domain is null")
-    void shouldThrowExceptionWhenDomainIsNull() {
-        // Given
+    @DisplayName("Should accept null domain (Auth V2)")
+    void shouldAcceptNullDomain() {
+        // Given - Auth V2 tokens do not have domain
         Instant now = Instant.now();
         Instant expires = now.plus(3600, ChronoUnit.SECONDS);
 
-        // When & Then
-        assertThrows(NullPointerException.class, () ->
-                new JwtToken(TEST_TOKEN, now, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, null)
-        );
+        // When
+        JwtToken token = new JwtToken(TEST_TOKEN, now, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, null);
+
+        // Then
+        assertNull(token.domain());
+        assertEquals(TEST_SITE_ID, token.siteId());
+        assertEquals(TEST_ACCOUNT_ID, token.accountId());
     }
 
     @Test

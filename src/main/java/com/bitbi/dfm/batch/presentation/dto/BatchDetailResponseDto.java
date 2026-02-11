@@ -87,7 +87,7 @@ public record BatchDetailResponseDto(
         return new BatchDetailResponseDto(
                 batch.getId(),
                 batch.getSiteId(),
-                site != null ? site.getDomain() : "unknown",
+                site != null ? site.getSiteName() : "unknown",
                 batch.getStatus().toString(),
                 batch.getS3Path(),
                 batch.getUploadedFilesCount(),

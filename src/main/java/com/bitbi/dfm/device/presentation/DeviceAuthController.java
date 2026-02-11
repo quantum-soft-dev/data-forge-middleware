@@ -1,8 +1,8 @@
 package com.bitbi.dfm.device.presentation;
 
-import com.bitbi.dfm.auth.application.TokenService;
-import com.bitbi.dfm.auth.domain.JwtToken;
-import com.bitbi.dfm.auth.presentation.dto.TokenResponseDto;
+import com.bitbi.dfm.auth.application.RefreshTokenService;
+import com.bitbi.dfm.auth.presentation.dto.RefreshTokenRequestDto;
+import com.bitbi.dfm.auth.presentation.dto.RefreshTokenResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.DeviceControllerHelper;
 import io.swagger.v3.oas.annotations.Operation;
@@ -10,177 +10,122 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
-import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-
 /**
- * Device API Authentication Controller.
+ * Device API Authentication Controller (Auth V2).
  * <p>
- * Provides JWT token generation for device clients (IoT devices, mobile apps,
- * data collection clients) using Basic Authentication with site credentials.
- * </p>
- * <p>
- * <b>Authentication</b>: Basic Auth (domain:clientSecret)<br>
- * <b>Returns</b>: Custom JWT token for subsequent Device API requests
+ * Provides token refresh endpoint for device clients.
+ * Basic Auth token generation has been removed in Auth V2.
+ * Devices obtain initial tokens via Device Authorization Flow.
  * </p>
  *
  * @author Data Forge Team
- * @version 1.0.0
- * @see com.bitbi.dfm.auth.application.TokenService
- * @see <a href="specs/010-api-unification-goal/spec.md">API Unification Specification</a>
+ * @version 2.0.0
  */
 @RestController
 @RequestMapping(ApiRoutes.DEVICE_AUTH)
-@Tag(name = "Device API - Authentication", description = "JWT token generation for device clients using Basic Auth (domain:clientSecret)")
+@Tag(name = "Device API - Authentication", description = "Token refresh for device clients (Auth V2)")
 public class DeviceAuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(DeviceAuthController.class);
 
-    private final TokenService tokenService;
+    private final RefreshTokenService refreshTokenService;
 
-    /**
-     * Constructor injection for TokenService.
-     *
-     * @param tokenService Service for generating JWT tokens
-     */
-    public DeviceAuthController(TokenService tokenService) {
-        this.tokenService = tokenService;
+    public DeviceAuthController(RefreshTokenService refreshTokenService) {
+        this.refreshTokenService = refreshTokenService;
     }
 
     /**
-     * Generate JWT token using Basic Auth credentials.
+     * Refresh access token using refresh token (Auth V2).
      * <p>
-     * <b>Authentication</b>: Basic Auth with site domain and clientSecret<br>
-     * <b>Format</b>: Authorization: Basic base64(domain:clientSecret)<br>
-     * <b>Returns</b>: Custom JWT token valid for 24 hours
+     * No authentication required - the refresh token itself is the credential.
+     * Implements token rotation: old refresh token is revoked, new one issued.
      * </p>
      *
-     * @param authHeader Authorization header with Basic Auth credentials
-     * @param request    HTTP servlet request for error reporting
-     * @return JWT token response or error response
+     * @param request refresh token request
+     * @return new access token and rotated refresh token
      */
-    @PostMapping("/token")
+    @PostMapping("/refresh")
     @Operation(
-            summary = "Generate JWT token for device authentication",
-            description = "Issues a Custom JWT token for device clients using Basic Authentication with site credentials. " +
-                    "The credentials format is 'domain:clientSecret' encoded in Base64."
+            summary = "Refresh access token",
+            description = "Issues a new JWT access token and rotated refresh token. " +
+                    "The provided refresh token is revoked after use (token rotation)."
     )
-    @SecurityRequirement(name = "basicAuth")
     @ApiResponses(value = {
             @ApiResponse(
                     responseCode = "200",
-                    description = "JWT token generated successfully",
+                    description = "Token refreshed successfully",
                     content = @Content(
                             mediaType = "application/json",
-                            schema = @Schema(implementation = TokenResponseDto.class)
+                            schema = @Schema(implementation = RefreshTokenResponseDto.class)
                     )
             ),
-            @ApiResponse(
-                    responseCode = "400",
-                    description = "Bad Request - Invalid Authorization header encoding",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "401",
-                    description = "Unauthorized - Invalid credentials or inactive site",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "500",
-                    description = "Internal Server Error",
-                    content = @Content(mediaType = "application/json")
-            )
+            @ApiResponse(responseCode = "400", description = "Bad Request - Invalid refresh token format"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - Refresh token expired or revoked")
     })
-    public ResponseEntity<?> generateToken(
-            @RequestHeader(value = "Authorization", required = false) String authHeader,
-            HttpServletRequest request) {
+    public ResponseEntity<?> refreshToken(
+            @Valid @RequestBody RefreshTokenRequestDto request,
+            HttpServletRequest httpRequest) {
 
-        logger.debug("Device API token generation request received from {}", request.getRemoteAddr());
-
-        // Validate Authorization header presence
-        if (authHeader == null || !authHeader.startsWith("Basic ")) {
-            logger.warn("Missing or invalid Authorization header from {}", request.getRemoteAddr());
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(DeviceControllerHelper.createErrorResponse(
-                            HttpStatus.UNAUTHORIZED,
-                            "Unauthorized",
-                            "Missing or invalid Authorization header",
-                            request.getRequestURI()));
-        }
+        logger.debug("Token refresh request received from {}", httpRequest.getRemoteAddr());
 
         try {
-            // Extract and decode Basic Auth credentials
-            String base64Credentials = authHeader.substring("Basic ".length());
-            byte[] decodedBytes = Base64.getDecoder().decode(base64Credentials);
-            String credentials = new String(decodedBytes, StandardCharsets.UTF_8);
+            RefreshTokenService.RefreshResult result =
+                    refreshTokenService.refreshAccessToken(request.refreshToken());
 
-            // Parse domain:clientSecret format
-            String[] parts = credentials.split(":", 2);
-            if (parts.length != 2) {
-                logger.warn("Invalid Basic Auth format from {}", request.getRemoteAddr());
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(DeviceControllerHelper.createErrorResponse(
-                                HttpStatus.UNAUTHORIZED,
-                                "Unauthorized",
-                                "Invalid credentials format",
-                                request.getRequestURI()));
-            }
+            RefreshTokenResponseDto response = new RefreshTokenResponseDto(
+                    result.accessToken().token(),
+                    result.refreshToken(),
+                    result.accessToken().expiresAt(),
+                    result.refreshTokenExpiresAt()
+            );
 
-            String domain = parts[0];
-            String clientSecret = parts[1];
-
-            // Generate JWT token via TokenService
-            JwtToken token = tokenService.generateToken(domain, clientSecret);
-
-            // Convert to DTO and return
-            TokenResponseDto response = TokenResponseDto.fromToken(token);
-
-            logger.info("Device API token generated successfully: domain={}, siteId={}",
-                    domain, token.siteId());
-
+            logger.info("Token refreshed successfully: siteId={}", result.accessToken().siteId());
             return ResponseEntity.ok(response);
 
-        } catch (TokenService.AuthenticationException e) {
-            // Invalid credentials, inactive site, or non-existent domain
-            logger.warn("Device API authentication failed from {}: {}",
-                    request.getRemoteAddr(), e.getMessage());
+        } catch (RefreshTokenService.RefreshTokenExpiredException e) {
+            logger.warn("Expired refresh token from {}: {}", httpRequest.getRemoteAddr(), e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(DeviceControllerHelper.createErrorResponse(
                             HttpStatus.UNAUTHORIZED,
-                            "Unauthorized",
-                            "Invalid credentials",
-                            request.getRequestURI()));
+                            "refresh_token_expired",
+                            "Refresh token has expired. Re-authorize using Device Flow.",
+                            httpRequest.getRequestURI()));
 
-        } catch (IllegalArgumentException e) {
-            // Invalid Base64 encoding
-            logger.warn("Invalid Basic Auth encoding from {}: {}",
-                    request.getRemoteAddr(), e.getMessage());
+        } catch (RefreshTokenService.RefreshTokenRevokedException e) {
+            logger.warn("Revoked refresh token from {}: {}", httpRequest.getRemoteAddr(), e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(DeviceControllerHelper.createErrorResponse(
+                            HttpStatus.UNAUTHORIZED,
+                            "refresh_token_revoked",
+                            "Refresh token has been revoked. Re-authorize using Device Flow.",
+                            httpRequest.getRequestURI()));
+
+        } catch (RefreshTokenService.InvalidRefreshTokenException e) {
+            logger.warn("Invalid refresh token from {}: {}", httpRequest.getRemoteAddr(), e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(DeviceControllerHelper.createErrorResponse(
                             HttpStatus.BAD_REQUEST,
-                            "Bad Request",
-                            "Invalid Authorization header encoding",
-                            request.getRequestURI()));
+                            "invalid_refresh_token",
+                            e.getMessage(),
+                            httpRequest.getRequestURI()));
 
         } catch (Exception e) {
-            // Unexpected error
-            logger.error("Unexpected error during Device API token generation from {}",
-                    request.getRemoteAddr(), e);
+            logger.error("Unexpected error during token refresh from {}", httpRequest.getRemoteAddr(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(DeviceControllerHelper.createErrorResponse(
                             HttpStatus.INTERNAL_SERVER_ERROR,
                             "Internal Server Error",
                             "Internal server error",
-                            request.getRequestURI()));
+                            httpRequest.getRequestURI()));
         }
     }
 }

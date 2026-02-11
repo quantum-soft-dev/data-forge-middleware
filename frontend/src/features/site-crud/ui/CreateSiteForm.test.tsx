@@ -93,7 +93,7 @@ describe('CreateSiteForm', () => {
     it('should render all form fields', () => {
       renderForm();
 
-      expect(screen.getByLabelText(/domain/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/site name/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/display name/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /create site/i })).toBeInTheDocument();
@@ -117,7 +117,7 @@ describe('CreateSiteForm', () => {
   });
 
   describe('Form Validation', () => {
-    it('should show error when domain is empty', async () => {
+    it('should show error when site name is empty', async () => {
       const user = userEvent.setup();
       renderForm();
 
@@ -125,37 +125,7 @@ describe('CreateSiteForm', () => {
       await user.click(submitButton);
 
       await waitFor(() => {
-        expect(screen.getByText(/domain is required/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should show error when domain is too short', async () => {
-      const user = userEvent.setup();
-      renderForm();
-
-      const domainInput = screen.getByLabelText(/domain/i);
-      await user.type(domainInput, 'ab');
-
-      const submitButton = screen.getByRole('button', { name: /create site/i });
-      await user.click(submitButton);
-
-      await waitFor(() => {
-        expect(screen.getByText(/at least 3 characters/i)).toBeInTheDocument();
-      });
-    });
-
-    it('should show error when domain contains invalid characters', async () => {
-      const user = userEvent.setup();
-      renderForm();
-
-      const domainInput = screen.getByLabelText(/domain/i);
-      await user.type(domainInput, 'invalid_domain');
-
-      const submitButton = screen.getByRole('button', { name: /create site/i });
-      await user.click(submitButton);
-
-      await waitFor(() => {
-        expect(screen.getByText(/can only contain letters/i)).toBeInTheDocument();
+        expect(screen.getByText(/site name is required/i)).toBeInTheDocument();
       });
     });
 
@@ -190,7 +160,7 @@ describe('CreateSiteForm', () => {
       const user = userEvent.setup();
       renderForm();
 
-      await user.type(screen.getByLabelText(/domain/i), 'valid-domain');
+      await user.type(screen.getByLabelText(/site name/i), 'valid-site');
       await user.type(screen.getByLabelText(/display name/i), 'Valid Site');
       await user.type(screen.getByLabelText(/password/i), 'validPass123');
 
@@ -293,19 +263,18 @@ describe('CreateSiteForm', () => {
         site: {
           id: '123',
           accountId: 'acc-123',
-          domain: 'test-site',
+          siteName: 'test-site',
           name: 'Test Site',
           isActive: true,
           createdAt: '2025-01-01T00:00:00Z',
         },
         password: 'testPassword123',
-        siteIdentifier: 'acc-123_test-site',
       };
 
       mockMutateAsync.mockResolvedValue(mockResult);
       renderForm();
 
-      await user.type(screen.getByLabelText(/domain/i), 'test-site');
+      await user.type(screen.getByLabelText(/site name/i), 'test-site');
       await user.type(screen.getByLabelText(/display name/i), 'Test Site');
       await user.type(screen.getByLabelText(/password/i), 'testPassword123');
 
@@ -313,7 +282,7 @@ describe('CreateSiteForm', () => {
 
       await waitFor(() => {
         expect(mockMutateAsync).toHaveBeenCalledWith({
-          domain: 'test-site',
+          siteName: 'test-site',
           displayName: 'Test Site',
           password: 'testPassword123',
         });
@@ -326,25 +295,24 @@ describe('CreateSiteForm', () => {
         site: {
           id: '123',
           accountId: 'acc-123',
-          domain: 'test-site',
+          siteName: 'test-site',
           name: 'Test Site',
           isActive: true,
           createdAt: '2025-01-01T00:00:00Z',
         },
         password: 'GeneratedPassword',
-        siteIdentifier: 'acc-123_test-site',
       });
 
       renderForm();
 
-      await user.type(screen.getByLabelText(/domain/i), 'test-site');
+      await user.type(screen.getByLabelText(/site name/i), 'test-site');
       await user.type(screen.getByLabelText(/display name/i), 'Test Site');
 
       await user.click(screen.getByRole('button', { name: /create site/i }));
 
       await waitFor(() => {
         expect(mockMutateAsync).toHaveBeenCalledWith({
-          domain: 'test-site',
+          siteName: 'test-site',
           displayName: 'Test Site',
           password: undefined,
         });
@@ -358,19 +326,18 @@ describe('CreateSiteForm', () => {
         site: {
           id: '123',
           accountId: 'acc-123',
-          domain: 'test-site',
+          siteName: 'test-site',
           name: 'Test Site',
           isActive: true,
           createdAt: '2025-01-01T00:00:00Z',
         },
         password: 'testPassword123',
-        siteIdentifier: 'acc-123_test-site',
       };
 
       mockMutateAsync.mockResolvedValue(mockResult);
       renderForm({ onSuccess: mockOnSuccess });
 
-      await user.type(screen.getByLabelText(/domain/i), 'test-site');
+      await user.type(screen.getByLabelText(/site name/i), 'test-site');
       await user.type(screen.getByLabelText(/display name/i), 'Test Site');
       await user.type(screen.getByLabelText(/password/i), 'testPassword123');
 
@@ -387,29 +354,28 @@ describe('CreateSiteForm', () => {
         site: {
           id: '123',
           accountId: 'acc-123',
-          domain: 'test-site',
+          siteName: 'test-site',
           name: 'Test Site',
           isActive: true,
           createdAt: '2025-01-01T00:00:00Z',
         },
         password: 'testPassword123',
-        siteIdentifier: 'acc-123_test-site',
       });
 
       renderForm();
 
-      const domainInput = screen.getByLabelText(/domain/i) as HTMLInputElement;
+      const siteNameInput = screen.getByLabelText(/site name/i) as HTMLInputElement;
       const displayNameInput = screen.getByLabelText(/display name/i) as HTMLInputElement;
       const passwordInput = screen.getByLabelText(/password/i) as HTMLInputElement;
 
-      await user.type(domainInput, 'test-site');
+      await user.type(siteNameInput, 'test-site');
       await user.type(displayNameInput, 'Test Site');
       await user.type(passwordInput, 'testPassword123');
 
       await user.click(screen.getByRole('button', { name: /create site/i }));
 
       await waitFor(() => {
-        expect(domainInput.value).toBe('');
+        expect(siteNameInput.value).toBe('');
         expect(displayNameInput.value).toBe('');
         expect(passwordInput.value).toBe('');
       });
@@ -420,7 +386,7 @@ describe('CreateSiteForm', () => {
       const mockError = {
         response: {
           data: {
-            message: 'Domain already exists',
+            message: 'Site with name already exists',
           },
         },
       };
@@ -428,7 +394,7 @@ describe('CreateSiteForm', () => {
       mockMutateAsync.mockRejectedValue(mockError);
       renderForm();
 
-      await user.type(screen.getByLabelText(/domain/i), 'test-site');
+      await user.type(screen.getByLabelText(/site name/i), 'test-site');
       await user.type(screen.getByLabelText(/display name/i), 'Test Site');
       await user.type(screen.getByLabelText(/password/i), 'testPassword123');
 
@@ -436,8 +402,8 @@ describe('CreateSiteForm', () => {
 
       // Form should not be reset on error
       await waitFor(() => {
-        const domainInput = screen.getByLabelText(/domain/i) as HTMLInputElement;
-        expect(domainInput.value).toBe('test-site');
+        const siteNameInput = screen.getByLabelText(/site name/i) as HTMLInputElement;
+        expect(siteNameInput.value).toBe('test-site');
       });
     });
   });
@@ -447,17 +413,17 @@ describe('CreateSiteForm', () => {
       const user = userEvent.setup();
       renderForm();
 
-      const domainInput = screen.getByLabelText(/domain/i) as HTMLInputElement;
+      const siteNameInput = screen.getByLabelText(/site name/i) as HTMLInputElement;
       const displayNameInput = screen.getByLabelText(/display name/i) as HTMLInputElement;
       const passwordInput = screen.getByLabelText(/password/i) as HTMLInputElement;
 
-      await user.type(domainInput, 'test-site');
+      await user.type(siteNameInput, 'test-site');
       await user.type(displayNameInput, 'Test Site');
       await user.type(passwordInput, 'testPassword123');
 
       await user.click(screen.getByRole('button', { name: /clear/i }));
 
-      expect(domainInput.value).toBe('');
+      expect(siteNameInput.value).toBe('');
       expect(displayNameInput.value).toBe('');
       expect(passwordInput.value).toBe('');
     });
@@ -498,10 +464,10 @@ describe('CreateSiteForm', () => {
 
       renderForm();
 
-      const domainInput = screen.getByLabelText(/domain/i);
+      const siteNameInput = screen.getByLabelText(/site name/i);
       const submitButton = screen.getByRole('button', { name: /create site/i });
 
-      expect(domainInput).toBeDisabled();
+      expect(siteNameInput).toBeDisabled();
       expect(submitButton).toBeDisabled();
     });
   });

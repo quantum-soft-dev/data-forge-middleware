@@ -2,7 +2,7 @@
  * CreateSiteForm - Form for creating a new site with password generation.
  *
  * Features:
- * - Domain and password input fields
+ * - Site name and password input fields
  * - Password generation button
  * - Form validation with Zod + React Hook Form
  * - Automatic site creation via TanStack Query mutation
@@ -41,9 +41,9 @@ interface CreateSiteFormProps {
 
   /**
    * Callback when site is successfully created.
-   * Receives the created site data, plaintext password, and site identifier.
+   * Receives the created site data and plaintext password.
    */
-  onSuccess?: (data: { site: any; password: string; siteIdentifier: string }) => void;
+  onSuccess?: (data: { site: any; password: string }) => void;
 
   /**
    * Whether to show the form in a card layout.
@@ -58,7 +58,6 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
   const [createdSiteData, setCreatedSiteData] = useState<{
     site: any;
     password: string;
-    siteIdentifier: string;
   } | null>(null);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
 
@@ -72,7 +71,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
   } = useForm<CreateSiteFormData>({
     resolver: zodResolver(CreateSiteFormSchema),
     defaultValues: {
-      domain: '',
+      siteName: '',
       displayName: '',
       password: '',
     },
@@ -109,12 +108,12 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
   const onSubmit = async (data: CreateSiteFormData) => {
     try {
       const result = await createSiteMutation.mutateAsync({
-        domain: data.domain,
+        siteName: data.siteName,
         displayName: data.displayName,
         password: data.password || undefined,
       });
 
-      toast.success(`Site "${data.domain}" created successfully!`);
+      toast.success(`Site "${data.siteName}" created successfully!`);
 
       // Store created site data and show success dialog
       setCreatedSiteData(result);
@@ -135,26 +134,26 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
 
   const formContent = (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-      {/* Domain field */}
+      {/* Site Name field */}
       <div className="space-y-2">
-        <Label htmlFor="domain">
-          Domain <span className="text-destructive">*</span>
+        <Label htmlFor="siteName">
+          Site Name <span className="text-destructive">*</span>
         </Label>
         <Input
-          id="domain"
+          id="siteName"
           placeholder="site-1"
-          {...register('domain')}
+          {...register('siteName')}
           disabled={createSiteMutation.isPending}
-          aria-invalid={errors.domain ? 'true' : 'false'}
-          aria-describedby={errors.domain ? 'domain-error' : undefined}
+          aria-invalid={errors.siteName ? 'true' : 'false'}
+          aria-describedby={errors.siteName ? 'siteName-error' : undefined}
         />
-        {errors.domain && (
-          <p id="domain-error" className="text-sm text-destructive">
-            {errors.domain.message}
+        {errors.siteName && (
+          <p id="siteName-error" className="text-sm text-destructive">
+            {errors.siteName.message}
           </p>
         )}
         <p className="text-sm text-muted-foreground">
-          Enter the domain name (lowercase, 3-255 characters)
+          Enter the site name (1-255 characters, unicode allowed)
         </p>
       </div>
 
@@ -293,7 +292,6 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
           onOpenChange={setShowSuccessDialog}
           site={createdSiteData.site}
           password={createdSiteData.password}
-          siteIdentifier={createdSiteData.siteIdentifier}
           accountId={accountId || createdSiteData.site.accountId}
         />
       )}

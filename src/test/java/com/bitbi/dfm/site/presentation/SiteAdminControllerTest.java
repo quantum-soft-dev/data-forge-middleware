@@ -83,10 +83,8 @@ class SiteAdminControllerTest {
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
         SiteCreationResponseDto body = response.getBody();
-        assertEquals(testSite.getDomain(), body.domain());
+        assertEquals(testSite.getSiteName(), body.siteName());
         assertEquals(testSite.getDisplayName(), body.name());
-        assertNotNull(body.clientSecret());
-        assertEquals("test-secret-plaintext", body.clientSecret());
         verify(siteService, times(1)).createSite(eq(testAccountId), eq("test.example.com"), eq("Test Site"));
         verify(adminActionLogRepository, times(1)).save(any());
     }
@@ -107,7 +105,7 @@ class SiteAdminControllerTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
         SiteResponseDto body = response.getBody();
-        assertEquals(testSite.getDomain(), body.domain());
+        assertEquals(testSite.getSiteName(), body.siteName());
         assertEquals(testSite.getDisplayName(), body.name());
         verify(siteService, times(1)).getSite(testSiteId);
     }
@@ -133,8 +131,8 @@ class SiteAdminControllerTest {
         assertNotNull(response.getBody());
         List<SiteResponseDto> siteList = response.getBody();
         assertEquals(2, siteList.size());
-        assertEquals("site1.example.com", siteList.get(0).domain());
-        assertEquals("site2.example.com", siteList.get(1).domain());
+        assertEquals("site1.example.com", siteList.get(0).siteName());
+        assertEquals("site2.example.com", siteList.get(1).siteName());
         verify(siteService, times(1)).listSitesByAccount(testAccountId);
     }
 

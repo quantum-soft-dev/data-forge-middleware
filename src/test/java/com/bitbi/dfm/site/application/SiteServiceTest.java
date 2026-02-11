@@ -1,5 +1,6 @@
 package com.bitbi.dfm.site.application;
 
+import com.bitbi.dfm.auth.application.RefreshTokenService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
@@ -60,6 +61,9 @@ class SiteServiceTest {
     @Mock
     private DeviceAuthorizationRepository deviceAuthorizationRepository;
 
+    @Mock
+    private RefreshTokenService refreshTokenService;
+
     private SiteService siteService;
 
     private UUID accountId;
@@ -70,7 +74,8 @@ class SiteServiceTest {
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
         siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
-                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository);
+                                      uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository,
+                                      refreshTokenService);
     }
 
     @Test
@@ -109,7 +114,7 @@ class SiteServiceTest {
     }
 
     @Test
-    @DisplayName("deactivateSite - Should deactivate active site")
+    @DisplayName("deactivateSite - Should deactivate active site and revoke refresh tokens")
     void deactivateSite_ShouldDeactivateActiveSite() {
         // Given
         Site mockSite = mock(Site.class);
@@ -123,6 +128,7 @@ class SiteServiceTest {
         verify(siteRepository).findById(siteId);
         verify(mockSite).deactivate();
         verify(siteRepository).save(mockSite);
+        verify(refreshTokenService).revokeAllForSite(siteId);
     }
 
     @Test
@@ -232,7 +238,7 @@ class SiteServiceTest {
     void deleteSite_ShouldHardDeleteWithCascade() {
         // Given
         Site mockSite = mock(Site.class);
-        when(mockSite.getDomain()).thenReturn("test.example.com");
+        when(mockSite.getSiteName()).thenReturn("test.example.com");
         when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
 
         // Mock batches
@@ -274,49 +280,46 @@ class SiteServiceTest {
     @DisplayName("getOrCreateSiteWithNewCredentials - Should create new site when not exists")
     void getOrCreateSiteWithNewCredentials_ShouldCreateNewSiteWhenNotExists() {
         // Given
-        String domain = "test-site";
+        String siteName = "test-site";
         String displayName = "Test Site";
-        String compositeDomain = accountId + "_" + domain;
 
-        when(siteRepository.findByDomain(compositeDomain)).thenReturn(Optional.empty());
+        when(siteRepository.findByAccountIdAndSiteName(accountId, siteName)).thenReturn(Optional.empty());
         when(siteRepository.save(any(Site.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // When
         SiteService.SiteCreationResult result = siteService.getOrCreateSiteWithNewCredentials(
-                accountId, domain, displayName);
+                accountId, siteName, displayName);
 
         // Then
         assertThat(result.site()).isNotNull();
-        assertThat(result.plaintextSecret()).isNotNull();
-        assertThat(result.plaintextSecret()).isNotBlank();
-        // findByDomain is called twice: once in getOrCreateSiteWithNewCredentials, once in createSite
-        verify(siteRepository, times(2)).findByDomain(compositeDomain);
+        // Auth V2: no credentials generated
+        assertThat(result.plaintextSecret()).isNull();
+        // findByAccountIdAndSiteName is called twice: once in getOrCreateSite, once in createSite
+        verify(siteRepository, times(2)).findByAccountIdAndSiteName(accountId, siteName);
         verify(siteRepository).save(any(Site.class));
     }
 
     @Test
-    @DisplayName("getOrCreateSiteWithNewCredentials - Should regenerate credentials for existing active site")
-    void getOrCreateSiteWithNewCredentials_ShouldRegenerateCredentialsForExistingSite() {
+    @DisplayName("getOrCreateSiteWithNewCredentials - Should return existing active site without credential regeneration")
+    void getOrCreateSiteWithNewCredentials_ShouldReturnExistingActiveSite() {
         // Given
-        String domain = "existing-site";
+        String siteName = "existing-site";
         String displayName = "Existing Site";
-        String compositeDomain = accountId + "_" + domain;
 
         Site existingSite = mock(Site.class);
         when(existingSite.getIsActive()).thenReturn(true);
 
-        when(siteRepository.findByDomain(compositeDomain)).thenReturn(Optional.of(existingSite));
+        when(siteRepository.findByAccountIdAndSiteName(accountId, siteName)).thenReturn(Optional.of(existingSite));
         when(siteRepository.save(existingSite)).thenReturn(existingSite);
 
         // When
         SiteService.SiteCreationResult result = siteService.getOrCreateSiteWithNewCredentials(
-                accountId, domain, displayName);
+                accountId, siteName, displayName);
 
         // Then
         assertThat(result.site()).isEqualTo(existingSite);
-        assertThat(result.plaintextSecret()).isNotNull();
-        assertThat(result.plaintextSecret()).isNotBlank();
-        verify(existingSite).updateClientSecretHash(anyString());
+        // Auth V2: no credentials generated
+        assertThat(result.plaintextSecret()).isNull();
         verify(existingSite, never()).activate(); // Already active
         verify(siteRepository).save(existingSite);
     }
@@ -325,25 +328,24 @@ class SiteServiceTest {
     @DisplayName("getOrCreateSiteWithNewCredentials - Should reactivate deactivated site")
     void getOrCreateSiteWithNewCredentials_ShouldReactivateDeactivatedSite() {
         // Given
-        String domain = "deactivated-site";
+        String siteName = "deactivated-site";
         String displayName = "Deactivated Site";
-        String compositeDomain = accountId + "_" + domain;
 
         Site existingSite = mock(Site.class);
         when(existingSite.getIsActive()).thenReturn(false); // Deactivated
 
-        when(siteRepository.findByDomain(compositeDomain)).thenReturn(Optional.of(existingSite));
+        when(siteRepository.findByAccountIdAndSiteName(accountId, siteName)).thenReturn(Optional.of(existingSite));
         when(siteRepository.save(existingSite)).thenReturn(existingSite);
 
         // When
         SiteService.SiteCreationResult result = siteService.getOrCreateSiteWithNewCredentials(
-                accountId, domain, displayName);
+                accountId, siteName, displayName);
 
         // Then
         assertThat(result.site()).isEqualTo(existingSite);
-        assertThat(result.plaintextSecret()).isNotNull();
+        // Auth V2: no credentials generated
+        assertThat(result.plaintextSecret()).isNull();
         verify(existingSite).activate();
-        verify(existingSite).updateClientSecretHash(anyString());
         verify(siteRepository).save(existingSite);
     }
 }

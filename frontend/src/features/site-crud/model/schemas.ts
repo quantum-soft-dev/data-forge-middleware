@@ -12,21 +12,16 @@ import { z } from 'zod';
  * Schema for creating a new site.
  *
  * Validation rules match backend CreateSiteRequestDto:
- * - domain: 3-255 chars, alphanumeric + dots/hyphens (case-insensitive, stored as lowercase)
+ * - siteName: 1-255 chars, unicode allowed (case-insensitive, stored as lowercase)
  * - displayName: 2-100 chars, human-readable site name
  * - password: 8+ chars, alphanumeric, optional (auto-generated if not provided)
  */
 export const CreateSiteFormSchema = z.object({
-  domain: z
+  siteName: z
     .string()
     .trim()
-    .min(1, 'Domain is required')
-    .min(3, 'Domain must be at least 3 characters')
-    .max(255, 'Domain must be at most 255 characters')
-    .regex(
-      /^[a-zA-Z0-9.-]+$/,
-      'Domain can only contain letters, numbers, dots, and hyphens'
-    ),
+    .min(1, 'Site name is required')
+    .max(255, 'Site name must be at most 255 characters'),
   displayName: z
     .string()
     .trim()
@@ -53,16 +48,12 @@ export const CreateSiteFormSchema = z.object({
 export type CreateSiteFormData = z.infer<typeof CreateSiteFormSchema>;
 
 /**
- * Schema for site domain validation (standalone).
+ * Schema for site name validation (standalone).
  */
-export const DomainSchema = z
+export const SiteNameSchema = z
   .string()
-  .min(3, 'Domain must be at least 3 characters')
-  .max(255, 'Domain must be at most 255 characters')
-  .regex(
-    /^[a-zA-Z0-9.-]+$/,
-    'Domain can only contain letters, numbers, dots, and hyphens'
-  )
+  .min(1, 'Site name is required')
+  .max(255, 'Site name must be at most 255 characters')
   .trim();
 
 /**

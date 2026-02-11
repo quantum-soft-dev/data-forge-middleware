@@ -114,15 +114,14 @@ public class DeviceBatchController {
     })
     public ResponseEntity<?> startBatch() {
         try {
-            // Extract authenticated site/account/domain from JWT security context
+            // Extract authenticated site/account from JWT security context
             UUID siteId = authorizationHelper.getAuthenticatedSiteId();
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
-            String domain = authorizationHelper.getAuthenticatedDomain();
 
-            logger.info("Device API: Starting batch - siteId={}, domain={}", siteId, domain);
+            logger.info("Device API: Starting batch - siteId={}", siteId);
 
             // Delegate to service layer
-            Batch batch = batchLifecycleService.startBatch(accountId, siteId, domain);
+            Batch batch = batchLifecycleService.startBatch(accountId, siteId);
 
             BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);

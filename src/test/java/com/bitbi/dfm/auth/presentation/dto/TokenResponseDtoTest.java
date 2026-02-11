@@ -24,13 +24,11 @@ class TokenResponseDtoTest {
         UUID siteId = UUID.randomUUID();
         Instant expiresAt = Instant.now().plusSeconds(3600);
         String tokenString = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
-        String domain = "example.com";
 
         JwtToken jwtToken = mock(JwtToken.class);
         when(jwtToken.token()).thenReturn(tokenString);
         when(jwtToken.expiresAt()).thenReturn(expiresAt);
         when(jwtToken.siteId()).thenReturn(siteId);
-        when(jwtToken.domain()).thenReturn(domain);
 
         // When
         TokenResponseDto dto = TokenResponseDto.fromToken(jwtToken);
@@ -40,6 +38,5 @@ class TokenResponseDtoTest {
         assertEquals(tokenString, dto.token());
         assertEquals(expiresAt, dto.expiresAt());
         assertEquals(siteId, dto.siteId());
-        assertEquals(domain, dto.domain());
     }
 }

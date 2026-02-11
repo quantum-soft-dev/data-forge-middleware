@@ -23,7 +23,7 @@ export function BatchCleanupPanel({ accountId }: BatchCleanupPanelProps) {
 
   const siteOptions = useMemo(() => {
     if (!sites) return [];
-    return sites.map((site) => ({ id: site.id, label: site.domain }));
+    return sites.map((site) => ({ id: site.id, label: site.siteName }));
   }, [sites]);
 
   const runCleanup = async (executeDryRun: boolean) => {

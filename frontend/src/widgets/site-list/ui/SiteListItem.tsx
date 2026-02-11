@@ -88,7 +88,7 @@ export function SiteListItem({
             {/* Site info */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <h3 className="font-semibold text-lg truncate">{site.domain}</h3>
+                <h3 className="font-semibold text-lg truncate">{site.siteName}</h3>
                 <Badge variant={site.isActive ? 'default' : 'secondary'}>
                   {site.isActive ? (
                     <>
@@ -181,7 +181,7 @@ export function SiteListItem({
           <AlertDialogHeader>
             <AlertDialogTitle>Deactivate Site</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to deactivate <strong>{site.domain}</strong>?
+              Are you sure you want to deactivate <strong>{site.siteName}</strong>?
               <br />
               <br />
               The site will be temporarily disabled. All historical data, batches, errors, and uploads will be preserved. You can reactivate the site at any time.
@@ -206,7 +206,7 @@ export function SiteListItem({
                 ⚠️ WARNING: This action cannot be undone!
               </p>
               <p>
-                Are you sure you want to permanently delete <strong>{site.domain}</strong>?
+                Are you sure you want to permanently delete <strong>{site.siteName}</strong>?
               </p>
               <p>
                 This will permanently delete:

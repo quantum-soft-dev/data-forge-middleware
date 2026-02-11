@@ -204,7 +204,7 @@ public class SqlGenerationService {
             // Phase 2b: Store SQL file in S3 (outside transaction)
             s3Key = s3SqlFileStorageService.storeSqlFile(
                     batchData.batch.getAccountId(),
-                    batchData.site.getDomain(),
+                    batchData.site.getId(),
                     result.sqlContent
             );
             long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
@@ -654,7 +654,7 @@ public class SqlGenerationService {
             // Store SQL file in S3
             s3Key = s3SqlFileStorageService.storeSqlFile(
                     batchData.batch.getAccountId(),
-                    batchData.site.getDomain(),
+                    batchData.site.getId(),
                     result.sqlContent
             );
             long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
