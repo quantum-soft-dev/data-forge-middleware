@@ -1,5 +1,6 @@
 package com.bitbi.dfm.deviceauth.domain;
 
+import com.bitbi.dfm.site.domain.SiteType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -84,6 +85,14 @@ public class DeviceAuthorization {
     private String clientSecretHash;
 
     /**
+     * Site type requested by the device (immutable after creation).
+     * Defaults to DBF for backward compatibility.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "site_type", nullable = false, length = 20)
+    private SiteType siteType = SiteType.DBF;
+
+    /**
      * Current status of the authorization request.
      */
     @Enumerated(EnumType.STRING)
@@ -117,15 +126,17 @@ public class DeviceAuthorization {
      * @param userCode        human-readable code for user
      * @param siteName        requested site name
      * @param siteDescription optional site description
+     * @param siteType        requested site type (null → DBF)
      * @param expiresAt       when codes expire
      */
     public DeviceAuthorization(String deviceCode, String userCode,
                                String siteName, String siteDescription,
-                               Instant expiresAt) {
+                               SiteType siteType, Instant expiresAt) {
         this.deviceCode = deviceCode;
         this.userCode = userCode;
         this.siteName = siteName;
         this.siteDescription = siteDescription;
+        this.siteType = siteType != null ? siteType : SiteType.DBF;
         this.expiresAt = expiresAt;
         this.createdAt = Instant.now();
         this.status = DeviceAuthorizationStatus.PENDING;
