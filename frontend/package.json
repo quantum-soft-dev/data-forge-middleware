@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
+    "@rollup/rollup-linux-arm64-gnu": "^4.57.1",
     "@testing-library/jest-dom": "^6.1.0",
     "@testing-library/react": "^14.1.0",
     "@testing-library/user-event": "^14.6.1",
