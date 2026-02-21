@@ -25,66 +25,97 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Gemini Code Review
-        uses: sshnaidm/gemini-code-review-action@v1
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          gemini-key: ${{ secrets.GEMINI_API_KEY }}
-          model: gemini-3
-          context-lines: '15'
-          add-files: 'false'
-          review-title: 'Gemini Code Review'
-          prompt: |
-            Ты эксперт по Java и Spring Boot. Это проект Data Forge Middleware — серверное приложение для:
-            - Приёма CSV/DBF файлов от клиентов через REST API (Device Code Flow OAuth)
-            - Хранения файлов в AWS S3 с batch-обработкой
-            - Генерации SQL-дельт через Plugin-систему (Bit BI)
-            - Управления аккаунтами и сайтами с мультитенантностью
-            - React SPA для администрирования
+          python-version: '3.11'
 
-            Технологии Backend: Java 21 LTS, Spring Boot 3.5, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, PostgreSQL 16 (partitioned tables), Flyway 11, AWS SDK v2 (S3), HikariCP.
-            Технологии Frontend: React 19, TypeScript 5.6, Vite 5, TanStack Query v5, React Router v6, shadcn/ui, Tailwind CSS, @auth0/auth0-react.
+      - name: Install google-genai
+        run: pip install google-genai
 
-            Архитектура: DDD (Package by Layered Feature), агрегаты: Account, Site, Batch, ErrorLog, Plugin.
-            Аутентификация: Client API — Custom JWT (HMAC-SHA256), Admin API — Auth0 OAuth2, Plugin API — API key.
+      - name: Get PR diff
+        run: |
+          git diff -U15 ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} > pr_diff.txt
+          wc -l pr_diff.txt
 
-            Проверь код на:
+      - name: Run Gemini review
+        id: review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 << 'PYEOF'
+          import os, sys
+          from google import genai
+          from google.genai import types
 
-            ## Java / Spring Boot
-            1. Правильное использование Spring Security filter chains (multi-chain: client JWT, Auth0 OAuth2, API key)
-            2. JPA N+1 проблемы — проверь что используется JOIN FETCH в @Query
-            3. Transaction boundaries — @Transactional на уровне сервиса, не контроллера
-            4. Immutable DTOs (Java records с fromEntity() factory methods)
-            5. Optional — возвращать из репозиториев, не использовать в параметрах
-            6. Корректный error handling (400/403/404/413/500 mapping)
+          api_key = os.environ.get("GEMINI_API_KEY", "")
+          if not api_key:
+              print("ERROR: GEMINI_API_KEY not set")
+              sys.exit(1)
 
-            ## PostgreSQL / Flyway
-            7. Миграции идемпотентны и безопасны для rollback
-            8. Правильное партиционирование (monthly range для error_logs, audit_logs)
-            9. Индексы для cursor pagination запросов
-            10. Soft delete (isActive flag) — проверь что фильтруется в запросах
+          with open("pr_diff.txt", "r") as f:
+              diff = f.read()
 
-            ## Безопасность
-            11. Мультитенантность — accountId проверяется в каждом endpoint
-            12. JWT validation (HMAC-SHA256 для client, Auth0 RS256 для admin)
-            13. Нет утечки credentials в логах (BCrypt для API keys, DPAPI)
-            14. SQL injection prevention (параметризованные запросы)
-            15. OWASP Top 10 (XSS, CSRF, injection)
+          if not diff.strip():
+              print("No diff found, skipping review")
+              with open("review.txt", "w") as f:
+                  f.write("## Gemini Code Review\n\nНет изменений для ревью.")
+              sys.exit(0)
 
-            ## React / TypeScript Frontend
-            16. TanStack Query — правильные queryKey, staleTime, cache invalidation
-            17. Auth0 React SDK — корректный redirect flow, token refresh
-            18. Zod validation на формах
-            19. Feature-Sliced Design (features/widgets/pages structure)
+          prompt = f"""## Изменения в PR (diff):
+```
+{diff[:30000]}
+```
 
-            ## Производительность
-            20. Batch operations — один активный batch на site, max 5 на account
-            21. S3 upload — retry (3 attempts, 1s delay), presigned URLs (15min)
-            22. Cursor pagination для больших datasets
-            23. 60-minute batch timeout scheduled task
+Ты эксперт по Java и Spring Boot. Это проект Data Forge Middleware — серверное приложение для:
+- Приёма CSV/DBF файлов от клиентов через REST API (Device Code Flow OAuth)
+- Хранения файлов в AWS S3 с batch-обработкой
+- Генерации SQL-дельт через Plugin-систему (Bit BI)
+- Управления аккаунтами и сайтами с мультитенантностью
+- React SPA для администрирования
 
-            Формат ответа:
-            - 🔴 **Критично**: проблемы безопасности, data leaks, баги
-            - 🟡 **Рекомендация**: улучшения качества кода
-            - 🟢 **Хорошо**: отметь удачные решения
+Технологии Backend: Java 21 LTS, Spring Boot 3.5, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, PostgreSQL 16, Flyway 11, AWS SDK v2 (S3).
+Технологии Frontend: React 19, TypeScript 5.6, Vite 5, TanStack Query v5, shadcn/ui, Tailwind CSS.
+Архитектура: DDD (Package by Layered Feature), агрегаты: Account, Site, Batch, ErrorLog, Plugin.
 
-            Отвечай на русском языке. Будь конкретен — указывай номера строк и предлагай исправления.
+Проверь код на:
+1. Корректный error handling (400/403/404/413/500 mapping)
+2. Transaction boundaries (@Transactional на уровне сервиса)
+3. JPA N+1 (JOIN FETCH в @Query)
+4. Мультитенантность (accountId проверяется в каждом endpoint)
+5. Безопасность (SQL injection, XSS, secrets в логах)
+6. Качество unit-тестов (покрытие, edge cases)
+
+Формат ответа:
+- 🔴 **Критично**: баги, проблемы безопасности
+- 🟡 **Рекомендация**: улучшения кода
+- 🟢 **Хорошо**: удачные решения
+
+Отвечай на русском языке. Указывай файлы и строки."""
+
+          try:
+              client = genai.Client(api_key=api_key)
+              response = client.models.generate_content(
+                  model="gemini-3",
+                  contents=prompt,
+                  config=types.GenerateContentConfig(temperature=0.0)
+              )
+              review = response.text
+          except Exception as e:
+              print(f"Gemini API error: {e}")
+              review = f"Ошибка вызова Gemini API: {e}"
+
+          with open("review.txt", "w") as f:
+              f.write("## Gemini Code Review\n\n")
+              f.write(review)
+
+          print("Review written to review.txt")
+          PYEOF
+
+      - name: Post review comment
+        if: always()
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: review.txt
+          reactions: '+1'
