@@ -461,6 +461,30 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle SchemaRequiredException (400 Bad Request).
+     * <p>
+     * Thrown when a POSTGRES_CDC site attempts to start a batch without a registered schema.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.SchemaRequiredException.class)
+    public ResponseEntity<ErrorResponseDto> handleSchemaRequired(
+            com.bitbi.dfm.batch.application.BatchLifecycleService.SchemaRequiredException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Schema required: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
      * Handle BatchNotFoundException (404 Not Found).
      */
     @ExceptionHandler(com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException.class)
