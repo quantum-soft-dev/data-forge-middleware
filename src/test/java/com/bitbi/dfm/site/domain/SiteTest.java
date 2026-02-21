@@ -177,12 +177,13 @@ class SiteTest {
         try {
             java.lang.reflect.Constructor<Site> constructor = Site.class.getDeclaredConstructor(
                     UUID.class, UUID.class, String.class, String.class, String.class,
-                    String.class, Boolean.class, Integer.class, LocalDateTime.class, LocalDateTime.class
+                    SiteType.class, String.class, Boolean.class, Integer.class,
+                    LocalDateTime.class, LocalDateTime.class
             );
             constructor.setAccessible(true);
             return constructor.newInstance(
                     id, accountId, domain, siteName, "$2a$10$dummyHash",
-                    "Test Site", true, 45, now, now
+                    SiteType.DBF, "Test Site", true, 45, now, now
             );
         } catch (Exception e) {
             throw new RuntimeException("Failed to create Site for testing", e);

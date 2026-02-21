@@ -64,6 +64,9 @@ class SiteServiceTest {
     @Mock
     private RefreshTokenService refreshTokenService;
 
+    @Mock
+    private com.bitbi.dfm.site.application.SiteSchemaService siteSchemaService;
+
     private SiteService siteService;
 
     private UUID accountId;
@@ -75,7 +78,7 @@ class SiteServiceTest {
         siteId = UUID.randomUUID();
         siteService = new SiteService(siteRepository, batchRepository, errorLogRepository,
                                       uploadedFileRepository, s3FileStorageService, deviceAuthorizationRepository,
-                                      refreshTokenService);
+                                      refreshTokenService, siteSchemaService);
     }
 
     @Test
