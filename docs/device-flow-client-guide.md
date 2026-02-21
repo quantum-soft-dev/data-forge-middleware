@@ -119,13 +119,16 @@ This code expires in 15 minutes.
 
 ### Success Response (200 OK)
 
-User has approved. Site created. Credentials returned:
+User has approved. Site created. Tokens returned:
 
 ```json
 {
   "siteId": "550e8400-e29b-41d4-a716-446655440000",
-  "domain": "c823d8b8-0e6f-4242-a350-d6ef335ab4e8_warehouse-01",
-  "clientSecret": "dGhpcyBpcyBhIHNlY3JldCBrZXk=",
+  "siteName": "warehouse-01",
+  "accessToken": "eyJhbGci...",
+  "refreshToken": "dGhpcyBpcyBhIHJlZnJlc2g...",
+  "accessTokenExpiresAt": "2026-02-21T11:35:00Z",
+  "refreshTokenExpiresAt": "2026-05-22T10:35:00Z",
   "apiBaseUrl": "https://dev.dfm.bitbi.io"
 }
 ```
@@ -133,8 +136,11 @@ User has approved. Site created. Credentials returned:
 | Field | Description |
 |-------|-------------|
 | `siteId` | UUID of created site |
-| `domain` | Domain for Basic Auth (username) |
-| `clientSecret` | Secret for Basic Auth (password). **Returned only once!** |
+| `siteName` | Site name |
+| `accessToken` | JWT for Batch API calls (valid ~1 hour) |
+| `refreshToken` | Opaque token for obtaining new access tokens (valid ~90 days, 43 chars) |
+| `accessTokenExpiresAt` | ISO 8601 timestamp when access token expires |
+| `refreshTokenExpiresAt` | ISO 8601 timestamp when refresh token expires |
 | `apiBaseUrl` | Base URL for API requests |
 
 ### Error Responses (400)
@@ -174,25 +180,61 @@ User has approved. Site created. Credentials returned:
 
 ## Step 4: Use Credentials for Batch API
 
-Once you have credentials, use them for Batch API authentication:
+Once you have tokens, use the `accessToken` for all Batch API calls:
 
 ### Authentication
 
-Use **HTTP Basic Authentication**:
-- **Username:** `domain` value
-- **Password:** `clientSecret` value
-
 ```
-Authorization: Basic base64(domain:clientSecret)
+Authorization: Bearer {accessToken}
 ```
 
 ### Example: Initiate Batch Upload
 
 ```bash
 curl -X POST "https://dev.dfm.bitbi.io/api/v1/device/batches" \
-  -u "c823d8b8-0e6f-4242-a350-d6ef335ab4e8_warehouse-01:dGhpcyBpcyBhIHNlY3JldCBrZXk=" \
+  -H "Authorization: Bearer eyJhbGci..." \
   -H "Content-Type: application/json"
 ```
+
+---
+
+## Step 5: Token Refresh
+
+Access tokens expire after ~1 hour. When `accessTokenExpiresAt` is reached or you receive a `401 Unauthorized`, refresh the token.
+
+**Endpoint:** `POST /api/v1/device/auth/refresh`
+
+**Authentication:** None (public endpoint)
+
+**Request:**
+```json
+{
+  "refreshToken": "dGhpcyBpcyBhIHJlZnJlc2g..."
+}
+```
+
+| Field | Type | Required | Constraints |
+|-------|------|----------|-------------|
+| `refreshToken` | string | Yes | 43 chars, pattern `^[A-Za-z0-9_-]{43}$` |
+
+**Response (200 OK):**
+```json
+{
+  "accessToken": "eyJhbGci...",
+  "refreshToken": "bmV3UmVmcmVzaFRva2Vu...",
+  "accessTokenExpiresAt": "2026-02-21T12:35:00Z",
+  "refreshTokenExpiresAt": "2026-05-22T10:35:00Z"
+}
+```
+
+> **Note:** The refresh endpoint may rotate the `refreshToken`. Always store the latest returned value.
+
+**Error Responses:**
+
+| Status | Description | Action |
+|--------|-------------|--------|
+| 400 | Invalid or expired refresh token | Re-run Device Authorization Flow (Steps 1–3) |
+| 401 | Refresh token revoked | Re-run Device Authorization Flow (Steps 1–3) |
 
 ---
 
@@ -275,7 +317,6 @@ def poll_for_credentials(device_code: str, interval: int, expires_in: int) -> di
 ```python
 import requests
 import time
-import base64
 
 class DeviceAuthClient:
     def __init__(self, base_url: str = "https://dev.dfm.bitbi.io"):
@@ -331,13 +372,11 @@ class DeviceAuthClient:
         raise Exception("Authorization timeout")
 
     def get_auth_header(self) -> str:
-        """Get Basic Auth header for API requests."""
+        """Get Bearer auth header for API requests."""
         if not self.credentials:
             raise Exception("Not authenticated")
 
-        auth_string = f"{self.credentials['domain']}:{self.credentials['clientSecret']}"
-        encoded = base64.b64encode(auth_string.encode()).decode()
-        return f"Basic {encoded}"
+        return f"Bearer {self.credentials['accessToken']}"
 
     def upload_file(self, file_path: str):
         """Step 4: Upload file using credentials."""
@@ -396,8 +435,9 @@ if __name__ == "__main__":
 
     # Store credentials for future use
     print(f"\nSite ID: {credentials['siteId']}")
-    print(f"Domain: {credentials['domain']}")
-    print(f"Secret: {credentials['clientSecret']} (save this!)")
+    print(f"Site name: {credentials['siteName']}")
+    print(f"Access token expires: {credentials['accessTokenExpiresAt']}")
+    print(f"Refresh token (save securely): {credentials['refreshToken']}")
 ```
 
 ---
@@ -462,10 +502,7 @@ class DeviceAuthClient {
 
   getAuthHeader() {
     if (!this.credentials) throw new Error('Not authenticated');
-    const auth = Buffer.from(
-      `${this.credentials.domain}:${this.credentials.clientSecret}`
-    ).toString('base64');
-    return `Basic ${auth}`;
+    return `Bearer ${this.credentials.accessToken}`;
   }
 
   sleep(ms) {
@@ -494,8 +531,9 @@ async function main() {
 
   // Step 4: Use credentials
   console.log(`\nSite ID: ${credentials.siteId}`);
-  console.log(`Domain: ${credentials.domain}`);
-  console.log(`Secret: ${credentials.clientSecret} (save this!)`);
+  console.log(`Site name: ${credentials.siteName}`);
+  console.log(`Access token expires: ${credentials.accessTokenExpiresAt}`);
+  console.log(`Refresh token (save securely): ${credentials.refreshToken}`);
 }
 
 main().catch(console.error);
@@ -553,8 +591,10 @@ while [ $(date +%s) -lt $END_TIME ]; do
     echo "Authorized!"
     echo ""
     echo "Site ID: $(echo $RESPONSE | jq -r '.siteId')"
-    echo "Domain: $(echo $RESPONSE | jq -r '.domain')"
-    echo "Secret: $(echo $RESPONSE | jq -r '.clientSecret')"
+    echo "Site name: $(echo $RESPONSE | jq -r '.siteName')"
+    echo "Access token: $(echo $RESPONSE | jq -r '.accessToken')"
+    echo "Access token expires: $(echo $RESPONSE | jq -r '.accessTokenExpiresAt')"
+    echo "Refresh token (save securely): $(echo $RESPONSE | jq -r '.refreshToken')"
     exit 0
   fi
 
@@ -604,31 +644,31 @@ exit 1
 
 ## Security Best Practices
 
-1. **Store `clientSecret` securely** - It's returned only once!
+1. **Store `refreshToken` securely** — the refresh token is the primary long-lived credential
 2. **Keep `deviceCode` secret** - Only device should know it
 3. **Use HTTPS** - All API calls must use HTTPS
-4. **Implement credential storage** - Save credentials for reuse
-5. **Handle secret rotation** - Re-authorize if secret is lost
+4. **Implement credential storage** - Save `refreshToken` and `refreshTokenExpiresAt` for reuse
+5. **Handle expiry** — if `refreshToken` expires, re-run the Device Authorization Flow
 
 ---
 
 ## Credential Persistence
 
-After successful authorization, store credentials securely:
+After successful authorization, store the refresh token in your config file. For Rust CLI clients, use a `[auth]` section in `config.toml`:
 
-```json
-{
-  "siteId": "550e8400-e29b-41d4-a716-446655440000",
-  "domain": "c823d8b8-0e6f-4242-a350-d6ef335ab4e8_warehouse-01",
-  "clientSecret": "dGhpcyBpcyBhIHNlY3JldCBrZXk=",
-  "apiBaseUrl": "https://dev.dfm.bitbi.io",
-  "authorizedAt": "2025-01-12T10:30:00Z"
-}
+```toml
+[auth]
+site_id = "550e8400-e29b-41d4-a716-446655440000"
+site_name = "warehouse-01"
+refresh_token = "dGhpcyBpcyBhIHJlZnJlc2g..."   # 43 chars, opaque
+refresh_token_expires_at = "2026-05-22T10:35:00Z"
+api_base_url = "https://dev.dfm.bitbi.io"
+# access_token is not stored — obtain via refresh on each startup
 ```
 
-On next startup, check if credentials exist:
-- **Yes**: Use stored credentials for Batch API
-- **No**: Run Device Authorization Flow
+**Startup logic:**
+1. If `[auth]` section exists and `refresh_token_expires_at` is in the future → call `POST /api/v1/device/auth/refresh` to obtain a fresh `accessToken`, then skip Device Flow
+2. Otherwise → run Device Authorization Flow (Steps 1–3) to get new tokens
 
 ---
 
@@ -641,7 +681,7 @@ On next startup, check if credentials exist:
 | `access_denied` | User clicked Deny | Restart authorization |
 | `expired_token` | Took too long | Restart authorization (15 min limit) |
 | `invalid_grant` | Wrong deviceCode | Check you're using correct code |
-| 401 on Batch API | Wrong credentials | Verify domain and clientSecret |
+| 401 on Batch API | Expired or invalid access token | Refresh via `POST /api/v1/device/auth/refresh` |
 
 ---
 

@@ -118,37 +118,44 @@ Content-Type: application/json
 ```json
 {
   "siteId": "550e8400-e29b-41d4-a716-446655440000",
-  "domain": "acct123_pg-cdc-prod",
-  "clientSecret": "dGhpcyBpcyBhIHNlY3JldCBrZXk=",
+  "siteName": "pg-cdc-prod",
+  "accessToken": "eyJhbGci...",
+  "refreshToken": "dGhpcyBpcyBhIHJlZnJlc2g...",
+  "accessTokenExpiresAt": "2026-02-21T11:35:00Z",
+  "refreshTokenExpiresAt": "2026-05-22T10:35:00Z",
   "apiBaseUrl": "https://api.dataforge.com"
 }
 ```
 
-> **Important:** Store `clientSecret` securely — it is returned only once.
-
 See [Device Flow Client Guide](./device-flow-client-guide.md) for full polling logic and error handling.
 
-### 1.3 Obtain JWT Token
+### 1.3 Use the Access Token
 
-Use the credentials to obtain a JWT access token:
+The `accessToken` received in step 1.2 is used directly for all subsequent API calls:
+
+```
+Authorization: Bearer {accessToken}
+```
+
+Access tokens are valid for ~1 hour. When `accessTokenExpiresAt` is reached or you receive a `401 Unauthorized`, obtain a new token:
 
 ```http
-POST /api/dfc/auth/token
-Authorization: Basic base64({domain}:{clientSecret})
+POST /api/v1/device/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "dGhpcyBpcyBhIHJlZnJlc2g..."
+}
 ```
 
 **Response (200 OK):**
 ```json
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4...",
-  "expiresIn": 3600
+  "accessToken": "eyJhbGci...",
+  "refreshToken": "bmV3UmVmcmVzaFRva2Vu...",
+  "accessTokenExpiresAt": "2026-02-21T12:35:00Z",
+  "refreshTokenExpiresAt": "2026-05-22T10:35:00Z"
 }
-```
-
-All subsequent API calls use this JWT:
-```
-Authorization: Bearer {accessToken}
 ```
 
 ---
@@ -195,8 +202,6 @@ Content-Type: application/json
 {
   "siteId": "550e8400-e29b-41d4-a716-446655440000",
   "schemaVersion": 1,
-  "tablesCount": 2,
-  "tables": ["customers", "orders"],
   "updatedAt": "2026-02-21T10:30:00Z"
 }
 ```
@@ -228,8 +233,10 @@ Authorization: Bearer {accessToken}
 ```json
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "siteId": "550e8400-e29b-41d4-a716-446655440000",
   "status": "IN_PROGRESS",
-  "startedAt": "2026-02-21T10:35:00Z"
+  "createdAt": "2026-02-21T10:35:00Z",
+  "updatedAt": "2026-02-21T10:35:00Z"
 }
 ```
 
@@ -249,7 +256,7 @@ files: orders.csv.gz
 CSV format requirements:
 - First row = column headers (must match schema column names)
 - Gzip compression supported (`.csv.gz`)
-- Max file size: 128 MB per file
+- Max file size: 500 MB per file
 - UTF-8 encoding
 
 **Response (200 OK):**
@@ -391,8 +398,6 @@ Content-Type: application/json
 {
   "siteId": "550e8400-e29b-41d4-a716-446655440000",
   "schemaVersion": 2,
-  "tablesCount": 2,
-  "tables": ["customers", "orders"],
   "updatedAt": "2026-02-21T14:00:00Z"
 }
 ```
@@ -407,8 +412,6 @@ Content-Type: application/json
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/dfc/auth/token` | Obtain JWT (Basic Auth) |
-| `POST` | `/api/dfc/auth/refresh` | Refresh JWT |
 | `POST` | `/api/dfc/schema` | Submit/update table schema |
 | `POST` | `/api/dfc/batch/start` | Start new batch |
 | `POST` | `/api/dfc/batch/{id}/upload` | Upload files to batch |
@@ -425,6 +428,7 @@ Content-Type: application/json
 |--------|----------|-------------|
 | `POST` | `/api/v1/device/authorize` | Initiate device authorization |
 | `POST` | `/api/v1/device/token` | Poll for credentials |
+| `POST` | `/api/v1/device/auth/refresh` | Refresh access token |
 
 ---
 
@@ -609,7 +613,7 @@ Deletes a row. `k` identifies the row by primary key.
 | 403 | Forbidden (wrong site, inactive site) |
 | 404 | Resource not found |
 | 409 | Conflict (active batch already exists for site) |
-| 413 | File too large (> 128 MB) |
+| 413 | File too large (> 500 MB) |
 | 429 | Too many requests / concurrent batch limit |
 | 500 | Server error |
 
@@ -689,17 +693,6 @@ class PostgresCdcClient:
             raise Exception(f"Authorization failed: {error}")
         raise Exception("Authorization timeout")
 
-    def obtain_jwt(self, domain: str, client_secret: str):
-        """Obtain JWT access token using Basic Auth credentials."""
-        resp = requests.post(
-            f"{self.base_url}/api/dfc/auth/token",
-            auth=(domain, client_secret)
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        self.access_token = data["accessToken"]
-        self.refresh_token = data["refreshToken"]
-
     # ── Step 2: Submit Schema ─────────────────────────────────────
 
     def submit_schema(self, tables: dict):
@@ -717,7 +710,7 @@ class PostgresCdcClient:
         )
         resp.raise_for_status()
         result = resp.json()
-        print(f"Schema v{result['schemaVersion']} submitted: {result['tables']}")
+        print(f"Schema v{result['schemaVersion']} submitted")
         return result
 
     # ── Step 3: Initial Load (CSV) ────────────────────────────────
@@ -814,7 +807,8 @@ if __name__ == "__main__":
     creds = client.poll_for_credentials(
         auth["deviceCode"], auth["interval"], auth["expiresIn"]
     )
-    client.obtain_jwt(creds["domain"], creds["clientSecret"])
+    client.site_id = creds["siteId"]
+    client.access_token = creds["accessToken"]
 
     # 2. Submit schema
     client.submit_schema({
@@ -856,8 +850,8 @@ if __name__ == "__main__":
 | `400` "Table name contains invalid characters" | Table name has spaces, dots, or special chars | Use only `[a-zA-Z_][a-zA-Z0-9_]*` |
 | Missing operations in generated SQL | Malformed JSONL line skipped | Check server logs for JSONL parse warnings |
 | `409` "Site already has an active batch" | Previous batch not completed/cancelled | Complete or cancel the active batch first |
-| `413` "File too large" | File exceeds 128 MB | Split data into smaller files |
-| `401` on any request | JWT expired | Refresh token via `POST /api/dfc/auth/refresh` |
+| `413` "File too large" | File exceeds 500 MB | Split data into smaller files |
+| `401` on any request | Access token expired | Refresh via `POST /api/v1/device/auth/refresh` |
 
 ### Extracting Schema from PostgreSQL
 

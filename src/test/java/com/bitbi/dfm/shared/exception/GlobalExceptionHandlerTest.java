@@ -235,6 +235,46 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("Should handle SiteInactiveException with 403 Forbidden")
+    void shouldHandleSiteInactiveException() {
+        // Given
+        com.bitbi.dfm.batch.application.BatchLifecycleService.SiteInactiveException ex =
+                new com.bitbi.dfm.batch.application.BatchLifecycleService.SiteInactiveException(
+                        "Cannot start batch for inactive site");
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleSiteInactive(ex, request);
+
+        // Then
+        assertNotNull(response);
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(403, response.getBody().status());
+        assertEquals("Forbidden", response.getBody().error());
+        assertTrue(response.getBody().message().contains("Cannot start batch for inactive site"));
+    }
+
+    @Test
+    @DisplayName("Should handle SchemaRequiredException with 400 Bad Request")
+    void shouldHandleSchemaRequiredException() {
+        // Given
+        com.bitbi.dfm.batch.application.BatchLifecycleService.SchemaRequiredException ex =
+                new com.bitbi.dfm.batch.application.BatchLifecycleService.SchemaRequiredException(
+                        "Schema required for POSTGRES_CDC sites");
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleSchemaRequired(ex, request);
+
+        // Then
+        assertNotNull(response);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(400, response.getBody().status());
+        assertEquals("Bad Request", response.getBody().error());
+        assertTrue(response.getBody().message().contains("Schema required for POSTGRES_CDC sites"));
+    }
+
+    @Test
     @DisplayName("Should handle empty validation errors gracefully")
     void shouldHandleEmptyValidationErrorsGracefully() {
         // Given: MethodArgumentNotValidException with no field errors
