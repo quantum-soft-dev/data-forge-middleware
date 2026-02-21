@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -45,6 +46,7 @@ public class SiteService {
     private final S3FileStorageService s3FileStorageService;
     private final DeviceAuthorizationRepository deviceAuthorizationRepository;
     private final RefreshTokenService refreshTokenService;
+    private final SiteSchemaService siteSchemaService;
 
     public SiteService(SiteRepository siteRepository,
                        BatchRepository batchRepository,
@@ -52,7 +54,8 @@ public class SiteService {
                        UploadedFileRepository uploadedFileRepository,
                        S3FileStorageService s3FileStorageService,
                        DeviceAuthorizationRepository deviceAuthorizationRepository,
-                       RefreshTokenService refreshTokenService) {
+                       RefreshTokenService refreshTokenService,
+                       SiteSchemaService siteSchemaService) {
         this.siteRepository = siteRepository;
         this.batchRepository = batchRepository;
         this.errorLogRepository = errorLogRepository;
@@ -60,6 +63,7 @@ public class SiteService {
         this.s3FileStorageService = s3FileStorageService;
         this.deviceAuthorizationRepository = deviceAuthorizationRepository;
         this.refreshTokenService = refreshTokenService;
+        this.siteSchemaService = siteSchemaService;
     }
 
     /**
@@ -426,7 +430,10 @@ public class SiteService {
         deviceAuthorizationRepository.deleteBySiteId(siteId);
         logger.info("Deleted device authorizations for site: {}", siteId);
 
-        // Step 6: Delete the site itself
+        // Step 6: Delete site schema (also deleted by DB CASCADE, but explicit for clarity)
+        siteSchemaService.deleteSchema(siteId);
+
+        // Step 7: Delete the site itself
         logger.info("Deleting site record: id={}", siteId);
         siteRepository.deleteById(siteId);
 
