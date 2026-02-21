@@ -36,19 +36,21 @@ jobs:
       - name: Get PR diff
         run: |
           git diff -U15 ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} > pr_diff.txt
-          wc -l pr_diff.txt
+          echo "Diff lines: $(wc -l < pr_diff.txt)"
 
       - name: Run Gemini review
         id: review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MODEL: gemini-3
         run: |
-          python3 << 'PYEOF'
+          cat > gemini_review.py << 'SCRIPT_EOF'
           import os, sys
           from google import genai
           from google.genai import types
 
           api_key = os.environ.get("GEMINI_API_KEY", "")
+          model = os.environ.get("MODEL", "gemini-3")
           if not api_key:
               print("ERROR: GEMINI_API_KEY not set")
               sys.exit(1)
@@ -57,46 +59,32 @@ jobs:
               diff = f.read()
 
           if not diff.strip():
-              print("No diff found, skipping review")
               with open("review.txt", "w") as f:
                   f.write("## Gemini Code Review\n\nНет изменений для ревью.")
               sys.exit(0)
 
-          prompt = f"""## Изменения в PR (diff):
-```
-{diff[:30000]}
-```
-
-Ты эксперт по Java и Spring Boot. Это проект Data Forge Middleware — серверное приложение для:
-- Приёма CSV/DBF файлов от клиентов через REST API (Device Code Flow OAuth)
-- Хранения файлов в AWS S3 с batch-обработкой
-- Генерации SQL-дельт через Plugin-систему (Bit BI)
-- Управления аккаунтами и сайтами с мультитенантностью
-- React SPA для администрирования
-
-Технологии Backend: Java 21 LTS, Spring Boot 3.5, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, PostgreSQL 16, Flyway 11, AWS SDK v2 (S3).
-Технологии Frontend: React 19, TypeScript 5.6, Vite 5, TanStack Query v5, shadcn/ui, Tailwind CSS.
-Архитектура: DDD (Package by Layered Feature), агрегаты: Account, Site, Batch, ErrorLog, Plugin.
-
-Проверь код на:
-1. Корректный error handling (400/403/404/413/500 mapping)
-2. Transaction boundaries (@Transactional на уровне сервиса)
-3. JPA N+1 (JOIN FETCH в @Query)
-4. Мультитенантность (accountId проверяется в каждом endpoint)
-5. Безопасность (SQL injection, XSS, secrets в логах)
-6. Качество unit-тестов (покрытие, edge cases)
-
-Формат ответа:
-- 🔴 **Критично**: баги, проблемы безопасности
-- 🟡 **Рекомендация**: улучшения кода
-- 🟢 **Хорошо**: удачные решения
-
-Отвечай на русском языке. Указывай файлы и строки."""
+          prompt = (
+              "Изменения в PR (diff):\n"
+              + diff[:30000]
+              + "\n\n"
+              + "Ты эксперт по Java и Spring Boot. Data Forge Middleware:\n"
+              + "- REST API (Device Code Flow OAuth), AWS S3, PostgreSQL 16, Spring Boot 3.5\n"
+              + "- DDD архитектура, агрегаты: Account, Site, Batch, ErrorLog, Plugin\n\n"
+              + "Проверь на:\n"
+              + "1. Error handling (400/403/404/413/500)\n"
+              + "2. @Transactional на уровне сервиса\n"
+              + "3. JPA N+1 (JOIN FETCH)\n"
+              + "4. Мультитенантность (accountId)\n"
+              + "5. Безопасность (SQL injection, XSS)\n"
+              + "6. Качество unit-тестов\n\n"
+              + "Формат: 🔴 Критично / 🟡 Рекомендация / 🟢 Хорошо\n"
+              + "Отвечай на русском. Указывай файлы и строки."
+          )
 
           try:
               client = genai.Client(api_key=api_key)
               response = client.models.generate_content(
-                  model="gemini-3",
+                  model=model,
                   contents=prompt,
                   config=types.GenerateContentConfig(temperature=0.0)
               )
@@ -109,8 +97,9 @@ jobs:
               f.write("## Gemini Code Review\n\n")
               f.write(review)
 
-          print("Review written to review.txt")
-          PYEOF
+          print("Review complete")
+          SCRIPT_EOF
+          python3 gemini_review.py
 
       - name: Post review comment
         if: always()
