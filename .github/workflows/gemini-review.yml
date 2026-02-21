@@ -42,7 +42,7 @@ jobs:
         id: review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          MODEL: gemini-3
+          MODEL: gemini-2.5-flash
         run: |
           cat > gemini_review.py << 'SCRIPT_EOF'
           import os, sys
@@ -50,7 +50,7 @@ jobs:
           from google.genai import types
 
           api_key = os.environ.get("GEMINI_API_KEY", "")
-          model = os.environ.get("MODEL", "gemini-3")
+          model = os.environ.get("MODEL", "gemini-2.5-flash")
           if not api_key:
               print("ERROR: GEMINI_API_KEY not set")
               sys.exit(1)
