@@ -69,11 +69,11 @@ springdoc:
 
 # Device Authorization Flow Configuration (dev environment)
 device-authorization:
-  verification-uri: https://dev.dfm.bitbi.io/device-verify
+  verification-uri: http://localhost:3000/device-verify
 
 # Application base URL (dev environment)
 app:
-  api-base-url: https://dev.dfm.bitbi.io
+  api-base-url: ${APP_API_BASE_URL:http://localhost:8080}
 
 logging:
   level:
