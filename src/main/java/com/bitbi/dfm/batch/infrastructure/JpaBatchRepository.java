@@ -347,4 +347,21 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
         """,
         nativeQuery = true)
     Page<Batch> findCompletedByAccountIdAndOptionalSiteId(UUID accountId, UUID siteId, Pageable pageable);
+
+    /**
+     * Finds the most recent completed batch for a site.
+     * Used by heartbeat to return last completed batch info.
+     *
+     * @param siteId The site ID
+     * @return Optional containing the most recent completed batch
+     */
+    @Query("""
+        SELECT b
+        FROM Batch b
+        WHERE b.siteId = :siteId
+          AND b.status IN ('COMPLETED', 'COMPLETED_WITH_WARNINGS')
+        ORDER BY b.completedAt DESC
+        LIMIT 1
+        """)
+    Optional<Batch> findLatestCompletedBySiteId(UUID siteId);
 }

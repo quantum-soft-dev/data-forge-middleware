@@ -4,6 +4,7 @@ import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.shared.exception.HeartbeatRequiredException;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -19,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -60,7 +62,7 @@ class BatchLifecycleServiceTest {
         accountProperties = new AccountProperties();
         accountProperties.setMaxConcurrentBatches(5);
         service = new BatchLifecycleService(batchRepository, eventPublisher, accountProperties,
-                siteRepository, siteSchemaService);
+                siteRepository, siteSchemaService, 5);
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
         batchId = UUID.randomUUID();
@@ -72,6 +74,7 @@ class BatchLifecycleServiceTest {
         Site site = mock(Site.class);
         when(site.getIsActive()).thenReturn(true);
         when(site.getSiteType()).thenReturn(siteType);
+        when(site.getLastHeartbeatAt()).thenReturn(LocalDateTime.now()); // recent heartbeat
         when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
         return site;
     }
@@ -114,6 +117,51 @@ class BatchLifecycleServiceTest {
             assertThatThrownBy(() -> service.startBatch(accountId, siteId))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Site not found");
+        }
+    }
+
+    @Nested
+    @DisplayName("startBatch() — heartbeat validation")
+    class StartBatchHeartbeatValidation {
+
+        @Test
+        @DisplayName("should throw HeartbeatRequiredException when no heartbeat recorded")
+        void shouldThrowWhenNoHeartbeat() {
+            Site site = mock(Site.class);
+            when(site.getIsActive()).thenReturn(true);
+            when(site.getId()).thenReturn(siteId);
+            when(site.getLastHeartbeatAt()).thenReturn(null);
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+
+            assertThatThrownBy(() -> service.startBatch(accountId, siteId))
+                    .isInstanceOf(HeartbeatRequiredException.class)
+                    .hasMessageContaining("Heartbeat required");
+        }
+
+        @Test
+        @DisplayName("should throw HeartbeatRequiredException when heartbeat is expired")
+        void shouldThrowWhenHeartbeatExpired() {
+            Site site = mock(Site.class);
+            when(site.getIsActive()).thenReturn(true);
+            when(site.getId()).thenReturn(siteId);
+            when(site.getLastHeartbeatAt()).thenReturn(LocalDateTime.now().minusMinutes(10)); // older than 5min interval
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+
+            assertThatThrownBy(() -> service.startBatch(accountId, siteId))
+                    .isInstanceOf(HeartbeatRequiredException.class);
+        }
+
+        @Test
+        @DisplayName("should pass heartbeat check when heartbeat is recent")
+        void shouldPassWhenHeartbeatRecent() {
+            mockActiveSite(SiteType.DBF); // sets recent heartbeat
+            setupNoActiveBatchForSite();
+            setupConcurrentBatchCount(0);
+            mockSavedBatch();
+
+            Batch result = service.startBatch(accountId, siteId);
+
+            assertThat(result).isNotNull();
         }
     }
 

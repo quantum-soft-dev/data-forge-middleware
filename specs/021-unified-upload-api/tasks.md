@@ -56,10 +56,10 @@
 
 ### Implementation for User Story 2
 
-- [ ] T011 [US2] Create HeartbeatResponseDto record (siteId, siteStatus, directives, schema, lastCompletedBatch, serverTime) in src/main/java/com/bitbi/dfm/site/presentation/dto/HeartbeatResponseDto.java
-- [ ] T012 [US2] Implement HeartbeatService with recordHeartbeat() that updates lastHeartbeatAt on Site and builds HeartbeatResponseDto with directives, schema version, and last completed batch info in src/main/java/com/bitbi/dfm/site/application/HeartbeatService.java
-- [ ] T013 [US2] Create HeartbeatController with GET /api/v1/device/heartbeat endpoint (Custom JWT auth, extracts siteId from token) in src/main/java/com/bitbi/dfm/site/presentation/HeartbeatController.java
-- [ ] T014 [US2] Add heartbeat timestamp validation to startBatch() — reject with 428 HeartbeatRequiredException if lastHeartbeatAt is null or older than configured interval in BatchLifecycleService in src/main/java/com/bitbi/dfm/batch/application/BatchLifecycleService.java
+- [X] T011 [US2] Create HeartbeatResponseDto record (siteId, siteStatus, directives, schema, lastCompletedBatch, serverTime) in src/main/java/com/bitbi/dfm/site/presentation/dto/HeartbeatResponseDto.java
+- [X] T012 [US2] Implement HeartbeatService with recordHeartbeat() that updates lastHeartbeatAt on Site and builds HeartbeatResponseDto with directives, schema version, and last completed batch info in src/main/java/com/bitbi/dfm/site/application/HeartbeatService.java
+- [X] T013 [US2] Create HeartbeatController with GET /api/v1/device/heartbeat endpoint (Custom JWT auth, extracts siteId from token) in src/main/java/com/bitbi/dfm/site/presentation/HeartbeatController.java
+- [X] T014 [US2] Add heartbeat timestamp validation to startBatch() — reject with 428 HeartbeatRequiredException if lastHeartbeatAt is null or older than configured interval in BatchLifecycleService in src/main/java/com/bitbi/dfm/batch/application/BatchLifecycleService.java
 
 **Checkpoint**: Heartbeat endpoint operational, batch start enforces heartbeat requirement
 

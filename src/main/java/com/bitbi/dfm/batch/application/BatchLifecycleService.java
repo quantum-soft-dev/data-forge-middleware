@@ -7,12 +7,14 @@ import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import com.bitbi.dfm.shared.domain.events.BatchExpiredEvent;
 import com.bitbi.dfm.shared.domain.events.BatchStartedEvent;
+import com.bitbi.dfm.shared.exception.HeartbeatRequiredException;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.site.domain.SiteType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,18 +43,21 @@ public class BatchLifecycleService {
     private final AccountProperties accountProperties;
     private final SiteRepository siteRepository;
     private final SiteSchemaService siteSchemaService;
+    private final int heartbeatRequiredIntervalMinutes;
 
     public BatchLifecycleService(
             BatchRepository batchRepository,
             ApplicationEventPublisher eventPublisher,
             AccountProperties accountProperties,
             SiteRepository siteRepository,
-            SiteSchemaService siteSchemaService) {
+            SiteSchemaService siteSchemaService,
+            @Value("${heartbeat.required-interval-minutes:5}") int heartbeatRequiredIntervalMinutes) {
         this.batchRepository = batchRepository;
         this.eventPublisher = eventPublisher;
         this.accountProperties = accountProperties;
         this.siteRepository = siteRepository;
         this.siteSchemaService = siteSchemaService;
+        this.heartbeatRequiredIntervalMinutes = heartbeatRequiredIntervalMinutes;
     }
 
     /**
@@ -83,6 +88,9 @@ public class BatchLifecycleService {
             logger.warn("Attempted to start batch for inactive site: siteId={}", siteId);
             throw new SiteInactiveException("Cannot start batch for inactive site. Please activate the site first.");
         }
+
+        // Validate heartbeat was called recently (Feature 021 - US2)
+        validateHeartbeat(site);
 
         // For POSTGRES_CDC sites, schema must exist before first batch
         if (site.getSiteType() == SiteType.POSTGRES_CDC && !siteSchemaService.hasSchema(siteId)) {
@@ -295,6 +303,32 @@ public class BatchLifecycleService {
 
         batch.markAsHavingErrors();
         batchRepository.save(batch);
+    }
+
+    /**
+     * Validate that the site has a recent heartbeat within the configured interval.
+     * <p>
+     * Throws HeartbeatRequiredException (428) if no heartbeat has been recorded
+     * or if the last heartbeat is older than the required interval.
+     * </p>
+     *
+     * @param site the site to validate
+     * @throws HeartbeatRequiredException if heartbeat is missing or expired
+     */
+    private void validateHeartbeat(Site site) {
+        LocalDateTime lastHeartbeat = site.getLastHeartbeatAt();
+
+        if (lastHeartbeat == null) {
+            logger.warn("No heartbeat recorded for site: siteId={}", site.getId());
+            throw new HeartbeatRequiredException(site.getId());
+        }
+
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(heartbeatRequiredIntervalMinutes);
+        if (lastHeartbeat.isBefore(cutoff)) {
+            logger.warn("Heartbeat expired for site: siteId={}, lastHeartbeat={}, cutoff={}",
+                    site.getId(), lastHeartbeat, cutoff);
+            throw new HeartbeatRequiredException(site.getId());
+        }
     }
 
     /**

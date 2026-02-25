@@ -108,4 +108,13 @@ public interface BatchRepository {
      * @return Page of completed batches
      */
     Page<Batch> findCompletedByAccountIdAndOptionalSiteId(UUID accountId, UUID siteId, Pageable pageable);
+
+    /**
+     * Finds the most recent completed batch for a site.
+     * Used by heartbeat to return last completed batch info.
+     *
+     * @param siteId The site ID
+     * @return Optional containing the most recent completed batch
+     */
+    Optional<Batch> findLatestCompletedBySiteId(UUID siteId);
 }
