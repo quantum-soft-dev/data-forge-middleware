@@ -7,6 +7,14 @@
  */
 
 /**
+ * Site type enum — determines the data ingestion method.
+ *
+ * DBF        = Legacy DBF/CSV upload (default)
+ * POSTGRES_CDC = Postgres Change Data Capture via JSONL delta files
+ */
+export type SiteType = 'DBF' | 'POSTGRES_CDC';
+
+/**
  * Site entity representing a monitored domain/website.
  *
  * @property id - Unique site identifier
@@ -16,6 +24,7 @@
  * @property isActive - Activation status (true = active, false = inactive/deleted)
  * @property retentionDays - Retention period in days for batch cleanup
  * @property createdAt - Creation timestamp (ISO 8601 string)
+ * @property siteType - Site type determining data ingestion method
  */
 export interface Site {
   id: string;
@@ -25,6 +34,7 @@ export interface Site {
   isActive: boolean;
   retentionDays: number;
   createdAt: string;
+  siteType: SiteType;
 }
 
 /**

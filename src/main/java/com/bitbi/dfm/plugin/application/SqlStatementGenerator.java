@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
+import com.bitbi.dfm.plugin.domain.JsonlChangeRecord;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -200,5 +201,130 @@ public class SqlStatementGenerator {
      */
     private String escapeString(String value) {
         return value.replace("'", "''");
+    }
+
+    // --- CDC (JSONL) generation methods ---
+
+    /**
+     * Generates a SQL statement from a JSONL change record (CDC / {@code POSTGRES_CDC} mode).
+     *
+     * <p>Type-aware value formatting based on JSON type:</p>
+     * <ul>
+     *   <li>JSON {@code null} → SQL {@code NULL}</li>
+     *   <li>JSON number → unquoted numeric literal</li>
+     *   <li>JSON boolean → unquoted {@code true} / {@code false}</li>
+     *   <li>JSON string → single-quoted, SQL-escaped string</li>
+     * </ul>
+     *
+     * <p>The {@code k} field in the JSONL record provides the primary-key values used
+     * for the WHERE clause of UPDATE and DELETE statements — no schema lookup is needed.</p>
+     *
+     * @param record    the change record parsed from JSONL
+     * @param tableName the target table name (validated against identifier pattern)
+     * @return SQL statement with trailing END OF COMMAND comment
+     * @throws IllegalArgumentException if the table name or any column name is invalid
+     */
+    public String generateFromJsonl(JsonlChangeRecord record, String tableName) {
+        validateIdentifier(tableName, "Table name");
+
+        String sql = switch (record.op()) {
+            case JsonlChangeRecord.OP_INSERT -> generateCdcInsert(record, tableName);
+            case JsonlChangeRecord.OP_UPDATE -> generateCdcUpdate(record, tableName);
+            case JsonlChangeRecord.OP_DELETE -> generateCdcDelete(record, tableName);
+            default -> throw new IllegalArgumentException("Unknown JSONL op: " + record.op());
+        };
+
+        return sql + ";\n" + String.format(END_OF_COMMAND_FORMAT, tableName, record.lineNumber()) + "\n";
+    }
+
+    private String generateCdcInsert(JsonlChangeRecord record, String tableName) {
+        if (record.data() == null || record.data().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "INSERT record has no data at line " + record.lineNumber());
+        }
+
+        StringBuilder sql = new StringBuilder("INSERT INTO ");
+        sql.append(tableName).append(" ");
+
+        StringJoiner columns = new StringJoiner(", ", "(", ")");
+        StringJoiner values = new StringJoiner(", ", "(", ")");
+
+        for (Map.Entry<String, Object> entry : record.data().entrySet()) {
+            String column = entry.getKey();
+            validateIdentifier(column, "Column name");
+            columns.add(column);
+            values.add(formatJsonValue(entry.getValue()));
+        }
+
+        sql.append(columns).append(" VALUES ").append(values);
+        return sql.toString();
+    }
+
+    private String generateCdcUpdate(JsonlChangeRecord record, String tableName) {
+        if (record.key() == null || record.key().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "UPDATE record missing key at line " + record.lineNumber());
+        }
+
+        StringBuilder sql = new StringBuilder("UPDATE ");
+        sql.append(tableName).append(" SET ");
+
+        StringJoiner setClause = new StringJoiner(", ");
+        if (record.data() != null) {
+            for (Map.Entry<String, Object> entry : record.data().entrySet()) {
+                String column = entry.getKey();
+                validateIdentifier(column, "Column name");
+                setClause.add(column + " = " + formatJsonValue(entry.getValue()));
+            }
+        }
+        sql.append(setClause);
+
+        sql.append(" WHERE ");
+        StringJoiner whereClause = new StringJoiner(" AND ");
+        for (Map.Entry<String, Object> entry : record.key().entrySet()) {
+            String column = entry.getKey();
+            validateIdentifier(column, "Column name");
+            whereClause.add(column + " = " + formatJsonValue(entry.getValue()));
+        }
+        sql.append(whereClause);
+
+        return sql.toString();
+    }
+
+    private String generateCdcDelete(JsonlChangeRecord record, String tableName) {
+        if (record.key() == null || record.key().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "DELETE record missing key at line " + record.lineNumber());
+        }
+
+        StringBuilder sql = new StringBuilder("DELETE FROM ");
+        sql.append(tableName).append(" WHERE ");
+
+        StringJoiner whereClause = new StringJoiner(" AND ");
+        for (Map.Entry<String, Object> entry : record.key().entrySet()) {
+            String column = entry.getKey();
+            validateIdentifier(column, "Column name");
+            whereClause.add(column + " = " + formatJsonValue(entry.getValue()));
+        }
+        sql.append(whereClause);
+
+        return sql.toString();
+    }
+
+    /**
+     * Formats a JSON-typed value for use in a SQL statement.
+     * Handles null, numbers, booleans and strings.
+     */
+    private String formatJsonValue(Object value) {
+        if (value == null) {
+            return "NULL";
+        }
+        if (value instanceof Number) {
+            return value.toString();
+        }
+        if (value instanceof Boolean) {
+            return value.toString();
+        }
+        return "'" + escapeString(value.toString()) + "'";
     }
 }

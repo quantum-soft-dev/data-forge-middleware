@@ -8,6 +8,7 @@ import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.shared.domain.events.AccountDeactivatedEvent;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
@@ -45,6 +46,7 @@ public class SiteService {
     private final S3FileStorageService s3FileStorageService;
     private final DeviceAuthorizationRepository deviceAuthorizationRepository;
     private final RefreshTokenService refreshTokenService;
+    private final SiteSchemaService siteSchemaService;
 
     public SiteService(SiteRepository siteRepository,
                        BatchRepository batchRepository,
@@ -52,7 +54,8 @@ public class SiteService {
                        UploadedFileRepository uploadedFileRepository,
                        S3FileStorageService s3FileStorageService,
                        DeviceAuthorizationRepository deviceAuthorizationRepository,
-                       RefreshTokenService refreshTokenService) {
+                       RefreshTokenService refreshTokenService,
+                       SiteSchemaService siteSchemaService) {
         this.siteRepository = siteRepository;
         this.batchRepository = batchRepository;
         this.errorLogRepository = errorLogRepository;
@@ -60,19 +63,35 @@ public class SiteService {
         this.s3FileStorageService = s3FileStorageService;
         this.deviceAuthorizationRepository = deviceAuthorizationRepository;
         this.refreshTokenService = refreshTokenService;
+        this.siteSchemaService = siteSchemaService;
     }
 
     /**
-     * Create new site for account.
+     * Create new site for account. Site type defaults to DBF.
      *
      * @param accountId   account identifier
-     * @param domain      site domain (must be unique)
+     * @param siteName    site name (must be unique within account)
      * @param displayName site display name
      * @return SiteCreationResult with site and plaintext clientSecret (only shown once)
-     * @throws SiteAlreadyExistsException if domain already exists
+     * @throws SiteAlreadyExistsException if site name already exists for account
      */
     public SiteCreationResult createSite(UUID accountId, String siteName, String displayName) {
-        logger.info("Creating new site: accountId={}, siteName={}, displayName={}", accountId, siteName, displayName);
+        return createSite(accountId, siteName, displayName, SiteType.DBF);
+    }
+
+    /**
+     * Create new site for account with explicit site type.
+     *
+     * @param accountId   account identifier
+     * @param siteName    site name (must be unique within account)
+     * @param displayName site display name
+     * @param siteType    site type (DBF or POSTGRES_CDC); defaults to DBF if null
+     * @return SiteCreationResult with site and plaintext clientSecret (only shown once)
+     * @throws SiteAlreadyExistsException if site name already exists for account
+     */
+    public SiteCreationResult createSite(UUID accountId, String siteName, String displayName, SiteType siteType) {
+        logger.info("Creating new site: accountId={}, siteName={}, displayName={}, siteType={}",
+                accountId, siteName, displayName, siteType);
 
         String cleanSiteName = siteName.toLowerCase().trim();
 
@@ -84,23 +103,24 @@ public class SiteService {
         // Create composite domain for backward compatibility
         String compositeDomain = accountId.toString() + "_" + cleanSiteName;
 
-        Site site = Site.create(accountId, compositeDomain, cleanSiteName, displayName, null);
+        SiteType resolvedType = siteType != null ? siteType : SiteType.DBF;
+        Site site = Site.create(accountId, compositeDomain, cleanSiteName, displayName, null, resolvedType);
         Site saved = siteRepository.save(site);
 
-        logger.info("Site created successfully: id={}, siteName={}", saved.getId(), saved.getSiteName());
+        logger.info("Site created successfully: id={}, siteName={}, siteType={}", saved.getId(), saved.getSiteName(), resolvedType);
         return new SiteCreationResult(saved, null);
     }
 
     /**
-     * Create new site for account with custom password.
+     * Create new site for account with custom password (DBF type).
      *
      * @param accountId   account identifier
-     * @param domain      site domain (must be unique)
+     * @param siteName    site name (must be unique within account)
      * @param displayName site display name
      * @param password    plaintext password (min 8 chars)
      * @return SiteCreationResult with site and plaintext clientSecret
-     * @throws SiteAlreadyExistsException if domain already exists
-     * @throws IllegalArgumentException if password is invalid
+     * @throws SiteAlreadyExistsException if site name already exists for account
+     * @throws IllegalArgumentException   if password is invalid
      */
     public SiteCreationResult createSite(UUID accountId, String siteName, String displayName, String password) {
         logger.info("Creating new site with custom password: accountId={}, siteName={}, displayName={}",
@@ -123,7 +143,7 @@ public class SiteService {
         // Create composite domain for backward compatibility
         String compositeDomain = accountId.toString() + "_" + cleanSiteName;
 
-        Site site = Site.create(accountId, compositeDomain, cleanSiteName, displayName, hashedSecret);
+        Site site = Site.create(accountId, compositeDomain, cleanSiteName, displayName, hashedSecret, SiteType.DBF);
         Site saved = siteRepository.save(site);
 
         logger.info("Site created successfully with custom password: id={}, siteName={}",
@@ -154,7 +174,7 @@ public class SiteService {
      * @return SiteCreationResult with site and new plaintext clientSecret
      */
     /**
-     * Get existing site or create new one (Auth V2 - no credential generation).
+     * Get existing site or create new one (Auth V2 - no credential generation). Site type defaults to DBF.
      * <p>
      * Used by Device Flow when user approves authorization:
      * - If site exists: Reactivate if needed, return existing site
@@ -162,7 +182,24 @@ public class SiteService {
      * </p>
      */
     public SiteCreationResult getOrCreateSite(UUID accountId, String siteName, String displayName) {
-        logger.info("GetOrCreate site: accountId={}, siteName={}", accountId, siteName);
+        return getOrCreateSite(accountId, siteName, displayName, SiteType.DBF);
+    }
+
+    /**
+     * Get existing site or create new one with explicit site type (Auth V2 - no credential generation).
+     * <p>
+     * Used by Device Flow when user approves authorization:
+     * - If site exists: Reactivate if needed, return existing site (type unchanged — immutable)
+     * - If site doesn't exist: Create new site with given type
+     * </p>
+     *
+     * @param accountId   account identifier
+     * @param siteName    site name
+     * @param displayName site display name
+     * @param siteType    site type for new site creation (ignored if site already exists)
+     */
+    public SiteCreationResult getOrCreateSite(UUID accountId, String siteName, String displayName, SiteType siteType) {
+        logger.info("GetOrCreate site: accountId={}, siteName={}, siteType={}", accountId, siteName, siteType);
 
         String cleanSiteName = siteName.toLowerCase().trim();
 
@@ -179,12 +216,12 @@ public class SiteService {
 
             Site saved = siteRepository.save(site);
 
-            logger.info("Found existing site: siteId={}, siteName={}", saved.getId(), saved.getSiteName());
+            logger.info("Found existing site: siteId={}, siteName={}, siteType={}", saved.getId(), saved.getSiteName(), saved.getSiteType());
             return new SiteCreationResult(saved, null);
         }
 
-        // Site doesn't exist - create new one
-        return createSite(accountId, siteName, displayName);
+        // Site doesn't exist - create new one with given type
+        return createSite(accountId, siteName, displayName, siteType);
     }
 
     /**
@@ -426,7 +463,10 @@ public class SiteService {
         deviceAuthorizationRepository.deleteBySiteId(siteId);
         logger.info("Deleted device authorizations for site: {}", siteId);
 
-        // Step 6: Delete the site itself
+        // Step 6: Delete site schema (also deleted by DB CASCADE, but explicit for clarity)
+        siteSchemaService.deleteSchema(siteId);
+
+        // Step 7: Delete the site itself
         logger.info("Deleting site record: id={}", siteId);
         siteRepository.deleteById(siteId);
 

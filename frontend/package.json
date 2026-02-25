@@ -75,6 +75,11 @@
     "vite-bundle-visualizer": "^1.0.0",
     "vitest": "^1.1.0"
   },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "^4.57.1",
+    "@rollup/rollup-linux-arm64-gnu": "^4.57.1",
+    "@rollup/rollup-linux-x64-gnu": "^4.57.1"
+  },
   "overrides": {
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

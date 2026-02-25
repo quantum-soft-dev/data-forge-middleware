@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
+import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFile;
@@ -83,22 +84,29 @@ class SqlGenerationConcurrencyTest {
 
     private static final String BUCKET_NAME = "test-bucket";
 
+    @Mock
+    private CdcSqlGenerationStrategy cdcStrategy;
+
+    @Mock
+    private SiteSchemaService siteSchemaService;
+
     /**
      * Creates a SqlGenerationService with the specified concurrency settings.
      */
     private SqlGenerationService createService(int maxConcurrent, int semaphoreTimeoutSeconds) {
+        DbfSqlGenerationStrategy dbfStrategy = new DbfSqlGenerationStrategy(
+                csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
         SqlGenerationService service = new SqlGenerationService(
                 batchRepository,
                 siteRepository,
                 accountPluginRepository,
                 sqlGenerationRepository,
-                csvDiffService,
-                sqlStatementGenerator,
                 s3SqlFileStorageService,
-                s3Client,
-                BUCKET_NAME,
                 meterRegistry,
                 pluginAuditService,
+                dbfStrategy,
+                cdcStrategy,
+                siteSchemaService,
                 maxConcurrent,
                 semaphoreTimeoutSeconds,
                 100  // 100% threshold — disable memory pressure check in concurrency tests
