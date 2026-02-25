@@ -7,6 +7,7 @@ import com.bitbi.dfm.deviceauth.domain.DeviceAuthorization;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationStatus;
 import com.bitbi.dfm.site.application.SiteService;
+import com.bitbi.dfm.site.domain.SiteType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -78,10 +79,11 @@ public class DeviceAuthorizationService {
      *
      * @param siteName        requested site name
      * @param siteDescription optional site description
+     * @param siteType        requested site type (null → DBF)
      * @return authorization result with codes
      */
-    public AuthorizationResult authorize(String siteName, String siteDescription) {
-        logger.info("Initiating device authorization: siteName={}", siteName);
+    public AuthorizationResult authorize(String siteName, String siteDescription, SiteType siteType) {
+        logger.info("Initiating device authorization: siteName={}, siteType={}", siteName, siteType);
 
         String deviceCode = generateDeviceCode();
         String userCode = generateUniqueUserCode();
@@ -92,6 +94,7 @@ public class DeviceAuthorizationService {
                 userCode,
                 siteName,
                 siteDescription,
+                siteType,
                 expiresAt
         );
 
@@ -292,13 +295,14 @@ public class DeviceAuthorizationService {
             throw new AuthorizationAlreadyProcessedException("Authorization already processed");
         }
 
-        // Get or create site (Auth V2 - no credential generation)
+        // Get or create site (Auth V2 - no credential generation), propagate site type
         SiteService.SiteCreationResult siteResult = siteService.getOrCreateSite(
                 accountId,
                 authorization.getSiteName(),
                 authorization.getSiteDescription() != null
                         ? authorization.getSiteDescription()
-                        : authorization.getSiteName()
+                        : authorization.getSiteName(),
+                authorization.getSiteType()
         );
 
         // Revoke any existing refresh tokens for this site

@@ -49,6 +49,10 @@ public class Site {
     @Column(name = "client_secret_hash", length = 60)
     private String clientSecretHash;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "site_type", nullable = false, length = 20)
+    private SiteType siteType;
+
     @Column(name = "display_name", nullable = false, length = 255)
     private String displayName;
 
@@ -65,13 +69,14 @@ public class Site {
     private LocalDateTime updatedAt;
 
     protected Site(UUID id, UUID accountId, String domain, String siteName, String clientSecretHash,
-                   String displayName, Boolean isActive, Integer retentionDays,
+                   SiteType siteType, String displayName, Boolean isActive, Integer retentionDays,
                    LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.accountId = accountId;
         this.domain = domain;
         this.siteName = siteName;
         this.clientSecretHash = clientSecretHash;
+        this.siteType = siteType;
         this.displayName = displayName;
         this.isActive = isActive;
         this.retentionDays = retentionDays;
@@ -87,9 +92,11 @@ public class Site {
      * @param siteName         clean site name (Unicode allowed)
      * @param displayName      human-readable display name
      * @param clientSecretHash bcrypt-hashed client secret (nullable for Auth V2)
+     * @param siteType         site type (DBF or POSTGRES_CDC); defaults to DBF if null
      * @return new Site entity
      */
-    public static Site create(UUID accountId, String domain, String siteName, String displayName, String clientSecretHash) {
+    public static Site create(UUID accountId, String domain, String siteName, String displayName,
+                              String clientSecretHash, SiteType siteType) {
         Objects.requireNonNull(accountId, "AccountId cannot be null");
         Objects.requireNonNull(domain, "Domain cannot be null");
         Objects.requireNonNull(siteName, "SiteName cannot be null");
@@ -110,9 +117,24 @@ public class Site {
 
         UUID id = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
+        SiteType resolvedType = siteType != null ? siteType : SiteType.DBF;
 
         return new Site(id, accountId, domain.toLowerCase().trim(), normalizedSiteName, clientSecretHash,
-                displayName.trim(), true, DEFAULT_RETENTION_DAYS, now, now);
+                resolvedType, displayName.trim(), true, DEFAULT_RETENTION_DAYS, now, now);
+    }
+
+    /**
+     * Create a new site with composite domain (legacy) and siteName. Site type defaults to DBF.
+     *
+     * @param accountId        account identifier
+     * @param domain           composite domain (accountId_siteName)
+     * @param siteName         clean site name (Unicode allowed)
+     * @param displayName      human-readable display name
+     * @param clientSecretHash bcrypt-hashed client secret (nullable for Auth V2)
+     * @return new Site entity
+     */
+    public static Site create(UUID accountId, String domain, String siteName, String displayName, String clientSecretHash) {
+        return create(accountId, domain, siteName, displayName, clientSecretHash, SiteType.DBF);
     }
 
     /**

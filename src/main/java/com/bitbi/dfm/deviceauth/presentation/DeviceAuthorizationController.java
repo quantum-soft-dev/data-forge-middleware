@@ -94,7 +94,8 @@ public class DeviceAuthorizationController {
 
         AuthorizationResult result = deviceAuthorizationService.authorize(
                 request.siteName(),
-                request.siteDescription()
+                request.siteDescription(),
+                request.siteType()
         );
 
         DeviceAuthorizationResponseDto response = DeviceAuthorizationResponseDto.fromResult(result);

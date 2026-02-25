@@ -1,6 +1,7 @@
 package com.bitbi.dfm.site.presentation.dto;
 
 import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteType;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -19,6 +20,7 @@ import java.util.UUID;
  * @param isActive Active status
  * @param retentionDays Retention period in days for batch cleanup
  * @param createdAt Creation timestamp
+ * @param siteType Site type (DBF or POSTGRES_CDC)
  */
 public record SiteResponseDto(
     UUID id,
@@ -27,7 +29,8 @@ public record SiteResponseDto(
     String name,
     Boolean isActive,
     Integer retentionDays,
-    Instant createdAt
+    Instant createdAt,
+    SiteType siteType
 ) {
 
     /**
@@ -44,7 +47,8 @@ public record SiteResponseDto(
             site.getDisplayName(),
             site.getIsActive(),
             site.getRetentionDays(),
-            site.getCreatedAt().toInstant(ZoneOffset.UTC)
+            site.getCreatedAt().toInstant(ZoneOffset.UTC),
+            site.getSiteType()
         );
     }
 }

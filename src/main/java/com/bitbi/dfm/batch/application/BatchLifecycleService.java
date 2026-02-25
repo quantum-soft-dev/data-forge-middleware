@@ -7,8 +7,10 @@ import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import com.bitbi.dfm.shared.domain.events.BatchExpiredEvent;
 import com.bitbi.dfm.shared.domain.events.BatchStartedEvent;
+import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.site.domain.SiteType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -38,16 +40,19 @@ public class BatchLifecycleService {
     private final ApplicationEventPublisher eventPublisher;
     private final AccountProperties accountProperties;
     private final SiteRepository siteRepository;
+    private final SiteSchemaService siteSchemaService;
 
     public BatchLifecycleService(
             BatchRepository batchRepository,
             ApplicationEventPublisher eventPublisher,
             AccountProperties accountProperties,
-            SiteRepository siteRepository) {
+            SiteRepository siteRepository,
+            SiteSchemaService siteSchemaService) {
         this.batchRepository = batchRepository;
         this.eventPublisher = eventPublisher;
         this.accountProperties = accountProperties;
         this.siteRepository = siteRepository;
+        this.siteSchemaService = siteSchemaService;
     }
 
     /**
@@ -77,6 +82,13 @@ public class BatchLifecycleService {
         if (!site.getIsActive()) {
             logger.warn("Attempted to start batch for inactive site: siteId={}", siteId);
             throw new SiteInactiveException("Cannot start batch for inactive site. Please activate the site first.");
+        }
+
+        // For POSTGRES_CDC sites, schema must exist before first batch
+        if (site.getSiteType() == SiteType.POSTGRES_CDC && !siteSchemaService.hasSchema(siteId)) {
+            logger.warn("Attempted to start batch for CDC site without schema: siteId={}", siteId);
+            throw new SchemaRequiredException(
+                    "Schema required for POSTGRES_CDC sites. Submit via POST /api/dfc/schema first.");
         }
 
         // Enforce one active batch per site
@@ -342,6 +354,15 @@ public class BatchLifecycleService {
      */
     public static class InvalidBatchStatusException extends RuntimeException {
         public InvalidBatchStatusException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when a CDC site attempts to start a batch without a registered schema.
+     */
+    public static class SchemaRequiredException extends RuntimeException {
+        public SchemaRequiredException(String message) {
             super(message);
         }
     }
