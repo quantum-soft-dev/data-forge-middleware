@@ -54,19 +54,22 @@ public class PluginAsyncConfiguration {
     /**
      * Creates executor for actual plugin execution (plugin.execute() calls).
      * Separate from dispatch executor to prevent thread starvation.
+     *
+     * <p>Pool sizes are reduced since a semaphore limits concurrent SQL generation
+     * to 2 operations — extra threads would be wasteful and consume stack memory.</p>
      * <ul>
-     *   <li>Core pool size: 10 threads</li>
-     *   <li>Max pool size: 20 threads</li>
-     *   <li>Queue capacity: 100 tasks</li>
+     *   <li>Core pool size: 4 threads</li>
+     *   <li>Max pool size: 8 threads</li>
+     *   <li>Queue capacity: 50 tasks</li>
      *   <li>Rejection policy: CallerRunsPolicy (backpressure)</li>
      * </ul>
      */
     @Bean(name = "pluginExecutionExecutor")
     public Executor pluginExecutionExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(10);
-        executor.setMaxPoolSize(20);
-        executor.setQueueCapacity(100);
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("plugin-run-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);

@@ -23,9 +23,13 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
+import jakarta.annotation.PostConstruct;
+
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 
@@ -65,6 +69,11 @@ public class SqlGenerationService {
     private final String bucketName;
     private final MeterRegistry meterRegistry;
     private final PluginAuditService pluginAuditService;
+    private final int maxConcurrent;
+    private final int semaphoreTimeoutSeconds;
+    private final int heapThresholdPercent;
+
+    private Semaphore sqlGenerationSemaphore;
 
     public SqlGenerationService(
             BatchRepository batchRepository,
@@ -77,7 +86,10 @@ public class SqlGenerationService {
             S3Client s3Client,
             @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}") String bucketName,
             MeterRegistry meterRegistry,
-            PluginAuditService pluginAuditService) {
+            PluginAuditService pluginAuditService,
+            @org.springframework.beans.factory.annotation.Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
+            @org.springframework.beans.factory.annotation.Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
+            @org.springframework.beans.factory.annotation.Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -89,6 +101,18 @@ public class SqlGenerationService {
         this.bucketName = bucketName;
         this.meterRegistry = meterRegistry;
         this.pluginAuditService = pluginAuditService;
+        this.maxConcurrent = maxConcurrent;
+        this.semaphoreTimeoutSeconds = semaphoreTimeoutSeconds;
+        this.heapThresholdPercent = heapThresholdPercent;
+    }
+
+    @PostConstruct
+    public void init() {
+        this.sqlGenerationSemaphore = new Semaphore(maxConcurrent, true);
+        meterRegistry.gauge("sql.generation.semaphore.queue.size", sqlGenerationSemaphore,
+                Semaphore::getQueueLength);
+        log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}",
+                maxConcurrent, semaphoreTimeoutSeconds);
     }
 
     /**
@@ -132,6 +156,15 @@ public class SqlGenerationService {
      * @return Optional containing the generation record, or empty if baseline batch (use CSV) or no changes
      */
     public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
+        acquireSemaphore(batchId);
+        try {
+            return doGenerateSqlForBatch(batchId, accountPluginId, forceFullGeneration);
+        } finally {
+            sqlGenerationSemaphore.release();
+        }
+    }
+
+    private Optional<PluginSqlGeneration> doGenerateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
         BatchData batchData = null;
@@ -388,8 +421,15 @@ public class SqlGenerationService {
     }
 
     /**
-     * Phase 2: Generates SQL content by reading files from S3 and computing diffs.
+     * Phase 2: Generates SQL content by streaming files from S3 and computing diffs.
      * Runs outside transaction to avoid connection starvation during S3 I/O.
+     * <p>
+     * Memory optimizations:
+     * <ul>
+     *   <li>Streams CSV directly from S3 into structured rows (no full-string allocation)</li>
+     *   <li>Checks JVM heap pressure before each file to prevent OOM</li>
+     *   <li>Nulls out row references after diff to enable eager GC between files</li>
+     * </ul>
      */
     private SqlGenerationResult generateSqlContent(BatchData data) throws IOException {
         StringBuilder sqlContent = new StringBuilder();
@@ -400,30 +440,50 @@ public class SqlGenerationService {
 
         for (UploadedFile currentFile : data.csvFiles) {
             try {
+                // Task 5: Check memory pressure before processing next file
+                if (isMemoryPressureHigh()) {
+                    log.warn("High memory pressure ({}%), requesting GC before processing file: {}",
+                            getHeapUsagePercent(), currentFile.getOriginalFileName());
+                    System.gc();
+                    if (isMemoryPressureHigh()) {
+                        log.error("Memory still high ({}%) after GC, skipping remaining {} files for batch: {}",
+                                getHeapUsagePercent(),
+                                data.csvFiles.size() - filesProcessed,
+                                data.batch.getId());
+                        meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
+                        break;
+                    }
+                }
+
                 String normalizedName = normalizeFileName(currentFile.getOriginalFileName());
                 String tableName = deriveTableName(normalizedName);
 
                 log.debug("Processing CSV file: {} -> table {}", currentFile.getOriginalFileName(), tableName);
 
-                // Read current file content from S3 as raw CSV string
-                String currentCsvContent = readCsvContentFromS3(currentFile.getS3Key());
-
-                // Extract headers from current CSV
-                List<String> headers = extractHeaders(currentCsvContent);
+                // Task 8: Stream current file directly from S3 into parsed rows (no full String)
+                ParsedCsvData currentData = streamCsvFromS3(currentFile.getS3Key());
+                List<String> headers = currentData.headers();
                 if (headers.isEmpty()) {
                     log.warn("Empty headers in CSV file: {}", currentFile.getOriginalFileName());
                     continue;
                 }
 
-                // Read previous file content (empty if first batch)
-                String previousCsvContent = "";
+                List<List<String>> currentRows = currentData.rows();
+
+                // Stream previous file (empty rows if first batch)
+                List<List<String>> previousRows = Collections.emptyList();
                 UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
                 if (previousFile != null) {
-                    previousCsvContent = readCsvContentFromS3(previousFile.getS3Key());
+                    ParsedCsvData previousData = streamCsvFromS3(previousFile.getS3Key());
+                    previousRows = previousData.rows();
                 }
 
-                // Generate diffs using the new compare method (accepts raw CSV content)
-                List<CsvRowDiff> diffs = csvDiffService.compare(previousCsvContent, currentCsvContent, headers);
+                // Compare using pre-parsed rows (avoids re-parsing CSV strings)
+                List<CsvRowDiff> diffs = csvDiffService.compare(previousRows, currentRows, headers);
+
+                // Task 3: Release row references for GC before generating SQL
+                currentRows = null;
+                previousRows = null;
 
                 // Generate SQL statements
                 for (CsvRowDiff diff : diffs) {
@@ -436,6 +496,9 @@ public class SqlGenerationService {
                         case DELETED -> totalDeletes++;
                     }
                 }
+
+                // Task 3: Release diffs for GC
+                diffs = null;
 
                 filesProcessed++;
                 meterRegistry.counter("sql.generation.files.processed").increment();
@@ -496,6 +559,93 @@ public class SqlGenerationService {
                 meterRegistry.counter("sql.generation.orphaned.files").increment();
             }
         }
+    }
+
+    /**
+     * Streams CSV content directly from S3 into parsed rows and headers.
+     * Avoids holding the full CSV file as a String in memory.
+     * <p>
+     * Handles:
+     * <ul>
+     *   <li>GZip decompression for .gz files</li>
+     *   <li>UTF-8 BOM stripping from first header</li>
+     *   <li>Embedded newline normalization (replaced with spaces)</li>
+     * </ul>
+     *
+     * @param s3Key The S3 object key
+     * @return Parsed headers and rows
+     */
+    ParsedCsvData streamCsvFromS3(String s3Key) throws IOException {
+        GetObjectRequest request = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(s3Key)
+                .build();
+
+        try (ResponseInputStream<GetObjectResponse> s3Response = s3Client.getObject(request)) {
+            InputStream inputStream = s3Response;
+
+            // Handle gzipped files
+            if (s3Key.toLowerCase().endsWith(".gz")) {
+                inputStream = new GZIPInputStream(s3Response);
+            }
+
+            try (CSVParser parser = CSVFormat.DEFAULT
+                    .withFirstRecordAsHeader()
+                    .parse(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+
+                List<String> headers = new ArrayList<>(parser.getHeaderNames());
+                if (headers.isEmpty()) {
+                    return new ParsedCsvData(Collections.emptyList(), Collections.emptyList());
+                }
+
+                // Strip UTF-8 BOM from first header if present
+                String firstHeader = headers.get(0);
+                if (firstHeader != null && !firstHeader.isEmpty() && firstHeader.charAt(0) == '\uFEFF') {
+                    headers.set(0, firstHeader.substring(1));
+                }
+
+                List<List<String>> rows = new ArrayList<>();
+                for (CSVRecord record : parser) {
+                    List<String> row = new ArrayList<>(headers.size());
+                    for (String header : headers) {
+                        String value = record.isMapped(header) ? record.get(header) : "";
+                        // Normalize embedded newlines (from real customer data)
+                        if (value != null) {
+                            value = value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ");
+                        }
+                        row.add(value);
+                    }
+                    rows.add(row);
+                }
+
+                return new ParsedCsvData(headers, rows);
+            }
+        }
+    }
+
+    /**
+     * Internal record holding parsed CSV data from S3 streaming.
+     */
+    record ParsedCsvData(List<String> headers, List<List<String>> rows) {}
+
+    /**
+     * Checks if JVM heap usage exceeds the configured threshold.
+     *
+     * @return true if heap usage is at or above the threshold percentage
+     */
+    private boolean isMemoryPressureHigh() {
+        return getHeapUsagePercent() >= heapThresholdPercent;
+    }
+
+    /**
+     * Returns current JVM heap usage as a percentage (0-100).
+     * Package-private for testing.
+     */
+    int getHeapUsagePercent() {
+        Runtime runtime = Runtime.getRuntime();
+        long used = runtime.totalMemory() - runtime.freeMemory();
+        long max = runtime.maxMemory();
+        return (int) (used * 100 / max);
     }
 
     /**
@@ -616,6 +766,15 @@ public class SqlGenerationService {
      * @throws SqlGenerationException if generation fails
      */
     public PluginSqlGeneration regenerateForBatch(UUID batchId, Long accountPluginId) {
+        acquireSemaphore(batchId);
+        try {
+            return doRegenerateForBatch(batchId, accountPluginId);
+        } finally {
+            sqlGenerationSemaphore.release();
+        }
+    }
+
+    private PluginSqlGeneration doRegenerateForBatch(UUID batchId, Long accountPluginId) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
         BatchData batchData = null;
@@ -773,9 +932,36 @@ public class SqlGenerationService {
     }
 
     /**
+     * Acquires the SQL generation semaphore with the configured timeout.
+     * Throws SqlGenerationException if the semaphore cannot be acquired in time.
+     *
+     * @param batchId The batch ID (for logging context)
+     */
+    private void acquireSemaphore(UUID batchId) {
+        try {
+            boolean acquired = sqlGenerationSemaphore.tryAcquire(semaphoreTimeoutSeconds, TimeUnit.SECONDS);
+            if (!acquired) {
+                log.warn("SQL generation semaphore acquisition timed out after {}s: batchId={}, queueLength={}",
+                        semaphoreTimeoutSeconds, batchId, sqlGenerationSemaphore.getQueueLength());
+                meterRegistry.counter("sql.generation.semaphore.timeouts").increment();
+                throw new SqlGenerationException(
+                        "SQL generation timed out waiting for available slot after " + semaphoreTimeoutSeconds +
+                        "s. Current queue length: " + sqlGenerationSemaphore.getQueueLength());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SqlGenerationException("SQL generation interrupted while waiting for semaphore", e);
+        }
+    }
+
+    /**
      * Exception thrown when SQL generation fails.
      */
     public static class SqlGenerationException extends RuntimeException {
+        public SqlGenerationException(String message) {
+            super(message);
+        }
+
         public SqlGenerationException(String message, Throwable cause) {
             super(message, cause);
         }

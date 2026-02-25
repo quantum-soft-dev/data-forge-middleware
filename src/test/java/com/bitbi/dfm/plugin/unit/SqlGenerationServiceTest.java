@@ -36,6 +36,7 @@ import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -105,8 +106,12 @@ class SqlGenerationServiceTest {
                 s3Client,
                 BUCKET_NAME,
                 meterRegistry,
-                pluginAuditService
+                pluginAuditService,
+                2,
+                120,
+                80
         );
+        service.init();
     }
 
     @Nested
@@ -227,8 +232,12 @@ class SqlGenerationServiceTest {
                     s3Client,
                     BUCKET_NAME,
                     realRegistry,
-                    pluginAuditService
+                    pluginAuditService,
+                    2,
+                    120,
+                    80
             );
+            serviceWithRealMetrics.init();
 
             UUID batchId = UUID.randomUUID();
             UUID siteId = UUID.randomUUID();
@@ -284,8 +293,8 @@ class SqlGenerationServiceTest {
                     .thenReturn(badStream)
                     .thenReturn(goodStream);
 
-            // Bad file throws InvalidCsvHeaderException during compare
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            // Bad file throws InvalidCsvHeaderException during compare (list-based overload)
+            when(csvDiffService.compare(anyList(), anyList(), anyList()))
                     .thenThrow(new CsvDiffService.InvalidCsvHeaderException("Invalid column names"))
                     .thenReturn(List.of(
                             CsvRowDiff.added(1, new LinkedHashMap<>(Map.of("id", "1", "name", "Alice"))),
