@@ -1,0 +1,283 @@
+openapi: 3.0.3
+info:
+  title: Unified Upload API - Device Endpoints
+  version: 1.0.0
+  description: New and modified device-facing endpoints for unified data upload
+
+paths:
+  /api/v1/device/heartbeat:
+    get:
+      operationId: heartbeat
+      summary: Pre-batch sync check
+      description: |
+        Returns site status, server directives (forceFullUpload, requestLogs),
+        schema version, last completed batch info, and server time.
+        Must be called before every POST /batches/start.
+      tags: [Device - Heartbeat]
+      security:
+        - customJwt: []
+      responses:
+        '200':
+          description: Heartbeat response with directives
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '401':
+          description: Invalid or missing JWT token
+        '403':
+          description: Site is inactive
+
+  /api/v1/device/batches/start:
+    post:
+      operationId: startBatch
+      summary: Start a new batch (modified)
+      description: |
+        Now requires batchType in request body. Validates heartbeat was called recently.
+        Pins schema version at batch start time.
+      tags: [Device - Batches]
+      security:
+        - customJwt: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchStartRequest'
+      responses:
+        '201':
+          description: Batch created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
+        '400':
+          description: |
+            - Missing batchType
+            - SchemaRequiredException (no schema submitted)
+        '403':
+          description: Site is inactive
+        '409':
+          description: Active batch already exists for this site
+        '428':
+          description: Heartbeat required before starting a batch
+        '429':
+          description: Max concurrent batches exceeded
+
+  /api/v1/device/logs:
+    post:
+      operationId: uploadClientLogs
+      summary: Upload client diagnostic logs
+      description: |
+        Upload client log files for remote troubleshooting.
+        Accepts .log, .log.gz, .txt, .txt.gz files up to 10MB.
+        Max 10 uploads per site per day. 30-day retention.
+      tags: [Device - Diagnostic Logs]
+      security:
+        - customJwt: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientLogUploadRequest'
+      responses:
+        '201':
+          description: Log uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientLogResponse'
+        '400':
+          description: Invalid file type or empty file
+        '401':
+          description: Invalid or missing JWT token
+        '413':
+          description: File exceeds 10MB limit
+        '429':
+          description: Rate limit exceeded (10 uploads per site per day)
+
+components:
+  securitySchemes:
+    customJwt:
+      type: http
+      scheme: bearer
+      description: Custom HMAC-SHA256 JWT token from device authorization
+
+  schemas:
+    HeartbeatResponse:
+      type: object
+      required: [siteId, siteStatus, directives, serverTime]
+      properties:
+        siteId:
+          type: string
+          format: uuid
+        siteStatus:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        directives:
+          type: object
+          required: [forceFullUpload]
+          properties:
+            forceFullUpload:
+              type: boolean
+              description: If true, client must upload full CSV instead of JSONL deltas
+            forceFullUploadReason:
+              type: string
+              nullable: true
+              enum: [ADMIN_REQUEST, PLUGIN_REINIT, SCHEMA_INCOMPATIBLE, DATA_CORRUPTION]
+            requestLogs:
+              type: boolean
+              description: If true, client should upload diagnostic logs
+            requestLogsMessage:
+              type: string
+              nullable: true
+        schema:
+          type: object
+          nullable: true
+          properties:
+            version:
+              type: integer
+            updatedAt:
+              type: string
+              format: date-time
+        lastCompletedBatch:
+          type: object
+          nullable: true
+          properties:
+            batchId:
+              type: string
+              format: uuid
+            completedAt:
+              type: string
+              format: date-time
+            status:
+              type: string
+        serverTime:
+          type: string
+          format: date-time
+
+    BatchStartRequest:
+      type: object
+      required: [batchType]
+      properties:
+        batchType:
+          type: string
+          enum: [BASELINE, DELTA]
+          description: Determines file validation and SQL generation behavior
+        expectedFileCount:
+          type: integer
+          minimum: 1
+          description: Expected number of files (for progress tracking)
+        description:
+          type: string
+          maxLength: 500
+          description: Human-readable batch description
+
+    BatchResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        batchId:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        batchType:
+          type: string
+          enum: [BASELINE, DELTA]
+        schemaVersion:
+          type: integer
+          nullable: true
+        uploadedFilesCount:
+          type: integer
+        totalSize:
+          type: integer
+          format: int64
+        hasErrors:
+          type: boolean
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    ClientLogUploadRequest:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: Log file (.log, .log.gz, .txt, .txt.gz). Max 10MB.
+        clientVersion:
+          type: string
+          description: Client application version (e.g., "dfc-agent/2.1.0")
+        os:
+          type: string
+          description: Client OS (e.g., "Windows 10 22H2")
+        periodFrom:
+          type: string
+          format: date-time
+          description: Start of the log period
+        periodTo:
+          type: string
+          format: date-time
+          description: End of the log period
+        tags:
+          type: string
+          description: Comma-separated tags (e.g., "error,upload,crash")
+        description:
+          type: string
+          maxLength: 1000
+          description: Problem description from the client
+
+    ClientLogResponse:
+      type: object
+      properties:
+        logId:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        fileSize:
+          type: integer
+          format: int64
+        clientVersion:
+          type: string
+          nullable: true
+        os:
+          type: string
+          nullable: true
+        periodFrom:
+          type: string
+          format: date-time
+          nullable: true
+        periodTo:
+          type: string
+          format: date-time
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        uploadedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time

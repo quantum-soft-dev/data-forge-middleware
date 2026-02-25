@@ -200,6 +200,8 @@ pages/{feature}/            # Route pages
 - PostgreSQL 16 (existing plugin_sql_generations, account_plugins, plugin_audit_logs tables) (014-plugin-history)
 - PostgreSQL 16 (existing `plugin_sql_generations`, `account_plugins`, `plugin_audit_logs` tables) (015-plugin-reinit)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
+- Java 21 (LTS) + Spring Boot 3.5.6 + Spring Data JPA, Spring Security 6 (Auth0 OAuth2), AWS SDK v2 (S3), Hypersistence Utils (JSONB) (021-unified-upload-api)
+- PostgreSQL 16 + AWS S3 (021-unified-upload-api)
 
 ## Recent Changes
 - 020-sql-generation-optimization: Concurrency control (semaphore max 2), merge-join CSV diff algorithm (~6x→~1x memory), streaming S3 parsing, memory backpressure (heap threshold), thread pool reduction (10/20→4/8), eager GC. Config: `plugin.sql-generation.max-concurrent`, `heap-threshold-percent`, `semaphore-timeout-seconds`

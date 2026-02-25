@@ -1,0 +1,244 @@
+openapi: 3.0.3
+info:
+  title: Unified Upload API - Admin Endpoints
+  version: 1.0.0
+  description: New admin-facing endpoints for force rebaseline and client log management
+
+paths:
+  /api/v1/admin/sites/{siteId}/force-rebaseline:
+    post:
+      operationId: forceRebaseline
+      summary: Force full upload on next sync
+      description: |
+        Sets forceFullUpload flag on the site. On the next heartbeat,
+        the client will see the directive and upload full CSV files.
+        The flag is automatically cleared when the client starts a batch.
+      tags: [Admin - Sites]
+      security:
+        - oauth2: [ROLE_ADMIN]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForceRebaselineRequest'
+      responses:
+        '200':
+          description: Force rebaseline flag set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForceRebaselineResponse'
+        '403':
+          description: Insufficient permissions (requires ROLE_ADMIN)
+        '404':
+          description: Site not found
+
+  /api/v1/admin/sites/{siteId}/client-logs:
+    get:
+      operationId: listClientLogs
+      summary: List uploaded client diagnostic logs
+      description: Returns paginated list of client log entries for a specific site.
+      tags: [Admin - Client Logs]
+      security:
+        - oauth2: [ROLE_ADMIN, ROLE_USER]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated list of client logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientLogListResponse'
+        '403':
+          description: Access denied (site not in user's account)
+        '404':
+          description: Site not found
+
+  /api/v1/admin/sites/{siteId}/client-logs/{logId}/download:
+    get:
+      operationId: downloadClientLog
+      summary: Download a client log file
+      description: Returns presigned URL redirect or streams file content.
+      tags: [Admin - Client Logs]
+      security:
+        - oauth2: [ROLE_ADMIN, ROLE_USER]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: logId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Log file download (presigned URL or streamed content)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientLogDownloadResponse'
+        '404':
+          description: Log or site not found
+
+  /api/v1/admin/sites/{siteId}/request-logs:
+    post:
+      operationId: requestClientLogs
+      summary: Request client to upload diagnostic logs
+      description: |
+        Sets requestLogs directive on the site. On the next heartbeat,
+        the client will see the directive and upload its logs.
+      tags: [Admin - Sites]
+      security:
+        - oauth2: [ROLE_ADMIN]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  maxLength: 500
+                  description: Message to include in the directive
+      responses:
+        '200':
+          description: Log request flag set
+        '404':
+          description: Site not found
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: Auth0 OAuth2 with ROLE_ADMIN or ROLE_USER
+
+  schemas:
+    ForceRebaselineRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          maxLength: 1000
+          description: Human-readable reason for forcing rebaseline
+
+    ForceRebaselineResponse:
+      type: object
+      properties:
+        siteId:
+          type: string
+          format: uuid
+        forceFullUpload:
+          type: boolean
+        reason:
+          type: string
+          enum: [ADMIN_REQUEST, PLUGIN_REINIT, SCHEMA_INCOMPATIBLE, DATA_CORRUPTION]
+        message:
+          type: string
+        setAt:
+          type: string
+          format: date-time
+        setBy:
+          type: string
+
+    ClientLogListResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientLogSummary'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+
+    ClientLogSummary:
+      type: object
+      properties:
+        logId:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        siteName:
+          type: string
+        filename:
+          type: string
+        fileSize:
+          type: integer
+          format: int64
+        clientVersion:
+          type: string
+          nullable: true
+        os:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        uploadedAt:
+          type: string
+          format: date-time
+
+    ClientLogDownloadResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Presigned download URL (15-minute expiry)
+        expiresAt:
+          type: string
+          format: date-time
+        filename:
+          type: string
+        fileSize:
+          type: integer
+          format: int64

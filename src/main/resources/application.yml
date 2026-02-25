@@ -151,6 +151,22 @@ plugins:
     # Auth0 client ID for Bit BI application (for client verification)
     client-id: ${PLUGIN_BITBI_CLIENT_ID:BITBI_CLIENT_ID_PLACEHOLDER}
 
+# Heartbeat Configuration
+heartbeat:
+  required-interval-minutes: ${HEARTBEAT_REQUIRED_INTERVAL_MINUTES:5}
+
+# Schema Enforcement Configuration
+schema:
+  enforcement:
+    dbf-grace-period-end: ${SCHEMA_DBF_GRACE_PERIOD_END:2026-12-31}
+
+# Client Logs Configuration
+client-logs:
+  max-file-size-mb: ${CLIENT_LOGS_MAX_FILE_SIZE_MB:10}
+  max-uploads-per-day: ${CLIENT_LOGS_MAX_UPLOADS_PER_DAY:10}
+  retention-days: ${CLIENT_LOGS_RETENTION_DAYS:30}
+  retention-cron: ${CLIENT_LOGS_RETENTION_CRON:0 0 3 * * *}
+
 # Device Authorization Flow Configuration
 device-authorization:
   verification-uri: ${DEVICE_AUTH_VERIFICATION_URI:https://app.dataforge.com/device-verify}
