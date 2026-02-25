@@ -3,6 +3,9 @@ package com.bitbi.dfm.upload.application;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.upload.domain.FileChecksum;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -43,14 +46,17 @@ public class FileUploadService {
     private final UploadedFileRepository uploadedFileRepository;
     private final BatchRepository batchRepository;
     private final S3FileStorageService s3FileStorageService;
+    private final SiteRepository siteRepository;
 
     public FileUploadService(
             UploadedFileRepository uploadedFileRepository,
             BatchRepository batchRepository,
-            S3FileStorageService s3FileStorageService) {
+            S3FileStorageService s3FileStorageService,
+            SiteRepository siteRepository) {
         this.uploadedFileRepository = uploadedFileRepository;
         this.batchRepository = batchRepository;
         this.s3FileStorageService = s3FileStorageService;
+        this.siteRepository = siteRepository;
     }
 
     /**
@@ -124,6 +130,9 @@ public class FileUploadService {
         if (fileName == null || fileName.isBlank()) {
             throw new InvalidFileException("File name cannot be empty");
         }
+
+        // Validate file type based on site type and batch position
+        validateFileTypeForSite(batch, fileName);
 
         // Check for duplicate filename
         if (uploadedFileRepository.existsByBatchIdAndOriginalFileName(batchId, fileName)) {
@@ -264,6 +273,73 @@ public class FileUploadService {
     public static class FileNotFoundException extends RuntimeException {
         public FileNotFoundException(String message) {
             super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when an incorrect file type is uploaded for the site type.
+     */
+    public static class InvalidFileTypeException extends RuntimeException {
+        public InvalidFileTypeException(String message) {
+            super(message);
+        }
+    }
+
+    // --- Private helpers ---
+
+    /**
+     * Validate that the uploaded file type matches what is expected for the site type and batch position.
+     *
+     * <p>Rules:
+     * <ul>
+     *   <li>DBF sites: CSV or CSV.GZ only (all batches)</li>
+     *   <li>POSTGRES_CDC baseline batch (first): CSV or CSV.GZ</li>
+     *   <li>POSTGRES_CDC subsequent batches: JSONL or JSONL.GZ only</li>
+     * </ul>
+     * </p>
+     */
+    private void validateFileTypeForSite(Batch batch, String fileName) {
+        Site site = siteRepository.findById(batch.getSiteId()).orElse(null);
+        if (site == null) {
+            return; // site not found — let other validations handle this
+        }
+
+        SiteType siteType = site.getSiteType();
+        String lowerName = fileName.toLowerCase();
+        boolean isCsvFile = lowerName.endsWith(".csv") || lowerName.endsWith(".csv.gz");
+        boolean isJsonlFile = lowerName.endsWith(".jsonl") || lowerName.endsWith(".jsonl.gz");
+
+        if (siteType == SiteType.DBF) {
+            if (isJsonlFile) {
+                throw new InvalidFileTypeException("JSONL files not supported for DBF sites");
+            }
+            // CSV and other files pass through (existing behavior)
+            return;
+        }
+
+        if (siteType == SiteType.POSTGRES_CDC) {
+            // Determine baseline: no previous completed batch means this is the baseline
+            boolean isBaselineBatch = batchRepository
+                    .findPreviousBatchForSite(batch.getSiteId(), batch.getId())
+                    .isEmpty();
+
+            if (isBaselineBatch) {
+                // Baseline batch: CSV only
+                if (isJsonlFile) {
+                    throw new InvalidFileTypeException(
+                            "JSONL files are not expected for the first (baseline) batch of a POSTGRES_CDC site. Upload CSV files for the initial snapshot.");
+                }
+            } else {
+                // Subsequent batch: JSONL only
+                if (isCsvFile) {
+                    throw new InvalidFileTypeException(
+                            "JSONL files expected for CDC delta batches. CSV files are only accepted for the first (baseline) batch.");
+                }
+                if (!isJsonlFile) {
+                    throw new InvalidFileTypeException(
+                            "Unsupported file type for POSTGRES_CDC delta batch. Only JSONL or JSONL.GZ files are accepted.");
+                }
+            }
         }
     }
 }

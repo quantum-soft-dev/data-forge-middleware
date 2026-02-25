@@ -1,14 +1,10 @@
 package com.bitbi.dfm.plugin.application;
 
-import com.bitbi.dfm.comparison.domain.ChangeType;
 import com.bitbi.dfm.comparison.domain.DiffService;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,39 +12,36 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.StringReader;
-import java.io.StringWriter;
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Service for comparing CSV files and generating row-level diffs.
- * Uses the existing DiffService (java-diff-utils with Myers algorithm) for comparison.
+ * Uses a direct sorted merge-join algorithm for memory-efficient comparison.
  *
  * <h2>Algorithm</h2>
  * <ol>
- *   <li>Sort both CSV files by all columns to normalize row order</li>
- *   <li>Generate diff using DiffService (Myers algorithm)</li>
- *   <li>Parse diff output to identify ADDED, REMOVED, and MODIFIED rows</li>
+ *   <li>Parse both CSV files into sorted row lists (normalized, no serialization back to string)</li>
+ *   <li>Merge-join the two sorted lists with two pointers to find ADDED and DELETED rows</li>
+ *   <li>Post-process adjacent DELETE+INSERT pairs to detect MODIFIED rows</li>
  * </ol>
  *
- * <h2>Interpretation of Diff Output</h2>
+ * <h2>Interpretation of Merge-Join Output</h2>
  * <ul>
- *   <li>ADDED only → new row, generates INSERT</li>
- *   <li>REMOVED only → deleted row, generates DELETE</li>
- *   <li>Adjacent REMOVED + ADDED with SOME unchanged columns → modified row, generates UPDATE</li>
- *   <li>Adjacent REMOVED + ADDED with ALL columns changed → different rows, generates DELETE + INSERT</li>
+ *   <li>Row only in current → ADDED (INSERT)</li>
+ *   <li>Row only in previous → DELETED (DELETE)</li>
+ *   <li>Adjacent DELETED + ADDED with SOME unchanged columns → MODIFIED (UPDATE)</li>
+ *   <li>Adjacent DELETED + ADDED with ALL columns changed → separate DELETE + INSERT</li>
  * </ul>
  *
  * <h2>Performance</h2>
  * <ul>
  *   <li>Sorting: O(n log n) where n = number of rows</li>
- *   <li>Myers diff: O(ND) where N = total rows, D = number of differences</li>
- *   <li>Parsing diff: O(D) where D = number of differences</li>
+ *   <li>Merge-join: O(n) single pass</li>
+ *   <li>Post-processing: O(D) where D = number of differences</li>
  * </ul>
- * <p><strong>Memory:</strong> O(n × m) where n = rows, m = average row size (sorts in-memory)</p>
+ * <p><strong>Memory:</strong> ~2x file size (parsed rows only, no string re-serialization)</p>
  *
- * @see DiffService
  * @see CsvRowDiff
  */
 @Service
@@ -77,7 +70,55 @@ public class CsvDiffService {
     }
 
     /**
+     * Compares two sets of pre-parsed CSV rows and returns the differences.
+     *
+     * <p>Accepts pre-parsed rows (e.g., from streaming S3 parsing) instead of
+     * raw CSV strings, avoiding the full-string-in-memory step.</p>
+     *
+     * <p>Input lists are copied before sorting to avoid mutating the caller's data.
+     * The copies share the same row references (shallow copy), so memory overhead
+     * is limited to the list structure itself, not the row content.</p>
+     *
+     * @param previousRows Pre-parsed rows from previous batch (null or empty for first batch)
+     * @param currentRows  Pre-parsed rows from current batch (null or empty for deletion detection)
+     * @param headers      Column names from the CSV header row
+     * @return List of row differences (added, modified, deleted)
+     * @throws InvalidCsvHeaderException if column headers are invalid
+     */
+    public List<CsvRowDiff> compare(
+            List<List<String>> previousRows,
+            List<List<String>> currentRows,
+            List<String> headers
+    ) {
+        validateHeaders(headers);
+
+        List<List<String>> prev = (previousRows != null) ? new ArrayList<>(previousRows) : Collections.emptyList();
+        List<List<String>> curr = (currentRows != null) ? new ArrayList<>(currentRows) : Collections.emptyList();
+
+        if (prev.isEmpty() && curr.isEmpty()) {
+            log.debug("Both row lists are empty, no changes");
+            return Collections.emptyList();
+        }
+
+        log.debug("Comparing pre-parsed CSV rows: previousRows={}, currentRows={}, headers={}",
+                prev.size(), curr.size(), headers.size());
+
+        // Sort defensive copies (shallow — shares row references, not data)
+        if (!prev.isEmpty()) {
+            prev.sort(CsvDiffService::compareRows);
+        }
+        if (!curr.isEmpty()) {
+            curr.sort(CsvDiffService::compareRows);
+        }
+
+        return compareSorted(prev, curr, headers);
+    }
+
+    /**
      * Compares two CSV file contents and returns the differences.
+     *
+     * <p>Uses a direct sorted merge-join algorithm instead of text-based Myers diff,
+     * reducing memory usage from ~6x to ~2x per file.</p>
      *
      * @param previousCsvContent Raw CSV content from previous batch (empty string for first batch)
      * @param currentCsvContent  Raw CSV content from current batch
@@ -108,30 +149,12 @@ public class CsvDiffService {
                 headers.size());
 
         try {
-            // Step 1: Sort both CSV files by all columns
-            String sortedPrevious = sortCsvContent(previousCsvContent, headers);
-            String sortedCurrent = sortCsvContent(currentCsvContent, headers);
+            // Step 1: Parse and sort both CSV files into row lists
+            List<List<String>> previousRows = parseCsvToSortedRows(previousCsvContent, headers);
+            List<List<String>> currentRows = parseCsvToSortedRows(currentCsvContent, headers);
 
-            // Step 2: Generate diff using existing DiffService (Myers algorithm)
-            DiffService.DiffResult diffResult = diffService.generateDiff(
-                    sortedCurrent,
-                    sortedPrevious,
-                    "current.csv",
-                    "previous.csv"
-            );
-
-            log.debug("Diff result: changeType={}, additions={}, deletions={}",
-                    diffResult.changeType(),
-                    diffResult.lineAdditions(),
-                    diffResult.lineDeletions());
-
-            // If unchanged, return empty list
-            if (diffResult.changeType() == ChangeType.UNCHANGED) {
-                return Collections.emptyList();
-            }
-
-            // Step 3: Parse diff JSON and convert to CsvRowDiff
-            return parseDiffJson(diffResult.unifiedDiffJson(), headers);
+            // Step 2: Merge-join comparison with modification detection
+            return compareSorted(previousRows, currentRows, headers);
 
         } catch (IOException e) {
             log.error("Failed to compare CSV files", e);
@@ -140,30 +163,31 @@ public class CsvDiffService {
     }
 
     /**
-     * Sorts CSV content by all columns to normalize row order.
-     * This ensures consistent comparison regardless of how the client exports data.
+     * Parses CSV content into a sorted list of rows.
+     * Each row is a list of string values in header order.
      *
-     * <p>Note: The output does NOT include headers - only data rows are returned.
-     * This is important because the diff algorithm treats every line as data.</p>
+     * <p>Normalizes embedded newlines (replaced with spaces) and sorts
+     * rows lexicographically by all columns.</p>
+     *
+     * @param csvContent Raw CSV content (may be null or blank)
+     * @param headers    Column names for value extraction
+     * @return Sorted list of rows (each row is a list of values in header order)
      */
-    private String sortCsvContent(String csvContent, List<String> headers) throws IOException {
+    private List<List<String>> parseCsvToSortedRows(String csvContent, List<String> headers) throws IOException {
         if (csvContent == null || csvContent.isBlank()) {
-            return "";
+            return Collections.emptyList();
         }
 
-        // Parse CSV content
         List<List<String>> rows = new ArrayList<>();
         try (CSVParser parser = CSVFormat.DEFAULT
                 .withFirstRecordAsHeader()
                 .parse(new StringReader(csvContent))) {
 
             for (CSVRecord record : parser) {
-                List<String> row = new ArrayList<>();
+                List<String> row = new ArrayList<>(headers.size());
                 for (String header : headers) {
                     String value = record.isMapped(header) ? record.get(header) : "";
                     // Normalize embedded newlines - replace with space
-                    // This prevents DiffServiceImpl.splitIntoLines() from breaking multiline CSV records
-                    // which would cause CSVException in parseCsvLine()
                     if (value != null) {
                         value = value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ");
                     }
@@ -174,160 +198,183 @@ public class CsvDiffService {
         }
 
         // Sort rows by all columns (lexicographic comparison)
-        rows.sort((row1, row2) -> {
-            for (int i = 0; i < row1.size(); i++) {
-                String val1 = row1.get(i) != null ? row1.get(i) : "";
-                String val2 = row2.get(i) != null ? row2.get(i) : "";
-                int cmp = val1.compareTo(val2);
-                if (cmp != 0) {
-                    return cmp;
-                }
-            }
-            return 0;
-        });
+        rows.sort(CsvDiffService::compareRows);
 
-        // Write sorted rows (NO header) - each row on its own line
-        // Using CSVFormat with empty record separator to avoid manual newline stripping
-        CSVFormat csvFormat = CSVFormat.DEFAULT.builder()
-                .setRecordSeparator("")
-                .build();
-
-        StringBuilder result = new StringBuilder();
-        for (int i = 0; i < rows.size(); i++) {
-            List<String> row = rows.get(i);
-            StringWriter rowWriter = new StringWriter();
-            try (CSVPrinter printer = new CSVPrinter(rowWriter, csvFormat)) {
-                printer.printRecord(row);
-            }
-            result.append(rowWriter.toString());
-            if (i < rows.size() - 1) {
-                result.append("\n");
-            }
-        }
-
-        return result.toString();
+        return rows;
     }
 
     /**
-     * Parses diff JSON and converts to CsvRowDiff objects.
-     * Identifies ADDED-only, REMOVED-only, and MODIFIED (adjacent REMOVED+ADDED) changes.
-     *
-     * <p>The algorithm processes changes in order, detecting modifications as
-     * adjacent REMOVED+ADDED pairs. Non-adjacent REMOVED becomes DELETED,
-     * and non-adjacent ADDED becomes ADDED (INSERT).</p>
+     * Lexicographic comparator for two CSV rows (lists of string values).
+     * Compares column by column; null values are treated as empty strings.
      */
-    private List<CsvRowDiff> parseDiffJson(String diffJson, List<String> headers) throws JsonProcessingException {
-        if (diffJson == null || diffJson.isBlank()) {
-            return Collections.emptyList();
-        }
-
-        List<CsvRowDiff> diffs = new ArrayList<>();
-        JsonNode root = objectMapper.readTree(diffJson);
-        JsonNode hunks = root.get("hunks");
-
-        if (hunks == null || !hunks.isArray()) {
-            return Collections.emptyList();
-        }
-
-        for (JsonNode hunk : hunks) {
-            JsonNode changes = hunk.get("changes");
-            if (changes == null || !changes.isArray()) {
-                continue;
+    private static int compareRows(List<String> row1, List<String> row2) {
+        int size = Math.min(row1.size(), row2.size());
+        for (int i = 0; i < size; i++) {
+            String val1 = row1.get(i) != null ? row1.get(i) : "";
+            String val2 = row2.get(i) != null ? row2.get(i) : "";
+            int cmp = val1.compareTo(val2);
+            if (cmp != 0) {
+                return cmp;
             }
+        }
+        return Integer.compare(row1.size(), row2.size());
+    }
 
-            // Process changes in order to detect adjacent REMOVED+ADDED pairs (modifications)
-            int i = 0;
-            int changesSize = changes.size();
+    /**
+     * Performs a merge-join comparison on two sorted row lists and returns differences.
+     *
+     * <p>Algorithm:</p>
+     * <ol>
+     *   <li>Walk both sorted lists with two pointers</li>
+     *   <li>If prev row &lt; curr row → DELETED (advance prev pointer)</li>
+     *   <li>If prev row &gt; curr row → ADDED (advance curr pointer)</li>
+     *   <li>If prev row == curr row → no change (advance both pointers)</li>
+     *   <li>After loop: remaining prev rows → DELETED, remaining curr rows → ADDED</li>
+     *   <li>Post-process: adjacent DELETE+INSERT with shared columns → MODIFIED</li>
+     * </ol>
+     *
+     * @param previousRows Sorted rows from previous CSV
+     * @param currentRows  Sorted rows from current CSV
+     * @param headers      Column names for building row maps
+     * @return List of CsvRowDiff representing all changes
+     */
+    private List<CsvRowDiff> compareSorted(
+            List<List<String>> previousRows,
+            List<List<String>> currentRows,
+            List<String> headers
+    ) {
+        // Phase 1: Merge-join to produce raw DELETED and ADDED entries
+        List<RawDiff> rawDiffs = new ArrayList<>();
 
-            while (i < changesSize) {
-                JsonNode change = changes.get(i);
-                String type = change.get("type").asText();
+        int prevIdx = 0;
+        int currIdx = 0;
 
-                if ("REMOVED".equals(type)) {
-                    // Check if next change is ADDED (adjacent = modification)
-                    if (i + 1 < changesSize) {
-                        JsonNode nextChange = changes.get(i + 1);
-                        String nextType = nextChange.get("type").asText();
+        while (prevIdx < previousRows.size() && currIdx < currentRows.size()) {
+            List<String> prevRow = previousRows.get(prevIdx);
+            List<String> currRow = currentRows.get(currIdx);
+            int cmp = compareRows(prevRow, currRow);
 
-                        if ("ADDED".equals(nextType)) {
-                            // Check if this is a true modification or unrelated delete+insert
-                            int lineNumber = nextChange.get("lineNumber").asInt();
-                            String previousContent = change.get("content").asText();
-                            String currentContent = nextChange.get("content").asText();
+            if (cmp < 0) {
+                // prev row is smaller → it was deleted
+                rawDiffs.add(new RawDiff(RawDiffType.DELETED, prevRow));
+                prevIdx++;
+            } else if (cmp > 0) {
+                // curr row is smaller → it was added
+                rawDiffs.add(new RawDiff(RawDiffType.ADDED, currRow));
+                currIdx++;
+            } else {
+                // Equal → no change, advance both
+                prevIdx++;
+                currIdx++;
+            }
+        }
 
-                            Map<String, String> previousRow = parseCsvLine(previousContent, headers);
-                            Map<String, String> currentRow = parseCsvLine(currentContent, headers);
+        // Remaining previous rows are all deleted
+        while (prevIdx < previousRows.size()) {
+            rawDiffs.add(new RawDiff(RawDiffType.DELETED, previousRows.get(prevIdx)));
+            prevIdx++;
+        }
 
-                            Map<String, String> changedColumns = findChangedColumns(previousRow, currentRow);
+        // Remaining current rows are all added
+        while (currIdx < currentRows.size()) {
+            rawDiffs.add(new RawDiff(RawDiffType.ADDED, currentRows.get(currIdx)));
+            currIdx++;
+        }
 
-                            // If ALL columns changed, these are different rows (delete + insert)
-                            // If SOME columns are unchanged, it's a modification of the same row
-                            if (!changedColumns.isEmpty() && changedColumns.size() < headers.size()) {
-                                // True modification: some columns unchanged, some changed
-                                diffs.add(CsvRowDiff.modified(lineNumber, currentRow, changedColumns));
-                                i += 2; // Skip both REMOVED and ADDED
-                                continue;
-                            } else if (changedColumns.size() == headers.size()) {
-                                // All columns changed = different rows, treat as DELETE + INSERT
-                                // Fall through to process REMOVED as DELETE
-                            } else {
-                                // No changes (shouldn't happen in diff), skip both
-                                i += 2;
-                                continue;
-                            }
-                        }
+        if (rawDiffs.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // Phase 2: Post-process to detect MODIFIED rows from adjacent DELETE+INSERT pairs
+        return postProcessRawDiffs(rawDiffs, headers);
+    }
+
+    /**
+     * Post-processes raw DELETED/ADDED diffs to detect MODIFIED rows.
+     *
+     * <p>Adjacent pairs of different types (DELETED+ADDED or ADDED+DELETED) are checked
+     * for shared columns. In a sorted merge-join, the ordering depends on which row version
+     * sorts first lexicographically, so both orderings must be handled.</p>
+     *
+     * <ul>
+     *   <li>If some columns are unchanged → MODIFIED (UPDATE)</li>
+     *   <li>If ALL columns changed → keep as separate DELETE + INSERT</li>
+     * </ul>
+     *
+     * <p>Line numbers are assigned sequentially (1-based) for each diff entry.</p>
+     *
+     * @implNote The MODIFIED detection is a heuristic based on lexicographic adjacency
+     * in the sorted output, NOT on logical row identity (e.g., primary key). Two unrelated
+     * rows that happen to sort next to each other — such as {@code ("1","Alice")} deleted
+     * and {@code ("1","Bob")} inserted — will be classified as MODIFIED if they share at
+     * least one column value (here: {@code "1"}). This is an intentional trade-off: without
+     * a declared primary key, exact identity matching is impossible. The all-columns-changed
+     * guard ({@code changedColumns.size() == headers.size()}) prevents false MODIFIEDs for
+     * completely unrelated rows.
+     */
+    private List<CsvRowDiff> postProcessRawDiffs(List<RawDiff> rawDiffs, List<String> headers) {
+        List<CsvRowDiff> result = new ArrayList<>();
+        int lineNumber = 1;
+        int i = 0;
+
+        while (i < rawDiffs.size()) {
+            RawDiff current = rawDiffs.get(i);
+
+            // Check for adjacent pair of different types (potential modification)
+            if (i + 1 < rawDiffs.size()) {
+                RawDiff next = rawDiffs.get(i + 1);
+
+                if (current.type != next.type) {
+                    // Determine which is previous (DELETED) and which is current (ADDED)
+                    List<String> prevValues = current.type == RawDiffType.DELETED ? current.values : next.values;
+                    List<String> currValues = current.type == RawDiffType.ADDED ? current.values : next.values;
+
+                    Map<String, String> previousRow = rowToMap(prevValues, headers);
+                    Map<String, String> currentRow = rowToMap(currValues, headers);
+                    Map<String, String> changedColumns = findChangedColumns(previousRow, currentRow);
+
+                    if (!changedColumns.isEmpty() && changedColumns.size() < headers.size()) {
+                        // True modification: some columns unchanged, some changed
+                        result.add(CsvRowDiff.modified(lineNumber++, currentRow, changedColumns));
+                        i += 2;
+                        continue;
+                    } else if (changedColumns.size() == headers.size()) {
+                        // All columns changed = different rows, treat as DELETE + INSERT
+                        result.add(CsvRowDiff.deleted(lineNumber++, previousRow));
+                        result.add(CsvRowDiff.added(lineNumber++, currentRow));
+                        i += 2;
+                        continue;
+                    } else {
+                        // No changes (shouldn't happen from merge-join), skip both
+                        i += 2;
+                        continue;
                     }
-
-                    // Standalone REMOVED = DELETED
-                    int lineNumber = change.get("lineNumber").asInt();
-                    String content = change.get("content").asText();
-                    Map<String, String> row = parseCsvLine(content, headers);
-                    diffs.add(CsvRowDiff.deleted(lineNumber, row));
-                    i++;
-
-                } else if ("ADDED".equals(type)) {
-                    // Standalone ADDED = INSERT
-                    int lineNumber = change.get("lineNumber").asInt();
-                    String content = change.get("content").asText();
-                    Map<String, String> row = parseCsvLine(content, headers);
-                    diffs.add(CsvRowDiff.added(lineNumber, row));
-                    i++;
-
-                } else {
-                    // Skip unknown change types
-                    i++;
                 }
             }
+
+            // Standalone DELETED or ADDED (no adjacent pair of different type)
+            Map<String, String> row = rowToMap(current.values, headers);
+            if (current.type == RawDiffType.DELETED) {
+                result.add(CsvRowDiff.deleted(lineNumber++, row));
+            } else {
+                result.add(CsvRowDiff.added(lineNumber++, row));
+            }
+            i++;
         }
 
-        log.debug("Parsed {} diffs from diff JSON", diffs.size());
-        return diffs;
+        log.debug("Merge-join produced {} diffs", result.size());
+        return result;
     }
 
     /**
-     * Parses a CSV line into a map of column name to value.
-     *
-     * @throws CsvDiffException if CSV parsing fails (indicates corrupted data)
+     * Converts a row (list of values) to a map of column name to value.
      */
-    private Map<String, String> parseCsvLine(String csvLine, List<String> headers) {
-        Map<String, String> row = new LinkedHashMap<>();
-
-        try (CSVParser parser = CSVFormat.DEFAULT.parse(new StringReader(csvLine))) {
-            for (CSVRecord record : parser) {
-                for (int i = 0; i < headers.size() && i < record.size(); i++) {
-                    row.put(headers.get(i), record.get(i));
-                }
-                break; // Only process first record
-            }
-        } catch (IOException e) {
-            // CSV parsing should never fail on valid CSV data produced by sortCsvContent.
-            // If it does, it indicates corrupted data - fail fast rather than silently corrupt the diff.
-            log.error("CRITICAL: Failed to parse CSV line, cannot safely proceed: {}",
-                    sanitizeForLogging(csvLine), e);
-            throw new CsvDiffException("Failed to parse CSV line: " + e.getMessage(), e);
+    private Map<String, String> rowToMap(List<String> row, List<String> headers) {
+        Map<String, String> map = new LinkedHashMap<>();
+        for (int i = 0; i < headers.size() && i < row.size(); i++) {
+            map.put(headers.get(i), row.get(i));
         }
-
-        return row;
+        return map;
     }
 
     /**
@@ -350,6 +397,18 @@ public class CsvDiffService {
 
         return changedColumns;
     }
+
+    /**
+     * Raw diff type used internally during merge-join before post-processing.
+     */
+    private enum RawDiffType {
+        ADDED, DELETED
+    }
+
+    /**
+     * Internal representation of a raw diff entry before post-processing.
+     */
+    private record RawDiff(RawDiffType type, List<String> values) {}
 
     /**
      * Validates CSV headers for security and sanity.

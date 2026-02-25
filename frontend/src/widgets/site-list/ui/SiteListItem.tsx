@@ -102,6 +102,12 @@ export function SiteListItem({
                     </>
                   )}
                 </Badge>
+                <Badge
+                  variant={site.siteType === 'POSTGRES_CDC' ? 'outline' : 'secondary'}
+                  className={site.siteType === 'POSTGRES_CDC' ? 'border-blue-400 text-blue-600' : ''}
+                >
+                  {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' : 'DBF'}
+                </Badge>
               </div>
               <p className="text-sm text-muted-foreground truncate">{site.name}</p>
               <p className="text-xs text-muted-foreground mt-1">

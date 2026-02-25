@@ -1,15 +1,13 @@
-package com.bitbi.dfm.plugin.unit;
+package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.plugin.application.CsvDiffService;
-import com.bitbi.dfm.plugin.application.SqlGenerationService;
-import com.bitbi.dfm.plugin.application.SqlStatementGenerator;
-import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
+import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -36,12 +34,13 @@ import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for SqlGenerationService.
- * Tests BOM stripping from CSV content and per-file error handling.
+ * Tests BOM stripping in DbfSqlGenerationStrategy and per-file error handling.
  */
 @DisplayName("SqlGenerationService")
 @ExtendWith(MockitoExtension.class)
@@ -79,12 +78,19 @@ class SqlGenerationServiceTest {
     private PluginAuditService pluginAuditService;
 
     @Mock
+    private SiteSchemaService siteSchemaService;
+
+    @Mock
+    private CdcSqlGenerationStrategy cdcStrategy;
+
+    @Mock
     private Counter counter;
 
     @Mock
     private Timer timer;
 
     private SqlGenerationService service;
+    private DbfSqlGenerationStrategy dbfStrategy;
 
     private static final String BUCKET_NAME = "test-bucket";
 
@@ -94,23 +100,29 @@ class SqlGenerationServiceTest {
         when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(counter);
         when(meterRegistry.timer(anyString())).thenReturn(timer);
 
+        dbfStrategy = new DbfSqlGenerationStrategy(
+                csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
+
         service = new SqlGenerationService(
                 batchRepository,
                 siteRepository,
                 accountPluginRepository,
                 sqlGenerationRepository,
-                csvDiffService,
-                sqlStatementGenerator,
                 s3SqlFileStorageService,
-                s3Client,
-                BUCKET_NAME,
                 meterRegistry,
-                pluginAuditService
+                pluginAuditService,
+                dbfStrategy,
+                cdcStrategy,
+                siteSchemaService,
+                2,
+                120,
+                80
         );
+        service.init();
     }
 
     @Nested
-    @DisplayName("BOM Stripping")
+    @DisplayName("BOM Stripping (DbfSqlGenerationStrategy)")
     class BomStripping {
 
         @Test
@@ -126,11 +138,11 @@ class SqlGenerationServiceTest {
             );
             when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(responseStream);
 
-            // When - invoke private method via reflection
-            Method readMethod = SqlGenerationService.class.getDeclaredMethod(
+            // When - invoke private method on DbfSqlGenerationStrategy via reflection
+            Method readMethod = DbfSqlGenerationStrategy.class.getDeclaredMethod(
                     "readCsvContentFromS3", String.class);
             readMethod.setAccessible(true);
-            String result = (String) readMethod.invoke(service, "test/file.csv");
+            String result = (String) readMethod.invoke(dbfStrategy, "test/file.csv");
 
             // Then - BOM should be stripped
             assertThat(result).isEqualTo("CAR_NO,PAY_DT,AMOUNT\n1,2024-01-01,100");
@@ -152,10 +164,10 @@ class SqlGenerationServiceTest {
             when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(responseStream);
 
             // When
-            Method readMethod = SqlGenerationService.class.getDeclaredMethod(
+            Method readMethod = DbfSqlGenerationStrategy.class.getDeclaredMethod(
                     "readCsvContentFromS3", String.class);
             readMethod.setAccessible(true);
-            String result = (String) readMethod.invoke(service, "test/file.csv");
+            String result = (String) readMethod.invoke(dbfStrategy, "test/file.csv");
 
             // Then - content should remain unchanged
             assertThat(result).isEqualTo(csvWithoutBom);
@@ -174,10 +186,10 @@ class SqlGenerationServiceTest {
             when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(responseStream);
 
             // When
-            Method readMethod = SqlGenerationService.class.getDeclaredMethod(
+            Method readMethod = DbfSqlGenerationStrategy.class.getDeclaredMethod(
                     "readCsvContentFromS3", String.class);
             readMethod.setAccessible(true);
-            String result = (String) readMethod.invoke(service, "test/file.csv");
+            String result = (String) readMethod.invoke(dbfStrategy, "test/file.csv");
 
             // Then
             assertThat(result).isEmpty();
@@ -197,10 +209,10 @@ class SqlGenerationServiceTest {
             when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(responseStream);
 
             // When
-            Method readMethod = SqlGenerationService.class.getDeclaredMethod(
+            Method readMethod = DbfSqlGenerationStrategy.class.getDeclaredMethod(
                     "readCsvContentFromS3", String.class);
             readMethod.setAccessible(true);
-            String result = (String) readMethod.invoke(service, "test/file.csv");
+            String result = (String) readMethod.invoke(dbfStrategy, "test/file.csv");
 
             // Then - middle BOM should remain (only strip from start)
             assertThat(result).isEqualTo(csvWithMiddleBom);
@@ -216,19 +228,24 @@ class SqlGenerationServiceTest {
         void shouldContinueWhenOneFileHasInvalidHeaders() throws Exception {
             // Given - use SimpleMeterRegistry to avoid NPE from Timer.start(mockRegistry)
             SimpleMeterRegistry realRegistry = new SimpleMeterRegistry();
+            DbfSqlGenerationStrategy realDbfStrategy = new DbfSqlGenerationStrategy(
+                    csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, realRegistry);
             SqlGenerationService serviceWithRealMetrics = new SqlGenerationService(
                     batchRepository,
                     siteRepository,
                     accountPluginRepository,
                     sqlGenerationRepository,
-                    csvDiffService,
-                    sqlStatementGenerator,
                     s3SqlFileStorageService,
-                    s3Client,
-                    BUCKET_NAME,
                     realRegistry,
-                    pluginAuditService
+                    pluginAuditService,
+                    realDbfStrategy,
+                    cdcStrategy,
+                    siteSchemaService,
+                    2,
+                    120,
+                    100  // 100% threshold — disable memory pressure check in this test
             );
+            serviceWithRealMetrics.init();
 
             UUID batchId = UUID.randomUUID();
             UUID siteId = UUID.randomUUID();
@@ -261,6 +278,7 @@ class SqlGenerationServiceTest {
 
             Site site = mock(Site.class);
             when(site.getDomain()).thenReturn("test-site.com");
+            when(site.getSiteType()).thenReturn(SiteType.DBF);
             when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
 
             // Previous batch is empty (first batch)
@@ -285,7 +303,7 @@ class SqlGenerationServiceTest {
                     .thenReturn(goodStream);
 
             // Bad file throws InvalidCsvHeaderException during compare
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            when(csvDiffService.compare(anyString(), anyString(), anyList()))
                     .thenThrow(new CsvDiffService.InvalidCsvHeaderException("Invalid column names"))
                     .thenReturn(List.of(
                             CsvRowDiff.added(1, new LinkedHashMap<>(Map.of("id", "1", "name", "Alice"))),

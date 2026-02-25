@@ -1,5 +1,6 @@
 package com.bitbi.dfm.deviceauth.presentation.dto;
 
+import com.bitbi.dfm.site.domain.SiteType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -9,6 +10,7 @@ import jakarta.validation.constraints.Size;
  *
  * @param siteName        requested site name (alphanumeric + hyphens)
  * @param siteDescription optional site description
+ * @param siteType        optional site type (DBF | POSTGRES_CDC); defaults to DBF if omitted
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -30,6 +32,14 @@ public record DeviceAuthorizationRequestDto(
                 requiredMode = Schema.RequiredMode.NOT_REQUIRED
         )
         @Size(max = 500, message = "Site description must be at most 500 characters")
-        String siteDescription
+        String siteDescription,
+
+        @Schema(
+                description = "Site type. DBF = full CSV snapshots (default). POSTGRES_CDC = first batch CSV, subsequent batches JSONL deltas.",
+                example = "DBF",
+                requiredMode = Schema.RequiredMode.NOT_REQUIRED,
+                allowableValues = {"DBF", "POSTGRES_CDC"}
+        )
+        SiteType siteType
 ) {
 }

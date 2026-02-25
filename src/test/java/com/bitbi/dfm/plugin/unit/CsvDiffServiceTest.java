@@ -1,6 +1,5 @@
 package com.bitbi.dfm.plugin.unit;
 
-import com.bitbi.dfm.comparison.domain.ChangeType;
 import com.bitbi.dfm.comparison.domain.DiffService;
 import com.bitbi.dfm.plugin.application.CsvDiffService;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
@@ -16,13 +15,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * Unit tests for CsvDiffService.
- * Tests row-level CSV comparison logic using DiffService.
+ * Tests row-level CSV comparison logic using the merge-join algorithm.
  */
 @DisplayName("CsvDiffService")
 @ExtendWith(MockitoExtension.class)
@@ -52,21 +49,6 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name\n1,Alice\n2,Bob\n3,Charlie";
             List<String> headers = List.of("id", "name");
 
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 3, "oldLines": 0,
-                    "newStart": 3, "newLines": 1,
-                    "changes": [
-                      {"type": "ADDED", "lineNumber": 3, "content": "3,Charlie"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 1, 0, 10L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
@@ -75,6 +57,7 @@ class CsvDiffServiceTest {
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.ADDED);
             assertThat(diffs.get(0).values()).containsEntry("id", "3");
             assertThat(diffs.get(0).values()).containsEntry("name", "Charlie");
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -85,21 +68,6 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name\n1,Alice\n2,Bob";
             List<String> headers = List.of("id", "name");
 
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 3, "oldLines": 1,
-                    "newStart": 3, "newLines": 0,
-                    "changes": [
-                      {"type": "REMOVED", "lineNumber": 3, "content": "3,Charlie"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 0, 1, 10L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
@@ -107,6 +75,7 @@ class CsvDiffServiceTest {
             assertThat(diffs).hasSize(1);
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.DELETED);
             assertThat(diffs.get(0).values()).containsEntry("id", "3");
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -117,22 +86,6 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name,email\n1,Alice,alice@new.com";
             List<String> headers = List.of("id", "name", "email");
 
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 1,
-                    "newStart": 1, "newLines": 1,
-                    "changes": [
-                      {"type": "REMOVED", "lineNumber": 1, "content": "1,Alice,alice@old.com"},
-                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice,alice@new.com"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 1, 1, 20L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
@@ -141,6 +94,7 @@ class CsvDiffServiceTest {
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.MODIFIED);
             assertThat(diffs.get(0).values()).containsEntry("email", "alice@new.com");
             assertThat(diffs.get(0).changedColumns()).containsEntry("email", "alice@old.com");
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -151,14 +105,12 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name\n1,Alice\n2,Bob";
             List<String> headers = List.of("id", "name");
 
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.UNCHANGED, null, 0, 0, 0L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
             // Then
             assertThat(diffs).isEmpty();
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -169,28 +121,13 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name\n1,Alice\n2,Bob";
             List<String> headers = List.of("id", "name");
 
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 0,
-                    "newStart": 1, "newLines": 2,
-                    "changes": [
-                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice"},
-                      {"type": "ADDED", "lineNumber": 2, "content": "2,Bob"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.ADDED, diffJson, 2, 0, 20L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
             // Then - all rows should be ADDED
             assertThat(diffs).hasSize(2);
             assertThat(diffs).allMatch(d -> d.type() == CsvRowDiff.DiffType.ADDED);
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -201,26 +138,6 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name\n1,Alice Updated\n2,Bob\n4,David";
             List<String> headers = List.of("id", "name");
 
-            // Diff output: first pair (1,Alice→1,Alice Updated) shares 'id' column → MODIFIED
-            // Second pair (3,Charlie→4,David) has ALL columns changed → DELETE + INSERT
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 3,
-                    "newStart": 1, "newLines": 3,
-                    "changes": [
-                      {"type": "REMOVED", "lineNumber": 1, "content": "1,Alice"},
-                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice Updated"},
-                      {"type": "REMOVED", "lineNumber": 3, "content": "3,Charlie"},
-                      {"type": "ADDED", "lineNumber": 3, "content": "4,David"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 2, 2, 40L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
@@ -229,6 +146,7 @@ class CsvDiffServiceTest {
             assertThat(diffs.stream().filter(d -> d.type() == CsvRowDiff.DiffType.MODIFIED).count()).isEqualTo(1);
             assertThat(diffs.stream().filter(d -> d.type() == CsvRowDiff.DiffType.DELETED).count()).isEqualTo(1);
             assertThat(diffs.stream().filter(d -> d.type() == CsvRowDiff.DiffType.ADDED).count()).isEqualTo(1);
+            verifyNoInteractions(diffService);
         }
     }
 
@@ -244,15 +162,12 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name\n1,Alice\n2,Bob";
             List<String> headers = List.of("id", "name");
 
-            // After sorting, both should be identical
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.UNCHANGED, null, 0, 0, 0L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
             // Then - no changes (order doesn't matter after sorting)
             assertThat(diffs).isEmpty();
+            verifyNoInteractions(diffService);
         }
     }
 
@@ -268,30 +183,15 @@ class CsvDiffServiceTest {
             String currentCsv = "";
             List<String> headers = List.of("id", "name");
 
-            // When current is empty, all previous rows should be detected as DELETED
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 1,
-                    "newStart": 1, "newLines": 0,
-                    "changes": [
-                      {"type": "REMOVED", "lineNumber": 1, "content": "1,Alice"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 0, 1, 10L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
-            // Then - all rows should be marked as DELETED (fixes "empty CSV hides deletions" bug)
+            // Then - all rows should be marked as DELETED
             assertThat(diffs).hasSize(1);
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.DELETED);
             assertThat(diffs.get(0).values()).containsEntry("id", "1");
             assertThat(diffs.get(0).values()).containsEntry("name", "Alice");
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -302,26 +202,13 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name,note\n1,Alice,\"Hello, World\"";
             List<String> headers = List.of("id", "name", "note");
 
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 0,
-                    "newStart": 1, "newLines": 1,
-                    "changes": [
-                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice,\\"Hello, World\\""}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.ADDED, diffJson, 1, 0, 20L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
             // Then
             assertThat(diffs).hasSize(1);
+            assertThat(diffs.get(0).values()).containsEntry("note", "Hello, World");
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -332,22 +219,6 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name,email\n1,Alice,";
             List<String> headers = List.of("id", "name", "email");
 
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 1,
-                    "newStart": 1, "newLines": 1,
-                    "changes": [
-                      {"type": "REMOVED", "lineNumber": 1, "content": "1,Alice,alice@example.com"},
-                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice,"}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.MODIFIED, diffJson, 1, 1, 20L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
@@ -355,6 +226,7 @@ class CsvDiffServiceTest {
             assertThat(diffs).hasSize(1);
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.MODIFIED);
             assertThat(diffs.get(0).values()).containsEntry("email", "");
+            verifyNoInteractions(diffService);
         }
 
         @Test
@@ -365,29 +237,13 @@ class CsvDiffServiceTest {
             String currentCsv = "id,name,memo\n1,Alice,\"Line1\nLine2\"";
             List<String> headers = List.of("id", "name", "memo");
 
-            // The embedded newline should be normalized to space before diff comparison
-            // After normalization, the diff output will contain "Line1 Line2" (no newline)
-            String diffJson = """
-                {
-                  "hunks": [{
-                    "oldStart": 1, "oldLines": 0,
-                    "newStart": 1, "newLines": 1,
-                    "changes": [
-                      {"type": "ADDED", "lineNumber": 1, "content": "1,Alice,\\"Line1 Line2\\""}
-                    ]
-                  }]
-                }
-                """;
-
-            when(diffService.generateDiff(any(), any(), any(), any()))
-                .thenReturn(new DiffService.DiffResult(ChangeType.ADDED, diffJson, 1, 0, 20L));
-
             // When
             List<CsvRowDiff> diffs = csvDiffService.compare(previousCsv, currentCsv, headers);
 
             // Then - should not crash with CSVException and should process the row
             assertThat(diffs).hasSize(1);
             assertThat(diffs.get(0).type()).isEqualTo(CsvRowDiff.DiffType.ADDED);
+            verifyNoInteractions(diffService);
         }
     }
 }

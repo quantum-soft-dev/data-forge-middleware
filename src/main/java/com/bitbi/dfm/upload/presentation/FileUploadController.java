@@ -156,6 +156,11 @@ public class FileUploadController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
 
+        } catch (FileUploadService.InvalidFileTypeException e) {
+            logger.warn("Invalid file type for site: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(createErrorResponse(HttpStatus.BAD_REQUEST, e.getMessage()));
+
         } catch (DataIntegrityViolationException e) {
             // Handle duplicate S3 key constraint violation
             logger.warn("Duplicate file upload attempt: batchId={}, error={}", batchId, e.getMessage());
