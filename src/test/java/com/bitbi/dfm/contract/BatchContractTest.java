@@ -71,7 +71,8 @@ class BatchContractTest extends BaseIntegrationTest {
         // When: POST /api/dfc/batch/start with Bearer token
         mockMvc.perform(post(BATCH_START_ENDPOINT)
                         .header("Authorization", "Bearer " + jwtToken)
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: 201 CREATED with batchId
                 .andExpect(status().isCreated())
@@ -108,7 +109,8 @@ class BatchContractTest extends BaseIntegrationTest {
         // When: POST /api/dfc/batch/start (assuming active batch exists)
         mockMvc.perform(post(BATCH_START_ENDPOINT)
                         .header("Authorization", "Bearer " + jwtToken)
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: 409 Conflict
                 .andExpect(status().isConflict())
@@ -336,7 +338,8 @@ class BatchContractTest extends BaseIntegrationTest {
         // When: POST /api/dfc/batch/start
         mockMvc.perform(post(BATCH_START_ENDPOINT)
                         .header("Authorization", "Bearer " + testJwtToken)
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: 201 CREATED with BatchResponseDto structure
                 .andExpect(status().isCreated())

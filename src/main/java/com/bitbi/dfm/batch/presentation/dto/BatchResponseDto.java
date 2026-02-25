@@ -1,6 +1,7 @@
 package com.bitbi.dfm.batch.presentation.dto;
 
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchType;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -20,7 +21,8 @@ import java.util.UUID;
  * @param batchId Alias for id (backward compatibility)
  * @param siteId Site that owns this batch
  * @param status Current batch status (IN_PROGRESS, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED, CANCELLED, NOT_COMPLETED)
- * @param s3Path S3 path prefix for uploaded files
+ * @param batchType Batch type (BASELINE or DELTA, nullable for legacy batches)
+ * @param schemaVersion Schema version pinned at batch start (nullable)
  * @param uploadedFilesCount Number of files uploaded to this batch
  * @param totalSize Total size of all uploaded files in bytes
  * @param hasErrors Whether batch has associated error logs
@@ -33,6 +35,8 @@ public record BatchResponseDto(
     UUID siteId,
     String status,
     String s3Path,
+    BatchType batchType,
+    Integer schemaVersion,
     Integer uploadedFilesCount,
     Long totalSize,
     Boolean hasErrors,
@@ -58,6 +62,8 @@ public record BatchResponseDto(
             batch.getSiteId(),
             batch.getStatus().name(), // Convert enum to string
             batch.getS3Path(),
+            batch.getBatchType(),
+            batch.getSchemaVersion(),
             batch.getUploadedFilesCount(),
             batch.getTotalSize(),
             batch.getHasErrors(),

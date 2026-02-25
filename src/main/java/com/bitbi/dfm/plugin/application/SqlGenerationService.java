@@ -37,7 +37,7 @@ import java.util.stream.Collectors;
  * <p>Dispatches to the appropriate {@link SqlGenerationStrategy} based on site type:</p>
  * <ul>
  *   <li>{@link DbfSqlGenerationStrategy} for {@code DBF} sites — CSV snapshot diff</li>
- *   <li>{@link CdcSqlGenerationStrategy} for {@code POSTGRES_CDC} sites — JSONL delta conversion</li>
+ *   <li>{@link CdcSqlGenerationStrategy} for CDC sites ({@code POSTGRES_CDC}, {@code MSSQL_CDC}, {@code DBF_CDC}) — JSONL delta conversion</li>
  * </ul>
  *
  * <p>Performance considerations:</p>
@@ -387,7 +387,7 @@ public class SqlGenerationService {
             return null;
         }
 
-        boolean isCdc = site.getSiteType() == SiteType.POSTGRES_CDC;
+        boolean isCdc = site.getSiteType().isCdc();
         List<UploadedFile> relevantFiles = filterRelevantFiles(currentFiles, isCdc);
 
         if (relevantFiles.isEmpty()) {
@@ -444,7 +444,7 @@ public class SqlGenerationService {
         }
 
         Map<String, TableSchema> tableSchemas = Map.of();
-        if (data.site().getSiteType() == SiteType.POSTGRES_CDC) {
+        if (data.site().getSiteType().isCdc()) {
             tableSchemas = siteSchemaService.getTableSchemas(data.site().getId());
         }
 
@@ -456,7 +456,7 @@ public class SqlGenerationService {
                 tableSchemas
         );
 
-        SqlGenerationStrategy strategy = (data.site().getSiteType() == SiteType.POSTGRES_CDC)
+        SqlGenerationStrategy strategy = data.site().getSiteType().isCdc()
                 ? cdcStrategy
                 : dbfStrategy;
 

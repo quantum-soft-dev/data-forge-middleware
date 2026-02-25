@@ -69,7 +69,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", "Bearer " + getCustomJwtToken())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isCreated()) // Expecting 201 Created for batch start
                 .andExpect(jsonPath("$.id").exists());
     }
@@ -92,7 +92,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (Auth0 token invalid for Custom JWT filter)
                 .andExpect(jsonPath("$.status").doesNotExist()); // 401 doesn't return JSON body
     }
@@ -110,7 +110,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     void deviceApiWithNoTokenShouldBeUnauthorized() throws Exception {
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized
                 .andExpect(jsonPath("$.status").doesNotExist()); // 401 doesn't return JSON body
     }

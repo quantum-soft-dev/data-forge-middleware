@@ -62,7 +62,7 @@ class BatchLifecycleServiceTest {
         accountProperties = new AccountProperties();
         accountProperties.setMaxConcurrentBatches(5);
         service = new BatchLifecycleService(batchRepository, eventPublisher, accountProperties,
-                siteRepository, siteSchemaService, 5);
+                siteRepository, siteSchemaService, 5, "2026-12-31");
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
         batchId = UUID.randomUUID();
@@ -195,16 +195,19 @@ class BatchLifecycleServiceTest {
         }
 
         @Test
-        @DisplayName("should not check schema for DBF sites")
-        void shouldNotCheckSchemaForDbfSite() {
+        @DisplayName("should allow DBF site without schema during grace period (warning only)")
+        void shouldAllowDbfSiteWithoutSchemaDuringGracePeriod() {
             mockActiveSite(SiteType.DBF);
+            when(siteSchemaService.hasSchema(siteId)).thenReturn(false);
             setupNoActiveBatchForSite();
             setupConcurrentBatchCount(0);
             mockSavedBatch();
 
-            service.startBatch(accountId, siteId);
+            Batch result = service.startBatch(accountId, siteId);
 
-            verify(siteSchemaService, never()).hasSchema(any());
+            // DBF sites without schema are allowed during grace period (warning logged, no exception)
+            assertThat(result).isNotNull();
+            verify(siteSchemaService).hasSchema(siteId);
         }
     }
 

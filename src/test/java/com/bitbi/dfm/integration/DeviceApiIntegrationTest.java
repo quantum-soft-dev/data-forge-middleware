@@ -54,7 +54,8 @@ class DeviceApiIntegrationTest extends BaseIntegrationTest {
         // STEP 2: Start new batch
         MvcResult batchResult = mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", bearerToken)
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.batchId").exists())

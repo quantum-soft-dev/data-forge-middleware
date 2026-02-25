@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +41,27 @@ public class SiteSchemaService {
      */
     private static final Pattern IDENTIFIER_PATTERN =
             Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
+
+    /**
+     * MSSQL type alias normalization map. Maps MSSQL-specific type names
+     * (case-insensitive) to unified types used by the SQL generation pipeline.
+     *
+     * Feature: 021-unified-upload-api (US1)
+     */
+    private static final Map<String, String> MSSQL_TYPE_ALIASES = Map.ofEntries(
+            Map.entry("nvarchar", "VARCHAR"),
+            Map.entry("nvarchar(max)", "VARCHAR"),
+            Map.entry("int", "INTEGER"),
+            Map.entry("datetime2", "TIMESTAMP"),
+            Map.entry("datetime", "TIMESTAMP"),
+            Map.entry("uniqueidentifier", "UUID"),
+            Map.entry("money", "MONEY"),
+            Map.entry("smallmoney", "MONEY"),
+            Map.entry("bit", "BOOLEAN"),
+            Map.entry("ntext", "TEXT"),
+            Map.entry("text", "TEXT"),
+            Map.entry("float", "FLOAT")
+    );
 
     private final SiteSchemaRepository siteSchemaRepository;
     private final ObjectMapper objectMapper;
@@ -70,6 +92,9 @@ public class SiteSchemaService {
         logger.info("Upserting schema for site: siteId={}, tables={}", siteId, request.tables().keySet());
 
         validateSchema(request);
+
+        // Normalize MSSQL type aliases before persisting
+        request = normalizeTypeAliases(request);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> schemaData = objectMapper.convertValue(request, Map.class);
@@ -134,6 +159,74 @@ public class SiteSchemaService {
     public void deleteSchema(UUID siteId) {
         siteSchemaRepository.deleteBySiteId(siteId);
         logger.info("Schema deleted for site: siteId={}", siteId);
+    }
+
+    // --- Type normalization ---
+
+    /**
+     * Normalize MSSQL type aliases in schema column types to unified types.
+     * <p>
+     * Replaces known MSSQL-specific type names (e.g., nvarchar, datetime2, uniqueidentifier)
+     * with their unified equivalents (VARCHAR, TIMESTAMP, UUID). Also normalizes
+     * parameterized types like {@code nvarchar(100)} to {@code VARCHAR}.
+     * </p>
+     *
+     * Feature: 021-unified-upload-api (US1)
+     */
+    private SchemaUploadRequestDto normalizeTypeAliases(SchemaUploadRequestDto request) {
+        boolean anyNormalized = false;
+        Map<String, SchemaUploadRequestDto.TableSchemaDto> normalizedTables = new LinkedHashMap<>();
+
+        for (Map.Entry<String, SchemaUploadRequestDto.TableSchemaDto> entry : request.tables().entrySet()) {
+            SchemaUploadRequestDto.TableSchemaDto tableSchema = entry.getValue();
+            List<SchemaUploadRequestDto.ColumnDto> normalizedColumns = new ArrayList<>();
+
+            for (SchemaUploadRequestDto.ColumnDto column : tableSchema.columns()) {
+                String normalizedType = normalizeColumnType(column.type());
+                if (!normalizedType.equals(column.type())) {
+                    anyNormalized = true;
+                    logger.debug("Normalized type alias: table={}, column={}, {} -> {}",
+                            entry.getKey(), column.name(), column.type(), normalizedType);
+                }
+                normalizedColumns.add(new SchemaUploadRequestDto.ColumnDto(
+                        column.name(), normalizedType, column.nullable()));
+            }
+
+            normalizedTables.put(entry.getKey(), new SchemaUploadRequestDto.TableSchemaDto(
+                    normalizedColumns, tableSchema.primaryKey(), tableSchema.uniqueKeys()));
+        }
+
+        if (anyNormalized) {
+            logger.info("Normalized MSSQL type aliases in schema");
+            return new SchemaUploadRequestDto(normalizedTables);
+        }
+        return request;
+    }
+
+    /**
+     * Normalize a single column type by checking against the MSSQL type alias map.
+     * Handles both exact matches (e.g., "nvarchar") and parameterized types (e.g., "nvarchar(100)").
+     */
+    private String normalizeColumnType(String type) {
+        String lowerType = type.toLowerCase(Locale.ROOT).trim();
+
+        // Exact match first
+        String normalized = MSSQL_TYPE_ALIASES.get(lowerType);
+        if (normalized != null) {
+            return normalized;
+        }
+
+        // Check for parameterized types like "nvarchar(100)" — strip the parenthesized part
+        int parenIndex = lowerType.indexOf('(');
+        if (parenIndex > 0) {
+            String baseType = lowerType.substring(0, parenIndex).trim();
+            normalized = MSSQL_TYPE_ALIASES.get(baseType);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+
+        return type;
     }
 
     // --- Validation ---

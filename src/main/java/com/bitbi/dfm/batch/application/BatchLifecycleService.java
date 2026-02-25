@@ -4,6 +4,8 @@ import com.bitbi.dfm.account.application.AccountProperties;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.batch.domain.BatchType;
+import com.bitbi.dfm.batch.presentation.dto.BatchStartRequestDto;
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import com.bitbi.dfm.shared.domain.events.BatchExpiredEvent;
 import com.bitbi.dfm.shared.domain.events.BatchStartedEvent;
@@ -11,6 +13,7 @@ import com.bitbi.dfm.shared.exception.HeartbeatRequiredException;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.site.domain.SiteSchema;
 import com.bitbi.dfm.site.domain.SiteType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +22,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -44,6 +49,7 @@ public class BatchLifecycleService {
     private final SiteRepository siteRepository;
     private final SiteSchemaService siteSchemaService;
     private final int heartbeatRequiredIntervalMinutes;
+    private final LocalDate dbfGracePeriodEnd;
 
     public BatchLifecycleService(
             BatchRepository batchRepository,
@@ -51,34 +57,41 @@ public class BatchLifecycleService {
             AccountProperties accountProperties,
             SiteRepository siteRepository,
             SiteSchemaService siteSchemaService,
-            @Value("${heartbeat.required-interval-minutes:5}") int heartbeatRequiredIntervalMinutes) {
+            @Value("${heartbeat.required-interval-minutes:5}") int heartbeatRequiredIntervalMinutes,
+            @Value("${schema.enforcement.dbf-grace-period-end:2026-12-31}") String dbfGracePeriodEndStr) {
         this.batchRepository = batchRepository;
         this.eventPublisher = eventPublisher;
         this.accountProperties = accountProperties;
         this.siteRepository = siteRepository;
         this.siteSchemaService = siteSchemaService;
         this.heartbeatRequiredIntervalMinutes = heartbeatRequiredIntervalMinutes;
+        this.dbfGracePeriodEnd = LocalDate.parse(dbfGracePeriodEndStr);
     }
 
     /**
-     * Start new batch for site.
+     * Start new batch for site with batch type information.
      * <p>
      * Business rules:
      * - Site must be active (isActive=true)
+     * - Heartbeat must have been called recently
+     * - Schema required for CDC sites; for DBF sites, enforced after grace period
      * - Only one active batch per site
      * - Maximum concurrent batches per account (configurable in application.yml)
+     * - Pins schema version from current site schema at batch start
+     * - Clears forceFullUpload directive on batch start
      * </p>
      *
      * @param accountId account identifier
      * @param siteId    site identifier
-     * @param domain    site domain
+     * @param request   batch start request with batchType and optional fields
      * @return started batch
      * @throws SiteInactiveException if site is deactivated
      * @throws ActiveBatchExistsException   if site has active batch
      * @throws ConcurrentBatchLimitException if account exceeded concurrent batch limit
+     * @throws SchemaRequiredException if schema is missing and required
      */
-    public Batch startBatch(UUID accountId, UUID siteId) {
-        logger.info("Starting new batch: accountId={}, siteId={}", accountId, siteId);
+    public Batch startBatch(UUID accountId, UUID siteId, BatchStartRequestDto request) {
+        logger.info("Starting new batch: accountId={}, siteId={}, batchType={}", accountId, siteId, request.batchType());
 
         // Validate site is active
         Site site = siteRepository.findById(siteId)
@@ -92,12 +105,8 @@ public class BatchLifecycleService {
         // Validate heartbeat was called recently (Feature 021 - US2)
         validateHeartbeat(site);
 
-        // For POSTGRES_CDC sites, schema must exist before first batch
-        if (site.getSiteType() == SiteType.POSTGRES_CDC && !siteSchemaService.hasSchema(siteId)) {
-            logger.warn("Attempted to start batch for CDC site without schema: siteId={}", siteId);
-            throw new SchemaRequiredException(
-                    "Schema required for POSTGRES_CDC sites. Submit via POST /api/dfc/schema first.");
-        }
+        // Schema enforcement (Feature 021 - US8 + US7)
+        validateSchemaRequirement(site, siteId);
 
         // Enforce one active batch per site
         if (batchRepository.findActiveBySiteId(siteId).isPresent()) {
@@ -105,7 +114,82 @@ public class BatchLifecycleService {
         }
 
         // Enforce concurrent batch limit per account with pessimistic lock
-        // This prevents race conditions by locking the count query
+        int maxConcurrentBatches = accountProperties.getMaxConcurrentBatches();
+        int activeBatchCount = batchRepository.countActiveBatchesByAccountIdWithLock(accountId);
+        if (activeBatchCount >= maxConcurrentBatches) {
+            throw new ConcurrentBatchLimitException(
+                    "Account exceeded concurrent batch limit: " + activeBatchCount + "/" + maxConcurrentBatches);
+        }
+
+        // Pin schema version from current site schema
+        Integer schemaVersion = siteSchemaService.findSchema(siteId)
+                .map(SiteSchema::getSchemaVersion)
+                .orElse(null);
+
+        // Create batch with type information
+        Batch batch = Batch.start(
+                accountId,
+                siteId,
+                request.batchType(),
+                schemaVersion,
+                request.expectedFileCount(),
+                request.description()
+        );
+        Batch saved = batchRepository.save(batch);
+
+        // Clear forceFullUpload directive on batch start (Feature 021 - US8)
+        if (site.getForceFullUpload()) {
+            logger.info("Clearing forceFullUpload directive on batch start: siteId={}", siteId);
+            site.clearForceFullUpload();
+            siteRepository.save(site);
+        }
+
+        // Publish domain event
+        BatchStartedEvent event = new BatchStartedEvent(saved.getId(), siteId, accountId);
+        eventPublisher.publishEvent(event);
+
+        logger.info("Batch started successfully: batchId={}, batchType={}, schemaVersion={}, s3Path={}",
+                saved.getId(), saved.getBatchType(), saved.getSchemaVersion(), saved.getS3Path());
+        return saved;
+    }
+
+    /**
+     * Start new batch for site (legacy overload without request DTO).
+     * <p>
+     * Retained for backward compatibility with internal callers.
+     * Creates a batch without type information.
+     * </p>
+     *
+     * @param accountId account identifier
+     * @param siteId    site identifier
+     * @return started batch
+     * @deprecated Use {@link #startBatch(UUID, UUID, BatchStartRequestDto)} instead
+     */
+    @Deprecated
+    public Batch startBatch(UUID accountId, UUID siteId) {
+        logger.info("Starting new batch (legacy): accountId={}, siteId={}", accountId, siteId);
+
+        // Validate site is active
+        Site site = siteRepository.findById(siteId)
+                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + siteId));
+
+        if (!site.getIsActive()) {
+            logger.warn("Attempted to start batch for inactive site: siteId={}", siteId);
+            throw new SiteInactiveException("Cannot start batch for inactive site. Please activate the site first.");
+        }
+
+        // Validate heartbeat was called recently (Feature 021 - US2)
+        validateHeartbeat(site);
+
+        // Schema enforcement
+        validateSchemaRequirement(site, siteId);
+
+        // Enforce one active batch per site
+        if (batchRepository.findActiveBySiteId(siteId).isPresent()) {
+            throw new ActiveBatchExistsException("Site already has an active batch: " + siteId);
+        }
+
+        // Enforce concurrent batch limit per account with pessimistic lock
         int maxConcurrentBatches = accountProperties.getMaxConcurrentBatches();
         int activeBatchCount = batchRepository.countActiveBatchesByAccountIdWithLock(accountId);
         if (activeBatchCount >= maxConcurrentBatches) {
@@ -303,6 +387,40 @@ public class BatchLifecycleService {
 
         batch.markAsHavingErrors();
         batchRepository.save(batch);
+    }
+
+    /**
+     * Validate schema requirement based on site type.
+     * <p>
+     * Rules:
+     * <ul>
+     *   <li>CDC sites (POSTGRES_CDC, MSSQL_CDC, DBF_CDC): schema always required</li>
+     *   <li>DBF sites: schema required after grace period; warning logged during grace period</li>
+     * </ul>
+     * </p>
+     *
+     * @param site   the site to validate
+     * @param siteId site identifier
+     * @throws SchemaRequiredException if schema is missing and required
+     */
+    private void validateSchemaRequirement(Site site, UUID siteId) {
+        SiteType siteType = site.getSiteType();
+        boolean hasSchema = siteSchemaService.hasSchema(siteId);
+
+        if (siteType.isCdc() && !hasSchema) {
+            logger.warn("Attempted to start batch for CDC site without schema: siteId={}, siteType={}", siteId, siteType);
+            throw new SchemaRequiredException(
+                    "Schema required for " + siteType + " sites. Submit via POST /api/dfc/schema first.");
+        }
+
+        if (siteType == SiteType.DBF && !hasSchema) {
+            if (LocalDate.now().isAfter(dbfGracePeriodEnd)) {
+                logger.warn("DBF schema grace period expired. Schema required: siteId={}, gracePeriodEnd={}", siteId, dbfGracePeriodEnd);
+                throw new SchemaRequiredException(
+                        "Schema required for DBF sites. Grace period ended on " + dbfGracePeriodEnd + ". Submit via POST /api/dfc/schema first.");
+            }
+            logger.warn("DBF site without schema (grace period active until {}): siteId={}", dbfGracePeriodEnd, siteId);
+        }
     }
 
     /**

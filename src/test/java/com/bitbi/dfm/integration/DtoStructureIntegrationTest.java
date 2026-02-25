@@ -76,7 +76,8 @@ class DtoStructureIntegrationTest extends BaseIntegrationTest {
         // ===================================================================
         String startResponse = mockMvc.perform(post("/api/dfc/batch/start")
                         .header("Authorization", "Bearer " + jwtToken)
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Assert 201 CREATED
                 .andExpect(status().isCreated())

@@ -293,8 +293,8 @@ public class FileUploadService {
      * <p>Rules:
      * <ul>
      *   <li>DBF sites: CSV or CSV.GZ only (all batches)</li>
-     *   <li>POSTGRES_CDC baseline batch (first): CSV or CSV.GZ</li>
-     *   <li>POSTGRES_CDC subsequent batches: JSONL or JSONL.GZ only</li>
+     *   <li>CDC sites (POSTGRES_CDC, MSSQL_CDC, DBF_CDC) baseline batch (first): CSV or CSV.GZ</li>
+     *   <li>CDC sites subsequent batches: JSONL or JSONL.GZ only</li>
      * </ul>
      * </p>
      */
@@ -317,7 +317,7 @@ public class FileUploadService {
             return;
         }
 
-        if (siteType == SiteType.POSTGRES_CDC) {
+        if (siteType.isCdc()) {
             // Determine baseline: no previous completed batch means this is the baseline
             boolean isBaselineBatch = batchRepository
                     .findPreviousBatchForSite(batch.getSiteId(), batch.getId())
@@ -327,7 +327,7 @@ public class FileUploadService {
                 // Baseline batch: CSV only
                 if (isJsonlFile) {
                     throw new InvalidFileTypeException(
-                            "JSONL files are not expected for the first (baseline) batch of a POSTGRES_CDC site. Upload CSV files for the initial snapshot.");
+                            "JSONL files are not expected for the first (baseline) batch of a " + siteType + " site. Upload CSV files for the initial snapshot.");
                 }
             } else {
                 // Subsequent batch: JSONL only
@@ -337,7 +337,7 @@ public class FileUploadService {
                 }
                 if (!isJsonlFile) {
                     throw new InvalidFileTypeException(
-                            "Unsupported file type for POSTGRES_CDC delta batch. Only JSONL or JSONL.GZ files are accepted.");
+                            "Unsupported file type for " + siteType + " delta batch. Only JSONL or JSONL.GZ files are accepted.");
                 }
             }
         }

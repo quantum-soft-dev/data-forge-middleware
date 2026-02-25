@@ -3,6 +3,7 @@ package com.bitbi.dfm.device.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.presentation.dto.BatchResponseDto;
+import com.bitbi.dfm.batch.presentation.dto.BatchStartRequestDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.DeviceControllerHelper;
@@ -13,6 +14,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -74,6 +76,7 @@ public class DeviceBatchController {
     @Operation(
             summary = "Start new batch",
             description = "Creates a new IN_PROGRESS batch for file uploads. " +
+                    "Requires batchType (BASELINE or DELTA) in the request body. " +
                     "The authenticated site can only have one active batch at a time. " +
                     "Account-level concurrent batch limit also applies."
     )
@@ -85,6 +88,11 @@ public class DeviceBatchController {
                             mediaType = "application/json",
                             schema = @Schema(implementation = BatchResponseDto.class)
                     )
+            ),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request - Missing batchType or schema required",
+                    content = @Content(mediaType = "application/json")
             ),
             @ApiResponse(
                     responseCode = "401",
@@ -102,6 +110,11 @@ public class DeviceBatchController {
                     content = @Content(mediaType = "application/json")
             ),
             @ApiResponse(
+                    responseCode = "428",
+                    description = "Precondition Required - Heartbeat required before starting a batch",
+                    content = @Content(mediaType = "application/json")
+            ),
+            @ApiResponse(
                     responseCode = "429",
                     description = "Too Many Requests - Concurrent batch limit exceeded",
                     content = @Content(mediaType = "application/json")
@@ -112,16 +125,16 @@ public class DeviceBatchController {
                     content = @Content(mediaType = "application/json")
             )
     })
-    public ResponseEntity<?> startBatch() {
+    public ResponseEntity<?> startBatch(@Valid @RequestBody BatchStartRequestDto request) {
         try {
             // Extract authenticated site/account from JWT security context
             UUID siteId = authorizationHelper.getAuthenticatedSiteId();
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
 
-            logger.info("Device API: Starting batch - siteId={}", siteId);
+            logger.info("Device API: Starting batch - siteId={}, batchType={}", siteId, request.batchType());
 
             // Delegate to service layer
-            Batch batch = batchLifecycleService.startBatch(accountId, siteId);
+            Batch batch = batchLifecycleService.startBatch(accountId, siteId, request);
 
             BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);

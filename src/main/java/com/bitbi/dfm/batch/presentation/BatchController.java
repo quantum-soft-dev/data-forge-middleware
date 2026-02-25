@@ -3,7 +3,9 @@ package com.bitbi.dfm.batch.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.presentation.dto.BatchResponseDto;
+import com.bitbi.dfm.batch.presentation.dto.BatchStartRequestDto;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -52,16 +54,16 @@ public class BatchController {
      * @return created batch response
      */
     @PostMapping("/start")
-    public ResponseEntity<?> startBatch() {
+    public ResponseEntity<?> startBatch(@Valid @RequestBody BatchStartRequestDto request) {
 
         try {
             // Get authenticated site/account from security context
             UUID siteId = authorizationHelper.getAuthenticatedSiteId();
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
 
-            logger.info("Starting batch: siteId={}", siteId);
+            logger.info("Starting batch: siteId={}, batchType={}", siteId, request.batchType());
 
-            Batch batch = batchLifecycleService.startBatch(accountId, siteId);
+            Batch batch = batchLifecycleService.startBatch(accountId, siteId, request);
 
             BatchResponseDto response = BatchResponseDto.fromEntity(batch);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);

@@ -4,6 +4,8 @@ import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.http.MediaType;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -49,7 +51,9 @@ class JwtOnlyWriteIntegrationTest extends BaseIntegrationTest {
 
         // When: POST batch start with JWT token
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", jwtToken))
+                        .header("Authorization", jwtToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: 201 Created with BatchResponseDto
                 .andExpect(status().isCreated())

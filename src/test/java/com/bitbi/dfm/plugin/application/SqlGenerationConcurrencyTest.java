@@ -10,6 +10,7 @@ import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.site.domain.SiteType;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -144,6 +145,7 @@ class SqlGenerationConcurrencyTest {
         Site site = mock(Site.class);
         when(site.getId()).thenReturn(siteId);
         when(site.getDomain()).thenReturn("test.com");
+        when(site.getSiteType()).thenReturn(SiteType.DBF);
         when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
 
         when(batchRepository.findPreviousBatchForSiteWithFiles(siteId, batchId))
@@ -221,6 +223,7 @@ class SqlGenerationConcurrencyTest {
                 Site site = mock(Site.class);
                 when(site.getId()).thenReturn(siteId);
                 when(site.getDomain()).thenReturn("test" + i + ".com");
+                when(site.getSiteType()).thenReturn(SiteType.DBF);
                 when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
 
                 when(batchRepository.findPreviousBatchForSiteWithFiles(siteId, batchIds[i]))
@@ -322,6 +325,7 @@ class SqlGenerationConcurrencyTest {
             Site site2 = mock(Site.class);
             when(site2.getId()).thenReturn(siteId2);
             when(site2.getDomain()).thenReturn("test2.com");
+            when(site2.getSiteType()).thenReturn(SiteType.DBF);
             when(siteRepository.findById(siteId2)).thenReturn(Optional.of(site2));
 
             when(batchRepository.findPreviousBatchForSiteWithFiles(siteId2, batchId2))
@@ -468,6 +472,7 @@ class SqlGenerationConcurrencyTest {
             Site site2 = mock(Site.class);
             when(site2.getId()).thenReturn(siteId2);
             when(site2.getDomain()).thenReturn("test2.com");
+            when(site2.getSiteType()).thenReturn(SiteType.DBF);
             when(siteRepository.findById(siteId2)).thenReturn(Optional.of(site2));
 
             when(batchRepository.findPreviousBatchForSiteWithFiles(siteId2, batchId2))
@@ -566,6 +571,7 @@ class SqlGenerationConcurrencyTest {
             Site site2 = mock(Site.class);
             when(site2.getId()).thenReturn(siteId2);
             when(site2.getDomain()).thenReturn("test2.com");
+            when(site2.getSiteType()).thenReturn(SiteType.DBF);
             when(siteRepository.findById(siteId2)).thenReturn(Optional.of(site2));
 
             when(batchRepository.findPreviousBatchForSiteWithFiles(siteId2, batchId2))

@@ -4,6 +4,8 @@ import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.http.MediaType;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -36,7 +38,9 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
     void shouldCreateBatchWithInProgressStatusAndValidS3Path() throws Exception {
         // When: POST /api/dfc/batch/start
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateStore03Token()))
+                        .header("Authorization", generateStore03Token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: Batch created with batchId
                 .andExpect(status().isCreated())
@@ -53,12 +57,16 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
 
         // Given: Active batch exists for site
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                .header("Authorization", token))
+                .header("Authorization", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isCreated());
 
         // When: Attempt to create another batch
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", token))
+                        .header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: 409 Conflict
                 .andExpect(status().isConflict())
@@ -72,7 +80,9 @@ class BatchLifecycleIntegrationTest extends BaseIntegrationTest {
 
         // When: Start new batch
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateStore03Token()))
+                        .header("Authorization", generateStore03Token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: Success
                 .andExpect(status().isCreated())

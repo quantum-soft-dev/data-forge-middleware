@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.http.MediaType;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -23,7 +25,9 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     void shouldMarkExpiredBatchAsNotCompleted() throws Exception {
         // Given: Batch created and left in IN_PROGRESS
         String batchResponse = mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateTestToken()))
+                        .header("Authorization", generateTestToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()
@@ -51,7 +55,9 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     void shouldAllowNewBatchAfterTimeout() throws Exception {
         // Given: Previous batch timed out and marked NOT_COMPLETED
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateTestToken()))
+                        .header("Authorization", generateTestToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isCreated());
 
         // Simulate timeout
@@ -59,7 +65,9 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
 
         // When: Start new batch
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateTestToken()))
+                        .header("Authorization", generateTestToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: Success (no IN_PROGRESS conflict)
                 .andExpect(status().isCreated())
@@ -71,7 +79,9 @@ class BatchTimeoutIntegrationTest extends BaseIntegrationTest {
     void shouldNotTimeoutCompletedBatch() throws Exception {
         // Given: Batch completed before timeout
         String batchResponse = mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateTestToken()))
+                        .header("Authorization", generateTestToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()

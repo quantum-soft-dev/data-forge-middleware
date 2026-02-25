@@ -73,9 +73,9 @@
 
 ### Implementation for User Story 8
 
-- [ ] T015 [US8] Create BatchStartRequestDto record (batchType required, expectedFileCount optional, description optional) with Jakarta validation annotations in src/main/java/com/bitbi/dfm/batch/presentation/dto/BatchStartRequestDto.java
-- [ ] T016 [US8] Modify DeviceBatchController and BatchController to accept BatchStartRequestDto as @RequestBody on batch start endpoints in src/main/java/com/bitbi/dfm/batch/presentation/DeviceBatchController.java and src/main/java/com/bitbi/dfm/batch/presentation/BatchController.java
-- [ ] T017 [US8] Add batchType validation (reject null with 400), schema version pinning from current SiteSchema, and forceFullUpload clearing on batch start in BatchLifecycleService in src/main/java/com/bitbi/dfm/batch/application/BatchLifecycleService.java
+- [X] T015 [US8] Create BatchStartRequestDto record (batchType required, expectedFileCount optional, description optional) with Jakarta validation annotations in src/main/java/com/bitbi/dfm/batch/presentation/dto/BatchStartRequestDto.java
+- [X] T016 [US8] Modify DeviceBatchController and BatchController to accept BatchStartRequestDto as @RequestBody on batch start endpoints in src/main/java/com/bitbi/dfm/batch/presentation/DeviceBatchController.java and src/main/java/com/bitbi/dfm/batch/presentation/BatchController.java
+- [X] T017 [US8] Add batchType validation (reject null with 400), schema version pinning from current SiteSchema, and forceFullUpload clearing on batch start in BatchLifecycleService in src/main/java/com/bitbi/dfm/batch/application/BatchLifecycleService.java
 
 **Checkpoint**: Batch start requires batchType, pins schema version, clears directives
 
@@ -89,9 +89,9 @@
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Add MSSQL type alias normalization map (nvarchar→VARCHAR, datetime2→TIMESTAMP, uniqueidentifier→UUID, money→MONEY, bit→BOOLEAN, ntext→TEXT, float→FLOAT, int→INTEGER) to schema submission in SiteSchemaService in src/main/java/com/bitbi/dfm/site/application/SiteSchemaService.java
-- [ ] T019 [P] [US1] Replace explicit POSTGRES_CDC routing with isCdc() check to route all CDC site types to CdcSqlGenerationStrategy in SqlGenerationService in src/main/java/com/bitbi/dfm/plugin/application/SqlGenerationService.java
-- [ ] T020 [P] [US1] Replace explicit POSTGRES_CDC file validation checks with isCdc() to support MSSQL_CDC and DBF_CDC file uploads in FileUploadService in src/main/java/com/bitbi/dfm/upload/application/FileUploadService.java
+- [X] T018 [US1] Add MSSQL type alias normalization map (nvarchar→VARCHAR, datetime2→TIMESTAMP, uniqueidentifier→UUID, money→MONEY, bit→BOOLEAN, ntext→TEXT, float→FLOAT, int→INTEGER) to schema submission in SiteSchemaService in src/main/java/com/bitbi/dfm/site/application/SiteSchemaService.java
+- [X] T019 [P] [US1] Replace explicit POSTGRES_CDC routing with isCdc() check to route all CDC site types to CdcSqlGenerationStrategy in SqlGenerationService in src/main/java/com/bitbi/dfm/plugin/application/SqlGenerationService.java
+- [X] T020 [P] [US1] Replace explicit POSTGRES_CDC file validation checks with isCdc() to support MSSQL_CDC and DBF_CDC file uploads in FileUploadService in src/main/java/com/bitbi/dfm/upload/application/FileUploadService.java
 
 **Checkpoint**: MSSQL_CDC sites can complete full CDC flow (authorize → schema → baseline → delta → SQL)
 
@@ -105,7 +105,7 @@
 
 ### Implementation for User Story 7
 
-- [ ] T021 [US7] Extend schema enforcement in startBatch() to cover DBF sites: read dbf-grace-period-end config, log warning if no schema during grace period, reject with SchemaRequiredException after grace period in BatchLifecycleService in src/main/java/com/bitbi/dfm/batch/application/BatchLifecycleService.java
+- [X] T021 [US7] Extend schema enforcement in startBatch() to cover DBF sites: read dbf-grace-period-end config, log warning if no schema during grace period, reject with SchemaRequiredException after grace period in BatchLifecycleService in src/main/java/com/bitbi/dfm/batch/application/BatchLifecycleService.java
 
 **Checkpoint**: DBF schema enforcement active with grace period protection
 

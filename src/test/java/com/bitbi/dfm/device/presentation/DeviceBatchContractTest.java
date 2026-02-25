@@ -69,7 +69,8 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
     void shouldReturn409WhenSiteHasActiveBatch() throws Exception {
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
                         .header("Authorization", "Bearer " + jwtToken)
-                        .contentType(MediaType.APPLICATION_JSON))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.status").value(409))

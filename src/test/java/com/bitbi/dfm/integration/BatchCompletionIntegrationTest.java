@@ -3,6 +3,7 @@ package com.bitbi.dfm.integration;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -95,7 +96,9 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
 
         // When: Start new batch
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateTestToken()))
+                        .header("Authorization", generateTestToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: Success (201 Created with BatchResponseDto)
                 .andExpect(status().isCreated())
@@ -157,7 +160,9 @@ class BatchCompletionIntegrationTest extends BaseIntegrationTest {
 
         // When: Start new batch
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", generateTestToken()))
+                        .header("Authorization", generateTestToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"batchType\":\"DELTA\"}"))
 
                 // Then: Success (201 Created with BatchResponseDto)
                 .andExpect(status().isCreated())
