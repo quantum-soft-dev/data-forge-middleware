@@ -105,9 +105,15 @@ class SqlGenerationConcurrencyTest {
                 pluginAuditService,
                 maxConcurrent,
                 semaphoreTimeoutSeconds,
-                80
+                100  // 100% threshold — disable memory pressure check in concurrency tests
         );
-        service.init();
+        try {
+            java.lang.reflect.Method initMethod = SqlGenerationService.class.getDeclaredMethod("init");
+            initMethod.setAccessible(true);
+            initMethod.invoke(service);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
         return service;
     }
 
@@ -235,7 +241,7 @@ class SqlGenerationConcurrencyTest {
                 );
             });
 
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            when(csvDiffService.compare(anyList(), anyList(), anyList()))
                     .thenReturn(List.of());
 
             ExecutorService executor = Executors.newFixedThreadPool(totalBatches);
@@ -327,7 +333,7 @@ class SqlGenerationConcurrencyTest {
                 );
             });
 
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            when(csvDiffService.compare(anyList(), anyList(), anyList()))
                     .thenReturn(List.of());
 
             ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -473,7 +479,7 @@ class SqlGenerationConcurrencyTest {
                 );
             });
 
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            when(csvDiffService.compare(anyList(), anyList(), anyList()))
                     .thenReturn(List.of());
 
             ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -533,7 +539,7 @@ class SqlGenerationConcurrencyTest {
                 );
             });
 
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            when(csvDiffService.compare(anyList(), anyList(), anyList()))
                     .thenReturn(List.of());
 
             // Second batch setup for regenerateForBatch

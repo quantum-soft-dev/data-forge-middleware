@@ -111,7 +111,17 @@ class SqlGenerationServiceTest {
                 120,
                 80
         );
-        service.init();
+        invokeInit(service);
+    }
+
+    private void invokeInit(SqlGenerationService svc) {
+        try {
+            java.lang.reflect.Method initMethod = SqlGenerationService.class.getDeclaredMethod("init");
+            initMethod.setAccessible(true);
+            initMethod.invoke(svc);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Nested
@@ -235,9 +245,9 @@ class SqlGenerationServiceTest {
                     pluginAuditService,
                     2,
                     120,
-                    80
+                    100  // 100% threshold — disable memory pressure check in this test
             );
-            serviceWithRealMetrics.init();
+            invokeInit(serviceWithRealMetrics);
 
             UUID batchId = UUID.randomUUID();
             UUID siteId = UUID.randomUUID();

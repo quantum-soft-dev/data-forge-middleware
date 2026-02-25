@@ -171,6 +171,9 @@ class SqlGenerationStreamingTest {
             // Then - BOM should be stripped from first header
             assertThat(result.headers().get(0)).isEqualTo("id");
             assertThat(result.headers().get(0).charAt(0)).isNotEqualTo('\uFEFF');
+            // Verify row values for first column are correct (not empty due to BOM key mismatch)
+            assertThat(result.rows()).hasSize(1);
+            assertThat(result.rows().get(0).get(0)).isEqualTo("1");
         }
 
         @Test
@@ -322,6 +325,73 @@ class SqlGenerationStreamingTest {
             assertThat(result).isPresent();
             verify(csvDiffService).compare(anyList(), anyList(), anyList());
             verify(csvDiffService, never()).compare(anyString(), anyString(), anyList());
+        }
+
+        @Test
+        @DisplayName("should use provided extraction headers for consistent column ordering")
+        void shouldUseProvidedExtractionHeaders() throws Exception {
+            // Given - previous file has columns in different order than current
+            SqlGenerationService service = createService(80);
+            String csvContent = "name,id\nAlice,1\nBob,2"; // columns: name, id (reversed)
+
+            when(s3Client.getObject(any(GetObjectRequest.class)))
+                    .thenReturn(createS3Stream(csvContent));
+
+            // When - use current file's header order: id, name
+            List<String> extractionHeaders = List.of("id", "name");
+            Method streamMethod = SqlGenerationService.class.getDeclaredMethod(
+                    "streamCsvFromS3", String.class, List.class);
+            streamMethod.setAccessible(true);
+            ParsedCsvData result = (ParsedCsvData) streamMethod.invoke(
+                    service, "test/previous.csv", extractionHeaders);
+
+            // Then - values should be in extraction header order (id, name), not file order (name, id)
+            assertThat(result.headers()).containsExactly("id", "name");
+            assertThat(result.rows()).hasSize(2);
+            assertThat(result.rows().get(0)).containsExactly("1", "Alice"); // id=1, name=Alice
+            assertThat(result.rows().get(1)).containsExactly("2", "Bob");   // id=2, name=Bob
+        }
+
+        @Test
+        @DisplayName("should handle missing columns in previous file gracefully")
+        void shouldHandleMissingColumnsInPreviousFile() throws Exception {
+            // Given - previous file lacks 'email' column that current file has
+            SqlGenerationService service = createService(80);
+            String csvContent = "id,name\n1,Alice";
+
+            when(s3Client.getObject(any(GetObjectRequest.class)))
+                    .thenReturn(createS3Stream(csvContent));
+
+            // When - extract using current file's headers which include 'email'
+            List<String> extractionHeaders = List.of("id", "name", "email");
+            Method streamMethod = SqlGenerationService.class.getDeclaredMethod(
+                    "streamCsvFromS3", String.class, List.class);
+            streamMethod.setAccessible(true);
+            ParsedCsvData result = (ParsedCsvData) streamMethod.invoke(
+                    service, "test/previous.csv", extractionHeaders);
+
+            // Then - missing column should be empty string
+            assertThat(result.rows()).hasSize(1);
+            assertThat(result.rows().get(0)).containsExactly("1", "Alice", "");
+        }
+    }
+
+    @Nested
+    @DisplayName("Init Guard")
+    class InitGuard {
+
+        @Test
+        @DisplayName("should not replace semaphore on double init")
+        void shouldNotReplaceSemaphoreOnDoubleInit() {
+            // Given
+            SqlGenerationService service = createService(80);
+
+            // When - call init() again
+            service.init();
+
+            // Then - should still work (no duplicate gauge exception, semaphore intact)
+            assertThat(meterRegistry.find("sql.generation.semaphore.queue.size").gauge())
+                    .isNotNull();
         }
     }
 

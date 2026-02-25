@@ -73,8 +73,12 @@ public class CsvDiffService {
      * Compares two sets of pre-parsed CSV rows and returns the differences.
      *
      * <p>Accepts pre-parsed rows (e.g., from streaming S3 parsing) instead of
-     * raw CSV strings, avoiding the full-string-in-memory step. Sorts rows
-     * in-place before comparison for memory efficiency.</p>
+     * raw CSV strings, avoiding the full-string-in-memory step.</p>
+     *
+     * @apiNote This method sorts the input lists <b>in-place</b> to avoid allocating
+     * defensive copies. Callers must not rely on the original order of {@code previousRows}
+     * or {@code currentRows} after this method returns. The lists must be mutable
+     * ({@link java.util.ArrayList}); immutable lists will throw {@link UnsupportedOperationException}.
      *
      * @param previousRows Pre-parsed rows from previous batch (null or empty for first batch)
      * @param currentRows  Pre-parsed rows from current batch (null or empty for deletion detection)
@@ -299,6 +303,15 @@ public class CsvDiffService {
      * </ul>
      *
      * <p>Line numbers are assigned sequentially (1-based) for each diff entry.</p>
+     *
+     * @implNote The MODIFIED detection is a heuristic based on lexicographic adjacency
+     * in the sorted output, NOT on logical row identity (e.g., primary key). Two unrelated
+     * rows that happen to sort next to each other — such as {@code ("1","Alice")} deleted
+     * and {@code ("1","Bob")} inserted — will be classified as MODIFIED if they share at
+     * least one column value (here: {@code "1"}). This is an intentional trade-off: without
+     * a declared primary key, exact identity matching is impossible. The all-columns-changed
+     * guard ({@code changedColumns.size() == headers.size()}) prevents false MODIFIEDs for
+     * completely unrelated rows.
      */
     private List<CsvRowDiff> postProcessRawDiffs(List<RawDiff> rawDiffs, List<String> headers) {
         List<CsvRowDiff> result = new ArrayList<>();

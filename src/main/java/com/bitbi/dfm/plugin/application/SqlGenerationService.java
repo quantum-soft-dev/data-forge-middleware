@@ -26,6 +26,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import jakarta.annotation.PostConstruct;
 
 import java.io.*;
+import java.io.PushbackReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Semaphore;
@@ -106,8 +107,17 @@ public class SqlGenerationService {
         this.heapThresholdPercent = heapThresholdPercent;
     }
 
+    /**
+     * Initializes the concurrency semaphore and registers metrics.
+     * Package-private for testability; guarded against double-initialization
+     * to prevent replacing an in-use semaphore or registering duplicate gauges.
+     */
     @PostConstruct
-    public void init() {
+    void init() {
+        if (this.sqlGenerationSemaphore != null) {
+            log.warn("init() called more than once — skipping re-initialization");
+            return;
+        }
         this.sqlGenerationSemaphore = new Semaphore(maxConcurrent, true);
         meterRegistry.gauge("sql.generation.semaphore.queue.size", sqlGenerationSemaphore,
                 Semaphore::getQueueLength);
@@ -440,19 +450,18 @@ public class SqlGenerationService {
 
         for (UploadedFile currentFile : data.csvFiles) {
             try {
-                // Task 5: Check memory pressure before processing next file
+                // Check memory pressure before processing next file.
+                // Abort immediately without calling System.gc() — the semaphore already
+                // limits concurrency, so GC will happen naturally between operations.
+                // Calling System.gc() here would block while holding the semaphore,
+                // preventing all other SQL generations from proceeding.
                 if (isMemoryPressureHigh()) {
-                    log.warn("High memory pressure ({}%), requesting GC before processing file: {}",
-                            getHeapUsagePercent(), currentFile.getOriginalFileName());
-                    System.gc();
-                    if (isMemoryPressureHigh()) {
-                        log.error("Memory still high ({}%) after GC, skipping remaining {} files for batch: {}",
-                                getHeapUsagePercent(),
-                                data.csvFiles.size() - filesProcessed,
-                                data.batch.getId());
-                        meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
-                        break;
-                    }
+                    log.error("High memory pressure ({}%), skipping remaining {} files for batch: {}",
+                            getHeapUsagePercent(),
+                            data.csvFiles.size() - filesProcessed,
+                            data.batch.getId());
+                    meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
+                    break;
                 }
 
                 String normalizedName = normalizeFileName(currentFile.getOriginalFileName());
@@ -470,11 +479,12 @@ public class SqlGenerationService {
 
                 List<List<String>> currentRows = currentData.rows();
 
-                // Stream previous file (empty rows if first batch)
+                // Stream previous file using CURRENT file's headers for consistent column ordering.
+                // This handles cases where column order changed between batches.
                 List<List<String>> previousRows = Collections.emptyList();
                 UploadedFile previousFile = data.previousFilesMap.get(normalizedName);
                 if (previousFile != null) {
-                    ParsedCsvData previousData = streamCsvFromS3(previousFile.getS3Key());
+                    ParsedCsvData previousData = streamCsvFromS3(previousFile.getS3Key(), headers);
                     previousRows = previousData.rows();
                 }
 
@@ -563,19 +573,35 @@ public class SqlGenerationService {
 
     /**
      * Streams CSV content directly from S3 into parsed rows and headers.
+     * Uses the file's own headers for column ordering.
+     *
+     * @param s3Key The S3 object key
+     * @return Parsed headers and rows
+     * @see #streamCsvFromS3(String, List)
+     */
+    ParsedCsvData streamCsvFromS3(String s3Key) throws IOException {
+        return streamCsvFromS3(s3Key, null);
+    }
+
+    /**
+     * Streams CSV content directly from S3 into parsed rows.
      * Avoids holding the full CSV file as a String in memory.
      * <p>
      * Handles:
      * <ul>
-     *   <li>GZip decompression for .gz files</li>
-     *   <li>UTF-8 BOM stripping from first header</li>
+     *   <li>GZip decompression for .gz files (detected by extension only — files
+     *       with {@code Content-Encoding: gzip} but no .gz suffix are not decompressed)</li>
+     *   <li>UTF-8 BOM stripping at character level before CSV parsing</li>
      *   <li>Embedded newline normalization (replaced with spaces)</li>
      * </ul>
      *
      * @param s3Key The S3 object key
+     * @param extractionHeaders If non-null, use these headers for row value extraction
+     *                          instead of the file's own headers. This ensures consistent
+     *                          column ordering when comparing files that may have reordered columns.
      * @return Parsed headers and rows
      */
-    ParsedCsvData streamCsvFromS3(String s3Key) throws IOException {
+    ParsedCsvData streamCsvFromS3(String s3Key, List<String> extractionHeaders) throws IOException {
         GetObjectRequest request = GetObjectRequest.builder()
                 .bucket(bucketName)
                 .key(s3Key)
@@ -589,20 +615,28 @@ public class SqlGenerationService {
                 inputStream = new GZIPInputStream(s3Response);
             }
 
+            Reader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8);
+
+            // Strip UTF-8 BOM (U+FEFF) at character level BEFORE CSVParser sees it.
+            // This ensures the parser's internal header map has clean keys.
+            PushbackReader bomReader = new PushbackReader(reader, 1);
+            int firstChar = bomReader.read();
+            if (firstChar != -1 && firstChar != '\uFEFF') {
+                bomReader.unread(firstChar);
+            }
+
             try (CSVParser parser = CSVFormat.DEFAULT
                     .withFirstRecordAsHeader()
-                    .parse(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+                    .parse(bomReader)) {
 
-                List<String> headers = new ArrayList<>(parser.getHeaderNames());
-                if (headers.isEmpty()) {
+                List<String> fileHeaders = new ArrayList<>(parser.getHeaderNames());
+                if (fileHeaders.isEmpty()) {
                     return new ParsedCsvData(Collections.emptyList(), Collections.emptyList());
                 }
 
-                // Strip UTF-8 BOM from first header if present
-                String firstHeader = headers.get(0);
-                if (firstHeader != null && !firstHeader.isEmpty() && firstHeader.charAt(0) == '\uFEFF') {
-                    headers.set(0, firstHeader.substring(1));
-                }
+                // Use provided extraction headers for consistent column ordering,
+                // or fall back to the file's own headers
+                List<String> headers = (extractionHeaders != null) ? extractionHeaders : fileHeaders;
 
                 List<List<String>> rows = new ArrayList<>();
                 for (CSVRecord record : parser) {
