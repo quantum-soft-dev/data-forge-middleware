@@ -62,6 +62,19 @@ public class Batch {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "batch_type", length = 20)
+    private BatchType batchType;
+
+    @Column(name = "schema_version")
+    private Integer schemaVersion;
+
+    @Column(name = "expected_file_count")
+    private Integer expectedFileCount;
+
+    @Column(name = "description", columnDefinition = "TEXT")
+    private String description;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
@@ -103,6 +116,27 @@ public class Batch {
 
         return new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
                 0, 0L, false, now, null, now);
+    }
+
+    /**
+     * Start a new batch with type information (Feature 021).
+     *
+     * @param accountId         account identifier
+     * @param siteId            site identifier
+     * @param batchType         batch type (BASELINE or DELTA)
+     * @param schemaVersion     schema version to pin (nullable)
+     * @param expectedFileCount client-declared expected file count (nullable)
+     * @param description       human-readable batch description (nullable)
+     * @return new batch in IN_PROGRESS status
+     */
+    public static Batch start(UUID accountId, UUID siteId, BatchType batchType,
+                              Integer schemaVersion, Integer expectedFileCount, String description) {
+        Batch batch = start(accountId, siteId);
+        batch.batchType = batchType;
+        batch.schemaVersion = schemaVersion;
+        batch.expectedFileCount = expectedFileCount;
+        batch.description = description;
+        return batch;
     }
 
     /**

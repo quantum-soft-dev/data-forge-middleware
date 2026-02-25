@@ -287,6 +287,10 @@ public class SecurityConfiguration {
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/errors/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/admin/plugins/**").hasRole("ADMIN") // Plugin admin endpoints
+                .requestMatchers("/api/v1/admin/sites/*/force-rebaseline").hasRole("ADMIN") // Force rebaseline (Feature 021)
+                .requestMatchers("/api/v1/admin/sites/*/request-logs").hasRole("ADMIN") // Request logs (Feature 021)
+                .requestMatchers("/api/v1/admin/sites/*/client-logs/**").authenticated() // Client logs (ADMIN or USER) (Feature 021)
+                .requestMatchers("/api/v1/admin/sites/*/client-logs").authenticated() // Client logs list (Feature 021)
                 .requestMatchers("/api/v1/plugins/**").authenticated() // Plugin activation endpoints (any authenticated user)
                 .requestMatchers("/api/v1/account/plugins/**").authenticated() // Account plugins list
                 .requestMatchers("/api/v1/account/errors/**").authenticated() // User global errors (Dashboard)

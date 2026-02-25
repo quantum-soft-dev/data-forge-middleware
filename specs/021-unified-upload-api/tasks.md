@@ -36,13 +36,13 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T004 Add MSSQL_CDC and DBF_CDC enum values with isCdc() helper method to SiteType in src/main/java/com/bitbi/dfm/site/domain/SiteType.java
-- [ ] T005 [P] Create ForceFullUploadReason enum (ADMIN_REQUEST, PLUGIN_REINIT, SCHEMA_INCOMPATIBLE, DATA_CORRUPTION) in src/main/java/com/bitbi/dfm/site/domain/ForceFullUploadReason.java
-- [ ] T006 [P] Create BatchType enum (BASELINE, DELTA) in src/main/java/com/bitbi/dfm/batch/domain/BatchType.java
-- [ ] T007 Add heartbeat and directive fields (lastHeartbeatAt, forceFullUpload, forceFullUploadReason, forceFullUploadMessage, forceFullUploadSetAt, forceFullUploadSetBy, requestLogs, requestLogsMessage) with business methods to Site entity in src/main/java/com/bitbi/dfm/site/domain/Site.java
-- [ ] T008 Add batchType, schemaVersion, expectedFileCount, and description fields to Batch entity in src/main/java/com/bitbi/dfm/batch/domain/Batch.java
-- [ ] T009 Secure new endpoints (/api/v1/device/heartbeat, /api/v1/device/logs, /api/v1/admin/sites/*/force-rebaseline, /api/v1/admin/sites/*/request-logs, /api/v1/admin/sites/*/client-logs) in SecurityConfiguration in src/main/java/com/bitbi/dfm/shared/config/SecurityConfiguration.java
-- [ ] T010 Add InvalidLogFileException (400), LogUploadLimitExceededException (429), and HeartbeatRequiredException (428) mappings to GlobalExceptionHandler in src/main/java/com/bitbi/dfm/shared/exception/GlobalExceptionHandler.java
+- [X] T004 Add MSSQL_CDC and DBF_CDC enum values with isCdc() helper method to SiteType in src/main/java/com/bitbi/dfm/site/domain/SiteType.java
+- [X] T005 [P] Create ForceFullUploadReason enum (ADMIN_REQUEST, PLUGIN_REINIT, SCHEMA_INCOMPATIBLE, DATA_CORRUPTION) in src/main/java/com/bitbi/dfm/site/domain/ForceFullUploadReason.java
+- [X] T006 [P] Create BatchType enum (BASELINE, DELTA) in src/main/java/com/bitbi/dfm/batch/domain/BatchType.java
+- [X] T007 Add heartbeat and directive fields (lastHeartbeatAt, forceFullUpload, forceFullUploadReason, forceFullUploadMessage, forceFullUploadSetAt, forceFullUploadSetBy, requestLogs, requestLogsMessage) with business methods to Site entity in src/main/java/com/bitbi/dfm/site/domain/Site.java
+- [X] T008 Add batchType, schemaVersion, expectedFileCount, and description fields to Batch entity in src/main/java/com/bitbi/dfm/batch/domain/Batch.java
+- [X] T009 Secure new endpoints (/api/v1/device/heartbeat, /api/v1/device/logs, /api/v1/admin/sites/*/force-rebaseline, /api/v1/admin/sites/*/request-logs, /api/v1/admin/sites/*/client-logs) in SecurityConfiguration in src/main/java/com/bitbi/dfm/shared/config/SecurityConfiguration.java
+- [X] T010 Add InvalidLogFileException (400), LogUploadLimitExceededException (429), and HeartbeatRequiredException (428) mappings to GlobalExceptionHandler in src/main/java/com/bitbi/dfm/shared/exception/GlobalExceptionHandler.java
 
 **Checkpoint**: Foundation ready — user story implementation can now begin
 

@@ -1166,6 +1166,78 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle InvalidLogFileException (400 Bad Request).
+     * <p>
+     * Thrown when a client uploads an invalid log file (unsupported type or empty).
+     * </p>
+     */
+    @ExceptionHandler(InvalidLogFileException.class)
+    public ResponseEntity<ErrorResponseDto> handleInvalidLogFile(
+            InvalidLogFileException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Invalid log file: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle LogUploadLimitExceededException (429 Too Many Requests).
+     * <p>
+     * Thrown when a site exceeds the daily log upload limit.
+     * </p>
+     */
+    @ExceptionHandler(LogUploadLimitExceededException.class)
+    public ResponseEntity<ErrorResponseDto> handleLogUploadLimitExceeded(
+            LogUploadLimitExceededException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Log upload limit exceeded: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.TOO_MANY_REQUESTS.value(),
+                "Too Many Requests",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error);
+    }
+
+    /**
+     * Handle HeartbeatRequiredException (428 Precondition Required).
+     * <p>
+     * Thrown when a batch start is attempted without a recent heartbeat.
+     * </p>
+     */
+    @ExceptionHandler(HeartbeatRequiredException.class)
+    public ResponseEntity<ErrorResponseDto> handleHeartbeatRequired(
+            HeartbeatRequiredException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Heartbeat required: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                428,
+                "Precondition Required",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(428).body(error);
+    }
+
+    /**
      * Handle CsvFileQueryService.FileNotFoundException (404 Not Found).
      * <p>
      * Thrown when a CSV file is not found for a site.

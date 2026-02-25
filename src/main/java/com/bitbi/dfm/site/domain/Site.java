@@ -68,6 +68,33 @@ public class Site {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    // --- Heartbeat fields (Feature 021) ---
+
+    @Column(name = "last_heartbeat_at")
+    private LocalDateTime lastHeartbeatAt;
+
+    @Column(name = "force_full_upload", nullable = false)
+    private Boolean forceFullUpload = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "force_full_upload_reason", length = 50)
+    private ForceFullUploadReason forceFullUploadReason;
+
+    @Column(name = "force_full_upload_message", columnDefinition = "TEXT")
+    private String forceFullUploadMessage;
+
+    @Column(name = "force_full_upload_set_at")
+    private LocalDateTime forceFullUploadSetAt;
+
+    @Column(name = "force_full_upload_set_by")
+    private String forceFullUploadSetBy;
+
+    @Column(name = "request_logs", nullable = false)
+    private Boolean requestLogs = false;
+
+    @Column(name = "request_logs_message", columnDefinition = "TEXT")
+    private String requestLogsMessage;
+
     protected Site(UUID id, UUID accountId, String domain, String siteName, String clientSecretHash,
                    SiteType siteType, String displayName, Boolean isActive, Integer retentionDays,
                    LocalDateTime createdAt, LocalDateTime updatedAt) {
@@ -267,6 +294,65 @@ public class Site {
             return domain;
         }
         return domain.substring(COMPOSITE_DOMAIN_PREFIX_LENGTH);
+    }
+
+    // --- Heartbeat business methods (Feature 021) ---
+
+    /**
+     * Record a heartbeat from the client, updating the last heartbeat timestamp.
+     */
+    public void recordHeartbeat() {
+        this.lastHeartbeatAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Set the force full upload directive with reason and metadata.
+     *
+     * @param reason  the reason for forcing rebaseline
+     * @param message human-readable message (nullable)
+     * @param setBy   who set the flag (email, nullable)
+     */
+    public void setForceFullUpload(ForceFullUploadReason reason, String message, String setBy) {
+        Objects.requireNonNull(reason, "ForceFullUploadReason cannot be null");
+        this.forceFullUpload = true;
+        this.forceFullUploadReason = reason;
+        this.forceFullUploadMessage = message;
+        this.forceFullUploadSetAt = LocalDateTime.now();
+        this.forceFullUploadSetBy = setBy;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Clear the force full upload directive (called on batch start).
+     */
+    public void clearForceFullUpload() {
+        this.forceFullUpload = false;
+        this.forceFullUploadReason = null;
+        this.forceFullUploadMessage = null;
+        this.forceFullUploadSetAt = null;
+        this.forceFullUploadSetBy = null;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Set the request logs directive.
+     *
+     * @param message optional message for the log request
+     */
+    public void setRequestLogs(String message) {
+        this.requestLogs = true;
+        this.requestLogsMessage = message;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Clear the request logs directive (called when client uploads logs).
+     */
+    public void clearRequestLogs() {
+        this.requestLogs = false;
+        this.requestLogsMessage = null;
+        this.updatedAt = LocalDateTime.now();
     }
 
     public boolean canAuthenticate() {
