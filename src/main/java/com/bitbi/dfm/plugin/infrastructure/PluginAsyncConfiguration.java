@@ -54,19 +54,27 @@ public class PluginAsyncConfiguration {
     /**
      * Creates executor for actual plugin execution (plugin.execute() calls).
      * Separate from dispatch executor to prevent thread starvation.
+     *
+     * <p>Pool sizes are reduced since a semaphore limits concurrent SQL generation
+     * to 2 operations — extra threads would be wasteful and consume stack memory.</p>
      * <ul>
-     *   <li>Core pool size: 10 threads</li>
-     *   <li>Max pool size: 20 threads</li>
-     *   <li>Queue capacity: 100 tasks</li>
+     *   <li>Core pool size: 4 threads</li>
+     *   <li>Max pool size: 8 threads</li>
+     *   <li>Queue capacity: 50 tasks</li>
      *   <li>Rejection policy: CallerRunsPolicy (backpressure)</li>
      * </ul>
      */
     @Bean(name = "pluginExecutionExecutor")
     public Executor pluginExecutionExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(10);
-        executor.setMaxPoolSize(20);
-        executor.setQueueCapacity(100);
+        // Pool sizes reduced from 10/20/100 — with SqlGenerationService's semaphore
+        // limiting concurrent SQL generation to 2, extra threads waste stack memory.
+        // 4 core threads = 2 for SQL generation + 2 spare for non-SQL plugin operations.
+        // Queue of 50 is sufficient: semaphore-blocked tasks release threads quickly
+        // (timeout or acquire), so the queue rarely fills beyond a few entries.
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(50);
         executor.setThreadNamePrefix("plugin-run-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);

@@ -15,12 +15,20 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.annotation.PostConstruct;
+
 import java.io.*;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryUsage;
 import java.util.*;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -62,6 +70,11 @@ public class SqlGenerationService {
     private final DbfSqlGenerationStrategy dbfStrategy;
     private final CdcSqlGenerationStrategy cdcStrategy;
     private final SiteSchemaService siteSchemaService;
+    private final int maxConcurrent;
+    private final int semaphoreTimeoutSeconds;
+    private final int heapThresholdPercent;
+
+    private Semaphore sqlGenerationSemaphore;
 
     public SqlGenerationService(
             BatchRepository batchRepository,
@@ -73,7 +86,10 @@ public class SqlGenerationService {
             PluginAuditService pluginAuditService,
             DbfSqlGenerationStrategy dbfStrategy,
             CdcSqlGenerationStrategy cdcStrategy,
-            SiteSchemaService siteSchemaService) {
+            SiteSchemaService siteSchemaService,
+            @Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
+            @Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
+            @Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -84,6 +100,28 @@ public class SqlGenerationService {
         this.dbfStrategy = dbfStrategy;
         this.cdcStrategy = cdcStrategy;
         this.siteSchemaService = siteSchemaService;
+        this.maxConcurrent = maxConcurrent;
+        this.semaphoreTimeoutSeconds = semaphoreTimeoutSeconds;
+        this.heapThresholdPercent = heapThresholdPercent;
+    }
+
+    /**
+     * Initializes the concurrency semaphore and registers metrics.
+     * Package-private for testability. The double-initialization guard protects
+     * against test scenarios that call {@code init()} manually after construction
+     * (Spring's {@code @PostConstruct} itself is only invoked once per bean).
+     */
+    @PostConstruct
+    void init() {
+        if (this.sqlGenerationSemaphore != null) {
+            log.warn("init() called more than once — skipping re-initialization");
+            return;
+        }
+        this.sqlGenerationSemaphore = new Semaphore(maxConcurrent, true);
+        meterRegistry.gauge("sql.generation.semaphore.queue.size", sqlGenerationSemaphore,
+                Semaphore::getQueueLength);
+        log.info("SQL generation semaphore initialized: maxConcurrent={}, timeoutSeconds={}",
+                maxConcurrent, semaphoreTimeoutSeconds);
     }
 
     /**
@@ -127,6 +165,15 @@ public class SqlGenerationService {
      * @return Optional containing the generation record, or empty if baseline batch (use CSV) or no changes
      */
     public Optional<PluginSqlGeneration> generateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
+        acquireSemaphore(batchId);
+        try {
+            return doGenerateSqlForBatch(batchId, accountPluginId, forceFullGeneration);
+        } finally {
+            sqlGenerationSemaphore.release();
+        }
+    }
+
+    private Optional<PluginSqlGeneration> doGenerateSqlForBatch(UUID batchId, Long accountPluginId, boolean forceFullGeneration) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
         BatchData batchData = null;
@@ -385,8 +432,17 @@ public class SqlGenerationService {
     /**
      * Phase 2: Generates SQL content by dispatching to the appropriate strategy.
      * Runs outside transaction to avoid connection starvation during S3 I/O.
+     * Checks JVM heap pressure before starting to prevent OOM.
      */
     private SqlGenerationResult generateSqlContent(BatchData data) throws IOException {
+        // Pre-flight memory pressure check before starting SQL generation
+        if (isMemoryPressureHigh()) {
+            log.error("High memory pressure ({}%), aborting SQL generation for batch: {}",
+                    getHeapUsagePercent(), data.batch().getId());
+            meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
+            return null;
+        }
+
         Map<String, TableSchema> tableSchemas = Map.of();
         if (data.site().getSiteType() == SiteType.POSTGRES_CDC) {
             tableSchemas = siteSchemaService.getTableSchemas(data.site().getId());
@@ -446,6 +502,33 @@ public class SqlGenerationService {
                 meterRegistry.counter("sql.generation.orphaned.files").increment();
             }
         }
+    }
+
+    /**
+     * Checks if JVM heap usage exceeds the configured threshold.
+     *
+     * @return true if heap usage is at or above the threshold percentage
+     */
+    private boolean isMemoryPressureHigh() {
+        return getHeapUsagePercent() >= heapThresholdPercent;
+    }
+
+    /**
+     * Returns current JVM heap usage as a percentage (0-100).
+     * Uses {@link MemoryMXBean} instead of {@link Runtime} for a more accurate
+     * post-GC view of heap usage (accounts for unreachable but uncollected objects).
+     * Uses ceiling division to avoid rounding down past the threshold.
+     * Package-private for testing.
+     */
+    int getHeapUsagePercent() {
+        MemoryMXBean memBean = ManagementFactory.getMemoryMXBean();
+        MemoryUsage heap = memBean.getHeapMemoryUsage();
+        long used = heap.getUsed();
+        long max = heap.getMax();
+        if (max <= 0) {
+            return 0;
+        }
+        return (int) Math.ceil(used * 100.0 / max);
     }
 
     /**
@@ -511,6 +594,15 @@ public class SqlGenerationService {
      * @throws SqlGenerationException if generation fails
      */
     public PluginSqlGeneration regenerateForBatch(UUID batchId, Long accountPluginId) {
+        acquireSemaphore(batchId);
+        try {
+            return doRegenerateForBatch(batchId, accountPluginId);
+        } finally {
+            sqlGenerationSemaphore.release();
+        }
+    }
+
+    private PluginSqlGeneration doRegenerateForBatch(UUID batchId, Long accountPluginId) {
         Timer.Sample timer = Timer.start(meterRegistry);
         String s3Key = null;
         BatchData batchData = null;
@@ -667,9 +759,39 @@ public class SqlGenerationService {
     }
 
     /**
+     * Acquires the SQL generation semaphore with the configured timeout.
+     * Throws SqlGenerationException if the semaphore cannot be acquired in time.
+     *
+     * @param batchId The batch ID (for logging context)
+     */
+    private void acquireSemaphore(UUID batchId) {
+        try {
+            boolean acquired = sqlGenerationSemaphore.tryAcquire(semaphoreTimeoutSeconds, TimeUnit.SECONDS);
+            if (acquired) {
+                meterRegistry.counter("sql.generation.semaphore.acquired").increment();
+            }
+            if (!acquired) {
+                log.warn("SQL generation semaphore acquisition timed out after {}s: batchId={}, queueLength={}",
+                        semaphoreTimeoutSeconds, batchId, sqlGenerationSemaphore.getQueueLength());
+                meterRegistry.counter("sql.generation.semaphore.timeouts").increment();
+                throw new SqlGenerationException(
+                        "SQL generation timed out waiting for available slot after " + semaphoreTimeoutSeconds +
+                        "s. Current queue length: " + sqlGenerationSemaphore.getQueueLength());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SqlGenerationException("SQL generation interrupted while waiting for semaphore", e);
+        }
+    }
+
+    /**
      * Exception thrown when SQL generation fails.
      */
     public static class SqlGenerationException extends RuntimeException {
+        public SqlGenerationException(String message) {
+            super(message);
+        }
+
         public SqlGenerationException(String message, Throwable cause) {
             super(message, cause);
         }

@@ -1,13 +1,7 @@
-package com.bitbi.dfm.plugin.unit;
+package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.plugin.application.CdcSqlGenerationStrategy;
-import com.bitbi.dfm.plugin.application.CsvDiffService;
-import com.bitbi.dfm.plugin.application.DbfSqlGenerationStrategy;
-import com.bitbi.dfm.plugin.application.SqlGenerationService;
-import com.bitbi.dfm.plugin.application.SqlStatementGenerator;
-import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.site.application.SiteSchemaService;
@@ -40,6 +34,7 @@ import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -118,8 +113,12 @@ class SqlGenerationServiceTest {
                 pluginAuditService,
                 dbfStrategy,
                 cdcStrategy,
-                siteSchemaService
+                siteSchemaService,
+                2,
+                120,
+                80
         );
+        service.init();
     }
 
     @Nested
@@ -241,8 +240,12 @@ class SqlGenerationServiceTest {
                     pluginAuditService,
                     realDbfStrategy,
                     cdcStrategy,
-                    siteSchemaService
+                    siteSchemaService,
+                    2,
+                    120,
+                    100  // 100% threshold — disable memory pressure check in this test
             );
+            serviceWithRealMetrics.init();
 
             UUID batchId = UUID.randomUUID();
             UUID siteId = UUID.randomUUID();
@@ -300,7 +303,7 @@ class SqlGenerationServiceTest {
                     .thenReturn(goodStream);
 
             // Bad file throws InvalidCsvHeaderException during compare
-            when(csvDiffService.compare(eq(""), anyString(), any()))
+            when(csvDiffService.compare(anyString(), anyString(), anyList()))
                     .thenThrow(new CsvDiffService.InvalidCsvHeaderException("Invalid column names"))
                     .thenReturn(List.of(
                             CsvRowDiff.added(1, new LinkedHashMap<>(Map.of("id", "1", "name", "Alice"))),
