@@ -1,12 +1,8 @@
-package com.bitbi.dfm.plugin.unit;
+package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.plugin.application.CsvDiffService;
-import com.bitbi.dfm.plugin.application.PluginAuditService;
-import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import com.bitbi.dfm.plugin.application.SqlGenerationService.SqlGenerationException;
-import com.bitbi.dfm.plugin.application.SqlStatementGenerator;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
@@ -107,13 +103,7 @@ class SqlGenerationConcurrencyTest {
                 semaphoreTimeoutSeconds,
                 100  // 100% threshold — disable memory pressure check in concurrency tests
         );
-        try {
-            java.lang.reflect.Method initMethod = SqlGenerationService.class.getDeclaredMethod("init");
-            initMethod.setAccessible(true);
-            initMethod.invoke(service);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        service.init();
         return service;
     }
 
@@ -187,6 +177,8 @@ class SqlGenerationConcurrencyTest {
             AtomicInteger concurrentCount = new AtomicInteger(0);
             AtomicInteger maxObservedConcurrent = new AtomicInteger(0);
             CountDownLatch allStarted = new CountDownLatch(maxConcurrent);
+            // Latch for the excess task (3rd) — should NOT count down if semaphore blocks it
+            CountDownLatch excessStarted = new CountDownLatch(1);
 
             // Set up N+1 batches to exceed the limit
             int totalBatches = maxConcurrent + 1;
@@ -232,6 +224,10 @@ class SqlGenerationConcurrencyTest {
                 int current = concurrentCount.incrementAndGet();
                 maxObservedConcurrent.updateAndGet(prev -> Math.max(prev, current));
                 allStarted.countDown();
+                // Signal if a task beyond maxConcurrent starts (the excess task)
+                if (current > maxConcurrent) {
+                    excessStarted.countDown();
+                }
                 blockLatch.await();
                 concurrentCount.decrementAndGet();
                 String csv = "id,name\n1,Alice";
@@ -258,8 +254,9 @@ class SqlGenerationConcurrencyTest {
                 boolean started = allStarted.await(5, TimeUnit.SECONDS);
                 assertThat(started).as("Expected %d tasks to start processing", maxConcurrent).isTrue();
 
-                // Give a small window for the third task to potentially start (it shouldn't)
-                Thread.sleep(200);
+                // Verify the excess task does NOT start (semaphore blocks it)
+                boolean excessDidStart = excessStarted.await(500, TimeUnit.MILLISECONDS);
+                assertThat(excessDidStart).as("Excess task should NOT have started").isFalse();
 
                 // Then - only maxConcurrent should be running simultaneously
                 assertThat(maxObservedConcurrent.get()).isLessThanOrEqualTo(maxConcurrent);

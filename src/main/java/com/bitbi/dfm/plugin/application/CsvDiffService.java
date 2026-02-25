@@ -75,10 +75,9 @@ public class CsvDiffService {
      * <p>Accepts pre-parsed rows (e.g., from streaming S3 parsing) instead of
      * raw CSV strings, avoiding the full-string-in-memory step.</p>
      *
-     * @apiNote This method sorts the input lists <b>in-place</b> to avoid allocating
-     * defensive copies. Callers must not rely on the original order of {@code previousRows}
-     * or {@code currentRows} after this method returns. The lists must be mutable
-     * ({@link java.util.ArrayList}); immutable lists will throw {@link UnsupportedOperationException}.
+     * <p>Input lists are copied before sorting to avoid mutating the caller's data.
+     * The copies share the same row references (shallow copy), so memory overhead
+     * is limited to the list structure itself, not the row content.</p>
      *
      * @param previousRows Pre-parsed rows from previous batch (null or empty for first batch)
      * @param currentRows  Pre-parsed rows from current batch (null or empty for deletion detection)
@@ -93,8 +92,8 @@ public class CsvDiffService {
     ) {
         validateHeaders(headers);
 
-        List<List<String>> prev = (previousRows != null) ? previousRows : Collections.emptyList();
-        List<List<String>> curr = (currentRows != null) ? currentRows : Collections.emptyList();
+        List<List<String>> prev = (previousRows != null) ? new ArrayList<>(previousRows) : Collections.emptyList();
+        List<List<String>> curr = (currentRows != null) ? new ArrayList<>(currentRows) : Collections.emptyList();
 
         if (prev.isEmpty() && curr.isEmpty()) {
             log.debug("Both row lists are empty, no changes");
@@ -104,7 +103,7 @@ public class CsvDiffService {
         log.debug("Comparing pre-parsed CSV rows: previousRows={}, currentRows={}, headers={}",
                 prev.size(), curr.size(), headers.size());
 
-        // Sort mutable lists in-place for memory efficiency
+        // Sort defensive copies (shallow — shares row references, not data)
         if (!prev.isEmpty()) {
             prev.sort(CsvDiffService::compareRows);
         }

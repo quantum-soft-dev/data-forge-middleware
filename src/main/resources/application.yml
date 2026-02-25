@@ -136,6 +136,13 @@ plugin:
   execution:
     # Plugin execution timeout in seconds (default: 30s per FR-008)
     timeout-seconds: ${PLUGIN_TIMEOUT_SECONDS:30}
+  sql-generation:
+    # Maximum concurrent SQL generation operations (semaphore permits)
+    max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}
+    # Timeout in seconds waiting for a semaphore permit before aborting
+    semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
+    # JVM heap usage percentage threshold; generation aborts if exceeded
+    heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
 
 plugins:
   bitbi:

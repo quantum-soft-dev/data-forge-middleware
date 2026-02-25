@@ -15,6 +15,7 @@ import org.apache.commons.csv.CSVRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,9 @@ import jakarta.annotation.PostConstruct;
 
 import java.io.*;
 import java.io.PushbackReader;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryUsage;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Semaphore;
@@ -85,12 +89,12 @@ public class SqlGenerationService {
             SqlStatementGenerator sqlStatementGenerator,
             S3SqlFileStorageService s3SqlFileStorageService,
             S3Client s3Client,
-            @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}") String bucketName,
+            @Value("${s3.bucket.name}") String bucketName,
             MeterRegistry meterRegistry,
             PluginAuditService pluginAuditService,
-            @org.springframework.beans.factory.annotation.Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
-            @org.springframework.beans.factory.annotation.Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
-            @org.springframework.beans.factory.annotation.Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
+            @Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
+            @Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
+            @Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -109,8 +113,9 @@ public class SqlGenerationService {
 
     /**
      * Initializes the concurrency semaphore and registers metrics.
-     * Package-private for testability; guarded against double-initialization
-     * to prevent replacing an in-use semaphore or registering duplicate gauges.
+     * Package-private for testability. The double-initialization guard protects
+     * against test scenarios that call {@code init()} manually after construction
+     * (Spring's {@code @PostConstruct} itself is only invoked once per bean).
      */
     @PostConstruct
     void init() {
@@ -469,7 +474,7 @@ public class SqlGenerationService {
 
                 log.debug("Processing CSV file: {} -> table {}", currentFile.getOriginalFileName(), tableName);
 
-                // Task 8: Stream current file directly from S3 into parsed rows (no full String)
+                // Stream current file directly from S3 into parsed rows (avoids full-String allocation)
                 ParsedCsvData currentData = streamCsvFromS3(currentFile.getS3Key());
                 List<String> headers = currentData.headers();
                 if (headers.isEmpty()) {
@@ -491,7 +496,7 @@ public class SqlGenerationService {
                 // Compare using pre-parsed rows (avoids re-parsing CSV strings)
                 List<CsvRowDiff> diffs = csvDiffService.compare(previousRows, currentRows, headers);
 
-                // Task 3: Release row references for GC before generating SQL
+                // Release row references to enable GC before generating SQL
                 currentRows = null;
                 previousRows = null;
 
@@ -507,7 +512,7 @@ public class SqlGenerationService {
                     }
                 }
 
-                // Task 3: Release diffs for GC
+                // Release diffs for GC before next file iteration
                 diffs = null;
 
                 filesProcessed++;
@@ -673,13 +678,20 @@ public class SqlGenerationService {
 
     /**
      * Returns current JVM heap usage as a percentage (0-100).
+     * Uses {@link MemoryMXBean} instead of {@link Runtime} for a more accurate
+     * post-GC view of heap usage (accounts for unreachable but uncollected objects).
+     * Uses ceiling division to avoid rounding down past the threshold.
      * Package-private for testing.
      */
     int getHeapUsagePercent() {
-        Runtime runtime = Runtime.getRuntime();
-        long used = runtime.totalMemory() - runtime.freeMemory();
-        long max = runtime.maxMemory();
-        return (int) (used * 100 / max);
+        MemoryMXBean memBean = ManagementFactory.getMemoryMXBean();
+        MemoryUsage heap = memBean.getHeapMemoryUsage();
+        long used = heap.getUsed();
+        long max = heap.getMax();
+        if (max <= 0) {
+            return 0;
+        }
+        return (int) Math.ceil(used * 100.0 / max);
     }
 
     /**
@@ -974,6 +986,9 @@ public class SqlGenerationService {
     private void acquireSemaphore(UUID batchId) {
         try {
             boolean acquired = sqlGenerationSemaphore.tryAcquire(semaphoreTimeoutSeconds, TimeUnit.SECONDS);
+            if (acquired) {
+                meterRegistry.counter("sql.generation.semaphore.acquired").increment();
+            }
             if (!acquired) {
                 log.warn("SQL generation semaphore acquisition timed out after {}s: batchId={}, queueLength={}",
                         semaphoreTimeoutSeconds, batchId, sqlGenerationSemaphore.getQueueLength());

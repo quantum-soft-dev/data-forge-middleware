@@ -1,11 +1,7 @@
-package com.bitbi.dfm.plugin.unit;
+package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
-import com.bitbi.dfm.plugin.application.CsvDiffService;
-import com.bitbi.dfm.plugin.application.SqlGenerationService;
-import com.bitbi.dfm.plugin.application.SqlStatementGenerator;
-import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.site.domain.Site;
@@ -111,17 +107,7 @@ class SqlGenerationServiceTest {
                 120,
                 80
         );
-        invokeInit(service);
-    }
-
-    private void invokeInit(SqlGenerationService svc) {
-        try {
-            java.lang.reflect.Method initMethod = SqlGenerationService.class.getDeclaredMethod("init");
-            initMethod.setAccessible(true);
-            initMethod.invoke(svc);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        service.init();
     }
 
     @Nested
@@ -247,7 +233,7 @@ class SqlGenerationServiceTest {
                     120,
                     100  // 100% threshold — disable memory pressure check in this test
             );
-            invokeInit(serviceWithRealMetrics);
+            serviceWithRealMetrics.init();
 
             UUID batchId = UUID.randomUUID();
             UUID siteId = UUID.randomUUID();
