@@ -1,5 +1,6 @@
 package com.bitbi.dfm.clientlog.presentation;
 
+import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.batch.infrastructure.S3PresignedUrlService;
 import com.bitbi.dfm.clientlog.application.ClientDiagnosticLogService;
 import com.bitbi.dfm.clientlog.domain.ClientDiagnosticLog;
@@ -7,6 +8,8 @@ import com.bitbi.dfm.clientlog.presentation.dto.ClientLogDownloadResponseDto;
 import com.bitbi.dfm.clientlog.presentation.dto.ClientLogListResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -20,6 +23,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -31,7 +38,8 @@ import java.util.UUID;
  * REST controller for admin client diagnostic log management.
  * <p>
  * Provides paginated listing and presigned download URLs for client logs.
- * Accessible to ROLE_ADMIN and ROLE_USER via Auth0 OAuth2.
+ * Accessible to ROLE_ADMIN (any site) and ROLE_USER (own account's sites only).
+ * ROLE_USER access is verified by checking site account ownership.
  * </p>
  *
  * Feature: 021-unified-upload-api
@@ -45,9 +53,15 @@ public class ClientLogAdminController {
     private static final Logger logger = LoggerFactory.getLogger(ClientLogAdminController.class);
 
     private final ClientDiagnosticLogService logService;
+    private final SiteRepository siteRepository;
+    private final Auth0Properties auth0Properties;
 
-    public ClientLogAdminController(ClientDiagnosticLogService logService) {
+    public ClientLogAdminController(ClientDiagnosticLogService logService,
+                                     SiteRepository siteRepository,
+                                     Auth0Properties auth0Properties) {
         this.logService = logService;
+        this.siteRepository = siteRepository;
+        this.auth0Properties = auth0Properties;
     }
 
     /**
@@ -75,9 +89,11 @@ public class ClientLogAdminController {
     public ResponseEntity<ClientLogListResponseDto> listClientLogs(
             @PathVariable("siteId") UUID siteId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            Authentication authentication
     ) {
         logger.debug("List client logs: siteId={}, page={}, size={}", siteId, page, size);
+        verifySiteAccess(siteId, authentication);
 
         int effectiveSize = Math.min(size, 100);
         Pageable pageable = PageRequest.of(page, effectiveSize);
@@ -113,14 +129,53 @@ public class ClientLogAdminController {
     @GetMapping(ApiRoutes.ADMIN_SITES_CLIENT_LOGS_DOWNLOAD)
     public ResponseEntity<ClientLogDownloadResponseDto> downloadClientLog(
             @PathVariable("siteId") UUID siteId,
-            @PathVariable("logId") UUID logId
+            @PathVariable("logId") UUID logId,
+            Authentication authentication
     ) {
         logger.debug("Download client log: siteId={}, logId={}", siteId, logId);
+        verifySiteAccess(siteId, authentication);
 
         ClientDiagnosticLog log = logService.getLog(siteId, logId);
         S3PresignedUrlService.PresignedUrlResult presignedUrl = logService.getDownloadUrl(siteId, logId);
 
         ClientLogDownloadResponseDto response = ClientLogDownloadResponseDto.fromPresignedUrl(presignedUrl, log);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Verify that the authenticated user has access to the given site.
+     * <p>
+     * ROLE_ADMIN can access any site. ROLE_USER can only access sites
+     * belonging to their own account.
+     * </p>
+     *
+     * @param siteId         site identifier
+     * @param authentication Spring Security authentication
+     * @throws AccessDeniedException if ROLE_USER tries to access another account's site
+     */
+    private void verifySiteAccess(UUID siteId, Authentication authentication) {
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(a -> a.equals("ROLE_ADMIN"));
+
+        if (isAdmin) {
+            return;
+        }
+
+        if (authentication.getPrincipal() instanceof Jwt jwt) {
+            String accountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
+            if (accountIdStr == null || accountIdStr.isEmpty()) {
+                accountIdStr = jwt.getClaimAsString("accountId");
+            }
+            if (accountIdStr != null && !accountIdStr.isEmpty()) {
+                UUID accountId = UUID.fromString(accountIdStr);
+                siteRepository.findByIdAndAccountId(siteId, accountId)
+                        .orElseThrow(() -> new AccessDeniedException(
+                                "You do not have access to this site's client logs"));
+                return;
+            }
+        }
+
+        throw new AccessDeniedException("Unable to verify site ownership");
     }
 }
