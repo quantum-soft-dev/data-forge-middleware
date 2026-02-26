@@ -7,8 +7,8 @@
  */
 
 // Types
-export type { Site, CreateSiteRequest, CreateSiteResponse } from './model/types';
-export { SiteStatus, AdminActionType } from './model/types';
+export type { Site, SiteType, BatchType, CreateSiteRequest, CreateSiteResponse } from './model/types';
+export { SiteStatus, AdminActionType, isCdcSiteType } from './model/types';
 
 // API functions
 export {
@@ -25,4 +25,7 @@ export {
   activateAdminSite,
   deleteAdminSite,
   updateAdminSiteRetention,
+  forceRebaseline,
+  requestLogs,
 } from './api/siteApi';
+export type { ForceRebaselineResponse } from './api/siteApi';

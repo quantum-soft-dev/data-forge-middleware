@@ -9,10 +9,17 @@
 /**
  * Site type enum — determines the data ingestion method.
  *
- * DBF        = Legacy DBF/CSV upload (default)
+ * DBF          = Legacy DBF/CSV upload (default)
  * POSTGRES_CDC = Postgres Change Data Capture via JSONL delta files
+ * MSSQL_CDC    = MS SQL Server Change Data Capture via JSONL delta files
+ * DBF_CDC      = DBF Change Data Capture via JSONL delta files
  */
-export type SiteType = 'DBF' | 'POSTGRES_CDC';
+export type SiteType = 'DBF' | 'POSTGRES_CDC' | 'MSSQL_CDC' | 'DBF_CDC';
+
+/** Returns true if the site type uses CDC (Change Data Capture) mode. */
+export function isCdcSiteType(siteType: SiteType): boolean {
+  return siteType === 'POSTGRES_CDC' || siteType === 'MSSQL_CDC' || siteType === 'DBF_CDC';
+}
 
 /**
  * Site entity representing a monitored domain/website.
@@ -35,6 +42,11 @@ export interface Site {
   retentionDays: number;
   createdAt: string;
   siteType: SiteType;
+  lastHeartbeatAt?: string | null;
+  forceFullUpload?: boolean;
+  forceFullUploadReason?: string | null;
+  requestLogs?: boolean;
+  requestLogsMessage?: string | null;
 }
 
 /**
@@ -60,6 +72,11 @@ export interface CreateSiteResponse {
   site: Site;
   password: string;
 }
+
+/**
+ * Batch type enum — determines the upload mode for a batch.
+ */
+export type BatchType = 'BASELINE' | 'DELTA';
 
 /**
  * Site status enum.

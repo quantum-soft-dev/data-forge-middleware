@@ -20,6 +20,8 @@ import {
   activateAdminSite,
   deleteAdminSite,
   updateAdminSiteRetention,
+  forceRebaseline,
+  requestLogs,
   type Site,
   type CreateSiteRequest,
 } from '@/entities/site';
@@ -282,6 +284,36 @@ export function useAdminUpdateSiteRetention(accountId: string) {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: siteKeys.list(accountId) });
+    },
+  });
+}
+
+/**
+ * Force rebaseline on a site (admin operation).
+ */
+export function useForceRebaseline() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ siteId, reason }: { siteId: string; reason: string }) =>
+      forceRebaseline(siteId, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: siteKeys.all });
+    },
+  });
+}
+
+/**
+ * Request client to upload diagnostic logs (admin operation).
+ */
+export function useRequestLogs() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ siteId, message }: { siteId: string; message?: string }) =>
+      requestLogs(siteId, message),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: siteKeys.all });
     },
   });
 }

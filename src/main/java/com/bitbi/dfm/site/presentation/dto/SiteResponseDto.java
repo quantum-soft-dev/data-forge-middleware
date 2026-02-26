@@ -4,6 +4,7 @@ import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteType;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
@@ -20,7 +21,12 @@ import java.util.UUID;
  * @param isActive Active status
  * @param retentionDays Retention period in days for batch cleanup
  * @param createdAt Creation timestamp
- * @param siteType Site type (DBF or POSTGRES_CDC)
+ * @param siteType Site type (DBF, POSTGRES_CDC, MSSQL_CDC, or DBF_CDC)
+ * @param lastHeartbeatAt Last heartbeat timestamp (nullable)
+ * @param forceFullUpload Whether force full upload directive is active
+ * @param forceFullUploadReason Reason for force full upload (nullable)
+ * @param requestLogs Whether log request directive is active
+ * @param requestLogsMessage Message for log request directive (nullable)
  */
 public record SiteResponseDto(
     UUID id,
@@ -30,7 +36,12 @@ public record SiteResponseDto(
     Boolean isActive,
     Integer retentionDays,
     Instant createdAt,
-    SiteType siteType
+    SiteType siteType,
+    Instant lastHeartbeatAt,
+    Boolean forceFullUpload,
+    String forceFullUploadReason,
+    Boolean requestLogs,
+    String requestLogsMessage
 ) {
 
     /**
@@ -48,7 +59,16 @@ public record SiteResponseDto(
             site.getIsActive(),
             site.getRetentionDays(),
             site.getCreatedAt().toInstant(ZoneOffset.UTC),
-            site.getSiteType()
+            site.getSiteType(),
+            toInstant(site.getLastHeartbeatAt()),
+            site.getForceFullUpload(),
+            site.getForceFullUploadReason() != null ? site.getForceFullUploadReason().name() : null,
+            site.getRequestLogs(),
+            site.getRequestLogsMessage()
         );
+    }
+
+    private static Instant toInstant(LocalDateTime dateTime) {
+        return dateTime != null ? dateTime.toInstant(ZoneOffset.UTC) : null;
     }
 }

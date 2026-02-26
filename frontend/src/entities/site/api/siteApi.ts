@@ -18,9 +18,21 @@ import {
   SITES_ACTIVATE,
   SITES_DEACTIVATE,
   SITES_DELETE_BY_ACCOUNT,
-  SITES_RETENTION
+  SITES_RETENTION,
+  ADMIN_SITES_FORCE_REBASELINE,
+  ADMIN_SITES_REQUEST_LOGS,
 } from '@/shared/api/apiRoutes';
 import type { Site, CreateSiteRequest, CreateSiteResponse } from '../model/types';
+
+/** Response from force-rebaseline endpoint. */
+export interface ForceRebaselineResponse {
+  siteId: string;
+  forceFullUpload: boolean;
+  reason: string;
+  message: string;
+  setAt: string;
+  setBy: string;
+}
 
 /**
  * User Site Management API
@@ -181,4 +193,33 @@ export async function deleteAdminSite(accountId: string, siteId: string): Promis
 export async function updateAdminSiteRetention(siteId: string, retentionDays: number): Promise<Site> {
   const response = await apiClient.patch<Site>(SITES_RETENTION(siteId), { retentionDays });
   return response.data;
+}
+
+/**
+ * Force rebaseline on a site (admin operation).
+ *
+ * POST /api/v1/admin/sites/{siteId}/force-rebaseline
+ *
+ * @param siteId - Site identifier
+ * @param reason - Human-readable reason for forcing rebaseline
+ * @returns Force rebaseline response with directive details
+ */
+export async function forceRebaseline(siteId: string, reason: string): Promise<ForceRebaselineResponse> {
+  const response = await apiClient.post<ForceRebaselineResponse>(
+    ADMIN_SITES_FORCE_REBASELINE(siteId),
+    { reason }
+  );
+  return response.data;
+}
+
+/**
+ * Request client to upload diagnostic logs (admin operation).
+ *
+ * POST /api/v1/admin/sites/{siteId}/request-logs
+ *
+ * @param siteId - Site identifier
+ * @param message - Optional message to include in the directive
+ */
+export async function requestLogs(siteId: string, message?: string): Promise<void> {
+  await apiClient.post(ADMIN_SITES_REQUEST_LOGS(siteId), message ? { message } : undefined);
 }

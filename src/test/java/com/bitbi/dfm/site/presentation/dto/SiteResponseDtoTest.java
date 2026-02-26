@@ -68,8 +68,8 @@ class SiteResponseDtoTest {
 
         // Then
         assertNotNull(dto);
-        // Verify DTO only contains safe fields (7 original + siteType = 8 total)
-        assertEquals(8, dto.getClass().getRecordComponents().length);
+        // Verify DTO only contains safe fields (8 original + 5 heartbeat/directive fields = 13 total)
+        assertEquals(13, dto.getClass().getRecordComponents().length);
         // Verify no clientSecret-like field exists in DTO
         assertDoesNotThrow(() -> {
             dto.id();

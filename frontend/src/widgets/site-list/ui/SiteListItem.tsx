@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { Button } from '@/shared/ui/ui/button';
 import { Badge } from '@/shared/ui/ui/badge';
 import {
@@ -47,6 +48,7 @@ export function SiteListItem({
   showRetentionControls = false,
   isLoading = false,
 }: SiteListItemProps) {
+  const navigate = useNavigate();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
   const [retentionInput, setRetentionInput] = useState(String(site.retentionDays));
@@ -88,7 +90,12 @@ export function SiteListItem({
             {/* Site info */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <h3 className="font-semibold text-lg truncate">{site.siteName}</h3>
+                <h3
+                  className="font-semibold text-lg truncate cursor-pointer hover:underline"
+                  onClick={() => navigate({ to: '/account/sites/$siteId', params: { siteId: site.id } })}
+                >
+                  {site.siteName}
+                </h3>
                 <Badge variant={site.isActive ? 'default' : 'secondary'}>
                   {site.isActive ? (
                     <>
@@ -103,10 +110,18 @@ export function SiteListItem({
                   )}
                 </Badge>
                 <Badge
-                  variant={site.siteType === 'POSTGRES_CDC' ? 'outline' : 'secondary'}
-                  className={site.siteType === 'POSTGRES_CDC' ? 'border-blue-400 text-blue-600' : ''}
+                  variant={site.siteType === 'DBF' ? 'secondary' : 'outline'}
+                  className={
+                    site.siteType === 'POSTGRES_CDC' ? 'border-blue-400 text-blue-600' :
+                    site.siteType === 'MSSQL_CDC' ? 'border-sky-400 text-sky-600' :
+                    site.siteType === 'DBF_CDC' ? 'border-purple-400 text-purple-600' :
+                    ''
+                  }
                 >
-                  {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' : 'DBF'}
+                  {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' :
+                   site.siteType === 'MSSQL_CDC' ? 'MSSQL CDC' :
+                   site.siteType === 'DBF_CDC' ? 'DBF CDC' :
+                   'DBF'}
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground truncate">{site.name}</p>

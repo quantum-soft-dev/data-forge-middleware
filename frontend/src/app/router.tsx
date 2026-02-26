@@ -10,6 +10,7 @@ const AccountsListPage = lazy(() => import('@/pages/accounts/users/AccountsListP
 const AccountDetailsPage = lazy(() => import('@/pages/accounts/details/AccountDetailsPage'))
 const UserSitesPage = lazy(() => import('@/pages/admin/user-sites/UserSitesPage'))
 const SiteManagementPage = lazy(() => import('@/pages/site-management').then(m => ({ default: m.SiteManagementPage })))
+const SiteDetailPage = lazy(() => import('@/pages/site-management/SiteDetailPage'))
 const UploadHistoryPage = lazy(() => import('@/pages/upload-history/UploadHistoryPage'))
 const BatchDetailPage = lazy(() => import('@/pages/upload-history/BatchDetailPage'))
 const ComparisonPage = lazy(() => import('@/pages/comparison/ComparisonPage').then(m => ({ default: m.ComparisonPage })))
@@ -106,6 +107,12 @@ const siteManagementRoute = createRoute({
   component: () => <UserOnlyGuard component={SiteManagementPage} />,
 })
 
+const siteDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/sites/$siteId',
+  component: () => <UserOnlyGuard component={SiteDetailPage} />,
+})
+
 const uploadHistoryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/upload-history',
@@ -160,6 +167,7 @@ const routeTree = rootRoute.addChildren([
   pluginsAdminRoute,
   pluginHistoryRoute,
   adminSettingsRoute,
+  siteDetailRoute,
   siteManagementRoute,
   uploadHistoryRoute,
   batchDetailRoute,

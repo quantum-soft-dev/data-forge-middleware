@@ -171,7 +171,7 @@
 
 ### Implementation for User Story 6
 
-- [ ] T035 [US6] Verify and update device authorization flow to accept DBF_CDC site type — review DeviceAuthorizationService and DeviceAuthorizationController for any remaining hardcoded SiteType checks in src/main/java/com/bitbi/dfm/auth/ and src/main/java/com/bitbi/dfm/site/
+- [X] T035 [US6] Verify and update device authorization flow to accept DBF_CDC site type — review DeviceAuthorizationService and DeviceAuthorizationController for any remaining hardcoded SiteType checks in src/main/java/com/bitbi/dfm/auth/ and src/main/java/com/bitbi/dfm/site/
 
 **Checkpoint**: DBF_CDC sites complete full CDC flow using shared pipeline
 
@@ -185,8 +185,8 @@
 
 ### Implementation for User Story 12
 
-- [ ] T036 [US12] Add MSSQL_CDC and DBF_CDC to SiteType union, extend Site type with lastHeartbeatAt, forceFullUpload, forceFullUploadReason, requestLogs, requestLogsMessage fields, and add batchType to Batch type in frontend/src/entities/site/model/types.ts
-- [ ] T037 [US12] Add "MSSQL CDC" and "DBF CDC" badge variants with distinct colors (e.g., blue for MSSQL, purple for DBF CDC) to SiteListItem in frontend/src/widgets/site-list/ui/SiteListItem.tsx
+- [X] T036 [US12] Add MSSQL_CDC and DBF_CDC to SiteType union, extend Site type with lastHeartbeatAt, forceFullUpload, forceFullUploadReason, requestLogs, requestLogsMessage fields, and add batchType to Batch type in frontend/src/entities/site/model/types.ts
+- [X] T037 [US12] Add "MSSQL CDC" and "DBF CDC" badge variants with distinct colors (e.g., blue for MSSQL, purple for DBF CDC) to SiteListItem in frontend/src/widgets/site-list/ui/SiteListItem.tsx
 
 **Checkpoint**: All four site types visually distinguishable in site list
 
@@ -200,9 +200,9 @@
 
 ### Implementation for User Story 9
 
-- [ ] T038 [US9] Add forceRebaseline mutation (POST /admin/sites/{siteId}/force-rebaseline) and endpoint route to siteApi in frontend/src/features/site-crud/api/siteApi.ts and frontend/src/shared/api/apiRoutes.ts
-- [ ] T039 [US9] Create ForceRebaselineDialog with AlertDialog, required reason Input, warning text, and confirm/cancel buttons using shadcn/ui in frontend/src/features/site-crud/ui/ForceRebaselineDialog.tsx
-- [ ] T040 [US9] Add "Force Rebaseline" button visible only for CDC sites (isCdc check), active directive badge, and ForceRebaselineDialog integration to SiteDetailPage in frontend/src/pages/site-management/SiteDetailPage.tsx
+- [X] T038 [US9] Add forceRebaseline mutation (POST /admin/sites/{siteId}/force-rebaseline) and endpoint route to siteApi in frontend/src/features/site-crud/api/siteApi.ts and frontend/src/shared/api/apiRoutes.ts
+- [X] T039 [US9] Create ForceRebaselineDialog with AlertDialog, required reason Input, warning text, and confirm/cancel buttons using shadcn/ui in frontend/src/features/site-crud/ui/ForceRebaselineDialog.tsx
+- [X] T040 [US9] Add "Force Rebaseline" button visible only for CDC sites (isCdc check), active directive badge, and ForceRebaselineDialog integration to SiteDetailPage in frontend/src/pages/site-management/SiteDetailPage.tsx
 
 **Checkpoint**: Admin can force-rebaseline CDC sites through UI
 
@@ -216,13 +216,13 @@
 
 ### Implementation for User Story 11
 
-- [ ] T041 [US11] Create ClientLog and ClientLogListResponse TypeScript interfaces in frontend/src/features/client-logs/model/types.ts
-- [ ] T042 [P] [US11] Create clientLogsApi with listClientLogs(siteId, page, size) and downloadClientLog(siteId, logId) functions in frontend/src/features/client-logs/api/clientLogsApi.ts
-- [ ] T043 [P] [US11] Create useClientLogs and useClientLogDownload TanStack Query hooks in frontend/src/features/client-logs/api/clientLogsQueries.ts
-- [ ] T044 [US11] Add client-logs endpoint routes (list, download) to apiRoutes in frontend/src/shared/api/apiRoutes.ts
-- [ ] T045 [US11] Create ClientLogEntry component rendering filename, human-readable file size, client version, OS, tags as Badge components, truncated description, upload date, and download Button in frontend/src/features/client-logs/ui/ClientLogEntry.tsx
-- [ ] T046 [US11] Create ClientLogsTab with paginated Table of ClientLogEntry rows, page size selector (20, 50, 100), previous/next pagination, and "No diagnostic logs uploaded yet" empty state in frontend/src/features/client-logs/ui/ClientLogsTab.tsx
-- [ ] T047 [US11] Add "Client Logs" tab to SiteDetailPage tabs section rendering ClientLogsTab with siteId prop in frontend/src/pages/site-management/SiteDetailPage.tsx
+- [X] T041 [US11] Create ClientLog and ClientLogListResponse TypeScript interfaces in frontend/src/features/client-logs/model/types.ts
+- [X] T042 [P] [US11] Create clientLogsApi with listClientLogs(siteId, page, size) and downloadClientLog(siteId, logId) functions in frontend/src/features/client-logs/api/clientLogsApi.ts
+- [X] T043 [P] [US11] Create useClientLogs and useClientLogDownload TanStack Query hooks in frontend/src/features/client-logs/api/clientLogsQueries.ts
+- [X] T044 [US11] Add client-logs endpoint routes (list, download) to apiRoutes in frontend/src/shared/api/apiRoutes.ts
+- [X] T045 [US11] Create ClientLogEntry component rendering filename, human-readable file size, client version, OS, tags as Badge components, truncated description, upload date, and download Button in frontend/src/features/client-logs/ui/ClientLogEntry.tsx
+- [X] T046 [US11] Create ClientLogsTab with paginated Table of ClientLogEntry rows, page size selector (20, 50, 100), previous/next pagination, and "No diagnostic logs uploaded yet" empty state in frontend/src/features/client-logs/ui/ClientLogsTab.tsx
+- [X] T047 [US11] Add "Client Logs" tab to SiteDetailPage tabs section rendering ClientLogsTab with siteId prop in frontend/src/pages/site-management/SiteDetailPage.tsx
 
 **Checkpoint**: Admin can view and download client diagnostic logs in site detail UI
 

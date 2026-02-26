@@ -162,6 +162,16 @@ export const ADMIN_PLUGIN_HISTORY = (pluginId: string, accountId: string) =>
 export const ADMIN_PLUGIN_HISTORY_SUMMARY = (pluginId: string, accountId: string) =>
   `${ADMIN_PLUGIN_HISTORY(pluginId, accountId)}/summary`;
 
+// Admin Sites — Force Rebaseline & Request Logs
+export const ADMIN_SITES = `${ADMIN_API_BASE}/admin/sites`;
+export const ADMIN_SITES_FORCE_REBASELINE = (siteId: string) => `${ADMIN_SITES}/${siteId}/force-rebaseline`;
+export const ADMIN_SITES_REQUEST_LOGS = (siteId: string) => `${ADMIN_SITES}/${siteId}/request-logs`;
+
+// Admin Sites — Client Diagnostic Logs
+export const ADMIN_SITES_CLIENT_LOGS = (siteId: string) => `${ADMIN_SITES}/${siteId}/client-logs`;
+export const ADMIN_SITES_CLIENT_LOG_DOWNLOAD = (siteId: string, logId: string) =>
+  `${ADMIN_SITES}/${siteId}/client-logs/${logId}/download`;
+
 // ==================== Device Authorization (RFC 8628) ====================
 
 /**
