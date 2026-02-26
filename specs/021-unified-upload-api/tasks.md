@@ -119,10 +119,10 @@
 
 ### Implementation for User Story 3
 
-- [ ] T022 [P] [US3] Create ForceRebaselineRequestDto (reason required) and ForceRebaselineResponseDto (siteId, forceFullUpload, reason, message, setAt, setBy) records in src/main/java/com/bitbi/dfm/site/presentation/dto/
-- [ ] T023 [US3] Add forceRebaseline(siteId, reason, message, adminEmail) and requestLogs(siteId, message) methods to SiteService in src/main/java/com/bitbi/dfm/site/application/SiteService.java
-- [ ] T024 [US3] Add POST /{siteId}/force-rebaseline (ROLE_ADMIN) and POST /{siteId}/request-logs (ROLE_ADMIN) endpoints to SiteAdminController in src/main/java/com/bitbi/dfm/site/presentation/SiteAdminController.java
-- [ ] T025 [US3] Set forceFullUpload with reason PLUGIN_REINIT on all active CDC sites for the account during plugin reinit in PluginHistoryService in src/main/java/com/bitbi/dfm/plugin/application/PluginHistoryService.java
+- [X] T022 [P] [US3] Create ForceRebaselineRequestDto (reason required) and ForceRebaselineResponseDto (siteId, forceFullUpload, reason, message, setAt, setBy) records in src/main/java/com/bitbi/dfm/site/presentation/dto/
+- [X] T023 [US3] Add forceRebaseline(siteId, reason, message, adminEmail) and requestLogs(siteId, message) methods to SiteService in src/main/java/com/bitbi/dfm/site/application/SiteService.java
+- [X] T024 [US3] Add POST /{siteId}/force-rebaseline (ROLE_ADMIN) and POST /{siteId}/request-logs (ROLE_ADMIN) endpoints to SiteAdminController in src/main/java/com/bitbi/dfm/site/presentation/SiteAdminController.java
+- [X] T025 [US3] Set forceFullUpload with reason PLUGIN_REINIT on all active CDC sites for the account during plugin reinit in PluginHistoryService in src/main/java/com/bitbi/dfm/plugin/application/PluginHistoryService.java
 
 **Checkpoint**: Admin can force-rebaseline and request logs via API, plugin reinit triggers rebaseline directive
 
@@ -136,11 +136,11 @@
 
 ### Implementation for User Story 4
 
-- [ ] T026 [P] [US4] Create ClientDiagnosticLog JPA entity with fields (id, siteId, accountId, s3Key, filename, fileSize, contentType, clientVersion, os, periodFrom, periodTo, tags as JSONB, description, uploadedAt, expiresAt) in src/main/java/com/bitbi/dfm/clientlog/domain/ClientDiagnosticLog.java
-- [ ] T027 [P] [US4] Create ClientDiagnosticLogRepository interface with countBySiteIdAndUploadedAtAfter(), findBySiteIdOrderByUploadedAtDesc(Pageable), findByExpiresAtBefore() methods in src/main/java/com/bitbi/dfm/clientlog/domain/ClientDiagnosticLogRepository.java
-- [ ] T028 [US4] Create JpaClientDiagnosticLogRepository extending JpaRepository implementing ClientDiagnosticLogRepository in src/main/java/com/bitbi/dfm/clientlog/infrastructure/JpaClientDiagnosticLogRepository.java
-- [ ] T029 [US4] Implement ClientDiagnosticLogService with uploadLog() — validate file type (.log/.log.gz/.txt/.txt.gz), check 10MB size limit, check 10/day/site rate limit, upload to S3 at client-logs/{accountId}/{siteId}/{date}/{logId}/{filename}, clear requestLogs flag on site in src/main/java/com/bitbi/dfm/clientlog/application/ClientDiagnosticLogService.java
-- [ ] T030 [US4] Create ClientLogDeviceController with POST /api/v1/device/logs multipart endpoint (Custom JWT auth) accepting file + metadata fields in src/main/java/com/bitbi/dfm/clientlog/presentation/ClientLogDeviceController.java
+- [X] T026 [P] [US4] Create ClientDiagnosticLog JPA entity with fields (id, siteId, accountId, s3Key, filename, fileSize, contentType, clientVersion, os, periodFrom, periodTo, tags as JSONB, description, uploadedAt, expiresAt) in src/main/java/com/bitbi/dfm/clientlog/domain/ClientDiagnosticLog.java
+- [X] T027 [P] [US4] Create ClientDiagnosticLogRepository interface with countBySiteIdAndUploadedAtAfter(), findBySiteIdOrderByUploadedAtDesc(Pageable), findByExpiresAtBefore() methods in src/main/java/com/bitbi/dfm/clientlog/domain/ClientDiagnosticLogRepository.java
+- [X] T028 [US4] Create JpaClientDiagnosticLogRepository extending JpaRepository implementing ClientDiagnosticLogRepository in src/main/java/com/bitbi/dfm/clientlog/infrastructure/JpaClientDiagnosticLogRepository.java
+- [X] T029 [US4] Implement ClientDiagnosticLogService with uploadLog() — validate file type (.log/.log.gz/.txt/.txt.gz), check 10MB size limit, check 10/day/site rate limit, upload to S3 at client-logs/{accountId}/{siteId}/{date}/{logId}/{filename}, clear requestLogs flag on site in src/main/java/com/bitbi/dfm/clientlog/application/ClientDiagnosticLogService.java
+- [X] T030 [US4] Create ClientLogDeviceController with POST /api/v1/device/logs multipart endpoint (Custom JWT auth) accepting file + metadata fields in src/main/java/com/bitbi/dfm/clientlog/presentation/ClientLogDeviceController.java
 
 **Checkpoint**: Clients can upload diagnostic logs, server validates and stores in S3
 
@@ -154,10 +154,10 @@
 
 ### Implementation for User Story 5
 
-- [ ] T031 [P] [US5] Create ClientLogResponseDto (logId, siteId, filename, fileSize, clientVersion, os, periodFrom, periodTo, tags, description, uploadedAt, expiresAt) and ClientLogListResponseDto (content, page, size, totalElements) records in src/main/java/com/bitbi/dfm/clientlog/presentation/dto/
-- [ ] T032 [US5] Add listLogs(siteId, Pageable) and getDownloadUrl(siteId, logId) methods (presigned URL via S3PresignedUrlService, 15-min expiry) to ClientDiagnosticLogService in src/main/java/com/bitbi/dfm/clientlog/application/ClientDiagnosticLogService.java
-- [ ] T033 [US5] Create ClientLogAdminController with GET /api/v1/admin/sites/{siteId}/client-logs (paginated) and GET /api/v1/admin/sites/{siteId}/client-logs/{logId}/download (presigned URL) endpoints accessible to ROLE_ADMIN and ROLE_USER in src/main/java/com/bitbi/dfm/clientlog/presentation/ClientLogAdminController.java
-- [ ] T034 [US5] Create ClientLogRetentionScheduler with configurable cron that deletes expired logs from S3 and database in src/main/java/com/bitbi/dfm/clientlog/application/ClientLogRetentionScheduler.java
+- [X] T031 [P] [US5] Create ClientLogResponseDto (logId, siteId, filename, fileSize, clientVersion, os, periodFrom, periodTo, tags, description, uploadedAt, expiresAt) and ClientLogListResponseDto (content, page, size, totalElements) records in src/main/java/com/bitbi/dfm/clientlog/presentation/dto/
+- [X] T032 [US5] Add listLogs(siteId, Pageable) and getDownloadUrl(siteId, logId) methods (presigned URL via S3PresignedUrlService, 15-min expiry) to ClientDiagnosticLogService in src/main/java/com/bitbi/dfm/clientlog/application/ClientDiagnosticLogService.java
+- [X] T033 [US5] Create ClientLogAdminController with GET /api/v1/admin/sites/{siteId}/client-logs (paginated) and GET /api/v1/admin/sites/{siteId}/client-logs/{logId}/download (presigned URL) endpoints accessible to ROLE_ADMIN and ROLE_USER in src/main/java/com/bitbi/dfm/clientlog/presentation/ClientLogAdminController.java
+- [X] T034 [US5] Create ClientLogRetentionScheduler with configurable cron that deletes expired logs from S3 and database in src/main/java/com/bitbi/dfm/clientlog/application/ClientLogRetentionScheduler.java
 
 **Checkpoint**: Admins can browse and download client logs, expired logs auto-cleaned
 

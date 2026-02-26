@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.deviceauth.domain.DeviceAuthorizationRepository;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.site.domain.ForceFullUploadReason;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteCredentials;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -494,6 +495,56 @@ public class SiteService {
         }
 
         logger.info("All sites deactivated for account: {}", accountId);
+    }
+
+    // ==================== Force Rebaseline & Request Logs (Feature 021, US3) ====================
+
+    /**
+     * Set forceFullUpload directive on a site.
+     * <p>
+     * The directive instructs the client to upload full CSV files instead of JSONL deltas
+     * on the next sync. The flag is automatically cleared when the client starts a batch.
+     * </p>
+     *
+     * @param siteId     site identifier
+     * @param reason     reason for forcing rebaseline
+     * @param message    human-readable message from admin
+     * @param adminEmail email of the admin who set the flag
+     * @return updated site
+     * @throws SiteNotFoundException if site not found
+     */
+    public Site forceRebaseline(UUID siteId, ForceFullUploadReason reason, String message, String adminEmail) {
+        logger.info("Force rebaseline: siteId={}, reason={}, setBy={}", siteId, reason, adminEmail);
+
+        Site site = getSite(siteId);
+        site.setForceFullUpload(reason, message, adminEmail);
+        Site saved = siteRepository.save(site);
+
+        logger.info("Force rebaseline set: siteId={}, reason={}", siteId, reason);
+        return saved;
+    }
+
+    /**
+     * Set requestLogs directive on a site.
+     * <p>
+     * The directive instructs the client to upload diagnostic logs on the next sync.
+     * The flag is cleared when the client uploads logs.
+     * </p>
+     *
+     * @param siteId  site identifier
+     * @param message optional message for the log request
+     * @return updated site
+     * @throws SiteNotFoundException if site not found
+     */
+    public Site requestLogs(UUID siteId, String message) {
+        logger.info("Request logs: siteId={}", siteId);
+
+        Site site = getSite(siteId);
+        site.setRequestLogs(message);
+        Site saved = siteRepository.save(site);
+
+        logger.info("Request logs set: siteId={}", siteId);
+        return saved;
     }
 
     /**

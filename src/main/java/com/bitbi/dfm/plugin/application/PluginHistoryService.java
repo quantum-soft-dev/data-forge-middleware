@@ -4,6 +4,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.plugin.domain.*;
 import com.bitbi.dfm.plugin.infrastructure.storage.S3SqlFileStorageService;
 import com.bitbi.dfm.plugin.presentation.dto.*;
+import com.bitbi.dfm.site.domain.ForceFullUploadReason;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import org.slf4j.Logger;
@@ -345,6 +346,20 @@ public class PluginHistoryService {
             accountPluginRepository.save(accountPlugin);
             log.info("Reinit: no completed batches found for account {}. " +
                     "First future batch will become baseline.", accountId);
+        }
+
+        // Set forceFullUpload on all active CDC sites for the account (Feature 021, US3)
+        List<Site> activeSites = siteRepository.findActiveByAccountId(accountId);
+        int cdcSitesUpdated = 0;
+        for (Site site : activeSites) {
+            if (site.getSiteType().isCdc()) {
+                site.setForceFullUpload(ForceFullUploadReason.PLUGIN_REINIT, "Plugin reinitialized", null);
+                siteRepository.save(site);
+                cdcSitesUpdated++;
+            }
+        }
+        if (cdcSitesUpdated > 0) {
+            log.info("Reinit: set forceFullUpload on {} active CDC sites for account {}", cdcSitesUpdated, accountId);
         }
 
         // Audit log

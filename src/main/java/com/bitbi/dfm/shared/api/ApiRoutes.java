@@ -723,6 +723,75 @@ public final class ApiRoutes {
      */
     public static final String GLOBAL_ERRORS_MARK_ALL_READ = GLOBAL_ERRORS + "/mark-all-as-read";
 
+    // ==================== Admin Site Operations (Feature 021) ====================
+
+    /**
+     * Base path for admin site operation endpoints.
+     * <p>
+     * These endpoints use /api/v1/admin/sites/ prefix and require ROLE_ADMIN.
+     * Separate from /api/v1/sites/ (standard CRUD) to distinguish operational actions.
+     * </p>
+     */
+    public static final String ADMIN_SITES = ADMIN_API_BASE + "/admin/sites";
+
+    /**
+     * Force rebaseline endpoint.
+     * <p>
+     * Method: POST<br>
+     * Path Variable: {siteId} - Site ID<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
+     * Returns: ForceRebaselineResponseDto
+     * </p>
+     */
+    public static final String ADMIN_SITES_FORCE_REBASELINE = ADMIN_SITES + "/{siteId}/force-rebaseline";
+
+    /**
+     * Request client logs endpoint.
+     * <p>
+     * Method: POST<br>
+     * Path Variable: {siteId} - Site ID<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN)<br>
+     * Returns: 200 OK
+     * </p>
+     */
+    public static final String ADMIN_SITES_REQUEST_LOGS = ADMIN_SITES + "/{siteId}/request-logs";
+
+    /**
+     * List client diagnostic logs endpoint.
+     * <p>
+     * Method: GET<br>
+     * Path Variable: {siteId} - Site ID<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN or ROLE_USER)<br>
+     * Query Params: page, size<br>
+     * Returns: ClientLogListResponseDto
+     * </p>
+     */
+    public static final String ADMIN_SITES_CLIENT_LOGS = ADMIN_SITES + "/{siteId}/client-logs";
+
+    /**
+     * Download client diagnostic log endpoint.
+     * <p>
+     * Method: GET<br>
+     * Path Variables: {siteId} - Site ID, {logId} - Log ID<br>
+     * Authentication: Auth0 OAuth2 (ROLE_ADMIN or ROLE_USER)<br>
+     * Returns: ClientLogDownloadResponseDto (presigned URL)
+     * </p>
+     */
+    public static final String ADMIN_SITES_CLIENT_LOGS_DOWNLOAD = ADMIN_SITES + "/{siteId}/client-logs/{logId}/download";
+
+    // ==================== Device Logs (Feature 021) ====================
+
+    /**
+     * Client diagnostic log upload endpoint.
+     * <p>
+     * Method: POST<br>
+     * Authentication: Custom JWT<br>
+     * Content-Type: multipart/form-data<br>
+     * Returns: ClientLogResponseDto (201 Created)
+     * </p>
+     */
+    public static final String DEVICE_LOGS = DEVICE_API_BASE + "/logs";
+
     // ==================== Plugins API ====================
 
     /**

@@ -5,8 +5,12 @@ import com.bitbi.dfm.account.domain.AdminActionLog;
 import com.bitbi.dfm.account.domain.AdminActionType;
 import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.site.application.SiteService;
+import com.bitbi.dfm.site.domain.ForceFullUploadReason;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.presentation.dto.CreateSiteRequestDto;
+import com.bitbi.dfm.site.presentation.dto.ForceRebaselineRequestDto;
+import com.bitbi.dfm.site.presentation.dto.ForceRebaselineResponseDto;
+import com.bitbi.dfm.site.presentation.dto.RequestLogsRequestDto;
 import com.bitbi.dfm.site.presentation.dto.SiteCreationResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteResponseDto;
 import com.bitbi.dfm.site.presentation.dto.SiteStatisticsDto;
@@ -580,6 +584,76 @@ public class SiteAdminController {
         return ResponseEntity.ok(response);
     }
 
+    // ==================== Force Rebaseline & Request Logs (Feature 021, US3) ====================
+
+    /**
+     * Force full upload (rebaseline) on next sync.
+     * <p>
+     * POST /api/v1/admin/sites/{siteId}/force-rebaseline
+     * </p>
+     *
+     * @param siteId         site identifier
+     * @param request        force rebaseline request (reason)
+     * @param authentication Spring Security authentication object
+     * @return force rebaseline response
+     */
+    @Operation(
+            summary = "Force rebaseline",
+            description = "Sets forceFullUpload flag on the site. On the next heartbeat, the client will upload full CSV files."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Force rebaseline flag set",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ForceRebaselineResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping(ApiRoutes.ADMIN_SITES_FORCE_REBASELINE)
+    public ResponseEntity<ForceRebaselineResponseDto> forceRebaseline(
+            @PathVariable("siteId") UUID siteId,
+            @Valid @RequestBody ForceRebaselineRequestDto request,
+            Authentication authentication) {
+
+        logger.info("Force rebaseline: siteId={}", siteId);
+
+        String adminEmail = extractEmailFromJwt(authentication);
+        Site site = siteService.forceRebaseline(siteId, ForceFullUploadReason.ADMIN_REQUEST, request.reason(), adminEmail);
+
+        ForceRebaselineResponseDto response = ForceRebaselineResponseDto.fromEntity(site);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Request client to upload diagnostic logs.
+     * <p>
+     * POST /api/v1/admin/sites/{siteId}/request-logs
+     * </p>
+     *
+     * @param siteId  site identifier
+     * @param request request logs request (optional message)
+     * @return 200 OK
+     */
+    @Operation(
+            summary = "Request client logs",
+            description = "Sets requestLogs directive on the site. On the next heartbeat, the client will upload diagnostic logs."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Log request flag set"),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    @PostMapping(ApiRoutes.ADMIN_SITES_REQUEST_LOGS)
+    public ResponseEntity<Void> requestLogs(
+            @PathVariable("siteId") UUID siteId,
+            @RequestBody(required = false) RequestLogsRequestDto request) {
+
+        logger.info("Request logs: siteId={}", siteId);
+
+        String message = request != null ? request.message() : null;
+        siteService.requestLogs(siteId, message);
+
+        return ResponseEntity.ok().build();
+    }
+
     // ========== Helper Methods ==========
 
     /**
@@ -630,6 +704,24 @@ public class SiteAdminController {
         if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
             String sub = jwt.getClaimAsString("sub");
             return UUID.fromString(sub);
+        }
+        return null;
+    }
+
+    /**
+     * Extract email from JWT token for audit logging.
+     *
+     * @param authentication Spring Security authentication object
+     * @return email from JWT claims, or null if not found
+     */
+    private String extractEmailFromJwt(Authentication authentication) {
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+            String email = jwt.getClaimAsString("email");
+            if (email != null && !email.isEmpty()) {
+                return email;
+            }
+            // Fallback to preferred_username
+            return jwt.getClaimAsString("preferred_username");
         }
         return null;
     }
