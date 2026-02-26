@@ -5,7 +5,6 @@ import com.bitbi.dfm.clientlog.domain.ClientDiagnosticLog;
 import com.bitbi.dfm.clientlog.domain.ClientDiagnosticLogRepository;
 import com.bitbi.dfm.shared.exception.InvalidLogFileException;
 import com.bitbi.dfm.shared.exception.LogUploadLimitExceededException;
-import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
@@ -160,19 +159,23 @@ public class ClientDiagnosticLogService {
 
     /**
      * Get a single log entry by ID, verifying site ownership.
+     * <p>
+     * Returns the same 404 response for both not-found and cross-site access
+     * to prevent information disclosure (log existence enumeration).
+     * </p>
      *
      * @param siteId site identifier (for ownership verification)
      * @param logId  log identifier
      * @return the log entry
-     * @throws IllegalArgumentException if log not found or site mismatch
+     * @throws java.util.NoSuchElementException if log not found or site mismatch
      */
     @Transactional(readOnly = true)
     public ClientDiagnosticLog getLog(UUID siteId, UUID logId) {
         ClientDiagnosticLog log = logRepository.findById(logId)
-                .orElseThrow(() -> new IllegalArgumentException("Client log not found: " + logId));
+                .orElseThrow(() -> new java.util.NoSuchElementException("Client log not found: " + logId));
 
         if (!log.getSiteId().equals(siteId)) {
-            throw new IllegalArgumentException("Client log does not belong to site: " + siteId);
+            throw new java.util.NoSuchElementException("Client log not found: " + logId);
         }
 
         return log;
@@ -193,33 +196,45 @@ public class ClientDiagnosticLogService {
     }
 
     /**
-     * Delete expired logs from S3 and database.
+     * Delete expired logs from S3 and database in batches to avoid OOM.
      *
      * @return number of logs deleted
      */
     public int deleteExpiredLogs() {
-        List<ClientDiagnosticLog> expiredLogs = logRepository.findByExpiresAtBefore(LocalDateTime.now());
-
-        if (expiredLogs.isEmpty()) {
-            logger.debug("No expired client logs to delete");
-            return 0;
-        }
-
-        logger.info("Deleting {} expired client logs", expiredLogs.size());
-
         int deleted = 0;
-        for (ClientDiagnosticLog log : expiredLogs) {
-            try {
-                s3FileStorageService.deleteFile(log.getS3Key());
-                logRepository.delete(log);
-                deleted++;
-            } catch (Exception e) {
-                logger.error("Failed to delete expired log: logId={}, s3Key={}, error={}",
-                        log.getId(), log.getS3Key(), e.getMessage());
+        int batchSize = 100;
+        org.springframework.data.domain.Pageable pageable =
+                org.springframework.data.domain.PageRequest.of(0, batchSize);
+
+        org.springframework.data.domain.Page<ClientDiagnosticLog> page;
+        do {
+            page = logRepository.findByExpiresAtBefore(LocalDateTime.now(), pageable);
+
+            if (page.isEmpty()) {
+                break;
             }
+
+            logger.info("Processing batch of {} expired client logs", page.getNumberOfElements());
+
+            for (ClientDiagnosticLog log : page.getContent()) {
+                try {
+                    s3FileStorageService.deleteFile(log.getS3Key());
+                    logRepository.delete(log);
+                    deleted++;
+                } catch (Exception e) {
+                    logger.error("Failed to delete expired log: logId={}, s3Key={}, error={}",
+                            log.getId(), log.getS3Key(), e.getMessage());
+                }
+            }
+            // Always re-query page 0 since we're deleting rows
+        } while (page.hasNext() || page.getNumberOfElements() == batchSize);
+
+        if (deleted > 0) {
+            logger.info("Deleted {} expired client logs", deleted);
+        } else {
+            logger.debug("No expired client logs to delete");
         }
 
-        logger.info("Deleted {} expired client logs", deleted);
         return deleted;
     }
 

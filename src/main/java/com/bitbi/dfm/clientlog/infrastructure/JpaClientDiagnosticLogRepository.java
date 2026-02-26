@@ -8,7 +8,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -28,5 +27,5 @@ public interface JpaClientDiagnosticLogRepository
     Page<ClientDiagnosticLog> findBySiteIdOrderByUploadedAtDesc(UUID siteId, Pageable pageable);
 
     @Override
-    List<ClientDiagnosticLog> findByExpiresAtBefore(LocalDateTime before);
+    Page<ClientDiagnosticLog> findByExpiresAtBefore(LocalDateTime before, Pageable pageable);
 }

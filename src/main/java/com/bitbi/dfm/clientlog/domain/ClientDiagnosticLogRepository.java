@@ -4,7 +4,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -33,9 +32,9 @@ public interface ClientDiagnosticLogRepository {
     Page<ClientDiagnosticLog> findBySiteIdOrderByUploadedAtDesc(UUID siteId, Pageable pageable);
 
     /**
-     * Find expired logs for retention cleanup.
+     * Find expired logs for retention cleanup (batched to avoid OOM).
      */
-    List<ClientDiagnosticLog> findByExpiresAtBefore(LocalDateTime before);
+    Page<ClientDiagnosticLog> findByExpiresAtBefore(LocalDateTime before, Pageable pageable);
 
     void delete(ClientDiagnosticLog log);
 }

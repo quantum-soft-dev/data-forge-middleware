@@ -575,6 +575,32 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle NoSuchElementException (404 Not Found).
+     * <p>
+     * Generic handler for domain lookups that fail. Uses the same 404
+     * response for both not-found and cross-entity access to prevent
+     * information disclosure (existence enumeration).
+     * </p>
+     */
+    @ExceptionHandler(java.util.NoSuchElementException.class)
+    public ResponseEntity<ErrorResponseDto> handleNoSuchElement(
+            java.util.NoSuchElementException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Resource not found: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
      * Handle GlobalErrorNotFoundException (404 Not Found).
      * <p>
      * Thrown when a global error is not found or access is denied.
