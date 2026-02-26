@@ -41,6 +41,8 @@ export interface BatchSummary {
   startedAt: string;
   /** Batch completion timestamp (ISO-8601, null if in progress) */
   completedAt: string | null;
+  /** Batch type: BASELINE or DELTA (null for legacy batches) */
+  batchType?: string | null;
 }
 
 /**
@@ -83,6 +85,8 @@ export interface BatchDetail {
   completedAt: string | null;
   /** List of file metadata */
   files: FileMetadata[];
+  /** Batch type: BASELINE or DELTA (null for legacy batches) */
+  batchType?: string | null;
 }
 
 /**

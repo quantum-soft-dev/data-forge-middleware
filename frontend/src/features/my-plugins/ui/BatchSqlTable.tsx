@@ -296,6 +296,7 @@ export function BatchSqlTable({
         <TableHeader>
           <TableRow>
             <TableHead>Site</TableHead>
+            <TableHead>Type</TableHead>
             <TableHead>Completed</TableHead>
             <TableHead>Files</TableHead>
             <TableHead>Size</TableHead>
@@ -307,6 +308,20 @@ export function BatchSqlTable({
           {batches.map((batch) => (
             <TableRow key={batch.batchId}>
               <TableCell className="font-medium">{batch.siteDomain}</TableCell>
+              <TableCell>
+                {batch.batchType ? (
+                  <Badge
+                    variant="secondary"
+                    className={
+                      batch.batchType === 'BASELINE'
+                        ? 'bg-gray-100 text-gray-600'
+                        : 'bg-blue-100 text-blue-700'
+                    }
+                  >
+                    {batch.batchType === 'BASELINE' ? 'Baseline' : 'Delta'}
+                  </Badge>
+                ) : null}
+              </TableCell>
               <TableCell className="text-sm text-gray-500">
                 {formatTimestamp(batch.completedAt)}
               </TableCell>

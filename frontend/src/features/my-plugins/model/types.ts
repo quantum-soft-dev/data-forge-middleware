@@ -244,6 +244,8 @@ export interface BatchSqlStatus {
   generatedAt: string | null
   /** Whether no changes were detected when generation was attempted */
   noChangesDetected: boolean
+  /** Batch type: BASELINE or DELTA (null for legacy batches) */
+  batchType?: string | null
 }
 
 /**

@@ -236,9 +236,9 @@
 
 ### Implementation for User Story 10
 
-- [ ] T048 [US10] Add requestLogs mutation (POST /admin/sites/{siteId}/request-logs) and endpoint route to siteApi in frontend/src/features/site-crud/api/siteApi.ts and frontend/src/shared/api/apiRoutes.ts
-- [ ] T049 [US10] Create RequestLogsDialog with AlertDialog, optional message Input, and confirm/cancel buttons using shadcn/ui in frontend/src/features/site-crud/ui/RequestLogsDialog.tsx
-- [ ] T050 [US10] Add "Request Logs" button (disabled when requestLogs active, showing "Logs Requested" indicator) and RequestLogsDialog integration to SiteDetailPage in frontend/src/pages/site-management/SiteDetailPage.tsx
+- [X] T048 [US10] Add requestLogs mutation (POST /admin/sites/{siteId}/request-logs) and endpoint route to siteApi in frontend/src/features/site-crud/api/siteApi.ts and frontend/src/shared/api/apiRoutes.ts
+- [X] T049 [US10] Create RequestLogsDialog with AlertDialog, optional message Input, and confirm/cancel buttons using shadcn/ui in frontend/src/features/site-crud/ui/RequestLogsDialog.tsx
+- [X] T050 [US10] Add "Request Logs" button (disabled when requestLogs active, showing "Logs Requested" indicator) and RequestLogsDialog integration to SiteDetailPage in frontend/src/pages/site-management/SiteDetailPage.tsx
 
 **Checkpoint**: Admin can request client logs through UI
 
@@ -252,7 +252,7 @@
 
 ### Implementation for User Story 13
 
-- [ ] T051 [US13] Add heartbeat status section (last heartbeat relative time or "Never") and directive indicators (forceFullUpload alert with reason/timestamp, requestLogs indicator) to SiteDetailPage info area in frontend/src/pages/site-management/SiteDetailPage.tsx
+- [X] T051 [US13] Add heartbeat status section (last heartbeat relative time or "Never") and directive indicators (forceFullUpload alert with reason/timestamp, requestLogs indicator) to SiteDetailPage info area in frontend/src/pages/site-management/SiteDetailPage.tsx
 
 **Checkpoint**: Heartbeat and directive status visible on site detail page
 
@@ -266,8 +266,8 @@
 
 ### Implementation for User Story 14
 
-- [ ] T052 [P] [US14] Add batchType badge column rendering "Baseline" (gray) or "Delta" (blue) Badge, null-safe for legacy batches, to FileTable in frontend/src/features/upload-history/ui/FileTable.tsx
-- [ ] T053 [P] [US14] Add batchType indicator to batch info display in BatchSqlTab in frontend/src/features/my-plugins/ui/BatchSqlTab.tsx
+- [X] T052 [P] [US14] Add batchType badge column rendering "Baseline" (gray) or "Delta" (blue) Badge, null-safe for legacy batches, to FileTable in frontend/src/features/upload-history/ui/FileTable.tsx
+- [X] T053 [P] [US14] Add batchType indicator to batch info display in BatchSqlTab in frontend/src/features/my-plugins/ui/BatchSqlTab.tsx
 
 **Checkpoint**: Batch type visually clear in upload history and SQL tabs
 
@@ -277,8 +277,8 @@
 
 **Purpose**: End-to-end validation and backward compatibility verification
 
-- [ ] T054 Run quickstart.md validation scenarios to verify all endpoints work end-to-end (heartbeat → batch start → upload → SQL generation for each site type)
-- [ ] T055 Verify backward compatibility — existing DBF clients work without schema during grace period, existing POSTGRES_CDC clients unaffected, legacy batches without batchType display correctly
+- [X] T054 Run quickstart.md validation scenarios to verify all endpoints work end-to-end (heartbeat → batch start → upload → SQL generation for each site type)
+- [X] T055 Verify backward compatibility — existing DBF clients work without schema during grace period, existing POSTGRES_CDC clients unaffected, legacy batches without batchType display correctly
 
 ---
 

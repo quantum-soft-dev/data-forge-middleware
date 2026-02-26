@@ -284,6 +284,17 @@ export function BatchListView({
                     >
                       {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : batch.status}
                     </span>
+                    {batch.batchType && (
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                          batch.batchType === 'BASELINE'
+                            ? 'bg-gray-100 text-gray-600'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}
+                      >
+                        {batch.batchType === 'BASELINE' ? 'Baseline' : 'Delta'}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-0.5 text-xs text-gray-500">
                     {siteLookup?.get(batch.siteId) && (
