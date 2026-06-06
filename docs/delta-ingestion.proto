@@ -1,0 +1,208 @@
+// Delta Ingestion gRPC contract — Delta Client v2
+//
+// Status: DRAFT (design review). See docs/cr-delta-client-v2.md for rationale.
+//
+// One service handles the full ingestion lifecycle:
+//   - GetSyncState : resume helper, returns server watermark + recovery action
+//   - SubmitSchema : table structure (columns, PK, unique keys); only on change
+//   - StreamChanges: bidirectional stream; one stream = one session = one batch
+//
+// A "session" maps onto the existing Batch aggregate (start -> records -> commit).
+// A "full snapshot" (bootstrap / re-baseline) is just a session whose records are
+// all INSERTs — there is no separate snapshot message type.
+
+syntax = "proto3";
+
+package com.bitbi.dfm.delta.v2;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "com.bitbi.dfm.delta.grpc.v2";
+option java_outer_classname = "DeltaIngestionProto";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Service
+// ─────────────────────────────────────────────────────────────────────────────
+
+service DeltaIngestion {
+  // Resume helper. Called before opening a session (esp. after a client crash)
+  // to align the client watermark with the server and learn whether a full
+  // re-baseline is required (e.g. after a detected gap or changelog pruning).
+  rpc GetSyncState (SyncStateRequest) returns (SyncStateResponse);
+
+  // Submit / replace the full table schema for the site. Required before the
+  // first session. Re-sent only when source table structure changes.
+  rpc SubmitSchema (SchemaRequest) returns (SchemaResponse);
+
+  // Core ingestion. Bidirectional stream:
+  //   client -> SessionStart, ChangeRecord*, SessionEnd
+  //   server -> SessionOpened, Ack*, SessionCommitted | ServerError
+  rpc StreamChanges (stream ClientEvent) returns (stream ServerEvent);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sync state / resume
+// ─────────────────────────────────────────────────────────────────────────────
+
+message SyncStateRequest {
+  // site_id is also derived from the auth token; sent for explicitness.
+  string site_id = 1;
+}
+
+message SyncStateResponse {
+  uint64 last_applied_seq   = 1; // highest seq durably committed by the server
+  int32  schema_version     = 2; // schema version the server currently holds
+  uint64 last_checkpoint_seq= 3; // seq of the latest materialized checkpoint
+  RecoveryAction action     = 4; // PROCEED | NEED_REBASELINE
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Schema
+// ─────────────────────────────────────────────────────────────────────────────
+
+message SchemaRequest {
+  // Full schema for ALL tables (replace-on-write, mirrors POST /api/dfc/schema).
+  map<string, TableSchema> tables = 1;
+}
+
+message SchemaResponse {
+  int32                      schema_version = 1;
+  google.protobuf.Timestamp  updated_at     = 2;
+}
+
+message TableSchema {
+  repeated Column    columns      = 1;
+  // Primary key column names. MAY be empty: when empty, the server treats the
+  // full set of columns as the identifying key (keyless table — see CR §6).
+  repeated string    primary_key  = 2;
+  repeated UniqueKey unique_keys  = 3;
+}
+
+message Column {
+  string name     = 1;
+  string type     = 2; // PostgreSQL type, e.g. "integer", "varchar(255)", "numeric(10,2)"
+  bool   nullable = 3;
+}
+
+message UniqueKey {
+  string          name    = 1;
+  repeated string columns = 2;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaming session
+// ─────────────────────────────────────────────────────────────────────────────
+
+message ClientEvent {
+  oneof event {
+    SessionStart start  = 1; // exactly one, first
+    ChangeRecord change = 2; // zero or more, seq strictly increasing
+    SessionEnd   end    = 3; // exactly one, last (omit in CONTINUOUS mode)
+  }
+}
+
+message SessionStart {
+  SessionMode mode              = 1;
+  uint64      first_seq         = 2; // seq of the first ChangeRecord in this session
+  int32       schema_version    = 3; // schema the records were produced against
+  string      client_session_id = 4; // client-generated; idempotency + resume key
+}
+
+enum SessionMode {
+  DELTA         = 0; // incremental change records (default)
+  FULL_SNAPSHOT = 1; // bootstrap or re-baseline; all records are INSERTs
+}
+
+message ChangeRecord {
+  string                    table     = 1;
+  Op                        op        = 2;
+  uint64                    seq       = 3; // per-site monotonic, strictly increasing
+  map<string, Value>        key       = 4; // PK values; for keyless tables = all columns
+  map<string, Value>        data      = 5; // INSERT: full row; UPDATE: changed cols; DELETE: empty
+  google.protobuf.Timestamp source_ts = 6; // source commit time (optional)
+}
+
+enum Op {
+  INSERT = 0;
+  UPDATE = 1; // never emitted for keyless tables (any change re-keys -> DELETE + INSERT)
+  DELETE = 2;
+}
+
+message SessionEnd {
+  uint64                       last_seq  = 1; // seq of the last ChangeRecord
+  map<string, TableStats>      per_table = 2; // for reconciliation
+  string                       content_hash = 3; // hash over records, for integrity
+}
+
+message TableStats {
+  uint64 inserts = 1;
+  uint64 updates = 2;
+  uint64 deletes = 3;
+}
+
+message ServerEvent {
+  oneof event {
+    SessionOpened    opened    = 1;
+    Ack              ack       = 2; // progressive watermark / backpressure
+    SessionCommitted committed = 3;
+    ServerError      error     = 4;
+  }
+}
+
+message SessionOpened {
+  string         server_session_id = 1; // == batch id
+  uint64         server_last_seq   = 2; // last applied seq before this session
+  RecoveryAction action            = 3; // PROCEED | NEED_REBASELINE | RESUME_FROM
+  uint64         resume_from_seq   = 4; // valid when action == RESUME_FROM
+}
+
+message Ack {
+  uint64 acked_seq = 1; // server has durably staged records up to this seq
+}
+
+message SessionCommitted {
+  uint64 committed_seq = 1; // highest seq now durably applied
+  string segment_s3_key = 2; // changelog segment written for this session
+}
+
+message ServerError {
+  ErrorCode      code    = 1;
+  string         message = 2;
+  RecoveryAction action  = 3; // what the client should do next
+  uint64         resume_from_seq = 4;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum RecoveryAction {
+  PROCEED         = 0; // continue normally
+  RESUME_FROM     = 1; // re-send from resume_from_seq (partial replay)
+  NEED_REBASELINE = 2; // open a FULL_SNAPSHOT session
+}
+
+enum ErrorCode {
+  UNKNOWN              = 0;
+  SEQUENCE_GAP         = 1; // first_seq != server_last_seq + 1
+  SCHEMA_MISMATCH      = 2; // schema_version unknown / stale
+  RECONCILIATION_FAILED= 3; // counts / content_hash mismatch at SessionEnd
+  UNAUTHORIZED         = 4;
+  ACTIVE_SESSION_EXISTS= 5; // one active session per site (mirrors active-batch rule)
+  INTERNAL             = 6;
+}
+
+// Typed scalar value. Mirrors the JSONL value typing of CDC v1, but typed on the
+// wire so the server need not infer types from strings.
+message Value {
+  oneof v {
+    bool        is_null    = 1; // true => SQL NULL (presence disambiguates absent vs null)
+    int64       int_value  = 2;
+    double      double_value = 3;
+    string      string_value = 4;
+    bool        bool_value  = 5;
+    string      decimal_value = 6; // exact numeric as string (numeric/decimal columns)
+    bytes       bytes_value = 7;
+  }
+}
