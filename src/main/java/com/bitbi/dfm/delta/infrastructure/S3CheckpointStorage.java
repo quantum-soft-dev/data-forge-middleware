@@ -71,6 +71,37 @@ public class S3CheckpointStorage {
         }
     }
 
+    /**
+     * Open a checkpoint snapshot for streaming download, exposing its byte length.
+     *
+     * @return the object's input stream paired with its content length
+     */
+    public CheckpointObject open(String s3Key) {
+        try {
+            ResponseInputStream<GetObjectResponse> in = s3Client.getObject(
+                    GetObjectRequest.builder().bucket(bucketName).key(s3Key).build());
+            return new CheckpointObject(in, in.response().contentLength());
+        } catch (NoSuchKeyException e) {
+            throw new CheckpointStorageException("Checkpoint snapshot not found: " + s3Key, e);
+        } catch (S3Exception e) {
+            throw new CheckpointStorageException("Failed to read checkpoint snapshot: " + s3Key, e);
+        }
+    }
+
+    /**
+     * Byte length of a checkpoint snapshot (HEAD), without transferring the object.
+     */
+    public long contentLength(String s3Key) {
+        try {
+            return s3Client.headObject(
+                    HeadObjectRequest.builder().bucket(bucketName).key(s3Key).build()).contentLength();
+        } catch (NoSuchKeyException e) {
+            throw new CheckpointStorageException("Checkpoint snapshot not found: " + s3Key, e);
+        } catch (S3Exception e) {
+            throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
+        }
+    }
+
     public boolean exists(String s3Key) {
         try {
             s3Client.headObject(HeadObjectRequest.builder().bucket(bucketName).key(s3Key).build());
@@ -80,6 +111,12 @@ public class S3CheckpointStorage {
         } catch (S3Exception e) {
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         }
+    }
+
+    /**
+     * A checkpoint snapshot opened for streaming, with its content length.
+     */
+    public record CheckpointObject(java.io.InputStream inputStream, long size) {
     }
 
     public static class CheckpointStorageException extends RuntimeException {

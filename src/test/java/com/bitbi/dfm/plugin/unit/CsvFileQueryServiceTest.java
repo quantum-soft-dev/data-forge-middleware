@@ -1,5 +1,7 @@
 package com.bitbi.dfm.plugin.unit;
 
+import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.application.CsvFileQueryService;
 import com.bitbi.dfm.plugin.presentation.dto.FileDto;
 import com.bitbi.dfm.site.domain.Site;
@@ -57,6 +59,12 @@ class CsvFileQueryServiceTest {
     private SiteRepository siteRepository;
 
     @Mock
+    private CheckpointRepository checkpointRepository;
+
+    @Mock
+    private S3CheckpointStorage checkpointStorage;
+
+    @Mock
     private S3Client s3Client;
 
     @Mock
@@ -77,6 +85,8 @@ class CsvFileQueryServiceTest {
         service = new CsvFileQueryService(
                 uploadedFileRepository,
                 siteRepository,
+                checkpointRepository,
+                checkpointStorage,
                 s3Client,
                 BUCKET_NAME,
                 meterRegistry
