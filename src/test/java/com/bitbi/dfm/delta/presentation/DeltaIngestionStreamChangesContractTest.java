@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import io.grpc.*;
@@ -20,6 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -143,6 +145,87 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(received.get(0).hasError());
         assertEquals(ErrorCode.ACTIVE_SESSION_EXISTS, received.get(0).getError().getCode());
         verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
+    void deltaSessionWithSequenceGapRejected() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        List<ServerEvent> received = runSession(req ->
+                req.onNext(start(SessionMode.DELTA, 130L))); // expected first_seq=121
+
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError());
+        assertEquals(ErrorCode.SEQUENCE_GAP, received.get(0).getError().getCode());
+        assertEquals(RecoveryAction.NEED_REBASELINE, received.get(0).getError().getAction());
+        verify(batchLifecycle, never()).startBatch(any(), any());
+    }
+
+    @Test
+    void deltaSessionContiguousProceeds() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req ->
+                req.onNext(start(SessionMode.DELTA, 121L)));
+
+        assertTrue(received.get(0).hasOpened());
+        assertEquals(120L, received.get(0).getOpened().getServerLastSeq());
+        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+    }
+
+    @Test
+    void fullSnapshotIgnoresSequenceGap() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req ->
+                req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L))); // not contiguous, but allowed
+
+        assertTrue(received.get(0).hasOpened());
+        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+    }
+
+    private List<ServerEvent> runSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {
+        List<ServerEvent> received = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ServerEvent> responses = new StreamObserver<>() {
+            @Override
+            public void onNext(ServerEvent event) {
+                received.add(event);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                done.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                done.countDown();
+            }
+        };
+        StreamObserver<ClientEvent> request = asyncStub.streamChanges(responses);
+        client.accept(request);
+        request.onCompleted(); // half-close so a still-open session completes for assertion
+        assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
+        return received;
+    }
+
+    private static ClientEvent start(SessionMode mode, long firstSeq) {
+        return ClientEvent.newBuilder()
+                .setStart(SessionStart.newBuilder().setMode(mode).setFirstSeq(firstSeq).build())
+                .build();
     }
 
     private static ServerInterceptor authContext(UUID siteId, UUID accountId) {

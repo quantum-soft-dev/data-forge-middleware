@@ -80,7 +80,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
                 try {
                     switch (event.getEventCase()) {
-                        case START -> onSessionStart();
+                        case START -> onSessionStart(event.getStart());
                         case CHANGE -> lastSeq = Math.max(lastSeq, event.getChange().getSeq());
                         case END -> onSessionEnd(event.getEnd().getLastSeq());
                         case EVENT_NOT_SET -> { /* ignore empty frame */ }
@@ -91,8 +91,18 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
             }
 
-            private void onSessionStart() {
+            private void onSessionStart(SessionStart start) {
                 long serverLastSeq = syncStateService.getSyncState(siteId).lastAppliedSeq();
+
+                // Gap detection: a DELTA session must continue contiguously from the server
+                // watermark. FULL_SNAPSHOT (bootstrap / re-baseline) resets and is exempt.
+                if (start.getMode() == SessionMode.DELTA && start.getFirstSeq() != serverLastSeq + 1) {
+                    emitError(ErrorCode.SEQUENCE_GAP,
+                            "Expected first_seq=" + (serverLastSeq + 1) + " but got " + start.getFirstSeq(),
+                            RecoveryAction.NEED_REBASELINE);
+                    return;
+                }
+
                 Batch batch;
                 try {
                     batch = batchLifecycleService.startBatch(accountId, siteId);

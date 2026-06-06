@@ -32,7 +32,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 
 ## Task 2 — Changelog ingest (CR Phase 2)
 
-- [ ] **T2.1** Per-site `seq` validation + gap detection (`first_seq == server_last_seq + 1`) → `SEQUENCE_GAP` / `NEED_REBASELINE` _(tests: unit — in-order, gap, first-ever)_
+- [x] **T2.1** Per-site `seq` validation + gap detection (`first_seq == server_last_seq + 1`) → `SEQUENCE_GAP` / `NEED_REBASELINE` _(tests: contract — DELTA gap rejected (NEED_REBASELINE); contiguous proceeds; FULL_SNAPSHOT exempt)_
 - [ ] **T2.2** Idempotency: dedup by `(site_id, seq)`; replay of applied seq ignored _(tests: unit — duplicate / out-of-order delivery)_
 - [ ] **T2.3** `ChangeRecord` typed `Value` mapping (null vs absent, decimal exactness, all op types) _(tests: unit — each value type; absent vs null)_
 - [ ] **T2.4** Keyless / all-fields-key handling: reject `UPDATE`; `DELETE`+`INSERT` round-trip _(tests: unit — UPDATE rejected; full-row key identity)_
