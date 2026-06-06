@@ -7,6 +7,8 @@
 - **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 11**
 - **AWS SDK v2** (S3) + **HikariCP** + **Micrometer** + **SpringDoc OpenAPI 3**
 - **Auth0 2.26.0** (Management API) + **Hypersistence Utils** (JSONB)
+- **Redis + Caffeine** (Spring Cache) + **Bucket4j** (rate limiting) + **Spring Retry**
+- **Apache POI / commons-csv / commons-compress** + **java-diff-utils** (file diff) + **json-schema-validator**
 - **JUnit 5 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
 
 ### Frontend
@@ -20,13 +22,18 @@
 ```
 src/main/java/com/bitbi/dfm/
 ├── account/              # Account aggregate (multi-tenant root)
-├── site/                 # Site aggregate (client authentication)
-├── batch/                # Batch aggregate (upload sessions)
-├── upload/               # File upload domain
+├── site/                 # Site aggregate + SiteType/SiteSchema (DBF, POSTGRES_CDC)
+├── batch/                # Batch aggregate (upload sessions), retention, history
+├── upload/               # File upload domain + schema upload
 ├── error/                # Error logging (partitioned)
-├── auth/                 # JWT authentication
+├── auth/                 # Client JWT authentication (v1)
+├── deviceauth/           # OAuth 2.0 Device Authorization Flow + refresh tokens (Auth V2)
+├── device/               # Client API v2 controllers (/api/v1/device/**)
+├── comparison/           # File comparison / diff visualization (Myers)
 ├── plugin/               # Plugin system (Bit BI integration)
-└── shared/               # Cross-cutting concerns
+├── settings/             # App settings (admin-configurable, app_settings)
+├── config/               # Security, cache, async, metrics, OpenAPI configuration
+└── shared/               # Cross-cutting concerns (events, exceptions, api routes)
 
 src/main/resources/db/migration/   # Flyway SQL migrations
 src/test/java/{contract,integration,[domain]}/
@@ -37,8 +44,9 @@ src/test/java/{contract,integration,[domain]}/
 ```bash
 ./gradlew build                           # Build
 ./gradlew bootRun --args='--spring.profiles.active=dev'  # Run dev
-./gradlew test                            # Unit tests
-./gradlew integrationTest                 # Integration tests
+./gradlew test                            # All tests (unit + contract + integration) — used by CI
+./gradlew test -PexcludeIntegration       # Unit + contract only (fast, no Docker) — per-task gate
+./gradlew integrationTest                 # Testcontainers integration suite only — before-PR gate
 ./gradlew flywayMigrate                   # Apply migrations
 docker-compose up postgres localstack     # Start dependencies
 ```
@@ -46,15 +54,17 @@ docker-compose up postgres localstack     # Start dependencies
 ## Architecture
 
 ### DDD (Package by Layered Feature)
-- **Aggregates**: Account, Site, Batch, ErrorLog, Plugin
-- **Value Objects**: JwtToken, FileChecksum, SiteCredentials, BatchStatus
+- **Layers per domain**: `domain/` (aggregate, value objects, repository interface, events) → `application/` (services, schedulers) → `infrastructure/` (`Jpa*` repo impl, S3) → `presentation/` (controllers + `dto/`)
+- **Aggregates**: Account, Site, Batch, ErrorLog, Plugin, Comparison, DeviceAuthorization, AppSetting
+- **Value Objects**: JwtToken, FileChecksum, SiteCredentials, BatchStatus, SiteType, TableSchema
 - **Events**: AccountDeactivatedEvent, BatchStartedEvent, PluginActivatedEvent
 - **Repository Pattern**: Interface in domain, JPA in infrastructure
 
 ### Authentication
-- **Client API** (`/api/dfc/**`): Custom JWT (HMAC-SHA256)
+- **Client API v1** (`/api/dfc/**`): Custom JWT (HMAC-SHA256). _Legacy — being deprecated, see API Evolution below._
+- **Client API v2** (`/api/v1/device/**`): OAuth 2.0 Device Authorization Flow with access + refresh tokens (Auth V2). Site declares `siteName` + `siteType` at registration. _Go-forward client path._
 - **Admin API** (`/api/admin/**`, `/api/v1/**`): Auth0 OAuth2 (ROLE_ADMIN/ROLE_USER)
-- **Plugin API** (`/api/v1/plugins/bit-bi/**`): API key via `X-Plugin-Api-Key` header
+- **Plugin API** (`/api/v1/plugins/bit-bi/**`): API key via `X-Plugin-Api-Key` header; per-account rate limiting (Bucket4j token bucket)
 
 ### User Types
 1. **Admin Users** (ROLE_ADMIN): Pure Auth0 users, NO PostgreSQL Account record
@@ -65,6 +75,12 @@ docker-compose up postgres localstack     # Start dependencies
 - **Soft Delete**: isActive flag on accounts/sites
 - **N+1 Prevention**: JOIN FETCH in @Query annotations
 - **Cursor Pagination**: For large datasets (batches, audit logs)
+- **JSONB**: site_schemas, plugin metadata, comparison diffs (Hypersistence Utils)
+- **Caching**: Spring Cache (Redis + Caffeine) via `config/CacheConfiguration` (e.g. batch history)
+
+### Site Types & Schemas (019)
+- **SiteType** (immutable per site): `DBF` (full CSV snapshots, server diffs) | `POSTGRES_CDC` (CSV baseline + JSONL deltas)
+- **site_schemas** (JSONB, one per site): columns, types, `primaryKey`, `uniqueKeys`. Required before first batch for CDC sites.
 
 ### Business Rules
 - One active batch per site (query check)
@@ -91,6 +107,47 @@ docker-compose up postgres localstack     # Start dependencies
 - **Unit**: Mock dependencies, `shouldDoSomethingWhenCondition()`
 - **Integration**: Testcontainers (PostgreSQL + LocalStack)
 - **Contract**: MockMvc endpoint verification
+
+## Development Policy
+
+_This file is the single source of dev rules (the spec-kit constitution is intentionally unused/empty). The policy below is **mandatory** and applies equally to humans and AI agents working in this repo._
+
+### Rule 1 — Feature branches
+- Every feature is developed on its own branch `feature/NNN-name`, **branched off `develop`**.
+- A feature lands via a **Pull Request into `develop`**, merged with **squash** (one feature = one squashed commit on `develop`).
+- A feature **must be documented** in `docs/` (a `docs/cr-*.md` change request and/or feature guide). Undocumented features are not merge-ready.
+
+### Rule 2 — Test-first (TDD), task-by-task, serial
+- A feature is split into ordered tasks in **`specs/NNN-name/tasks.md`** (use `/tasks`).
+- Work tasks **strictly one at a time (WIP = 1)**. Do **not** start the next task until the current one is committed.
+- For each task, follow **test-first**:
+  1. **Study** the task and decide the approach/design before writing code.
+  2. **Write the test set first** — it expresses the intended behavior and starts **red** (failing).
+  3. **Implement**, iterating until **all tests are green**.
+  4. **Tests track the decision, not frozen.** If you change the approach mid-task, **delete the obsolete tests and write new ones** — never keep tests that no longer reflect the chosen design.
+  5. **Bar:** the task must be **adequately covered** by tests (its behavior, edge cases, and failure modes), and **100% green**.
+  6. Commit **one atomic commit per task** (Conventional Commit referencing the task), e.g. `feat(batch): add retention scheduler (T03)`.
+- **Gate — per-task tests must be 100% green** before committing (enforced by the pre-commit hook):
+  - backend → `./gradlew test -PexcludeIntegration` (unit + contract; fast, no Docker)
+  - frontend → `npm --prefix frontend test`
+- "100% green" = **all tests pass**, not 100% code coverage.
+
+### Gates summary
+| Gate | When | Must be green |
+|---|---|---|
+| **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `vitest` if touched) |
+| **Before PR** | before opening the PR | `./gradlew integrationTest` (Testcontainers) |
+| **Merge** (PR → develop) | before merge | full CI (`backend-test`) green + automated review |
+
+### Enforcement
+- **git pre-commit hook** (`.githooks/pre-commit`) runs the per-task gate and blocks red commits. Enable once per clone: `git config core.hooksPath .githooks`. Bypassing (`--no-verify`) is against policy.
+- **CI required checks**: the `backend-test` job (`.github/workflows/ci-cd.yml`, runs `./gradlew test`) must be a **required status check** on PRs to `develop` (configure in GitHub branch protection).
+
+### Conventions
+- **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
+- **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V28**, next is **V29**.
+- **API evolution (strangler)**: add a versioned surface **alongside** the old one (e.g. `/api/v1/device/**` v2 next to `/api/dfc/**` v1), reusing the same application services; deprecate the old (`@Deprecated` + sunset), migrate clients, then remove. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ## Key Implementation Patterns
 
@@ -184,8 +241,8 @@ pages/{feature}/            # Route pages
 
 ## Known Limitations
 
-1. Test coverage ~16% (legacy code untested)
-2. No rate limiting on API endpoints
+1. Test coverage ~16% (legacy code untested). Note: a jacoco 80% verification task is declared but **not wired into the build gate**.
+2. Rate limiting only on the Plugin API (per-account, Bucket4j); no global rate limiting yet
 3. S3 single region only
 4. In-memory batch counting (not atomic across instances)
 5. Basic retry logic (no exponential backoff)
@@ -197,12 +254,15 @@ pages/{feature}/            # Route pages
 
 ## Active Technologies
 - Java 21 (LTS) + Spring Boot 3.5.6, Spring Security 6 (Auth0 OAuth2), Spring Data JPA, AWS SDK v2 (S3) (014-plugin-history)
-- PostgreSQL 16 (existing plugin_sql_generations, account_plugins, plugin_audit_logs tables) (014-plugin-history)
-- PostgreSQL 16 (existing `plugin_sql_generations`, `account_plugins`, `plugin_audit_logs` tables) (015-plugin-reinit)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
+- PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
+- Migrations current at **V28**; next migration is **V29** (do not reuse numbers)
 
 ## Recent Changes
+- 021-unified-upload-api: Unified upload API consolidation across client API versions
 - 020-sql-generation-optimization: Concurrency control (semaphore max 2), merge-join CSV diff algorithm (~6x→~1x memory), streaming S3 parsing, memory backpressure (heap threshold), thread pool reduction (10/20→4/8), eager GC. Config: `plugin.sql-generation.max-concurrent`, `heap-threshold-percent`, `semaphore-timeout-seconds`
+- 019-site-types-postgres-cdc: SiteType (DBF/POSTGRES_CDC), site_schemas (JSONB), JSONL delta uploads, PK-aware SQL generation strategy. Auth V2: device flow + refresh tokens, site_name. See `docs/cr-site-types-postgres-cdc.md`, `docs/postgres-cdc-client-guide.md`
+- 015-plugin-reinit: Plugin reinitialization (re-baseline). See `docs/reinit.md`
 - 018-plugin-filtering: Added filtering (siteId, from, to) and siteDomain to plugin logs API, siteId filter to batches API, frontend PluginTabFilters component with site dropdown, date range, and page size (20, 30, 50, 100)
 - 017-csv-file-initialization: Added baseline_batch_id to account_plugins, new /sites/{siteId}/files endpoints for CSV download, SQL generation skipped for baseline batch
 - 016-global-error-handling: Added severity and isRead to ErrorLog, GlobalErrorUserController with user-facing endpoints, frontend GlobalErrorsWidget on Dashboard

@@ -119,6 +119,25 @@ tasks.withType<Test> {
     finalizedBy(tasks.jacocoTestReport)
 }
 
+// Per-task gate (pre-commit hook): `./gradlew test -PexcludeIntegration` runs unit + contract
+// tests only, skipping the Testcontainers integration suite (fast, no Docker required).
+// Default `./gradlew test` (CI) still runs everything.
+tasks.named<Test>("test") {
+    if (project.hasProperty("excludeIntegration")) {
+        exclude("**/integration/**")
+    }
+}
+
+// Before-PR gate: only the Testcontainers integration suite.
+tasks.register<Test>("integrationTest") {
+    description = "Runs Testcontainers integration tests (src/test/java/**/integration/**)."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    include("**/integration/**")
+    shouldRunAfter(tasks.test)
+}
+
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
     reports {

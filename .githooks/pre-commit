@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# Per-task test gate (development policy — see CLAUDE.md "Development Policy").
+# Blocks a commit unless the relevant test suite is 100% green.
+#
+#   - Backend changes  -> ./gradlew test -PexcludeIntegration  (unit + contract, no Docker)
+#   - Frontend changes -> npm --prefix frontend test           (vitest run)
+#   - Docs/config-only -> skipped
+#
+# Integration (Testcontainers) tests are NOT run here — they are the before-PR gate
+# (`./gradlew integrationTest`) and the CI required check on PRs to develop.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Emergency bypass (discouraged, against policy):   git commit --no-verify
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+[ -z "$staged" ] && exit 0
+
+backend_changed=false
+frontend_changed=false
+
+while IFS= read -r f; do
+  case "$f" in
+    frontend/*)
+      frontend_changed=true ;;
+    *.java|build.gradle.kts|settings.gradle.kts|gradle.properties|gradle/*|gradlew*)
+      backend_changed=true ;;
+  esac
+done <<< "$staged"
+
+status=0
+
+if [ "$backend_changed" = true ]; then
+  echo "▶ pre-commit: backend tests (./gradlew test -PexcludeIntegration)"
+  if ! ./gradlew test -PexcludeIntegration --no-daemon --console=plain; then
+    echo "✖ Backend tests failed — commit blocked (policy: 100% green per task)."
+    status=1
+  fi
+fi
+
+if [ "$frontend_changed" = true ]; then
+  echo "▶ pre-commit: frontend tests (npm --prefix frontend test)"
+  if ! npm --prefix frontend test; then
+    echo "✖ Frontend tests failed — commit blocked (policy: 100% green per task)."
+    status=1
+  fi
+fi
+
+if [ "$backend_changed" = false ] && [ "$frontend_changed" = false ]; then
+  echo "▶ pre-commit: no backend/frontend changes staged — test gate skipped."
+fi
+
+exit "$status"
