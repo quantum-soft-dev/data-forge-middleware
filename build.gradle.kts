@@ -30,6 +30,8 @@ repositories {
 extra["awsSdkVersion"] = "2.28.11"
 extra["grpcVersion"] = "1.68.1"
 extra["protobufVersion"] = "3.25.5"
+extra["parquetVersion"] = "1.15.2"
+extra["hadoopVersion"] = "3.4.1"
 
 dependencies {
     // Spring Boot Starters (versions managed by Spring Boot BOM)
@@ -107,6 +109,15 @@ dependencies {
     implementation("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
     // javax.annotation.Generated, referenced by generated gRPC stubs on JDK 9+
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
+
+    // Parquet egress for Power BI (Delta Client v2 — 022, Task 4).
+    // We write/read via Parquet's OutputFile/InputFile + PlainParquetConfiguration (no Hadoop FS), but
+    // parquet-hadoop references org.apache.hadoop.{fs.Path,conf.Configuration} in its API signatures, so
+    // the Hadoop client classes must be on the classpath. Use the shaded thin-client artifacts: they
+    // relocate their own guava/protobuf/jackson and so do NOT conflict with Spring Boot or our protobuf.
+    implementation("org.apache.parquet:parquet-avro:${property("parquetVersion")}")
+    implementation("org.apache.hadoop:hadoop-client-api:${property("hadoopVersion")}")
+    runtimeOnly("org.apache.hadoop:hadoop-client-runtime:${property("hadoopVersion")}")
 
     // Lombok
     compileOnly("org.projectlombok:lombok")

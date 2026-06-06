@@ -52,7 +52,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 
 ## Task 4 — Power BI egress (CR Phase 4)
 
-- [ ] **T4.1** Decide Parquet writer (parquet-mr vs Arrow); add dependency + smoke write _(tests: unit — write/read a typed Parquet file)_
+- [x] **T4.1** Decide Parquet writer (parquet-mr vs Arrow); add dependency + smoke write _(tests: unit — write/read a typed Parquet file)_ — **parquet-avro 1.15.2** (Hadoop-free via OutputFile/InputFile + `PlainParquetConfiguration`; shaded `hadoop-client-api/runtime` 3.4.1 on classpath for the API types)
 - [ ] **T4.2** Write `snapshot.parquet` checkpoint (typed from `site_schemas`) _(tests: integration — Parquet schema/types match; row count)_
 - [ ] **T4.3** Materialize Parquet change-feed partitions `egress/{siteId}/{table}/_change_date=…/` _(tests: integration — partitions by change date; all-INSERT frame for checkpoint)_
 - [ ] **T4.4** Manual: validate Power BI Incremental Refresh against the feed + floor _(no automated test; documented checklist in plan.md)_
