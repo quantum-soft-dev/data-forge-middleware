@@ -2,7 +2,7 @@
 
 **Status**: Planning (not started)
 **Branch**: `feature/022-delta-client-v2` → squash-merge into `develop`
-**Design source**: [docs/cr-delta-client-v2.md](../../docs/cr-delta-client-v2.md) · contract: [docs/delta-ingestion.proto](../../docs/delta-ingestion.proto)
+**Design source**: [docs/cr-delta-client-v2.md](../../docs/cr-delta-client-v2.md) · contract: [src/main/proto/delta-ingestion.proto](../../src/main/proto/delta-ingestion.proto)
 **Task list**: [tasks.md](./tasks.md)
 
 This is the working document for the feature: the approach, the technologies, and a pointer to the detailed checkbox task list. The full design rationale lives in the CR — this file does **not** duplicate it.

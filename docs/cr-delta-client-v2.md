@@ -4,7 +4,7 @@
 **Last Updated**: 2026-06-05
 **Status**: Proposal — not yet approved for implementation
 **Supersedes (conceptually)**: [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) (CDC v1)
-**Related contract**: [delta-ingestion.proto](./delta-ingestion.proto)
+**Related contract**: [delta-ingestion.proto](../src/main/proto/delta-ingestion.proto)
 **Русская версия**: [cr-delta-client-v2.ru.md](./cr-delta-client-v2.ru.md)
 
 ---
@@ -200,7 +200,7 @@ checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet     # Parquet floor (Pow
 
 ## 6. Change record & keys
 
-Each `ChangeRecord` carries `table`, `op`, `seq`, `key`, `data`, `source_ts` (see [proto](./delta-ingestion.proto)).
+Each `ChangeRecord` carries `table`, `op`, `seq`, `key`, `data`, `source_ts` (see [proto](../src/main/proto/delta-ingestion.proto)).
 
 - **INSERT** — `data` = full row; `key` = PK values.
 - **UPDATE** — `key` = PK; `data` = changed columns only (after-image).
@@ -221,7 +221,7 @@ Values are typed on the wire (`Value` oneof: null / int / double / string / bool
 
 ## 7. gRPC protocol
 
-Full contract: [delta-ingestion.proto](./delta-ingestion.proto). Three RPCs:
+Full contract: [delta-ingestion.proto](../src/main/proto/delta-ingestion.proto). Three RPCs:
 
 | RPC | Type | Purpose |
 |---|---|---|

@@ -5,6 +5,7 @@ plugins {
     id("org.springframework.boot") version "3.5.6"
     id("io.spring.dependency-management") version "1.1.7"
     jacoco
+    id("com.google.protobuf") version "0.9.4"
 }
 
 group = "com.bitbi"
@@ -27,6 +28,8 @@ repositories {
 }
 
 extra["awsSdkVersion"] = "2.28.11"
+extra["grpcVersion"] = "1.68.1"
+extra["protobufVersion"] = "3.25.5"
 
 dependencies {
     // Spring Boot Starters (versions managed by Spring Boot BOM)
@@ -97,6 +100,14 @@ dependencies {
     // Caffeine cache for rate limiter (prevents memory leak)
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
+    // gRPC + Protobuf (Delta Client v2 ingestion — 022)
+    implementation("io.grpc:grpc-stub:${property("grpcVersion")}")
+    implementation("io.grpc:grpc-protobuf:${property("grpcVersion")}")
+    runtimeOnly("io.grpc:grpc-netty-shaded:${property("grpcVersion")}")
+    implementation("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
+    // javax.annotation.Generated, referenced by generated gRPC stubs on JDK 9+
+    compileOnly("org.apache.tomcat:annotations-api:6.0.53")
+
     // Lombok
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
@@ -155,6 +166,24 @@ tasks.jacocoTestCoverageVerification {
         rule {
             limit {
                 minimum = "0.80".toBigDecimal()
+            }
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${property("protobufVersion")}"
+    }
+    plugins {
+        create("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:${property("grpcVersion")}"
+        }
+    }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.plugins {
+                create("grpc")
             }
         }
     }

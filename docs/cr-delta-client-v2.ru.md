@@ -4,7 +4,7 @@
 **Обновлён**: 2026-06-05
 **Статус**: Предложение — ещё не утверждено к реализации
 **Концептуально заменяет**: [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) (CDC v1)
-**Связанный контракт**: [delta-ingestion.proto](./delta-ingestion.proto)
+**Связанный контракт**: [delta-ingestion.proto](../src/main/proto/delta-ingestion.proto)
 **Английская версия**: [cr-delta-client-v2.md](./cr-delta-client-v2.md)
 
 ---
@@ -200,7 +200,7 @@ checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet     # Parquet-пол (Po
 
 ## 6. Change record и ключи
 
-Каждый `ChangeRecord` несёт `table`, `op`, `seq`, `key`, `data`, `source_ts` (см. [proto](./delta-ingestion.proto)).
+Каждый `ChangeRecord` несёт `table`, `op`, `seq`, `key`, `data`, `source_ts` (см. [proto](../src/main/proto/delta-ingestion.proto)).
 
 - **INSERT** — `data` = вся строка; `key` = значения PK.
 - **UPDATE** — `key` = PK; `data` = только изменённые колонки (after-image).
@@ -221,7 +221,7 @@ checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet     # Parquet-пол (Po
 
 ## 7. gRPC-протокол
 
-Полный контракт: [delta-ingestion.proto](./delta-ingestion.proto). Три RPC:
+Полный контракт: [delta-ingestion.proto](../src/main/proto/delta-ingestion.proto). Три RPC:
 
 | RPC | Тип | Назначение |
 |---|---|---|
