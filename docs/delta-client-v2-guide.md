@@ -208,6 +208,21 @@ message SessionStart {
 **Only one active session per site.** A concurrent `SessionStart` while a session is live is rejected with
 `ACTIVE_SESSION_EXISTS` — serialize your sessions per site.
 
+### `content_hash` (optional integrity check)
+
+`SessionEnd.content_hash` lets the server verify it accepted exactly the records you sent. It is
+**optional**: send an empty string to skip the check. When non-empty, a mismatch fails the session
+with `RECONCILIATION_FAILED`. The hash is **lowercase hex SHA-256** over a canonical, wire-order-independent
+serialization (protobuf map order is not stable across languages):
+
+- records in `seq` order; each contributes `op ␟ table ␟ seq ␟ key-cols ␟ data-cols ␞`
+  (`␟` = `0x1F`, `␞` = `0x1E`);
+- columns **sorted by name**, each `name=<tagged-value>`, joined by `␝` (`0x1D`);
+- value tags: `I`nt, `D`ouble, `S`tring, boo`L`ean, deci`M`al (string form), `B`ytes (hex), `N`ull —
+  so `1`, `"1"`, and `true` never collide.
+
+See `ChangelogContentHash` for the reference implementation.
+
 ---
 
 ## Change records & value typing

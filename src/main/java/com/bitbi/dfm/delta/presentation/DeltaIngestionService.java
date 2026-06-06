@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.delta.application.ChangelogContentHash;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
@@ -269,13 +270,23 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onSessionEnd(SessionEnd end) {
-                if (buffer != null && !SessionReconciler.reconcile(buffer.accepted(), end.getPerTableMap())) {
-                    // Hard-fail: declared counts must match accepted records (CR §10).
-                    metrics.reconciliationFailed();
-                    emitError(ErrorCode.RECONCILIATION_FAILED,
-                            "Declared per-table counts do not match accepted records",
-                            RecoveryAction.NEED_REBASELINE);
-                    return; // do not complete the batch
+                if (buffer != null) {
+                    // Hard-fail: declared counts and (when provided) the integrity hash must match the
+                    // accepted records (CR §10). A blank content_hash means the client opted out.
+                    if (!SessionReconciler.reconcile(buffer.accepted(), end.getPerTableMap())) {
+                        metrics.reconciliationFailed();
+                        emitError(ErrorCode.RECONCILIATION_FAILED,
+                                "Declared per-table counts do not match accepted records",
+                                RecoveryAction.NEED_REBASELINE);
+                        return; // do not complete the batch
+                    }
+                    if (!ChangelogContentHash.matches(buffer.accepted(), end.getContentHash())) {
+                        metrics.reconciliationFailed();
+                        emitError(ErrorCode.RECONCILIATION_FAILED,
+                                "Declared content_hash does not match accepted records",
+                                RecoveryAction.NEED_REBASELINE);
+                        return; // do not complete the batch
+                    }
                 }
                 long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
                 emitSealed(committed, buffer != null ? buffer.accepted() : List.of());

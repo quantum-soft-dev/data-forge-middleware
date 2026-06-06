@@ -233,6 +233,28 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void contentHashMismatchRejectsAndDoesNotCompleteBatch() throws Exception {
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(
+                    SessionEnd.newBuilder().setLastSeq(1L)
+                            .putPerTable("t", TableStats.newBuilder().setInserts(1).build()) // counts OK
+                            .setContentHash("deadbeef") // but integrity hash is wrong
+                            .build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasError());
+        assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
     void resumesAfterMidSessionDropWithResumeFrom() throws Exception {
         SiteSyncState state = SiteSyncState.initial(SITE);
         state.advanceWatermark(120L);
