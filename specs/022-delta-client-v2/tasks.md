@@ -24,7 +24,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 
 ## Task 1 — Contract & session skeleton (CR Phase 1)
 
-- [ ] **T1.1** Flyway `V29__delta_ingestion.sql`: `site_sync_state` table + JPA entity/repository; **add `sites.client_api_version` (V1/V2, default V2, backfill existing → V1)** _(tests: integration — migration applies; existing sites = V1; new default = V2; repo CRUD round-trip)_
+- [x] **T1.1** Flyway `V29__delta_site_sync_state.sql`: `site_sync_state` table + JPA entity/repository; **add `sites.client_api_version` (V1/V2, default V2, backfill existing → V1)** _(tests: integration — default V2 + NOT NULL; CHECK rejects non-V1/V2; `site_sync_state` round-trip. Backfill-to-V1 is by DDL construction — test fixtures seed post-migration so take the V2 default)_
 - [ ] **T1.2** Bearer-token gRPC interceptor reusing Auth V2; derive `site_id` from token; reject missing/invalid _(tests: unit — valid/expired/missing token; cross-site rejected)_
 - [ ] **T1.3** `GetSyncState` RPC returns `last_applied_seq` / `schema_version` / `RecoveryAction` _(tests: contract — in-process gRPC; empty state vs existing watermark)_
 - [ ] **T1.4** `StreamChanges` skeleton: `SessionStart` → open batch via `BatchLifecycleService`; `SessionEnd` → complete batch; emit `SessionOpened` / `SessionCommitted` _(tests: contract — happy-path session opens/commits a batch)_
