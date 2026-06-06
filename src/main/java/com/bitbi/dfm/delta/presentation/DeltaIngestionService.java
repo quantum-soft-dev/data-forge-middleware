@@ -2,9 +2,11 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
 import com.bitbi.dfm.delta.application.SessionReconciler;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.SiteSchema;
@@ -39,13 +41,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
+    private final ChangelogSegmentService changelogSegmentService;
 
     public DeltaIngestionService(DeltaSyncStateService syncStateService,
                                  BatchLifecycleService batchLifecycleService,
-                                 SiteSchemaService siteSchemaService) {
+                                 SiteSchemaService siteSchemaService,
+                                 ChangelogSegmentService changelogSegmentService) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
+        this.changelogSegmentService = changelogSegmentService;
     }
 
     @Override
@@ -129,6 +134,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         return new StreamObserver<>() {
             private UUID batchId;
             private SessionChangeBuffer buffer;
+            private String sessionMode;
+            private long firstSeq;
             private boolean closed;
 
             @Override
@@ -171,6 +178,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
                 batchId = batch.getId();
                 buffer = new SessionChangeBuffer(serverLastSeq);
+                sessionMode = start.getMode().name();
+                firstSeq = start.getFirstSeq();
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setOpened(SessionOpened.newBuilder()
                                 .setServerSessionId(batchId.toString())
@@ -188,12 +197,20 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                             RecoveryAction.NEED_REBASELINE);
                     return; // do not complete the batch
                 }
-                batchLifecycleService.completeBatch(batchId);
                 long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
+
+                // Commit orchestration: persist the changelog segment, advance the watermark,
+                // then complete the batch and report the segment key.
+                ChangelogSegment segment = changelogSegmentService.persist(
+                        siteId, batchId, sessionMode, firstSeq,
+                        buffer != null ? buffer.accepted() : List.of());
+                syncStateService.advanceWatermark(siteId, committed);
+                batchLifecycleService.completeBatch(batchId);
+
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committed)
-                                .setSegmentS3Key("")
+                                .setSegmentS3Key(segment.getS3Key())
                                 .build())
                         .build());
                 closed = true;

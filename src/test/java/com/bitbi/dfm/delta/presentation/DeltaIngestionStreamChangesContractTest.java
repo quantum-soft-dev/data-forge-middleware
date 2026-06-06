@@ -2,9 +2,12 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
+import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import io.grpc.*;
 import io.grpc.inprocess.InProcessChannelBuilder;
@@ -37,6 +40,7 @@ class DeltaIngestionStreamChangesContractTest {
 
     private final SiteSyncStateRepository syncRepo = mock(SiteSyncStateRepository.class);
     private final BatchLifecycleService batchLifecycle = mock(BatchLifecycleService.class);
+    private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
     private Server server;
     private ManagedChannel channel;
     private DeltaIngestionGrpc.DeltaIngestionStub asyncStub;
@@ -44,9 +48,12 @@ class DeltaIngestionStreamChangesContractTest {
     @BeforeEach
     void setUp() throws IOException {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        ChangelogSegment segment = mock(ChangelogSegment.class);
+        when(segment.getS3Key()).thenReturn("delta/site/segments/batch.pb.gz");
+        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
         DeltaIngestionService service = new DeltaIngestionService(
                 new DeltaSyncStateService(syncRepo), batchLifecycle,
-                org.mockito.Mockito.mock(com.bitbi.dfm.site.application.SiteSchemaService.class));
+                mock(SiteSchemaService.class), changelogSegmentService);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()

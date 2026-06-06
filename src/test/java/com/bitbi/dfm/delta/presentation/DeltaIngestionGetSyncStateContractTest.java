@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
@@ -41,7 +42,7 @@ class DeltaIngestionGetSyncStateContractTest {
     void setUp() throws IOException {
         DeltaIngestionService service = new DeltaIngestionService(
                 new DeltaSyncStateService(repository), mock(BatchLifecycleService.class),
-                mock(SiteSchemaService.class));
+                mock(SiteSchemaService.class), mock(ChangelogSegmentService.class));
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()

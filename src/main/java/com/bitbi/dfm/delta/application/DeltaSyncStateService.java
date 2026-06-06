@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,23 @@ public class DeltaSyncStateService {
                         state.getSchemaVersion(),
                         false))
                 .orElseGet(() -> new SyncStateView(0L, 0L, 0, false));
+    }
+
+    /**
+     * Advance the applied watermark for a site to {@code seq} (creating the sync state row if
+     * absent). Monotonic: a lower-or-equal {@code seq} is a no-op.
+     *
+     * @param siteId site identifier
+     * @param seq    highest sequence now durably applied
+     */
+    @Transactional
+    public void advanceWatermark(UUID siteId, long seq) {
+        SiteSyncState state = repository.findBySiteId(siteId)
+                .orElseGet(() -> SiteSyncState.initial(siteId));
+        if (seq > state.getLastAppliedSeq()) {
+            state.advanceWatermark(seq);
+            repository.save(state);
+        }
     }
 
     /**
