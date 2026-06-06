@@ -4,12 +4,11 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangeRecordValidator;
 import com.bitbi.dfm.delta.application.ChangelogContentHash;
-import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
+import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
 import com.bitbi.dfm.delta.application.SessionReconciler;
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.SiteSchema;
@@ -53,7 +52,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
-    private final ChangelogSegmentService changelogSegmentService;
+    private final DeltaSessionCommitService commitService;
     private final DeltaMetrics metrics;
 
     /**
@@ -66,12 +65,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     public DeltaIngestionService(DeltaSyncStateService syncStateService,
                                  BatchLifecycleService batchLifecycleService,
                                  SiteSchemaService siteSchemaService,
-                                 ChangelogSegmentService changelogSegmentService,
+                                 DeltaSessionCommitService commitService,
                                  DeltaMetrics metrics) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
-        this.changelogSegmentService = changelogSegmentService;
+        this.commitService = commitService;
         this.metrics = metrics;
     }
 
@@ -341,17 +340,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void emitSealed(long committedSeq, List<ChangeRecord> records) {
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
-                // An empty session (no accepted records) persists no segment: a degenerate segment at
-                // first_seq=watermark+1 would not advance the watermark and would then collide on
-                // UNIQUE(site_id, first_seq) with the next session, wedging the site.
-                String segmentKey = "";
-                if (!records.isEmpty()) {
-                    ChangelogSegment segment = changelogSegmentService.persist(
-                            siteId, batchId, sessionMode, firstSeq, records);
-                    segmentKey = segment.getS3Key();
-                }
-                syncStateService.advanceWatermark(siteId, committedSeq);
-                batchLifecycleService.completeBatch(batchId);
+                // Persist the segment, advance the watermark, and complete the batch atomically so a
+                // failure can never leave the watermark ahead of a still-active batch.
+                String segmentKey = commitService.commit(
+                        siteId, batchId, sessionMode, firstSeq, committedSeq, records);
                 metrics.sessionCommitted();
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
