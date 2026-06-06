@@ -70,6 +70,16 @@ public class SiteSyncState {
     }
 
     /**
+     * Record the schema version the server currently holds (mirrors {@code site_schemas}).
+     *
+     * @param version current schema version
+     */
+    public void recordSchemaVersion(int version) {
+        this.schemaVersion = version;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
      * Record a newly-materialized checkpoint.
      *
      * @param seq sequence the checkpoint represents

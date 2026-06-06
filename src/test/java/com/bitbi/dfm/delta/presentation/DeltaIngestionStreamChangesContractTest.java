@@ -240,6 +240,25 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void sessionSchemaVersionMismatchRejected() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordSchemaVersion(2); // server holds schema v2
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        List<ServerEvent> received = runSession(req -> req.onNext(ClientEvent.newBuilder()
+                .setStart(SessionStart.newBuilder()
+                        .setMode(SessionMode.FULL_SNAPSHOT).setFirstSeq(1L).setSchemaVersion(1) // stale
+                        .build())
+                .build()));
+
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError());
+        assertEquals(ErrorCode.SCHEMA_MISMATCH, received.get(0).getError().getCode());
+        assertEquals(RecoveryAction.NEED_REBASELINE, received.get(0).getError().getAction());
+        verify(batchLifecycle, never()).startBatch(any(), any());
+    }
+
+    @Test
     void emptySessionCompletesBatchWithoutPersistingSegment() throws Exception {
         // A no-op session must not persist a segment: doing so at first_seq=watermark+1 without
         // advancing the watermark would collide with the next session on UNIQUE(site_id,first_seq).

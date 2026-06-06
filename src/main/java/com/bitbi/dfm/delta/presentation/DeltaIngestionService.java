@@ -106,6 +106,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         }
         try {
             SiteSchema saved = siteSchemaService.upsertSchema(siteId, toDto(request));
+            // Mirror the schema version into the sync state so GetSyncState and SessionStart
+            // validation see the version the server actually holds.
+            syncStateService.recordSchemaVersion(siteId, saved.getSchemaVersion());
             Instant updated = saved.getUpdatedAt().toInstant(ZoneOffset.UTC);
             responseObserver.onNext(SchemaResponse.newBuilder()
                     .setSchemaVersion(saved.getSchemaVersion())
@@ -272,7 +275,21 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     stagedSessions.remove(siteId);
                 }
 
-                long serverLastSeq = syncStateService.getSyncState(siteId).lastAppliedSeq();
+                SyncStateView state = syncStateService.getSyncState(siteId);
+                long serverLastSeq = state.lastAppliedSeq();
+
+                // Schema-version guard: when both sides declare a version, the session's schema must
+                // match the one the server holds, otherwise the records may not parse against the
+                // current schema. A 0 on either side (not provided / no schema yet) skips the check.
+                int clientSchemaVersion = start.getSchemaVersion();
+                if (clientSchemaVersion != 0 && state.schemaVersion() != 0
+                        && clientSchemaVersion != state.schemaVersion()) {
+                    emitError(ErrorCode.SCHEMA_MISMATCH,
+                            "Session schema_version=" + clientSchemaVersion
+                                    + " does not match server schema_version=" + state.schemaVersion(),
+                            RecoveryAction.NEED_REBASELINE);
+                    return;
+                }
 
                 // Gap detection: a DELTA / CONTINUOUS session must continue contiguously from the
                 // server watermark. FULL_SNAPSHOT (bootstrap / re-baseline) resets and is exempt.

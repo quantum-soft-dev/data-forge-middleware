@@ -58,6 +58,21 @@ public class DeltaSyncStateService {
     }
 
     /**
+     * Record the schema version the server currently holds for a site (creating the sync state row if
+     * absent), so {@code GetSyncState} and {@code SessionStart} validation reflect the submitted schema.
+     *
+     * @param siteId  site identifier
+     * @param version current schema version
+     */
+    @Transactional
+    public void recordSchemaVersion(UUID siteId, int version) {
+        SiteSyncState state = repository.findBySiteId(siteId)
+                .orElseGet(() -> SiteSyncState.initial(siteId));
+        state.recordSchemaVersion(version);
+        repository.save(state);
+    }
+
+    /**
      * Record that a checkpoint up to {@code seq} has been materialized for a site.
      *
      * @param siteId site identifier
