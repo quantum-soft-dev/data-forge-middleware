@@ -67,6 +67,6 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 
 ## Pre-PR (before opening the PR to `develop`)
 
-- [ ] **PR.1** `./gradlew integrationTest` 100% green
+- [x] **PR.1** `./gradlew integrationTest` 100% green — 164 tests, 0 failures (30 skipped)
 - [ ] **PR.2** Feature documented in `docs/` (CR up to date; client guide for Delta Client v2)
 - [ ] **PR.3** Open PR → `develop`; CI `backend-test` green; automated review addressed; squash-merge

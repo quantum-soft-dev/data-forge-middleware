@@ -27,20 +27,28 @@
 
 Migrations: **V29, V30, V31** (no new migration for Task 3 frames — frame key is derived from `last_checkpoint_seq`). Delta pkg: `com.bitbi.dfm.delta.{domain,application,infrastructure,presentation}` (+ gRPC in `delta.grpc.v2`).
 
+## Task 5 — DONE ✅ (Hardening & continuous mode)
+- **T5.1 resume (`RESUME_FROM`)** — a periodic DELTA session that drops before `SessionEnd` (transport error or half-close) is staged **in-memory** keyed by site, leaving its batch active. A DELTA reconnect re-attaches to that batch and replies `SessionOpened(action=RESUME_FROM, resume_from_seq=staged+1)`; `SessionEnd` commits one segment spanning staged + replayed records. FULL_SNAPSHOT discards staged data. In-memory only → lost on restart (client then falls back to gap detection / re-baseline). _Per-session active-batch cleanup on give-up is the 60-min timeout; durable staging is a follow-up._
+- **T5.2 backpressure** — progressive `Ack(acked_seq)` every `ACK_INTERVAL=100` accepted records + inbound gRPC flow control (`ServerCallStreamObserver.disableAutoRequest` + `request(1)` per record).
+- **T5.3 metrics** — `DeltaMetrics` (`delta.sessions.started/.committed`, `delta.reconciliation.failures`, `delta.checkpoint.duration` timer, `delta.seq.lag` summary); wired into `DeltaIngestionService` + `CheckpointService`. `/actuator/metrics`.
+- **T5.4 continuous mode** — new `SessionMode.CONTINUOUS` (proto regen). Server seals a segment at `CONTINUOUS_SEAL_RECORDS=100` (size trigger; **time trigger is a follow-up**), emits `SessionCommitted` per segment, opens the next under a fresh batch; final partial flushed on close. No `SessionEnd`. Periodic DELTA/FULL_SNAPSHOT reconciliation untouched. CR §9 updated.
+
+**Integration suite green**: `./gradlew integrationTest` → 164 tests, 0 failures (30 skipped). Per-commit gate green on every commit.
+
 ## Next ⬜
 - **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._ Egress is in place: floor `checkpoints/{site}/{table}/seq={seq}/snapshot.parquet` + change feed `egress/{site}/{table}/_change_date=…/`.
-- **Task 5 (Hardening & continuous mode)** — the next agent-actionable work (not started). See below.
+- **PR.2** — write a client guide for Delta Client v2 in `docs/` (CR is up to date; a `docs/*-client-guide.md` like 019's is still missing).
+- **PR.3** — mark PR #39 ready, ensure CI `backend-test` green, address automated review, squash-merge. _Gated on T4.4 + the client guide; user's call._
 
 ### Task 4 egress follow-ups (deferred, not blocking)
-- **Change-feed is floor-only / all-INSERT.** Steady-state DELTA egress (per-op partitions with an `op` column so Power BI honors deletes/updates across partitions) is not built — it lands naturally with T5.4 (continuous mode) or a dedicated delta-egress task. Today only the floor frame is materialized into `_change_date`.
+- **Change-feed is floor-only / all-INSERT.** Steady-state per-op DELTA egress (an `op` column so Power BI honors deletes/updates across partitions) is not built — only the floor frame is materialized into `_change_date`. Continuous-mode (T5.4) seals raw segments but does **not** yet materialize delta egress partitions.
 - **Change date = build date (`LocalDate.now()`)**, not `source_ts`. Correct for the floor; revisit when per-record delta egress arrives.
 - Re-checkpointing twice in one day leaves two files in the same `_change_date` partition (`seq=…` differ); both are full all-INSERT frames so Power BI's latest-per-key fold dedupes, but it's wasteful — fine for the floor, reconsider for deltas.
 
-## Task 5 (Hardening & continuous mode) — not started
-T5.1 resume (`RESUME_FROM`), T5.2 backpressure/`Ack`, T5.3 Micrometer metrics, T5.4 continuous-stream mode.
-
 ## Gotchas / deferred / follow-ups
 - **gRPC server NOT wired into Spring Boot lifecycle** — `DeltaIngestionService` is tested via in-process gRPC only; no netty `Server` bean listens on a port. Wire before end-to-end use.
+- **Resume staging is in-memory** (`DeltaIngestionService.stagedSessions`) — lost on restart; unbounded across sites that drop-and-never-resume (mitigated only by the 60-min batch timeout, which doesn't evict the map entry). Durable staging + eviction is a follow-up.
+- **Continuous mode**: only a **size** seal trigger (`CONTINUOUS_SEAL_RECORDS`); a **time** trigger is unimplemented. A continuous drop loses the unsealed tail and leaves the batch active → a reconnect hits `ACTIVE_SESSION_EXISTS` until timeout (no continuous resume).
 - **Keyless-validation not wired into the live stream** (`ChangeRecordValidator` unit-tested, not called in the CHANGE handler).
 - **`content_hash` not verified end-to-end** (T2.6 reconciles counts only).
 - **FK cascade**: `changelog_segments.batch_id` lacks `ON DELETE CASCADE` → batch-retention deletion will hit FK once segments exist. Spawned task `task_42e807af`. Test workaround in `src/test/resources/test-data.sql` (deletes delta tables before batches); prod migration still needed.
