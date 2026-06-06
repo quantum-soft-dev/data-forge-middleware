@@ -20,7 +20,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 - [x] **T0.1** Resolve OQ-1 (keyless duplicate rows) and record the decision in the CR _(no code; doc change)_ — **no duplicates; keyed tables = I/U/D; keyless = INSERT/DELETE only (no UPDATE)**
 - [x] **T0.2** Resolve OQ-3 (how a site is flagged as Delta v2 ingestion) and record it in the CR _(no code; doc change)_ — **`client_api_version` (V1/V2), default V2; existing backfilled to V1**
 - [x] **T0.3** Create branch `feature/022-delta-client-v2` off `develop` _(no tests)_
-- [ ] **T0.4** Add `spring-grpc` / `grpc-java` + protobuf gradle plugin; `delta-ingestion.proto` codegen wired into build _(tests: build compiles, generated stubs importable in a smoke test)_
+- [x] **T0.4** Add `spring-grpc` / `grpc-java` + protobuf gradle plugin; `delta-ingestion.proto` codegen wired into build _(tests: build compiles, generated stubs importable in a smoke test)_ — `com.google.protobuf` 0.9.4 + `protoc-gen-grpc-java`; `DeltaProtoCodegenSmokeTest`
 
 ## Task 1 — Contract & session skeleton (CR Phase 1)
 
