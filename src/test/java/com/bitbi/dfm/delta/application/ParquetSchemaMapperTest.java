@@ -93,6 +93,26 @@ class ParquetSchemaMapperTest {
         assertEquals(Schema.Type.STRING, branch(avro, "weird").getType());
     }
 
+    @Test
+    void bareNumericWithoutScaleMapsToStringToAvoidRounding() {
+        // numeric/decimal with no declared precision/scale is arbitrary-scale in PostgreSQL; mapping
+        // it to a fixed decimal(38,0) would silently round the fraction (123.45 -> 123). Carry it as a
+        // lossless string instead. An explicitly scaled numeric still maps to a decimal logical type.
+        TableSchema schema = new TableSchema(List.of(
+                col("amount", "numeric", false),
+                col("amount2", "decimal", false),
+                col("priced", "numeric(10,2)", false)),
+                List.of(), List.of());
+
+        Schema avro = ParquetSchemaMapper.toAvroSchema("t", schema);
+
+        assertEquals(Schema.Type.STRING, branch(avro, "amount").getType(),
+                "bare numeric must not become a rounding decimal(38,0)");
+        assertEquals(Schema.Type.STRING, branch(avro, "amount2").getType());
+        assertTrue(branch(avro, "priced").getLogicalType() instanceof LogicalTypes.Decimal,
+                "explicitly scaled numeric still maps to a decimal logical type");
+    }
+
     /** The value branch of a field's schema (unwrapping a nullable union). */
     private static Schema branch(Schema record, String field) {
         Schema s = record.getField(field).schema();

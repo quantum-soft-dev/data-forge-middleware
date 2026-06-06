@@ -24,7 +24,6 @@ import java.util.Locale;
 public final class ParquetSchemaMapper {
 
     private static final String NAMESPACE = "com.bitbi.dfm.delta.egress";
-    private static final int DEFAULT_DECIMAL_PRECISION = 38;
 
     private ParquetSchemaMapper() {
     }
@@ -78,7 +77,12 @@ public final class ParquetSchemaMapper {
             case "real", "float4" -> Schema.create(Schema.Type.FLOAT);
             case "double precision", "float8", "double" -> Schema.create(Schema.Type.DOUBLE);
             case "numeric", "decimal" -> {
-                int precision = params.isEmpty() ? DEFAULT_DECIMAL_PRECISION : params.get(0);
+                if (params.isEmpty()) {
+                    // Bare numeric/decimal is arbitrary precision & scale; a fixed decimal(38,0) would
+                    // round the fraction away. Carry it losslessly as a string (its on-the-wire form).
+                    yield Schema.create(Schema.Type.STRING);
+                }
+                int precision = params.get(0);
                 int scale = params.size() > 1 ? params.get(1) : 0;
                 yield LogicalTypes.decimal(precision, scale).addToSchema(Schema.create(Schema.Type.BYTES));
             }
