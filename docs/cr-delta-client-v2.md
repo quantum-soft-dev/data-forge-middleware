@@ -433,7 +433,7 @@ At current scale the bandwidth delta over HTTP/2 + compressed JSONL is modest; g
 
 ## 18. Open questions / deferred decisions
 
-- **OQ-1 (keyless duplicates): RESOLVED — no.** The client guarantees it sends only unique deltas. For keyless tables it does a set comparison and emits **only INSERT / DELETE** (a row that no longer matches → DELETE, a new row → INSERT); **no UPDATE** is produced for keyless tables (confirms §6). Full-row key is treated as unique → **no row-multiplicity counter needed**.
+- **OQ-1 (keyless duplicates): RESOLVED — no.** The client guarantees it sends only unique deltas. **Tables with a primary/unique key** get the full `INSERT/UPDATE/DELETE` set (UPDATE = changed columns matched by key); for DBF tables UPDATEs are rare but supported when a key is declared. **Keyless tables** (all-fields key) do a set comparison and emit **only INSERT / DELETE** (a row that no longer matches → DELETE, a new row → INSERT) — **no UPDATE** (confirms §6). Full-row key is treated as unique → **no row-multiplicity counter needed**.
 - **OQ-2 (seq granularity):** per-site `seq` (chosen — simpler continuity) vs per-table `seq` (more parallelism). Revisit if per-table throughput becomes a bottleneck.
 - **OQ-3 (site ingestion flag): RESOLVED.** Add a site field **`client_api_version`** (`V1` = legacy HTTP `/api/dfc`, `V2` = Delta gRPC). **`V2` is the default** for new sites; existing sites are **backfilled to `V1`** in the V29 migration so the legacy path keeps working. `site_type` (DBF / POSTGRES_CDC — data semantics) is orthogonal and unchanged.
 - **OQ-4 (checkpoint cadence):** default frequencies for the table checkpoint vs the Power BI floor; tune against real data volumes.
