@@ -162,6 +162,14 @@ device-authorization:
 app:
   api-base-url: ${APP_API_BASE_URL:https://api.dataforge.com}
 
+# Delta Client v2 (gRPC ingestion — feature 022)
+delta:
+  grpc:
+    # Bind and serve the Delta v2 gRPC ingestion endpoint
+    enabled: ${DELTA_GRPC_ENABLED:true}
+    # Port for the Delta v2 gRPC server (separate from the HTTP server.port)
+    port: ${DELTA_GRPC_PORT:9090}
+
 # OpenAPI Configuration
 springdoc:
   api-docs:

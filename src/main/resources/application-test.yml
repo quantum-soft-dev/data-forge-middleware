@@ -95,3 +95,8 @@ logging:
     org.springframework: WARN
     org.hibernate: WARN
     org.testcontainers: INFO
+
+# Delta v2 gRPC server is not bound in tests (contract tests use in-process servers)
+delta:
+  grpc:
+    enabled: false
