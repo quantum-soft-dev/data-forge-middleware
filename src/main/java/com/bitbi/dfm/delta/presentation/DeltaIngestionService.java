@@ -184,6 +184,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         case EVENT_NOT_SET -> { /* ignore empty frame */ }
                     }
                 } catch (RuntimeException e) {
+                    abortBatch();
                     closed = true;
                     responseObserver.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
                 }
@@ -193,8 +194,22 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onChange(ChangeRecord change) {
-                if (buffer == null || !buffer.accept(change)) {
-                    return; // no open session, or a duplicate / replayed seq
+                if (buffer == null) {
+                    return; // no open session
+                }
+                switch (buffer.accept(change)) {
+                    case DUPLICATE -> {
+                        return; // replay / already-applied seq, ignore
+                    }
+                    case GAP -> {
+                        // A sequence was skipped mid-stream; rejecting forces the client to re-baseline
+                        // rather than silently committing a hole in the changelog.
+                        emitError(ErrorCode.SEQUENCE_GAP,
+                                "Expected seq=" + (buffer.lastSeq() + 1) + " but got " + change.getSeq(),
+                                RecoveryAction.NEED_REBASELINE);
+                        return;
+                    }
+                    case ACCEPTED -> { /* fall through to ack / seal */ }
                 }
                 if (++sinceAck >= ACK_INTERVAL) {
                     sinceAck = 0;
@@ -346,6 +361,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void emitError(ErrorCode code, String message, RecoveryAction action) {
+                abortBatch();
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setError(ServerError.newBuilder()
                                 .setCode(code)
@@ -355,6 +371,23 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         .build());
                 closed = true;
                 responseObserver.onCompleted();
+            }
+
+            /**
+             * Fail the in-progress batch when a session is rejected, so it is not left {@code IN_PROGRESS}
+             * (which would block the site with {@code ACTIVE_SESSION_EXISTS} until the timeout sweeper).
+             * Best-effort and idempotent: no-op when no batch is open or it already committed.
+             */
+            private void abortBatch() {
+                if (batchId != null && !committed) {
+                    UUID toFail = batchId;
+                    batchId = null;
+                    try {
+                        batchLifecycleService.failBatch(toFail);
+                    } catch (RuntimeException ignored) {
+                        // Batch may already be terminal (e.g. timed out); failing it is best-effort.
+                    }
+                }
             }
 
             @Override

@@ -104,9 +104,9 @@ class DeltaIngestionStreamChangesContractTest {
         request.onNext(ClientEvent.newBuilder().setStart(
                 SessionStart.newBuilder().setMode(SessionMode.FULL_SNAPSHOT).setFirstSeq(1).build()).build());
         request.onNext(ClientEvent.newBuilder().setChange(
-                ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(7).build()).build());
+                ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1).build()).build());
         request.onNext(ClientEvent.newBuilder().setEnd(
-                SessionEnd.newBuilder().setLastSeq(7)
+                SessionEnd.newBuilder().setLastSeq(1)
                         .putPerTable("t", TableStats.newBuilder().setInserts(1).build())
                         .build()).build());
         request.onCompleted();
@@ -122,7 +122,7 @@ class DeltaIngestionStreamChangesContractTest {
         assertEquals(0L, received.get(0).getOpened().getServerLastSeq());
         assertEquals(RecoveryAction.PROCEED, received.get(0).getOpened().getAction());
         assertTrue(received.get(1).hasCommitted());
-        assertEquals(7L, received.get(1).getCommitted().getCommittedSeq());
+        assertEquals(1L, received.get(1).getCommitted().getCommittedSeq());
     }
 
     @Test
@@ -229,6 +229,29 @@ class DeltaIngestionStreamChangesContractTest {
         ServerEvent last = received.get(received.size() - 1);
         assertTrue(last.hasError());
         assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
+    void inStreamSequenceGapRejectsAndFailsBatch() throws Exception {
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(change("t", Op.INSERT, 3L)); // seq 2 skipped
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(3L).build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasError());
+        assertEquals(ErrorCode.SEQUENCE_GAP, last.getError().getCode());
+        assertEquals(RecoveryAction.NEED_REBASELINE, last.getError().getAction());
+        // The batch must be failed, not left active (which would block the site).
+        verify(batchLifecycle).failBatch(batchId);
         verify(batchLifecycle, never()).completeBatch(any());
     }
 
