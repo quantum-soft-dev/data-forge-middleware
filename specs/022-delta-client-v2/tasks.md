@@ -27,7 +27,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 - [x] **T1.1** Flyway `V29__delta_site_sync_state.sql`: `site_sync_state` table + JPA entity/repository; **add `sites.client_api_version` (V1/V2, default V2, backfill existing → V1)** _(tests: integration — default V2 + NOT NULL; CHECK rejects non-V1/V2; `site_sync_state` round-trip. Backfill-to-V1 is by DDL construction — test fixtures seed post-migration so take the V2 default)_
 - [x] **T1.2** Bearer-token gRPC interceptor reusing Auth V2; derive `site_id` from token; reject missing/invalid _(tests: unit — valid binds `SITE_ID` context; missing / non-Bearer / invalid → UNAUTHENTICATED, handler not invoked. Cross-site enforcement is downstream in handlers via `DeltaAuthInterceptor.SITE_ID`)_
 - [x] **T1.3** `GetSyncState` RPC returns `last_applied_seq` / `schema_version` / `RecoveryAction` _(tests: contract — in-process gRPC; empty state → 0/PROCEED; existing watermark returned. `DeltaIngestionService` + `DeltaSyncStateService`)_
-- [ ] **T1.4** `StreamChanges` skeleton: `SessionStart` → open batch via `BatchLifecycleService`; `SessionEnd` → complete batch; emit `SessionOpened` / `SessionCommitted` _(tests: contract — happy-path session opens/commits a batch)_
+- [x] **T1.4** `StreamChanges` skeleton: `SessionStart` → open batch via `BatchLifecycleService`; `SessionEnd` → complete batch; emit `SessionOpened` / `SessionCommitted` _(tests: contract — bidi happy-path opens+commits a batch. Interceptor extended to bind `ACCOUNT_ID`. Change persistence deferred to Task 2)_
 - [ ] **T1.5** One-active-session-per-site rule → `ACTIVE_SESSION_EXISTS` _(tests: unit/contract — second concurrent stream rejected)_
 
 ## Task 2 — Changelog ingest (CR Phase 2)

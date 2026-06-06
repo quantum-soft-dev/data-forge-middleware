@@ -1,11 +1,10 @@
 package com.bitbi.dfm.delta.presentation;
 
+import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
-import com.bitbi.dfm.delta.grpc.v2.DeltaIngestionGrpc;
-import com.bitbi.dfm.delta.grpc.v2.RecoveryAction;
-import com.bitbi.dfm.delta.grpc.v2.SyncStateRequest;
-import com.bitbi.dfm.delta.grpc.v2.SyncStateResponse;
+import com.bitbi.dfm.delta.grpc.v2.*;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import org.springframework.stereotype.Component;
@@ -15,9 +14,10 @@ import java.util.UUID;
 /**
  * gRPC service implementation for Delta Client v2 ingestion (feature 022).
  *
- * <p>The authenticated site is taken from the gRPC context ({@link DeltaAuthInterceptor#SITE_ID}),
- * populated by {@link DeltaAuthInterceptor}. This class only maps between the application layer
- * and the Protobuf contract.</p>
+ * <p>The authenticated site/account are taken from the gRPC context
+ * ({@link DeltaAuthInterceptor#SITE_ID} / {@link DeltaAuthInterceptor#ACCOUNT_ID}), populated by
+ * {@link DeltaAuthInterceptor}. This class maps between the application layer and the Protobuf
+ * contract.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -26,9 +26,12 @@ import java.util.UUID;
 public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImplBase {
 
     private final DeltaSyncStateService syncStateService;
+    private final BatchLifecycleService batchLifecycleService;
 
-    public DeltaIngestionService(DeltaSyncStateService syncStateService) {
+    public DeltaIngestionService(DeltaSyncStateService syncStateService,
+                                 BatchLifecycleService batchLifecycleService) {
         this.syncStateService = syncStateService;
+        this.batchLifecycleService = batchLifecycleService;
     }
 
     @Override
@@ -51,5 +54,81 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
         responseObserver.onNext(response);
         responseObserver.onCompleted();
+    }
+
+    /**
+     * Bidirectional ingestion session (skeleton — T1.4).
+     *
+     * <p>{@code SessionStart} opens a batch (one session = one batch); {@code ChangeRecord}s are
+     * tracked for the committed-seq report (persistence is added in Task 2); {@code SessionEnd}
+     * completes the batch and emits {@code SessionCommitted}.</p>
+     */
+    @Override
+    public StreamObserver<ClientEvent> streamChanges(StreamObserver<ServerEvent> responseObserver) {
+        UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
+        UUID accountId = DeltaAuthInterceptor.ACCOUNT_ID.get();
+
+        return new StreamObserver<>() {
+            private UUID batchId;
+            private long lastSeq;
+            private boolean closed;
+
+            @Override
+            public void onNext(ClientEvent event) {
+                if (closed) {
+                    return;
+                }
+                try {
+                    switch (event.getEventCase()) {
+                        case START -> onSessionStart();
+                        case CHANGE -> lastSeq = Math.max(lastSeq, event.getChange().getSeq());
+                        case END -> onSessionEnd(event.getEnd().getLastSeq());
+                        case EVENT_NOT_SET -> { /* ignore empty frame */ }
+                    }
+                } catch (RuntimeException e) {
+                    closed = true;
+                    responseObserver.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
+                }
+            }
+
+            private void onSessionStart() {
+                long serverLastSeq = syncStateService.getSyncState(siteId).lastAppliedSeq();
+                Batch batch = batchLifecycleService.startBatch(accountId, siteId);
+                batchId = batch.getId();
+                lastSeq = serverLastSeq;
+                responseObserver.onNext(ServerEvent.newBuilder()
+                        .setOpened(SessionOpened.newBuilder()
+                                .setServerSessionId(batchId.toString())
+                                .setServerLastSeq(serverLastSeq)
+                                .setAction(RecoveryAction.PROCEED)
+                                .build())
+                        .build());
+            }
+
+            private void onSessionEnd(long clientLastSeq) {
+                batchLifecycleService.completeBatch(batchId);
+                long committed = Math.max(lastSeq, clientLastSeq);
+                responseObserver.onNext(ServerEvent.newBuilder()
+                        .setCommitted(SessionCommitted.newBuilder()
+                                .setCommittedSeq(committed)
+                                .setSegmentS3Key("")
+                                .build())
+                        .build());
+                closed = true;
+                responseObserver.onCompleted();
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                // client cancelled / transport error — nothing persisted in the skeleton to roll back
+            }
+
+            @Override
+            public void onCompleted() {
+                if (!closed) {
+                    responseObserver.onCompleted();
+                }
+            }
+        };
     }
 }

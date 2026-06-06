@@ -26,6 +26,9 @@ public class DeltaAuthInterceptor implements ServerInterceptor {
     /** gRPC context key holding the authenticated site identifier for the current call. */
     public static final Context.Key<UUID> SITE_ID = Context.key("delta-site-id");
 
+    /** gRPC context key holding the authenticated account identifier for the current call. */
+    public static final Context.Key<UUID> ACCOUNT_ID = Context.key("delta-account-id");
+
     static final Metadata.Key<String> AUTHORIZATION =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
 
@@ -48,13 +51,17 @@ public class DeltaAuthInterceptor implements ServerInterceptor {
 
         String token = authorization.substring(BEARER_PREFIX.length()).trim();
         UUID siteId;
+        UUID accountId;
         try {
             siteId = tokenService.validateToken(token);
+            accountId = tokenService.extractAccountId(token);
         } catch (TokenService.InvalidTokenException | TokenService.AuthenticationException e) {
             return unauthenticated(call, "Invalid or expired token");
         }
 
-        Context context = Context.current().withValue(SITE_ID, siteId);
+        Context context = Context.current()
+                .withValue(SITE_ID, siteId)
+                .withValue(ACCOUNT_ID, accountId);
         return Contexts.interceptCall(context, call, headers, next);
     }
 

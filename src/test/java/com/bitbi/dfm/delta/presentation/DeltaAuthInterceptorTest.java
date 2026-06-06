@@ -33,16 +33,20 @@ class DeltaAuthInterceptorTest {
     }
 
     @Test
-    void validTokenBindsSiteIdToContextAndProceeds() {
+    void validTokenBindsSiteAndAccountToContextAndProceeds() {
         UUID siteId = UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
         when(tokenService.validateToken("good-token")).thenReturn(siteId);
+        when(tokenService.extractAccountId("good-token")).thenReturn(accountId);
 
         Metadata headers = new Metadata();
         headers.put(AUTHORIZATION, "Bearer good-token");
 
         AtomicReference<UUID> boundSiteId = new AtomicReference<>();
+        AtomicReference<UUID> boundAccountId = new AtomicReference<>();
         ServerCallHandler<Object, Object> next = (call, md) -> {
             boundSiteId.set(DeltaAuthInterceptor.SITE_ID.get());
+            boundAccountId.set(DeltaAuthInterceptor.ACCOUNT_ID.get());
             return new ServerCall.Listener<>() {
             };
         };
@@ -50,6 +54,7 @@ class DeltaAuthInterceptorTest {
         interceptor.interceptCall(mockCall(), headers, next);
 
         assertEquals(siteId, boundSiteId.get(), "authenticated siteId must be on the gRPC context");
+        assertEquals(accountId, boundAccountId.get(), "authenticated accountId must be on the gRPC context");
     }
 
     @Test
