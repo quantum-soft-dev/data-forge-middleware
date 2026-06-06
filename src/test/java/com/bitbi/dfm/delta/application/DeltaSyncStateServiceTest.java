@@ -49,4 +49,28 @@ class DeltaSyncStateServiceTest {
         assertEquals(0, service.getSyncState(SITE).schemaVersion());
         verify(repository, never()).save(any());
     }
+
+    @Test
+    void recordCheckpointAdvancesWhenHigher() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordCheckpoint(50L);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.recordCheckpoint(SITE, 80L);
+
+        assertEquals(80L, state.getLastCheckpointSeq());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void recordCheckpointIsMonotonicAndIgnoresRegression() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.recordCheckpoint(80L);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.recordCheckpoint(SITE, 50L); // stale/concurrent rebuild
+
+        assertEquals(80L, state.getLastCheckpointSeq(), "checkpoint pointer must not regress");
+        verify(repository, never()).save(any());
+    }
 }

@@ -73,7 +73,9 @@ public class DeltaSyncStateService {
     }
 
     /**
-     * Record that a checkpoint up to {@code seq} has been materialized for a site.
+     * Record that a checkpoint up to {@code seq} has been materialized for a site. Monotonic: a
+     * lower-or-equal {@code seq} (e.g. a stale or concurrent rebuild) is a no-op, so the checkpoint
+     * pointer never regresses (which would re-fold already-checkpointed segments or orphan the frame).
      *
      * @param siteId site identifier
      * @param seq    sequence the checkpoint represents
@@ -82,8 +84,10 @@ public class DeltaSyncStateService {
     public void recordCheckpoint(UUID siteId, long seq) {
         SiteSyncState state = repository.findBySiteId(siteId)
                 .orElseGet(() -> SiteSyncState.initial(siteId));
-        state.recordCheckpoint(seq);
-        repository.save(state);
+        if (seq > state.getLastCheckpointSeq()) {
+            state.recordCheckpoint(seq);
+            repository.save(state);
+        }
     }
 
     /**
