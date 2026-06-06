@@ -16,6 +16,7 @@ import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.io.IOException;
 import java.util.List;
@@ -226,6 +227,85 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(last.hasError());
         assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
         verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
+    void resumesAfterMidSessionDropWithResumeFrom() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        // --- Session 1: open, stage 121 & 122, then drop mid-stream (no SessionEnd). ---
+        List<ServerEvent> first = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(collect(first, new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.DELTA, 121L));
+        s1.onNext(change("t", Op.INSERT, 121L));
+        s1.onNext(change("t", Op.INSERT, 122L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        assertTrue(first.get(0).hasOpened(), "session 1 opened");
+        assertEquals(RecoveryAction.PROCEED, first.get(0).getOpened().getAction());
+
+        // --- Session 2: reconnect from the client watermark → server replies RESUME_FROM 123. ---
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 121L));
+
+        assertTrue(second.get(0).hasOpened(), "resume opens the session");
+        assertEquals(RecoveryAction.RESUME_FROM, second.get(0).getOpened().getAction());
+        assertEquals(123L, second.get(0).getOpened().getResumeFromSeq(), "resume from highest staged seq + 1");
+        assertEquals(batchId.toString(), second.get(0).getOpened().getServerSessionId(),
+                "re-attaches to the dropped session's batch");
+
+        // Client replays from the resume point and ends the session.
+        s2.onNext(change("t", Op.INSERT, 123L));
+        s2.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(123L)
+                .putPerTable("t", TableStats.newBuilder().setInserts(3).build()).build()).build());
+        s2.onCompleted();
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "resumed stream did not complete");
+
+        ServerEvent committed = second.get(second.size() - 1);
+        assertTrue(committed.hasCommitted(), "resumed session commits");
+        assertEquals(123L, committed.getCommitted().getCommittedSeq());
+
+        // One batch overall (started by session 1), completed once on resume; the committed segment
+        // spans the staged + replayed records [121..123].
+        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).completeBatch(batchId);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
+        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("DELTA"), eq(121L), records.capture());
+        assertEquals(3, records.getValue().size(), "segment spans staged + replayed records");
+    }
+
+    private static StreamObserver<ServerEvent> collect(List<ServerEvent> sink, CountDownLatch done) {
+        return new StreamObserver<>() {
+            @Override
+            public void onNext(ServerEvent event) {
+                sink.add(event);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                done.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                done.countDown();
+            }
+        };
+    }
+
+    private static ClientEvent change(String table, Op op, long seq) {
+        return ClientEvent.newBuilder().setChange(
+                ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq).build()).build();
     }
 
     private List<ServerEvent> runSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {

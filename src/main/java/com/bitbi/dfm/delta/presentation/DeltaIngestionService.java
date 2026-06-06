@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * gRPC service implementation for Delta Client v2 ingestion (feature 022).
@@ -42,6 +43,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
     private final ChangelogSegmentService changelogSegmentService;
+
+    /**
+     * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
+     * can resume from the staged data (T5.1). In-memory only: lost on server restart, in which case
+     * the client falls back to gap detection / re-baseline. Cleared on commit or on re-baseline.
+     */
+    private final Map<UUID, StagedSession> stagedSessions = new ConcurrentHashMap<>();
 
     public DeltaIngestionService(DeltaSyncStateService syncStateService,
                                  BatchLifecycleService batchLifecycleService,
@@ -137,6 +145,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private String sessionMode;
             private long firstSeq;
             private boolean closed;
+            private boolean committed;
 
             @Override
             public void onNext(ClientEvent event) {
@@ -157,6 +166,30 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onSessionStart(SessionStart start) {
+                // Resume: a DELTA reconnect re-attaches to a session that dropped mid-stream and
+                // replays from the staged watermark, rather than re-sending everything (T5.1). A
+                // FULL_SNAPSHOT re-baseline instead discards any staged data.
+                if (start.getMode() == SessionMode.DELTA) {
+                    StagedSession resume = stagedSessions.remove(siteId);
+                    if (resume != null) {
+                        batchId = resume.batchId();
+                        buffer = resume.buffer();
+                        sessionMode = resume.mode();
+                        firstSeq = resume.firstSeq();
+                        responseObserver.onNext(ServerEvent.newBuilder()
+                                .setOpened(SessionOpened.newBuilder()
+                                        .setServerSessionId(batchId.toString())
+                                        .setServerLastSeq(syncStateService.getSyncState(siteId).lastAppliedSeq())
+                                        .setAction(RecoveryAction.RESUME_FROM)
+                                        .setResumeFromSeq(buffer.lastSeq() + 1)
+                                        .build())
+                                .build());
+                        return;
+                    }
+                } else {
+                    stagedSessions.remove(siteId);
+                }
+
                 long serverLastSeq = syncStateService.getSyncState(siteId).lastAppliedSeq();
 
                 // Gap detection: a DELTA session must continue contiguously from the server
@@ -213,8 +246,21 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 .setSegmentS3Key(segment.getS3Key())
                                 .build())
                         .build());
+                this.committed = true;
                 closed = true;
                 responseObserver.onCompleted();
+            }
+
+            /**
+             * Retain an open, uncommitted session for resume (T5.1). Called on a transport drop or a
+             * half-close without {@code SessionEnd}; the batch is left active so the reconnect
+             * re-attaches to it. No-op once the session has committed or otherwise closed.
+             */
+            private void stageForResume() {
+                if (!closed && !committed && batchId != null && buffer != null) {
+                    stagedSessions.put(siteId, new StagedSession(batchId, sessionMode, firstSeq, buffer));
+                    closed = true;
+                }
             }
 
             private void emitError(ErrorCode code, String message, RecoveryAction action) {
@@ -231,15 +277,26 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             @Override
             public void onError(Throwable t) {
-                // client cancelled / transport error — nothing persisted in the skeleton to roll back
+                // Client cancelled / transport dropped mid-session — stage for resume (T5.1).
+                stageForResume();
             }
 
             @Override
             public void onCompleted() {
                 if (!closed) {
+                    // Half-close without SessionEnd = abandoned session — stage for resume (T5.1),
+                    // then complete the response stream gracefully.
+                    stageForResume();
                     responseObserver.onCompleted();
                 }
             }
         };
+    }
+
+    /**
+     * A session retained for resume after a mid-session drop (T5.1): the active batch it opened, its
+     * mode and first sequence, and the buffer of records staged so far.
+     */
+    private record StagedSession(UUID batchId, String mode, long firstSeq, SessionChangeBuffer buffer) {
     }
 }
