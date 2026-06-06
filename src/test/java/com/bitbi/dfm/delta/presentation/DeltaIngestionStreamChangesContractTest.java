@@ -284,6 +284,40 @@ class DeltaIngestionStreamChangesContractTest {
         assertEquals(3, records.getValue().size(), "segment spans staged + replayed records");
     }
 
+    @Test
+    void emitsProgressiveAcksOverLargeSession() throws Exception {
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        long total = 250L;
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            for (long seq = 1; seq <= total; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(total)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(total).build()).build()).build());
+        });
+
+        List<ServerEvent> acks = received.stream().filter(ServerEvent::hasAck).toList();
+        assertEquals(2, acks.size(), "an ack every 100 records over a 250-record session");
+        assertEquals(100L, acks.get(0).getAck().getAckedSeq());
+        assertEquals(200L, acks.get(1).getAck().getAckedSeq());
+
+        long prev = 0;
+        for (ServerEvent ack : acks) {
+            assertTrue(ack.getAck().getAckedSeq() > prev, "acked_seq advances monotonically");
+            prev = ack.getAck().getAckedSeq();
+        }
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasCommitted(), "session commits after the acks");
+        assertEquals(total, last.getCommitted().getCommittedSeq());
+        assertTrue(prev <= last.getCommitted().getCommittedSeq(), "acks never exceed the committed seq");
+    }
+
     private static StreamObserver<ServerEvent> collect(List<ServerEvent> sink, CountDownLatch done) {
         return new StreamObserver<>() {
             @Override

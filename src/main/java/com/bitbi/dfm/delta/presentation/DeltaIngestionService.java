@@ -13,6 +13,7 @@ import com.bitbi.dfm.site.domain.SiteSchema;
 import com.bitbi.dfm.upload.presentation.dto.SchemaUploadRequestDto;
 import com.google.protobuf.Timestamp;
 import io.grpc.Status;
+import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import org.springframework.stereotype.Component;
 
@@ -38,6 +39,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImplBase {
+
+    /** Emit a progressive {@link Ack} every this many accepted records (backpressure watermark). */
+    private static final int ACK_INTERVAL = 100;
 
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
@@ -139,6 +143,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
         UUID accountId = DeltaAuthInterceptor.ACCOUNT_ID.get();
 
+        // Inbound flow control: pull one record at a time so a fast producer cannot outrun the server
+        // (backpressure). Combined with the progressive Acks below, the client bounds its in-flight
+        // window to the server's pace.
+        ServerCallStreamObserver<ServerEvent> flow =
+                responseObserver instanceof ServerCallStreamObserver<ServerEvent> s ? s : null;
+        if (flow != null) {
+            flow.disableAutoRequest();
+            flow.request(1);
+        }
+
         return new StreamObserver<>() {
             private UUID batchId;
             private SessionChangeBuffer buffer;
@@ -146,6 +160,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private long firstSeq;
             private boolean closed;
             private boolean committed;
+            private int sinceAck;
 
             @Override
             public void onNext(ClientEvent event) {
@@ -155,13 +170,28 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 try {
                     switch (event.getEventCase()) {
                         case START -> onSessionStart(event.getStart());
-                        case CHANGE -> { if (buffer != null) buffer.accept(event.getChange()); }
+                        case CHANGE -> onChange(event.getChange());
                         case END -> onSessionEnd(event.getEnd());
                         case EVENT_NOT_SET -> { /* ignore empty frame */ }
                     }
                 } catch (RuntimeException e) {
                     closed = true;
                     responseObserver.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
+                }
+                if (flow != null && !closed) {
+                    flow.request(1); // pull the next record now that this one is staged
+                }
+            }
+
+            private void onChange(ChangeRecord change) {
+                if (buffer == null || !buffer.accept(change)) {
+                    return; // no open session, or a duplicate / replayed seq
+                }
+                if (++sinceAck >= ACK_INTERVAL) {
+                    sinceAck = 0;
+                    responseObserver.onNext(ServerEvent.newBuilder()
+                            .setAck(Ack.newBuilder().setAckedSeq(buffer.lastSeq()).build())
+                            .build());
                 }
             }
 
