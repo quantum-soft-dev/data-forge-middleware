@@ -6,10 +6,20 @@ import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
 import com.bitbi.dfm.delta.application.SessionReconciler;
 import com.bitbi.dfm.delta.grpc.v2.*;
+import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.site.domain.SiteSchema;
+import com.bitbi.dfm.upload.presentation.dto.SchemaUploadRequestDto;
+import com.google.protobuf.Timestamp;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -28,11 +38,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
+    private final SiteSchemaService siteSchemaService;
 
     public DeltaIngestionService(DeltaSyncStateService syncStateService,
-                                 BatchLifecycleService batchLifecycleService) {
+                                 BatchLifecycleService batchLifecycleService,
+                                 SiteSchemaService siteSchemaService) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
+        this.siteSchemaService = siteSchemaService;
     }
 
     @Override
@@ -55,6 +68,50 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
         responseObserver.onNext(response);
         responseObserver.onCompleted();
+    }
+
+    @Override
+    public void submitSchema(SchemaRequest request, StreamObserver<SchemaResponse> responseObserver) {
+        UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
+        if (siteId == null) {
+            responseObserver.onError(Status.UNAUTHENTICATED
+                    .withDescription("No authenticated site on context").asRuntimeException());
+            return;
+        }
+        try {
+            SiteSchema saved = siteSchemaService.upsertSchema(siteId, toDto(request));
+            Instant updated = saved.getUpdatedAt().toInstant(ZoneOffset.UTC);
+            responseObserver.onNext(SchemaResponse.newBuilder()
+                    .setSchemaVersion(saved.getSchemaVersion())
+                    .setUpdatedAt(Timestamp.newBuilder()
+                            .setSeconds(updated.getEpochSecond())
+                            .setNanos(updated.getNano())
+                            .build())
+                    .build());
+            responseObserver.onCompleted();
+        } catch (SiteSchemaService.InvalidSchemaException e) {
+            responseObserver.onError(Status.INVALID_ARGUMENT
+                    .withDescription(e.getMessage()).asRuntimeException());
+        }
+    }
+
+    private static SchemaUploadRequestDto toDto(SchemaRequest request) {
+        Map<String, SchemaUploadRequestDto.TableSchemaDto> tables = new LinkedHashMap<>();
+        request.getTablesMap().forEach((name, table) -> {
+            List<SchemaUploadRequestDto.ColumnDto> columns = new ArrayList<>();
+            for (Column column : table.getColumnsList()) {
+                columns.add(new SchemaUploadRequestDto.ColumnDto(
+                        column.getName(), column.getType(), column.getNullable()));
+            }
+            List<SchemaUploadRequestDto.UniqueKeyDto> uniqueKeys = new ArrayList<>();
+            for (UniqueKey uk : table.getUniqueKeysList()) {
+                uniqueKeys.add(new SchemaUploadRequestDto.UniqueKeyDto(
+                        uk.getName(), new ArrayList<>(uk.getColumnsList())));
+            }
+            tables.put(name, new SchemaUploadRequestDto.TableSchemaDto(
+                    columns, new ArrayList<>(table.getPrimaryKeyList()), uniqueKeys));
+        });
+        return new SchemaUploadRequestDto(tables);
     }
 
     /**

@@ -38,7 +38,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 - [x] **T2.4** Keyless / all-fields-key handling: reject `UPDATE`; `DELETE`+`INSERT` round-trip _(tests: unit — `ChangeRecordValidator` rejects UPDATE for keyless tables; allows I/D for keyless and all ops for keyed. Wiring into the stream uses schema lookup, landed with T2.7)_
 - [x] **T2.5** `changelog_segments` persistence + write raw segment to S3 _(V30 + `ChangelogSegment` entity/repo + `S3ChangelogSegmentStorage` + `ChangelogSegmentService`; integration test: S3 object + metadata row. Wiring into the session commit lands with T2.8)_
 - [x] **T2.6** `SessionEnd` reconciliation (per-table counts), hard-fail → `RECONCILIATION_FAILED`, no commit _(tests: unit `SessionReconciler` + contract: mismatch → RECONCILIATION_FAILED, batch not completed. `content_hash` end-to-end verification is a follow-up)_
-- [ ] **T2.7** `SubmitSchema` over gRPC reusing `SiteSchemaService` (validation, version bump) _(tests: contract — valid/invalid schema; version increment)_
+- [x] **T2.7** `SubmitSchema` over gRPC reusing `SiteSchemaService` (validation, version bump) _(tests: contract — valid schema returns version; `InvalidSchemaException` → INVALID_ARGUMENT. proto `SchemaRequest` → `SchemaUploadRequestDto` mapping)_
 - [ ] **T2.8** Advance `site_sync_state.last_applied_seq` atomically on commit _(tests: integration — watermark advances; concurrent safety)_
 
 ## Task 3 — Checkpointing & reconstruction (CR Phase 3)

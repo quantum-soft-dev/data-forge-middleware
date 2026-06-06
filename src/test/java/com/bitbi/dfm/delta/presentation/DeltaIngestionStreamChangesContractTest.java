@@ -44,8 +44,9 @@ class DeltaIngestionStreamChangesContractTest {
     @BeforeEach
     void setUp() throws IOException {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
-        DeltaIngestionService service =
-                new DeltaIngestionService(new DeltaSyncStateService(syncRepo), batchLifecycle);
+        DeltaIngestionService service = new DeltaIngestionService(
+                new DeltaSyncStateService(syncRepo), batchLifecycle,
+                org.mockito.Mockito.mock(com.bitbi.dfm.site.application.SiteSchemaService.class));
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
