@@ -4,6 +4,7 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
+import com.bitbi.dfm.delta.application.SessionReconciler;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
@@ -82,7 +83,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     switch (event.getEventCase()) {
                         case START -> onSessionStart(event.getStart());
                         case CHANGE -> { if (buffer != null) buffer.accept(event.getChange()); }
-                        case END -> onSessionEnd(event.getEnd().getLastSeq());
+                        case END -> onSessionEnd(event.getEnd());
                         case EVENT_NOT_SET -> { /* ignore empty frame */ }
                     }
                 } catch (RuntimeException e) {
@@ -122,9 +123,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         .build());
             }
 
-            private void onSessionEnd(long clientLastSeq) {
+            private void onSessionEnd(SessionEnd end) {
+                if (buffer != null && !SessionReconciler.reconcile(buffer.accepted(), end.getPerTableMap())) {
+                    // Hard-fail: declared counts must match accepted records (CR §10).
+                    emitError(ErrorCode.RECONCILIATION_FAILED,
+                            "Declared per-table counts do not match accepted records",
+                            RecoveryAction.NEED_REBASELINE);
+                    return; // do not complete the batch
+                }
                 batchLifecycleService.completeBatch(batchId);
-                long committed = buffer != null ? buffer.lastSeq() : clientLastSeq;
+                long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committed)

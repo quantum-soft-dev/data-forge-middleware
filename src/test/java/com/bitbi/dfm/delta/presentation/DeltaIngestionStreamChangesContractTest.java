@@ -94,7 +94,9 @@ class DeltaIngestionStreamChangesContractTest {
         request.onNext(ClientEvent.newBuilder().setChange(
                 ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(7).build()).build());
         request.onNext(ClientEvent.newBuilder().setEnd(
-                SessionEnd.newBuilder().setLastSeq(7).build()).build());
+                SessionEnd.newBuilder().setLastSeq(7)
+                        .putPerTable("t", TableStats.newBuilder().setInserts(1).build())
+                        .build()).build());
         request.onCompleted();
 
         assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
@@ -194,6 +196,28 @@ class DeltaIngestionStreamChangesContractTest {
 
         assertTrue(received.get(0).hasOpened());
         verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+    }
+
+    @Test
+    void reconciliationMismatchRejectsAndDoesNotCompleteBatch() throws Exception {
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(ClientEvent.newBuilder().setChange(
+                    ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()).build());
+            req.onNext(ClientEvent.newBuilder().setEnd(
+                    SessionEnd.newBuilder().setLastSeq(1L)
+                            .putPerTable("t", TableStats.newBuilder().setInserts(2).build()) // actual = 1
+                            .build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasError());
+        assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
     }
 
     private List<ServerEvent> runSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {
