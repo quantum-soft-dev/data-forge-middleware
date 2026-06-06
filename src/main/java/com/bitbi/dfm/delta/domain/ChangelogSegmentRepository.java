@@ -20,5 +20,7 @@ public interface ChangelogSegmentRepository {
 
     List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
 
+    List<ChangelogSegment> findByBatchId(UUID batchId);
+
     List<UUID> findDistinctSiteIds();
 }

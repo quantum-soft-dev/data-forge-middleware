@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -42,6 +43,9 @@ class BatchRetentionServiceTest {
     @Mock
     private S3FileStorageService s3FileStorageService;
 
+    @Mock
+    private ChangelogSegmentService changelogSegmentService;
+
     private BatchRetentionService service;
 
     private UUID siteId;
@@ -55,7 +59,8 @@ class BatchRetentionServiceTest {
                 siteRepository,
                 uploadedFileRepository,
                 sqlGenerationRepository,
-                s3FileStorageService
+                s3FileStorageService,
+                changelogSegmentService
         );
         siteId = UUID.randomUUID();
         accountId = UUID.randomUUID();
@@ -126,6 +131,8 @@ class BatchRetentionServiceTest {
         verify(s3FileStorageService).deleteObjects(any());
         verify(sqlGenerationRepository).deleteByComparisonBatchId(batchId);
         verify(sqlGenerationRepository).deleteBySourceBatchId(batchId);
+        // Delta v2 changelog segments must be removed before the batch so the batch_id FK does not block it.
+        verify(changelogSegmentService).deleteByBatchId(batchId);
         verify(batchRepository).deleteById(batchId);
     }
 

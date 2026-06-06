@@ -28,6 +28,10 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
 
     @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId = :batchId")
+    java.util.List<ChangelogSegment> findByBatchId(UUID batchId);
+
+    @Override
     @Query("SELECT DISTINCT s.siteId FROM ChangelogSegment s")
     java.util.List<UUID> findDistinctSiteIds();
 }

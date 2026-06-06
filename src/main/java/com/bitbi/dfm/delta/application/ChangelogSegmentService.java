@@ -64,6 +64,21 @@ public class ChangelogSegmentService {
         return ChangelogCodec.parse(storage.download(s3Key));
     }
 
+    /**
+     * Delete all changelog segments (object storage + metadata) for a batch. Called before a batch is
+     * removed by retention/admin so the {@code changelog_segments.batch_id} foreign key does not block
+     * the delete and no S3 segment object is orphaned.
+     *
+     * @param batchId batch identifier
+     */
+    @Transactional
+    public void deleteByBatchId(UUID batchId) {
+        for (ChangelogSegment segment : repository.findByBatchId(batchId)) {
+            storage.delete(segment.getS3Key());
+            repository.deleteById(segment.getId());
+        }
+    }
+
     private static String sha256Hex(byte[] content) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

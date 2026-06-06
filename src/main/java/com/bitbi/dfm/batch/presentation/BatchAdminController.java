@@ -4,6 +4,7 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
@@ -60,15 +61,18 @@ public class BatchAdminController {
     private final SiteRepository siteRepository;
     private final UploadedFileRepository uploadedFileRepository;
     private final BatchLifecycleService batchLifecycleService;
+    private final ChangelogSegmentService changelogSegmentService;
 
     public BatchAdminController(BatchRepository batchRepository,
                                 SiteRepository siteRepository,
                                 UploadedFileRepository uploadedFileRepository,
-                                BatchLifecycleService batchLifecycleService) {
+                                BatchLifecycleService batchLifecycleService,
+                                ChangelogSegmentService changelogSegmentService) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.batchLifecycleService = batchLifecycleService;
+        this.changelogSegmentService = changelogSegmentService;
     }
 
     /**
@@ -174,6 +178,8 @@ public class BatchAdminController {
             return ResponseEntity.notFound().build();
         }
 
+        // Remove Delta v2 changelog segments first so the batch_id FK does not block the delete.
+        changelogSegmentService.deleteByBatchId(batchId);
         batchRepository.deleteById(batchId);
         return ResponseEntity.noContent().build();
     }
