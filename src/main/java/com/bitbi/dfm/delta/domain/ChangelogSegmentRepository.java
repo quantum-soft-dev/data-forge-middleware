@@ -14,6 +14,8 @@ public interface ChangelogSegmentRepository {
 
     ChangelogSegment save(ChangelogSegment segment);
 
+    void deleteById(UUID id);
+
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
 
     List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);

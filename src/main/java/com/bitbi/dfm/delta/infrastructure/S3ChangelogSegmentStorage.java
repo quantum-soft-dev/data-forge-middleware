@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
@@ -77,6 +78,22 @@ public class S3ChangelogSegmentStorage {
             throw new SegmentStorageException("Changelog segment not found: " + s3Key, e);
         } catch (S3Exception | IOException e) {
             throw new SegmentStorageException("Failed to read changelog segment: " + s3Key, e);
+        }
+    }
+
+    /**
+     * Delete a segment object (retention). A missing object is treated as already deleted.
+     *
+     * @param s3Key the segment key
+     */
+    public void delete(String s3Key) {
+        try {
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(s3Key).build());
+            log.info("Deleted changelog segment: key={}", s3Key);
+        } catch (NoSuchKeyException e) {
+            log.debug("Changelog segment already absent: key={}", s3Key);
+        } catch (S3Exception e) {
+            throw new SegmentStorageException("Failed to delete changelog segment: " + s3Key, e);
         }
     }
 

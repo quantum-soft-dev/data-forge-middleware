@@ -20,11 +20,14 @@ public class CheckpointScheduler {
     private static final Logger log = LoggerFactory.getLogger(CheckpointScheduler.class);
 
     private final CheckpointService checkpointService;
+    private final ChangelogRetentionService retentionService;
     private final ChangelogSegmentRepository segmentRepository;
 
     public CheckpointScheduler(CheckpointService checkpointService,
+                               ChangelogRetentionService retentionService,
                                ChangelogSegmentRepository segmentRepository) {
         this.checkpointService = checkpointService;
+        this.retentionService = retentionService;
         this.segmentRepository = segmentRepository;
     }
 
@@ -33,8 +36,9 @@ public class CheckpointScheduler {
         for (UUID siteId : segmentRepository.findDistinctSiteIds()) {
             try {
                 checkpointService.buildCheckpoint(siteId);
+                retentionService.prune(siteId);
             } catch (RuntimeException e) {
-                log.warn("Checkpoint build failed for site {}: {}", siteId, e.getMessage());
+                log.warn("Checkpoint build/retention failed for site {}: {}", siteId, e.getMessage());
             }
         }
     }
