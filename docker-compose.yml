@@ -39,7 +39,7 @@ services:
       - dfm-network
 
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:3.8
     container_name: dfm-localstack
     environment:
       SERVICES: s3

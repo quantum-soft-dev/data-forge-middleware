@@ -72,7 +72,9 @@ jobs:
           --health-retries 5
 
       localstack:
-        image: localstack/localstack:latest
+        # Pinned to the community edition used by Testcontainers (TestContainersManager).
+        # `:latest` now requires LOCALSTACK_AUTH_TOKEN and fails container init.
+        image: localstack/localstack:3.8
         env:
           SERVICES: s3
           DEFAULT_REGION: us-east-1
