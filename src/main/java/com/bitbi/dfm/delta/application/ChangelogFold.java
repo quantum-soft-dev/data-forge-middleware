@@ -57,9 +57,12 @@ public final class ChangelogFold {
                         new LinkedHashMap<>(record.getDataMap())));
                 case UPDATE -> {
                     FoldedRow existing = table.get(identity);
+                    // Seed a brand-new row (no prior INSERT in state) with its key columns so the
+                    // materialized row never loses its primary key; an existing row already carries
+                    // its key columns in data from the original INSERT.
                     Map<String, Value> mergedData = existing != null
                             ? new LinkedHashMap<>(existing.data())
-                            : new LinkedHashMap<>();
+                            : new LinkedHashMap<>(record.getKeyMap());
                     mergedData.putAll(record.getDataMap());
                     Map<String, Value> key = existing != null ? existing.key() : new LinkedHashMap<>(record.getKeyMap());
                     table.put(identity, new FoldedRow(key, mergedData));

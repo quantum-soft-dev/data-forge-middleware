@@ -36,6 +36,20 @@ class ChangelogFoldTest {
     }
 
     @Test
+    void updateOfAbsentRowStillMaterializesKeyColumns() {
+        // An UPDATE whose row is not in the starting state (e.g. its INSERT was pruned below the
+        // checkpoint, or it arrives first) must still carry its key columns into the row data, so the
+        // reconstructed CSV/Parquet checkpoint is not missing the primary key.
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("u", Op.UPDATE, key("id", 7L), data("city", "Berlin"))));
+
+        FoldedRow row = state.get("u").values().iterator().next();
+        assertEquals(7L, ValueMapper.toJava(row.data().get("id")), "key column must be present in data");
+        assertEquals("Berlin", ValueMapper.toJava(row.data().get("city")));
+        assertEquals(7L, ValueMapper.toJava(row.key().get("id")), "structured key retained");
+    }
+
+    @Test
     void continuesFromPriorState() {
         Map<String, Map<String, FoldedRow>> afterInsert = ChangelogFold.fold(Map.of(), List.of(
                 rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "name", "Ann"))));
