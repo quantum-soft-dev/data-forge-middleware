@@ -70,7 +70,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
         return new StreamObserver<>() {
             private UUID batchId;
-            private long lastSeq;
+            private SessionChangeBuffer buffer;
             private boolean closed;
 
             @Override
@@ -81,7 +81,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 try {
                     switch (event.getEventCase()) {
                         case START -> onSessionStart(event.getStart());
-                        case CHANGE -> lastSeq = Math.max(lastSeq, event.getChange().getSeq());
+                        case CHANGE -> { if (buffer != null) buffer.accept(event.getChange()); }
                         case END -> onSessionEnd(event.getEnd().getLastSeq());
                         case EVENT_NOT_SET -> { /* ignore empty frame */ }
                     }
@@ -112,7 +112,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return;
                 }
                 batchId = batch.getId();
-                lastSeq = serverLastSeq;
+                buffer = new SessionChangeBuffer(serverLastSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setOpened(SessionOpened.newBuilder()
                                 .setServerSessionId(batchId.toString())
@@ -124,7 +124,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             private void onSessionEnd(long clientLastSeq) {
                 batchLifecycleService.completeBatch(batchId);
-                long committed = Math.max(lastSeq, clientLastSeq);
+                long committed = buffer != null ? buffer.lastSeq() : clientLastSeq;
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committed)
