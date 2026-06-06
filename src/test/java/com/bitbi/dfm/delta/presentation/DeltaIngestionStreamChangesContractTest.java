@@ -10,6 +10,7 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import io.grpc.*;
 import io.grpc.inprocess.InProcessChannelBuilder;
@@ -22,6 +23,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -44,6 +46,7 @@ class DeltaIngestionStreamChangesContractTest {
     private final SiteSyncStateRepository syncRepo = mock(SiteSyncStateRepository.class);
     private final BatchLifecycleService batchLifecycle = mock(BatchLifecycleService.class);
     private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
+    private final SiteSchemaService siteSchemaService = mock(SiteSchemaService.class);
     private Server server;
     private ManagedChannel channel;
     private DeltaIngestionGrpc.DeltaIngestionStub asyncStub;
@@ -56,7 +59,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
         DeltaIngestionService service = new DeltaIngestionService(
                 new DeltaSyncStateService(syncRepo), batchLifecycle,
-                mock(SiteSchemaService.class), changelogSegmentService,
+                siteSchemaService, changelogSegmentService,
                 new DeltaMetrics(new SimpleMeterRegistry()));
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
@@ -229,6 +232,30 @@ class DeltaIngestionStreamChangesContractTest {
         ServerEvent last = received.get(received.size() - 1);
         assertTrue(last.hasError());
         assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
+    void keylessTableUpdateRejectedWithSchemaMismatch() throws Exception {
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        // Table "t" has no primary/unique key -> keyless: UPDATE is not allowed.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "t", new TableSchema(List.of(
+                        new TableSchema.ColumnDefinition("a", "integer", false)),
+                        List.of(), List.of())));
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.UPDATE, 1L)); // keyless UPDATE
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasError());
+        assertEquals(ErrorCode.SCHEMA_MISMATCH, last.getError().getCode());
+        verify(batchLifecycle).failBatch(batchId);
         verify(batchLifecycle, never()).completeBatch(any());
     }
 

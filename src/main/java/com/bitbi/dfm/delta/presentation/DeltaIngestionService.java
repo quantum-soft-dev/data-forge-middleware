@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.delta.application.ChangeRecordValidator;
 import com.bitbi.dfm.delta.application.ChangelogContentHash;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
@@ -12,6 +13,7 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.SiteSchema;
+import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.upload.presentation.dto.SchemaUploadRequestDto;
 import com.google.protobuf.Timestamp;
 import io.grpc.Status;
@@ -170,6 +172,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private boolean committed;
             private boolean continuous;
             private int sinceAck;
+            /** Per-table key model for this site, lazily loaded on the first change record. */
+            private Map<String, TableSchema> schemas;
 
             @Override
             public void onNext(ClientEvent event) {
@@ -197,6 +201,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (buffer == null) {
                     return; // no open session
                 }
+                try {
+                    // Keyless tables (no declared PK/unique key) may only INSERT/DELETE: an UPDATE
+                    // would re-key the row (CR §6). Reject before staging so it never enters a segment.
+                    ChangeRecordValidator.validate(change, tableHasKey(change.getTable()));
+                } catch (ChangeRecordValidator.InvalidChangeException e) {
+                    emitError(ErrorCode.SCHEMA_MISMATCH, e.getMessage(), RecoveryAction.NEED_REBASELINE);
+                    return;
+                }
                 switch (buffer.accept(change)) {
                     case DUPLICATE -> {
                         return; // replay / already-applied seq, ignore
@@ -222,6 +234,18 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (continuous && buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS) {
                     sealContinuous(true);
                 }
+            }
+
+            /**
+             * Whether the record's table has a declared primary/unique key. A table with no schema on
+             * file is treated as keyed so this guard never over-rejects (unknown tables fail elsewhere).
+             */
+            private boolean tableHasKey(String table) {
+                if (schemas == null) {
+                    schemas = siteSchemaService.getTableSchemas(siteId);
+                }
+                TableSchema schema = schemas.get(table);
+                return schema == null || !schema.primaryKey().isEmpty() || !schema.uniqueKeys().isEmpty();
             }
 
             private void onSessionStart(SessionStart start) {
