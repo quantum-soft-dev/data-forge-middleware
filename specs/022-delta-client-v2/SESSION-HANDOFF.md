@@ -37,8 +37,9 @@ Migrations: **V29, V30, V31** (no new migration for Task 3 frames — frame key 
 
 ## Next ⬜
 - **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._ Egress is in place: floor `checkpoints/{site}/{table}/seq={seq}/snapshot.parquet` + change feed `egress/{site}/{table}/_change_date=…/`.
-- **PR.2** — write a client guide for Delta Client v2 in `docs/` (CR is up to date; a `docs/*-client-guide.md` like 019's is still missing).
-- **PR.3** — mark PR #39 ready, ensure CI `backend-test` green, address automated review, squash-merge. _Gated on T4.4 + the client guide; user's call._
+- **PR.3** — mark PR #39 ready, ensure CI `backend-test` green, address automated review, squash-merge. _Gated on the manual T4.4; user's call._
+
+**PR.2 DONE** ✅ — [`docs/delta-client-v2-guide.md`](../../docs/delta-client-v2-guide.md) (gRPC contract, auth, full lifecycle, value typing/FR-004, keyless rules, reconciliation, resume/gap/re-baseline, continuous mode, backpressure, error codes, type mapping, pseudocode). CR links it.
 
 ### Task 4 egress follow-ups (deferred, not blocking)
 - **Change-feed is floor-only / all-INSERT.** Steady-state per-op DELTA egress (an `op` column so Power BI honors deletes/updates across partitions) is not built — only the floor frame is materialized into `_change_date`. Continuous-mode (T5.4) seals raw segments but does **not** yet materialize delta egress partitions.

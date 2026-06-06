@@ -5,6 +5,7 @@
 **Status**: Proposal — not yet approved for implementation
 **Supersedes (conceptually)**: [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) (CDC v1)
 **Related contract**: [delta-ingestion.proto](../src/main/proto/delta-ingestion.proto)
+**Client guide**: [delta-client-v2-guide.md](./delta-client-v2-guide.md)
 **Русская версия**: [cr-delta-client-v2.ru.md](./cr-delta-client-v2.ru.md)
 
 ---
