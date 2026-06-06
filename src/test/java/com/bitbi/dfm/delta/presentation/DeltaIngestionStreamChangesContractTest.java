@@ -236,6 +236,27 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void emptySessionCompletesBatchWithoutPersistingSegment() throws Exception {
+        // A no-op session must not persist a segment: doing so at first_seq=watermark+1 without
+        // advancing the watermark would collide with the next session on UNIQUE(site_id,first_seq).
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.DELTA, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(0L).build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasCommitted(), "empty session still commits its batch");
+        assertTrue(last.getCommitted().getSegmentS3Key().isEmpty(), "no segment for an empty session");
+        verify(changelogSegmentService, never()).persist(any(), any(), any(), anyLong(), any());
+        verify(batchLifecycle).completeBatch(batchId);
+    }
+
+    @Test
     void keylessTableUpdateRejectedWithSchemaMismatch() throws Exception {
         UUID batchId = UUID.randomUUID();
         Batch batch = mock(Batch.class);

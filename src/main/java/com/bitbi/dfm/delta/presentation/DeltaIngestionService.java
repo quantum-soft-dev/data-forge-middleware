@@ -341,8 +341,15 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void emitSealed(long committedSeq, List<ChangeRecord> records) {
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
-                ChangelogSegment segment = changelogSegmentService.persist(
-                        siteId, batchId, sessionMode, firstSeq, records);
+                // An empty session (no accepted records) persists no segment: a degenerate segment at
+                // first_seq=watermark+1 would not advance the watermark and would then collide on
+                // UNIQUE(site_id, first_seq) with the next session, wedging the site.
+                String segmentKey = "";
+                if (!records.isEmpty()) {
+                    ChangelogSegment segment = changelogSegmentService.persist(
+                            siteId, batchId, sessionMode, firstSeq, records);
+                    segmentKey = segment.getS3Key();
+                }
                 syncStateService.advanceWatermark(siteId, committedSeq);
                 batchLifecycleService.completeBatch(batchId);
                 metrics.sessionCommitted();
@@ -350,7 +357,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committedSeq)
-                                .setSegmentS3Key(segment.getS3Key())
+                                .setSegmentS3Key(segmentKey)
                                 .build())
                         .build());
             }
