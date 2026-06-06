@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.domain;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -14,4 +15,8 @@ public interface ChangelogSegmentRepository {
     ChangelogSegment save(ChangelogSegment segment);
 
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
+
+    List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
+
+    List<UUID> findDistinctSiteIds();
 }

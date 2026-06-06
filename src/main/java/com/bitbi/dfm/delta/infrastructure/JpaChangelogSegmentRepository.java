@@ -22,4 +22,12 @@ public interface JpaChangelogSegmentRepository
     @Override
     @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.firstSeq = :firstSeq")
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
+
+    @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
+
+    @Override
+    @Query("SELECT DISTINCT s.siteId FROM ChangelogSegment s")
+    java.util.List<UUID> findDistinctSiteIds();
 }

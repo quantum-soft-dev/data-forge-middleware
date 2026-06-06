@@ -7,14 +7,17 @@ import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -56,6 +59,26 @@ public class ChangelogSegmentService {
         ChangelogSegment segment = ChangelogSegment.create(
                 siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode);
         return repository.save(segment);
+    }
+
+    /**
+     * Read back the change records of a persisted segment.
+     *
+     * @param s3Key segment key
+     * @return the segment's change records in order
+     */
+    public List<ChangeRecord> readRecords(String s3Key) {
+        byte[] content = storage.download(s3Key);
+        List<ChangeRecord> records = new ArrayList<>();
+        try (GZIPInputStream gz = new GZIPInputStream(new ByteArrayInputStream(content))) {
+            ChangeRecord record;
+            while ((record = ChangeRecord.parseDelimitedFrom(gz)) != null) {
+                records.add(record);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to read changelog segment: " + s3Key, e);
+        }
+        return records;
     }
 
     private static byte[] serialize(List<ChangeRecord> records) {

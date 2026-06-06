@@ -44,7 +44,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 ## Task 3 — Checkpointing & reconstruction (CR Phase 3)
 
 - [x] **T3.1** Fold engine: `latest checkpoint + deltas (M, now]` → current state (apply I/U/D, honor deletes) _(tests: unit `ChangelogFold` — INSERT/UPDATE-merge/DELETE within a fold; continues from a prior checkpoint state)_
-- [ ] **T3.2** Scheduler builds checkpoint; `checkpoints` table + pointer in `site_sync_state` _(tests: integration — checkpoint@seq materialized; pointer updated)_
+- [x] **T3.2** Scheduler builds checkpoint; `checkpoints` table + pointer in `site_sync_state` _(V31; `CheckpointService.buildCheckpoint` folds S3 segments → per-table checkpoint rows + advances pointer; `CheckpointScheduler`. integration test: rows + pointer)_
 - [ ] **T3.3** Write `snapshot.csv.gz` (legacy) from checkpoint _(tests: integration — CSV bytes match folded state; gzip valid)_
 - [ ] **T3.4** Wire Bit BI `/sites/{siteId}/files` to serve the reconstructed CSV _(tests: integration — Bit BI download returns checkpoint CSV; behavior unchanged)_
 - [ ] **T3.5** Changelog retention: prune segments below durable checkpoint (keep audit window) _(tests: integration — old segments pruned; reconstruction still correct)_

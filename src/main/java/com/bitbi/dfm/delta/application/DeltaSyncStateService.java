@@ -58,6 +58,20 @@ public class DeltaSyncStateService {
     }
 
     /**
+     * Record that a checkpoint up to {@code seq} has been materialized for a site.
+     *
+     * @param siteId site identifier
+     * @param seq    sequence the checkpoint represents
+     */
+    @Transactional
+    public void recordCheckpoint(UUID siteId, long seq) {
+        SiteSyncState state = repository.findBySiteId(siteId)
+                .orElseGet(() -> SiteSyncState.initial(siteId));
+        state.recordCheckpoint(seq);
+        repository.save(state);
+    }
+
+    /**
      * Immutable view of a site's sync state.
      *
      * @param lastAppliedSeq    highest durably-applied change sequence
