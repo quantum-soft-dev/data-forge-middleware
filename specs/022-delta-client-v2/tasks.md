@@ -53,7 +53,8 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 ## Task 4 — Power BI egress (CR Phase 4)
 
 - [x] **T4.1** Decide Parquet writer (parquet-mr vs Arrow); add dependency + smoke write _(tests: unit — write/read a typed Parquet file)_ — **parquet-avro 1.15.2** (Hadoop-free via OutputFile/InputFile + `PlainParquetConfiguration`; shaded `hadoop-client-api/runtime` 3.4.1 on classpath for the API types)
-- [ ] **T4.2** Write `snapshot.parquet` checkpoint (typed from `site_schemas`) _(tests: integration — Parquet schema/types match; row count)_
+- [x] **T4.2a** PG-type → Avro/Parquet schema mapper from `site_schemas` (`varchar/text`→string, `integer`→int, `bigint`→long, `numeric(p,s)`→decimal logical, `double precision`→double, `boolean`→boolean, `date`→date, `timestamp`→timestamp-micros, `bytea`→bytes; nullable→union) _(tests: unit — field types/logical types/nullability match)_
+- [ ] **T4.2b** Write `snapshot.parquet` per table from checkpoint state (Value→typed-Avro coercion, in-memory OutputFile → `S3CheckpointStorage.uploadParquet` + `Checkpoint.attachParquet`; wire into `buildCheckpoint`) _(tests: integration — Parquet schema/types match `site_schemas`; row count)_
 - [ ] **T4.3** Materialize Parquet change-feed partitions `egress/{siteId}/{table}/_change_date=…/` _(tests: integration — partitions by change date; all-INSERT frame for checkpoint)_
 - [ ] **T4.4** Manual: validate Power BI Incremental Refresh against the feed + floor _(no automated test; documented checklist in plan.md)_
 
