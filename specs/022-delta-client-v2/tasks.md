@@ -47,7 +47,8 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 - [x] **T3.2** Scheduler builds checkpoint; `checkpoints` table + pointer in `site_sync_state` _(V31; `CheckpointService.buildCheckpoint` folds S3 segments → per-table checkpoint rows + advances pointer; `CheckpointScheduler`. integration test: rows + pointer)_
 - [x] **T3.3** Write `snapshot.csv.gz` (legacy) from checkpoint _(`CsvSnapshotWriter` (commons-csv) + unit test; `S3CheckpointStorage`; `CheckpointService` writes per-table CSV + attaches `s3_key_csv`; integration test: S3 object + content)_
 - [x] **T3.4** Wire Bit BI `/sites/{siteId}/files` to serve the reconstructed CSV _(tests: integration — Bit BI download returns checkpoint CSV; behavior unchanged)_
-- [ ] **T3.5** Changelog retention: prune segments below durable checkpoint (keep audit window) _(tests: integration — old segments pruned; reconstruction still correct)_
+- [x] **T3.5a** Incremental `buildCheckpoint`: seed from the latest **all-INSERT checkpoint frame**@M, fold only segments with `first_seq > M`, write new frame@now (+ CSV + rows + pointer). Makes reconstruction independent of pre-checkpoint segments (CR §8.D). _(tests: unit `ChangelogFold` retains key + emits frame; integration — checkpoint correct after pre-checkpoint segments removed, i.e. seeded from frame not full history)_
+- [ ] **T3.5b** Changelog retention: prune segments below durable checkpoint (keep audit window); wire into scheduler _(tests: integration — old segments pruned; audit window kept; reconstruction still correct)_
 
 ## Task 4 — Power BI egress (CR Phase 4)
 

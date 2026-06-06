@@ -60,6 +60,44 @@ public class S3CheckpointStorage {
         }
     }
 
+    /**
+     * Upload the all-INSERT checkpoint frame (reloadable seed) for a site at a given sequence.
+     *
+     * <p>Layout: {@code checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz}.</p>
+     *
+     * @return the S3 key written
+     */
+    public String uploadFrame(UUID siteId, long seq, byte[] content) {
+        String s3Key = frameKey(siteId, seq);
+        try {
+            PutObjectRequest request = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .contentType("application/octet-stream")
+                    .contentLength((long) content.length)
+                    .build();
+            s3Client.putObject(request, RequestBody.fromBytes(content));
+            log.info("Stored checkpoint frame: key={}, size={}", s3Key, content.length);
+            return s3Key;
+        } catch (S3Exception e) {
+            throw new CheckpointStorageException("Failed to store checkpoint frame: " + s3Key, e);
+        }
+    }
+
+    /** Download the checkpoint frame bytes for a site at a given sequence. */
+    public byte[] downloadFrame(UUID siteId, long seq) {
+        return download(frameKey(siteId, seq));
+    }
+
+    /** @return whether a checkpoint frame exists for a site at a given sequence. */
+    public boolean frameExists(UUID siteId, long seq) {
+        return exists(frameKey(siteId, seq));
+    }
+
+    private static String frameKey(UUID siteId, long seq) {
+        return String.format("checkpoints/%s/_frame/seq=%d/frame.pb.gz", siteId, seq);
+    }
+
     public byte[] download(String s3Key) {
         try (ResponseInputStream<GetObjectResponse> in = s3Client.getObject(
                 GetObjectRequest.builder().bucket(bucketName).key(s3Key).build())) {

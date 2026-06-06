@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.application.ChangelogFold.FoldedRow;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -17,9 +19,11 @@ import java.util.UUID;
 /**
  * Builds materialized checkpoints from the changelog (Delta Client v2 — 022, CR §8.D).
  *
- * <p>Folds the site's changelog segments into current per-table state, records one
- * {@link Checkpoint} row per table (seq + row count), and advances the site's checkpoint pointer.
- * The folded state is returned so later stages can materialize CSV / Parquet snapshots.</p>
+ * <p>Reconstruction is <b>incremental</b>: it seeds from the latest all-INSERT checkpoint frame@M and
+ * folds only the segments with {@code first_seq > M}, then materializes a CSV snapshot per table,
+ * records one {@link Checkpoint} row per table, persists a new frame@now, and advances the site's
+ * checkpoint pointer. Because the frame is a self-contained seed, segments at or below the checkpoint
+ * can be pruned (T3.5b) without breaking the next build.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -46,33 +50,59 @@ public class CheckpointService {
     }
 
     /**
-     * Build (or refresh) the checkpoint for a site by folding its changelog segments.
+     * Build (or refresh) the checkpoint for a site by folding the latest checkpoint frame plus the
+     * segments recorded since the checkpoint pointer.
      *
      * @param siteId site identifier
-     * @return folded state: table → row-identity → row(column → value) (empty if no segments)
+     * @return folded state: table → row-identity → folded row (empty if no segments)
      */
     @Transactional
-    public Map<String, Map<String, Map<String, Object>>> buildCheckpoint(UUID siteId) {
+    public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId) {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
         if (segments.isEmpty()) {
             return Map.of();
         }
 
-        List<ChangeRecord> all = new ArrayList<>();
-        for (ChangelogSegment segment : segments) {
-            all.addAll(changelogSegmentService.readRecords(segment.getS3Key()));
+        long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
+        boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
+
+        // Seed from the durable checkpoint frame when present; otherwise fold the full history.
+        Map<String, Map<String, FoldedRow>> seed = haveFrame
+                ? ChangelogFold.fold(Map.of(), ChangelogCodec.parse(checkpointStorage.downloadFrame(siteId, checkpointSeq)))
+                : Map.of();
+        long foldFrom = haveFrame ? checkpointSeq : 0L;
+
+        List<ChangelogSegment> newSegments = segments.stream()
+                .filter(segment -> segment.getFirstSeq() > foldFrom)
+                .toList();
+        if (newSegments.isEmpty()) {
+            return seed; // nothing recorded since the last checkpoint
         }
 
-        Map<String, Map<String, Map<String, Object>>> state = ChangelogFold.fold(Map.of(), all);
-        long seq = segments.get(segments.size() - 1).getLastSeq();
+        List<ChangeRecord> newRecords = new ArrayList<>();
+        for (ChangelogSegment segment : newSegments) {
+            newRecords.addAll(changelogSegmentService.readRecords(segment.getS3Key()));
+        }
+
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(seed, newRecords);
+        long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
 
         state.forEach((tableName, rows) -> {
-            byte[] csv = CsvSnapshotWriter.toGzippedCsv(rows);
+            byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
             String csvKey = checkpointStorage.uploadCsv(siteId, tableName, seq, csv);
             upsertCheckpoint(siteId, tableName, seq, rows.size(), csvKey);
         });
+
+        // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
+        checkpointStorage.uploadFrame(siteId, seq, ChangelogCodec.serialize(CheckpointFrame.toRecords(state)));
         syncStateService.recordCheckpoint(siteId, seq);
         return state;
+    }
+
+    private static Map<String, Map<String, Object>> toDataRows(Map<String, FoldedRow> rows) {
+        Map<String, Map<String, Object>> dataRows = new LinkedHashMap<>();
+        rows.forEach((identity, row) -> dataRows.put(identity, ValueMapper.toMap(row.data())));
+        return dataRows;
     }
 
     private void upsertCheckpoint(UUID siteId, String tableName, long seq, long rowCount, String csvKey) {

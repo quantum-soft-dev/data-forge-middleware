@@ -7,18 +7,11 @@ import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.GZIPOutputStream;
 
 /**
  * Persists a session's accepted change records as an immutable changelog segment
@@ -50,7 +43,7 @@ public class ChangelogSegmentService {
      */
     @Transactional
     public ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq, List<ChangeRecord> records) {
-        byte[] content = serialize(records);
+        byte[] content = ChangelogCodec.serialize(records);
         String contentHash = sha256Hex(content);
         String s3Key = storage.uploadSegment(siteId, batchId, content);
 
@@ -68,29 +61,7 @@ public class ChangelogSegmentService {
      * @return the segment's change records in order
      */
     public List<ChangeRecord> readRecords(String s3Key) {
-        byte[] content = storage.download(s3Key);
-        List<ChangeRecord> records = new ArrayList<>();
-        try (GZIPInputStream gz = new GZIPInputStream(new ByteArrayInputStream(content))) {
-            ChangeRecord record;
-            while ((record = ChangeRecord.parseDelimitedFrom(gz)) != null) {
-                records.add(record);
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read changelog segment: " + s3Key, e);
-        }
-        return records;
-    }
-
-    private static byte[] serialize(List<ChangeRecord> records) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (GZIPOutputStream gz = new GZIPOutputStream(baos)) {
-            for (ChangeRecord record : records) {
-                record.writeDelimitedTo(gz);
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to serialize changelog segment", e);
-        }
-        return baos.toByteArray();
+        return ChangelogCodec.parse(storage.download(s3Key));
     }
 
     private static String sha256Hex(byte[] content) {
