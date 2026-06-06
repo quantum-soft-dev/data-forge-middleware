@@ -13,6 +13,7 @@ import com.bitbi.dfm.site.domain.TableSchema;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -101,11 +102,14 @@ public class CheckpointService {
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
             checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
 
-            // Typed Parquet floor for Power BI — only for tables with a declared schema (CR §12).
+            // Typed Parquet for Power BI — only for tables with a declared schema (CR §12). The same
+            // all-INSERT frame is both the immutable floor and the change-feed partition at the floor
+            // date, which Power BI Incremental Refresh reads on top of the floor.
             TableSchema tableSchema = schemas.get(tableName);
             if (tableSchema != null) {
                 byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
                 checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
+                checkpointStorage.uploadChangeFeed(siteId, tableName, LocalDate.now(), seq, parquet);
             }
 
             checkpointRepository.save(checkpoint);
