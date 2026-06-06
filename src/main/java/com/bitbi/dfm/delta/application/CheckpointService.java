@@ -6,7 +6,10 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
+import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.site.domain.TableSchema;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,17 +39,20 @@ public class CheckpointService {
     private final CheckpointRepository checkpointRepository;
     private final DeltaSyncStateService syncStateService;
     private final S3CheckpointStorage checkpointStorage;
+    private final SiteSchemaService siteSchemaService;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
                              CheckpointRepository checkpointRepository,
                              DeltaSyncStateService syncStateService,
-                             S3CheckpointStorage checkpointStorage) {
+                             S3CheckpointStorage checkpointStorage,
+                             SiteSchemaService siteSchemaService) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
         this.syncStateService = syncStateService;
         this.checkpointStorage = checkpointStorage;
+        this.siteSchemaService = siteSchemaService;
     }
 
     /**
@@ -87,10 +93,22 @@ public class CheckpointService {
         Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(seed, newRecords);
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
 
+        Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
+
         state.forEach((tableName, rows) -> {
+            Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
+
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
-            String csvKey = checkpointStorage.uploadCsv(siteId, tableName, seq, csv);
-            upsertCheckpoint(siteId, tableName, seq, rows.size(), csvKey);
+            checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
+
+            // Typed Parquet floor for Power BI — only for tables with a declared schema (CR §12).
+            TableSchema tableSchema = schemas.get(tableName);
+            if (tableSchema != null) {
+                byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
+                checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
+            }
+
+            checkpointRepository.save(checkpoint);
         });
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
@@ -105,14 +123,16 @@ public class CheckpointService {
         return dataRows;
     }
 
-    private void upsertCheckpoint(UUID siteId, String tableName, long seq, long rowCount, String csvKey) {
-        Checkpoint checkpoint = checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
+    private static List<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
+        return rows.values().stream().map(FoldedRow::data).toList();
+    }
+
+    private Checkpoint findOrCreate(UUID siteId, String tableName, long seq, long rowCount) {
+        return checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
                 .map(existing -> {
                     existing.update(seq, rowCount);
                     return existing;
                 })
                 .orElseGet(() -> Checkpoint.create(siteId, tableName, seq, rowCount));
-        checkpoint.attachCsv(csvKey);
-        checkpointRepository.save(checkpoint);
     }
 }

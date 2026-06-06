@@ -61,6 +61,30 @@ public class S3CheckpointStorage {
     }
 
     /**
+     * Upload a typed Parquet snapshot for a table checkpoint (Power BI floor).
+     *
+     * <p>Layout: {@code checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet}.</p>
+     *
+     * @return the S3 key written
+     */
+    public String uploadParquet(UUID siteId, String tableName, long seq, byte[] content) {
+        String s3Key = String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq);
+        try {
+            PutObjectRequest request = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .contentType("application/vnd.apache.parquet")
+                    .contentLength((long) content.length)
+                    .build();
+            s3Client.putObject(request, RequestBody.fromBytes(content));
+            log.info("Stored checkpoint Parquet: key={}, size={}", s3Key, content.length);
+            return s3Key;
+        } catch (S3Exception e) {
+            throw new CheckpointStorageException("Failed to store checkpoint Parquet: " + s3Key, e);
+        }
+    }
+
+    /**
      * Upload the all-INSERT checkpoint frame (reloadable seed) for a site at a given sequence.
      *
      * <p>Layout: {@code checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz}.</p>
