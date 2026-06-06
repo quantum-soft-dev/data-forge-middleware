@@ -20,6 +20,10 @@ DELETE FROM error_logs WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE 
 DELETE FROM uploaded_files WHERE batch_id IN (SELECT id FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com'));
 -- account_plugins may reference batches via baseline_batch_id (FK RESTRICT), so must be deleted before batches
 DELETE FROM account_plugins WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE '%@example.com');
+-- Delta v2 (022): changelog_segments references batches (no cascade), so clear before batches
+DELETE FROM changelog_segments WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
+DELETE FROM checkpoints WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
+DELETE FROM site_sync_state WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM batches WHERE site_id IN (SELECT id FROM sites WHERE domain LIKE '%.example.com');
 DELETE FROM sites WHERE domain LIKE '%.example.com';
 -- Clean up plugin-related data (FK to accounts or referencing account)

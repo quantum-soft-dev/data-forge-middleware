@@ -5,6 +5,7 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,15 +31,18 @@ public class CheckpointService {
     private final ChangelogSegmentService changelogSegmentService;
     private final CheckpointRepository checkpointRepository;
     private final DeltaSyncStateService syncStateService;
+    private final S3CheckpointStorage checkpointStorage;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
                              CheckpointRepository checkpointRepository,
-                             DeltaSyncStateService syncStateService) {
+                             DeltaSyncStateService syncStateService,
+                             S3CheckpointStorage checkpointStorage) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
         this.syncStateService = syncStateService;
+        this.checkpointStorage = checkpointStorage;
     }
 
     /**
@@ -62,18 +66,23 @@ public class CheckpointService {
         Map<String, Map<String, Map<String, Object>>> state = ChangelogFold.fold(Map.of(), all);
         long seq = segments.get(segments.size() - 1).getLastSeq();
 
-        state.forEach((tableName, rows) -> upsertCheckpoint(siteId, tableName, seq, rows.size()));
+        state.forEach((tableName, rows) -> {
+            byte[] csv = CsvSnapshotWriter.toGzippedCsv(rows);
+            String csvKey = checkpointStorage.uploadCsv(siteId, tableName, seq, csv);
+            upsertCheckpoint(siteId, tableName, seq, rows.size(), csvKey);
+        });
         syncStateService.recordCheckpoint(siteId, seq);
         return state;
     }
 
-    private void upsertCheckpoint(UUID siteId, String tableName, long seq, long rowCount) {
+    private void upsertCheckpoint(UUID siteId, String tableName, long seq, long rowCount, String csvKey) {
         Checkpoint checkpoint = checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
                 .map(existing -> {
                     existing.update(seq, rowCount);
                     return existing;
                 })
                 .orElseGet(() -> Checkpoint.create(siteId, tableName, seq, rowCount));
+        checkpoint.attachCsv(csvKey);
         checkpointRepository.save(checkpoint);
     }
 }
