@@ -17,4 +17,6 @@ public interface CheckpointRepository {
     Optional<Checkpoint> findBySiteIdAndTableName(UUID siteId, String tableName);
 
     List<Checkpoint> findBySiteId(UUID siteId);
+
+    void deleteById(UUID id);
 }

@@ -80,6 +80,20 @@ public class SiteSyncState {
     }
 
     /**
+     * Reset the watermarks for a FULL_SNAPSHOT re-baseline: the snapshot becomes the new baseline, so
+     * the applied watermark drops to {@code lastAppliedSeq} (the seq just before the snapshot's first
+     * record) and the checkpoint pointer is cleared. The schema version is preserved.
+     *
+     * @param lastAppliedSeq the seq the snapshot starts from minus one
+     */
+    public void resetForRebaseline(long lastAppliedSeq) {
+        this.lastAppliedSeq = lastAppliedSeq;
+        this.lastCheckpointSeq = 0L;
+        this.lastCheckpointAt = null;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
      * Record a newly-materialized checkpoint.
      *
      * @param seq sequence the checkpoint represents

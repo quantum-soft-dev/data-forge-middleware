@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangeRecordValidator;
 import com.bitbi.dfm.delta.application.ChangelogContentHash;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
+import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
@@ -53,6 +54,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
     private final DeltaSessionCommitService commitService;
+    private final DeltaRebaselineService rebaselineService;
     private final DeltaMetrics metrics;
 
     /**
@@ -66,11 +68,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  BatchLifecycleService batchLifecycleService,
                                  SiteSchemaService siteSchemaService,
                                  DeltaSessionCommitService commitService,
+                                 DeltaRebaselineService rebaselineService,
                                  DeltaMetrics metrics) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
         this.commitService = commitService;
+        this.rebaselineService = rebaselineService;
         this.metrics = metrics;
     }
 
@@ -310,6 +314,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return;
                 }
                 batchId = batch.getId();
+                if (start.getMode() == SessionMode.FULL_SNAPSHOT) {
+                    // Re-baseline: discard the prior changelog and checkpoints so the snapshot becomes
+                    // the new baseline (rows that disappeared since the old baseline do not survive the
+                    // fold). The watermark resets to just before the snapshot's first record.
+                    rebaselineService.reset(siteId, start.getFirstSeq());
+                    serverLastSeq = start.getFirstSeq() - 1;
+                }
                 buffer = new SessionChangeBuffer(serverLastSeq);
                 sessionMode = start.getMode().name();
                 firstSeq = start.getFirstSeq();

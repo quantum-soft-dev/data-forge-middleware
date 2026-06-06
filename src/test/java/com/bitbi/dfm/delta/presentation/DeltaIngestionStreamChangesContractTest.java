@@ -4,6 +4,7 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
+import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -48,6 +49,7 @@ class DeltaIngestionStreamChangesContractTest {
     private final BatchLifecycleService batchLifecycle = mock(BatchLifecycleService.class);
     private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
     private final SiteSchemaService siteSchemaService = mock(SiteSchemaService.class);
+    private final DeltaRebaselineService rebaselineService = mock(DeltaRebaselineService.class);
     private Server server;
     private ManagedChannel channel;
     private DeltaIngestionGrpc.DeltaIngestionStub asyncStub;
@@ -63,7 +65,7 @@ class DeltaIngestionStreamChangesContractTest {
                 changelogSegmentService, syncStateService, batchLifecycle);
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
-                siteSchemaService, commitService,
+                siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()));
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
@@ -199,6 +201,25 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(received.get(0).hasOpened());
         assertEquals(120L, received.get(0).getOpened().getServerLastSeq());
         verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+    }
+
+    @Test
+    void fullSnapshotResetsPriorStateAndStartsFromFirstSeqMinusOne() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L); // stale watermark from a previous baseline
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req ->
+                req.onNext(start(SessionMode.FULL_SNAPSHOT, 200L)));
+
+        // The prior changelog/checkpoints are wiped and the watermark resets to firstSeq-1.
+        verify(rebaselineService).reset(SITE, 200L);
+        assertTrue(received.get(0).hasOpened());
+        assertEquals(199L, received.get(0).getOpened().getServerLastSeq(),
+                "snapshot session reports the reset watermark (firstSeq-1)");
     }
 
     @Test
