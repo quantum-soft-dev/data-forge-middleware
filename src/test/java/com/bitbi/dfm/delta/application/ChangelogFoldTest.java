@@ -4,6 +4,7 @@ import com.bitbi.dfm.delta.application.ChangelogFold.FoldedRow;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
+import com.google.protobuf.ByteString;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * T3.1 / T3.5a — fold engine: applying a changelog (INSERT/UPDATE/DELETE) over a starting state
@@ -61,6 +63,38 @@ class ChangelogFoldTest {
         assertEquals("Annie", ValueMapper.toJava(row.data().get("name")));
         assertEquals(1L, ValueMapper.toJava(row.data().get("id")));
         assertEquals(1L, ValueMapper.toJava(row.key().get("id")), "key survives a prior-state fold");
+    }
+
+    @Test
+    void bytesKeyFoldsDeterministically() {
+        // Equal byte[] keys arriving as separate records must fold to the same row identity. Under a
+        // byte[].toString() identity they would each get a distinct [B@hash, so DELETE never matches.
+        Map<String, Value> insertKey = bytesKey("id", new byte[]{1, 2, 3});
+        Map<String, Value> deleteKey = bytesKey("id", new byte[]{1, 2, 3}); // equal bytes, different array
+
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("b", Op.INSERT, insertKey, data("v", "x")),
+                rec("b", Op.DELETE, deleteKey, Map.of())));
+
+        assertTrue(state.getOrDefault("b", Map.of()).isEmpty(),
+                "DELETE with an equal byte[] key must remove the inserted row");
+    }
+
+    @Test
+    void nullKeyIsDistinctFromLiteralNullString() {
+        // A SQL NULL key must not collapse onto the literal string "null".
+        Map<String, Value> nullKey = Map.of("k", Value.newBuilder().setIsNull(true).build());
+        Map<String, Value> strKey = Map.of("k", Value.newBuilder().setStringValue("null").build());
+
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("t", Op.INSERT, nullKey, data("v", "fromNull")),
+                rec("t", Op.INSERT, strKey, data("v", "fromString"))));
+
+        assertEquals(2, state.get("t").size(), "SQL NULL key must not collide with the string \"null\"");
+    }
+
+    private static Map<String, Value> bytesKey(String col, byte[] v) {
+        return Map.of(col, Value.newBuilder().setBytesValue(ByteString.copyFrom(v)).build());
     }
 
     private static ChangeRecord rec(String table, Op op, Map<String, Value> key, Map<String, Value> data) {

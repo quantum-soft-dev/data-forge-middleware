@@ -3,10 +3,10 @@ package com.bitbi.dfm.delta.application;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Folds a changelog into current per-key row state (Delta Client v2 — 022, CR §8.D).
@@ -21,8 +21,6 @@ import java.util.stream.Collectors;
  * @version 1.0.0
  */
 public final class ChangelogFold {
-
-    private static final String KEY_SEPARATOR = "";
 
     private ChangelogFold() {
     }
@@ -75,11 +73,37 @@ public final class ChangelogFold {
         return state;
     }
 
+    /**
+     * Build a deterministic, collision-free identity string for a row's key columns.
+     *
+     * <p>Columns are sorted by name and each {@code name=value} pair is length-prefixed, so distinct
+     * key tuples can never concatenate to the same string. Each value carries a type tag: {@code N}
+     * for SQL NULL, {@code B} for bytes (hex-encoded, so equal {@code byte[]}s match), {@code V} for
+     * every other scalar (its {@code toString()}). The tag keeps a NULL key distinct from the literal
+     * string {@code "null"} and a bytes key distinct from a same-looking string.</p>
+     */
     private static String identity(Map<String, Value> keyMap) {
-        return keyMap.entrySet().stream()
+        StringBuilder sb = new StringBuilder();
+        keyMap.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
-                .map(e -> e.getKey() + "=" + ValueMapper.toJava(e.getValue()))
-                .collect(Collectors.joining(KEY_SEPARATOR));
+                .forEach(entry -> {
+                    String name = entry.getKey();
+                    String value = encode(entry.getValue());
+                    sb.append(name.length()).append(':').append(name)
+                            .append('=').append(value.length()).append(':').append(value);
+                });
+        return sb.toString();
+    }
+
+    private static String encode(Value value) {
+        Object java = ValueMapper.toJava(value);
+        if (java == null) {
+            return "N";
+        }
+        if (java instanceof byte[] bytes) {
+            return "B" + HexFormat.of().formatHex(bytes);
+        }
+        return "V" + java;
     }
 
     private static Map<String, Map<String, FoldedRow>> deepCopy(Map<String, Map<String, FoldedRow>> source) {
