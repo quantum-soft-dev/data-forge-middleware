@@ -312,10 +312,11 @@ Bit BI (unchanged):
 
 ## 9. Modes: periodic vs continuous
 
-One protocol, two modes; the only difference is whether the client sends `SessionEnd`.
+One protocol, two modes, selected by `SessionStart.mode`.
 
-- **Periodic session (default, recommended first):** client opens `StreamChanges` on a schedule (hourly/daily), drains accumulated deltas, sends `SessionEnd`. One session = one segment. Matches the freshness requirement and the batch model; lowest risk.
-- **Continuous stream (forward-compatible, impl. deferred):** client keeps the stream open and pushes changes as they occur, never sending `SessionEnd`; the **server seals** segments on a time/size threshold and emits `SessionCommitted` per sealed segment. Near-real-time, same contract.
+- **Periodic session (default, recommended first):** `mode = DELTA` (or `FULL_SNAPSHOT` to bootstrap/re-baseline). Client opens `StreamChanges` on a schedule (hourly/daily), drains accumulated deltas, sends `SessionEnd`. One session = one segment, reconciled at `SessionEnd`. Matches the freshness requirement and the batch model; lowest risk.
+- **Continuous stream:** `mode = CONTINUOUS`. Client keeps the stream open and pushes changes as they occur, never sending `SessionEnd`; the **server seals** a segment once it reaches a size threshold (`CONTINUOUS_SEAL_RECORDS`; a time threshold is a follow-up) and emits `SessionCommitted` per sealed segment, opening the next segment under a fresh batch. The final partial segment is flushed on stream close. Near-real-time, same contract.
+  - **Implementation note (T5.4):** continuous is signalled by the explicit `SessionMode.CONTINUOUS` enum value (not merely the absence of `SessionEnd`), so the server knows to seal on threshold without conflicting with periodic `SessionEnd` reconciliation. Periodic `DELTA`/`FULL_SNAPSHOT` behaviour is unchanged. A continuous session that drops mid-segment loses its unsealed tail; the client reconnects and continues from the committed watermark (resume/`RESUME_FROM` is implemented for periodic `DELTA` only — see §10/T5.1).
 
 ---
 

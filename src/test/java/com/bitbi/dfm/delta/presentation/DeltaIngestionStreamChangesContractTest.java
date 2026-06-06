@@ -321,6 +321,56 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(prev <= last.getCommitted().getCommittedSeq(), "acks never exceed the committed seq");
     }
 
+    @Test
+    void continuousModeSealsSegmentsWithoutSessionEnd() throws Exception {
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
+        UUID id1 = UUID.randomUUID();
+        UUID id2 = UUID.randomUUID();
+        UUID id3 = UUID.randomUUID();
+        Batch b1 = mockBatch(id1);
+        Batch b2 = mockBatch(id2);
+        Batch b3 = mockBatch(id3);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+
+        long total = 250L;
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.CONTINUOUS, 1L));
+            for (long seq = 1; seq <= total; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+            // No SessionEnd — continuous mode; runSession half-closes the stream to flush the tail.
+        });
+
+        List<ServerEvent> committed = received.stream().filter(ServerEvent::hasCommitted).toList();
+        assertEquals(3, committed.size(), "two seals at the 100-record threshold + a final seal on close");
+        assertEquals(100L, committed.get(0).getCommitted().getCommittedSeq());
+        assertEquals(200L, committed.get(1).getCommitted().getCommittedSeq());
+        assertEquals(250L, committed.get(2).getCommitted().getCommittedSeq());
+        committed.forEach(e -> assertFalse(e.getCommitted().getSegmentS3Key().isEmpty(),
+                "each sealed segment reports an s3 key"));
+        assertTrue(received.stream().noneMatch(ServerEvent::hasError), "no error in continuous mode");
+
+        // One batch per sealed segment.
+        verify(batchLifecycle, times(3)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).completeBatch(id1);
+        verify(batchLifecycle).completeBatch(id2);
+        verify(batchLifecycle).completeBatch(id3);
+
+        // Three segments, contiguous and complete: [1..100], [101..200], [201..250].
+        verify(changelogSegmentService).persist(eq(SITE), eq(id1), eq("CONTINUOUS"), eq(1L),
+                argThat((List<ChangeRecord> r) -> r.size() == 100));
+        verify(changelogSegmentService).persist(eq(SITE), eq(id2), eq("CONTINUOUS"), eq(101L),
+                argThat((List<ChangeRecord> r) -> r.size() == 100));
+        verify(changelogSegmentService).persist(eq(SITE), eq(id3), eq("CONTINUOUS"), eq(201L),
+                argThat((List<ChangeRecord> r) -> r.size() == 50));
+    }
+
+    private static Batch mockBatch(UUID id) {
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(id);
+        return batch;
+    }
+
     private static StreamObserver<ServerEvent> collect(List<ServerEvent> sink, CountDownLatch done) {
         return new StreamObserver<>() {
             @Override

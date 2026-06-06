@@ -112,6 +112,8 @@ message SessionStart {
 enum SessionMode {
   DELTA         = 0; // incremental change records (default)
   FULL_SNAPSHOT = 1; // bootstrap or re-baseline; all records are INSERTs
+  CONTINUOUS    = 2; // long-lived delta stream; server seals segments on size/time and
+                     // emits SessionCommitted per sealed segment; no SessionEnd (CR §9)
 }
 
 message ChangeRecord {

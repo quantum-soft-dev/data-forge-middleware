@@ -44,6 +44,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     /** Emit a progressive {@link Ack} every this many accepted records (backpressure watermark). */
     private static final int ACK_INTERVAL = 100;
 
+    /** In CONTINUOUS mode, seal a segment once this many records have accumulated (T5.4, size trigger). */
+    private static final int CONTINUOUS_SEAL_RECORDS = 100;
+
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
@@ -164,6 +167,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private long firstSeq;
             private boolean closed;
             private boolean committed;
+            private boolean continuous;
             private int sinceAck;
 
             @Override
@@ -197,6 +201,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                             .setAck(Ack.newBuilder().setAckedSeq(buffer.lastSeq()).build())
                             .build());
                 }
+                // Continuous mode: seal a segment once it reaches the size threshold and keep the
+                // stream open for the next one (T5.4).
+                if (continuous && buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS) {
+                    sealContinuous(true);
+                }
             }
 
             private void onSessionStart(SessionStart start) {
@@ -226,9 +235,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
                 long serverLastSeq = syncStateService.getSyncState(siteId).lastAppliedSeq();
 
-                // Gap detection: a DELTA session must continue contiguously from the server
-                // watermark. FULL_SNAPSHOT (bootstrap / re-baseline) resets and is exempt.
-                if (start.getMode() == SessionMode.DELTA && start.getFirstSeq() != serverLastSeq + 1) {
+                // Gap detection: a DELTA / CONTINUOUS session must continue contiguously from the
+                // server watermark. FULL_SNAPSHOT (bootstrap / re-baseline) resets and is exempt.
+                boolean delta = start.getMode() == SessionMode.DELTA || start.getMode() == SessionMode.CONTINUOUS;
+                if (delta && start.getFirstSeq() != serverLastSeq + 1) {
                     emitError(ErrorCode.SEQUENCE_GAP,
                             "Expected first_seq=" + (serverLastSeq + 1) + " but got " + start.getFirstSeq(),
                             RecoveryAction.NEED_REBASELINE);
@@ -247,6 +257,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 buffer = new SessionChangeBuffer(serverLastSeq);
                 sessionMode = start.getMode().name();
                 firstSeq = start.getFirstSeq();
+                continuous = start.getMode() == SessionMode.CONTINUOUS;
                 metrics.sessionStarted();
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setOpened(SessionOpened.newBuilder()
@@ -267,27 +278,48 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return; // do not complete the batch
                 }
                 long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
-                long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
-
-                // Commit orchestration: persist the changelog segment, advance the watermark,
-                // then complete the batch and report the segment key.
-                ChangelogSegment segment = changelogSegmentService.persist(
-                        siteId, batchId, sessionMode, firstSeq,
-                        buffer != null ? buffer.accepted() : List.of());
-                syncStateService.advanceWatermark(siteId, committed);
-                batchLifecycleService.completeBatch(batchId);
-                metrics.sessionCommitted();
-                metrics.recordSeqLag(committed - checkpointSeq);
-
-                responseObserver.onNext(ServerEvent.newBuilder()
-                        .setCommitted(SessionCommitted.newBuilder()
-                                .setCommittedSeq(committed)
-                                .setSegmentS3Key(segment.getS3Key())
-                                .build())
-                        .build());
+                emitSealed(committed, buffer != null ? buffer.accepted() : List.of());
                 this.committed = true;
                 closed = true;
                 responseObserver.onCompleted();
+            }
+
+            /**
+             * Commit orchestration for one segment: persist it, advance the watermark, complete the
+             * batch, record metrics, and emit {@code SessionCommitted}. Shared by {@code SessionEnd}
+             * and continuous sealing.
+             */
+            private void emitSealed(long committedSeq, List<ChangeRecord> records) {
+                long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
+                ChangelogSegment segment = changelogSegmentService.persist(
+                        siteId, batchId, sessionMode, firstSeq, records);
+                syncStateService.advanceWatermark(siteId, committedSeq);
+                batchLifecycleService.completeBatch(batchId);
+                metrics.sessionCommitted();
+                metrics.recordSeqLag(committedSeq - checkpointSeq);
+                responseObserver.onNext(ServerEvent.newBuilder()
+                        .setCommitted(SessionCommitted.newBuilder()
+                                .setCommittedSeq(committedSeq)
+                                .setSegmentS3Key(segment.getS3Key())
+                                .build())
+                        .build());
+            }
+
+            /**
+             * Seal the current continuous-mode segment (T5.4). When {@code continueStream} is true,
+             * open the next segment under a fresh batch and keep the stream open; otherwise this is
+             * the final flush on stream close.
+             */
+            private void sealContinuous(boolean continueStream) {
+                long committedSeq = buffer.lastSeq();
+                emitSealed(committedSeq, buffer.accepted());
+                if (continueStream) {
+                    batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
+                    firstSeq = committedSeq + 1;
+                    buffer = new SessionChangeBuffer(committedSeq);
+                    sinceAck = 0;
+                    metrics.sessionStarted();
+                }
             }
 
             /**
@@ -316,18 +348,29 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             @Override
             public void onError(Throwable t) {
-                // Client cancelled / transport dropped mid-session — stage for resume (T5.1).
-                stageForResume();
+                // Periodic session dropped mid-stream — stage for resume (T5.1). A continuous session
+                // drops its unsealed tail; the client reconnects and continues from the watermark.
+                if (!continuous) {
+                    stageForResume();
+                }
             }
 
             @Override
             public void onCompleted() {
-                if (!closed) {
-                    // Half-close without SessionEnd = abandoned session — stage for resume (T5.1),
-                    // then complete the response stream gracefully.
-                    stageForResume();
-                    responseObserver.onCompleted();
+                if (closed) {
+                    return;
                 }
+                if (continuous) {
+                    // Flush the final partial segment, then close (T5.4).
+                    if (buffer != null && buffer.acceptedCount() > 0) {
+                        sealContinuous(false);
+                    }
+                } else {
+                    // Half-close without SessionEnd = abandoned periodic session — stage for resume (T5.1).
+                    stageForResume();
+                }
+                closed = true;
+                responseObserver.onCompleted();
             }
         };
     }
