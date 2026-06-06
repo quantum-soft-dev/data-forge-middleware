@@ -13,7 +13,7 @@
 - Integration tasks: verify locally with `./gradlew test --tests "<FQN>"` (Docker/LocalStack available).
 - Commit trailer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Push updates PR #39 + CI.
 
-## Done ✅ (Tasks 0–3 complete, T4.1 done)
+## Done ✅ (Tasks 0–3 complete, Task 4 automated work done — only manual T4.4 left)
 - **Tasks 0–2** — contract+auth skeleton, changelog ingest (seq gap, idempotency, typed Value, keyless rule, segment persistence V30, reconciliation, SubmitSchema, watermark). See git log.
 - **Task 3 — DONE**:
   - T3.1 fold engine; T3.2 checkpoint builder+scheduler (V31); T3.3 CSV snapshot.
@@ -21,13 +21,20 @@
   - **T3.5a** — `buildCheckpoint` is **incremental**: seeds from an all-INSERT **checkpoint frame**@M (S3 `checkpoints/{site}/_frame/seq={M}/frame.pb.gz`), folds only segments `first_seq > M`, writes a new frame@now. `ChangelogFold` now keeps the structured key per row (`FoldedRow{key,data}`); `CheckpointFrame.toRecords`; `ChangelogCodec` (extracted gzip+delimited-protobuf codec).
   - **T3.5b** — `ChangelogRetentionService.prune(siteId)`: deletes segments with `last_seq ≤ last_checkpoint_seq` (S3 + row), keeping `delta.retention.audit-window-segments` (default 20); wired into `CheckpointScheduler` after each build.
 - **T4.1** — Parquet writer = **parquet-avro 1.15.2** (parquet-mr, not Arrow). Hadoop-free write/read via `OutputFile`/`InputFile` + `PlainParquetConfiguration`; shaded `hadoop-client-api/runtime` 3.4.1 on classpath only for the API types (relocated, no Spring/protobuf clash). Smoke test round-trips a typed file.
+- **T4.2a** — `ParquetSchemaMapper`: PG-type → Avro record schema (`varchar/text`→string, `integer`→int, `bigint`→long, `numeric(p,s)`→decimal logical, `double precision`→double, `boolean`→boolean, `date`→date logical, `timestamp`→timestamp-micros, `bytea`→bytes; unknown→string; nullable→`[null,T]` union). Unit-tested.
+- **T4.2b** — `ParquetCheckpointWriter.toParquet(table, TableSchema, rows)`: typed Parquet from the folded state. Coerces each wire `Value` **by declared column type** (not oneof case) — dates/timestamps/decimals arrive as ISO/decimal **strings** (FR-004), parsed and written through standard Avro logical-type conversions (`logicalTypeModel()` shared by reader). Hadoop-free in-memory `OutputFile` (ByteArrayOutputStream), **SNAPPY** (verified Hadoop-free). Floor bytes → `S3CheckpointStorage.uploadParquet` (`checkpoints/{site}/{table}/seq={seq}/snapshot.parquet`) + `Checkpoint.attachParquet`. Wired into `buildCheckpoint` (inject `SiteSchemaService`) — **only tables with a declared schema get Parquet**; CSV unchanged. Unit round-trip + integration.
+- **T4.3** — Parquet **change feed**: same floor frame written to `egress/{siteId}/{table}/_change_date=YYYY-MM-DD/seq={seq}.parquet` (`LocalDate.now()`). Floor frame == floor snapshot (all-INSERT), so the same bytes go to both. Added `S3CheckpointStorage.uploadChangeFeed` + `listKeys`. Integration test.
 
 Migrations: **V29, V30, V31** (no new migration for Task 3 frames — frame key is derived from `last_checkpoint_seq`). Delta pkg: `com.bitbi.dfm.delta.{domain,application,infrastructure,presentation}` (+ gRPC in `delta.grpc.v2`).
 
-## Next ⬜ — Task 4 (Power BI Parquet egress)
-- **T4.2** — write `snapshot.parquet` per table from the checkpoint state, **typed from `site_schemas`**. Needs: (a) PG-type→Avro/Parquet schema mapper (`varchar(n)/text`→string, `integer`→int, `bigint`→long, `numeric(p,s)`→decimal logical, `double precision`→double, `boolean`→boolean, `date`→date, `timestamp`→timestamp-micros, `bytea`→bytes; nullable→union); (b) `Value`→typed-Avro coercion (dates/decimals arrive as ISO/decimal **strings** per client FR-004 — parse by declared type); (c) in-memory `OutputFile` (ByteArrayOutputStream) → `S3CheckpointStorage.uploadParquet` + `Checkpoint.attachParquet`; (d) wire into `CheckpointService.buildCheckpoint` (inject `SiteSchemaService.getTableSchemas`). **Consider splitting T4.2a (schema mapper, unit) / T4.2b (write+coerce+S3+wire, integration).** Test: Parquet schema/types match `site_schemas`; row count.
-- **T4.3** — materialize Parquet change-feed partitions `egress/{siteId}/{table}/_change_date=…/` (all-INSERT frame for the checkpoint floor). Integration test.
-- **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._
+## Next ⬜
+- **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._ Egress is in place: floor `checkpoints/{site}/{table}/seq={seq}/snapshot.parquet` + change feed `egress/{site}/{table}/_change_date=…/`.
+- **Task 5 (Hardening & continuous mode)** — the next agent-actionable work (not started). See below.
+
+### Task 4 egress follow-ups (deferred, not blocking)
+- **Change-feed is floor-only / all-INSERT.** Steady-state DELTA egress (per-op partitions with an `op` column so Power BI honors deletes/updates across partitions) is not built — it lands naturally with T5.4 (continuous mode) or a dedicated delta-egress task. Today only the floor frame is materialized into `_change_date`.
+- **Change date = build date (`LocalDate.now()`)**, not `source_ts`. Correct for the floor; revisit when per-record delta egress arrives.
+- Re-checkpointing twice in one day leaves two files in the same `_change_date` partition (`seq=…` differ); both are full all-INSERT frames so Power BI's latest-per-key fold dedupes, but it's wasteful — fine for the floor, reconsider for deltas.
 
 ## Task 5 (Hardening & continuous mode) — not started
 T5.1 resume (`RESUME_FROM`), T5.2 backpressure/`Ack`, T5.3 Micrometer metrics, T5.4 continuous-stream mode.
