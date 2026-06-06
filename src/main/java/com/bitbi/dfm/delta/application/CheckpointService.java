@@ -41,19 +41,22 @@ public class CheckpointService {
     private final DeltaSyncStateService syncStateService;
     private final S3CheckpointStorage checkpointStorage;
     private final SiteSchemaService siteSchemaService;
+    private final DeltaMetrics metrics;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
                              CheckpointRepository checkpointRepository,
                              DeltaSyncStateService syncStateService,
                              S3CheckpointStorage checkpointStorage,
-                             SiteSchemaService siteSchemaService) {
+                             SiteSchemaService siteSchemaService,
+                             DeltaMetrics metrics) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
         this.syncStateService = syncStateService;
         this.checkpointStorage = checkpointStorage;
         this.siteSchemaService = siteSchemaService;
+        this.metrics = metrics;
     }
 
     /**
@@ -86,6 +89,13 @@ public class CheckpointService {
             return seed; // nothing recorded since the last checkpoint
         }
 
+        // Time only real materialization work (T5.3).
+        return metrics.timeCheckpoint(() -> materialize(siteId, seed, newSegments));
+    }
+
+    private Map<String, Map<String, FoldedRow>> materialize(UUID siteId,
+                                                            Map<String, Map<String, FoldedRow>> seed,
+                                                            List<ChangelogSegment> newSegments) {
         List<ChangeRecord> newRecords = new ArrayList<>();
         for (ChangelogSegment segment : newSegments) {
             newRecords.addAll(changelogSegmentService.readRecords(segment.getS3Key()));

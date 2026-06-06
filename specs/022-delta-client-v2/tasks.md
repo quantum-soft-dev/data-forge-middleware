@@ -62,7 +62,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 
 - [x] **T5.1** Resume (`RESUME_FROM`) — partial replay from staged data _(tests: contract — resume after mid-session drop)_
 - [x] **T5.2** Backpressure: progressive `Ack(acked_seq)` + flow control _(tests: contract — acks emitted; large session)_
-- [ ] **T5.3** Metrics (Micrometer): sessions, seq lag, checkpoint duration, reconciliation failures _(tests: unit — meters registered/incremented)_
+- [x] **T5.3** Metrics (Micrometer): sessions, seq lag, checkpoint duration, reconciliation failures _(tests: unit — meters registered/incremented)_
 - [ ] **T5.4** Continuous-stream mode: server seals segments on time/size, emits `SessionCommitted` per segment _(tests: contract — segment sealed without `SessionEnd`)_
 
 ## Pre-PR (before opening the PR to `develop`)

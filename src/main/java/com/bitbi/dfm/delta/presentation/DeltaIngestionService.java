@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
 import com.bitbi.dfm.delta.application.SessionReconciler;
@@ -47,6 +48,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
     private final ChangelogSegmentService changelogSegmentService;
+    private final DeltaMetrics metrics;
 
     /**
      * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
@@ -58,11 +60,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     public DeltaIngestionService(DeltaSyncStateService syncStateService,
                                  BatchLifecycleService batchLifecycleService,
                                  SiteSchemaService siteSchemaService,
-                                 ChangelogSegmentService changelogSegmentService) {
+                                 ChangelogSegmentService changelogSegmentService,
+                                 DeltaMetrics metrics) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
         this.changelogSegmentService = changelogSegmentService;
+        this.metrics = metrics;
     }
 
     @Override
@@ -243,6 +247,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 buffer = new SessionChangeBuffer(serverLastSeq);
                 sessionMode = start.getMode().name();
                 firstSeq = start.getFirstSeq();
+                metrics.sessionStarted();
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setOpened(SessionOpened.newBuilder()
                                 .setServerSessionId(batchId.toString())
@@ -255,12 +260,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private void onSessionEnd(SessionEnd end) {
                 if (buffer != null && !SessionReconciler.reconcile(buffer.accepted(), end.getPerTableMap())) {
                     // Hard-fail: declared counts must match accepted records (CR §10).
+                    metrics.reconciliationFailed();
                     emitError(ErrorCode.RECONCILIATION_FAILED,
                             "Declared per-table counts do not match accepted records",
                             RecoveryAction.NEED_REBASELINE);
                     return; // do not complete the batch
                 }
                 long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
+                long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
 
                 // Commit orchestration: persist the changelog segment, advance the watermark,
                 // then complete the batch and report the segment key.
@@ -269,6 +276,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         buffer != null ? buffer.accepted() : List.of());
                 syncStateService.advanceWatermark(siteId, committed);
                 batchLifecycleService.completeBatch(batchId);
+                metrics.sessionCommitted();
+                metrics.recordSeqLag(committed - checkpointSeq);
 
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()

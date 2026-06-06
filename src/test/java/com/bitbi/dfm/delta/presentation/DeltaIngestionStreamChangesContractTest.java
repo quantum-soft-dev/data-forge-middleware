@@ -3,7 +3,9 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.DeltaMetrics;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
@@ -54,7 +56,8 @@ class DeltaIngestionStreamChangesContractTest {
         when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
         DeltaIngestionService service = new DeltaIngestionService(
                 new DeltaSyncStateService(syncRepo), batchLifecycle,
-                mock(SiteSchemaService.class), changelogSegmentService);
+                mock(SiteSchemaService.class), changelogSegmentService,
+                new DeltaMetrics(new SimpleMeterRegistry()));
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
