@@ -115,6 +115,8 @@ dependencies {
     // Test Dependencies
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
+    // In-process gRPC transport for Delta v2 contract tests (022)
+    testImplementation("io.grpc:grpc-inprocess:${property("grpcVersion")}")
     // Testcontainers 2.0.3 for Docker Desktop 29.x compatibility
     testImplementation("org.testcontainers:testcontainers:2.0.3")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.3")
