@@ -33,10 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * T4.3 — building a checkpoint materializes a Parquet change-feed partition per table under
- * {@code egress/{siteId}/{table}/_change_date=YYYY-MM-DD/}, carrying the checkpoint floor as an
- * all-INSERT frame (CR §8.D / §12). Power BI Incremental Refresh reads these date partitions on top
- * of the immutable floor; here we prove the partition is keyed by change date and round-trips the
- * full typed state.
+ * {@code egress/{siteId}/{table}/_change_date=YYYY-MM-DD/} (CR §8.D / §12). The partition carries only
+ * the rows that changed in that build (delta), so Power BI Incremental Refresh does not re-ingest the
+ * whole table each day; the full floor lives in the {@code checkpoints/} snapshot. On the very first
+ * checkpoint the delta equals the full state. Here we prove the partition is keyed by change date and
+ * that a later build emits only the changed rows.
  */
 class CheckpointChangeFeedIntegrationTest extends BaseIntegrationTest {
 
@@ -100,6 +101,58 @@ class CheckpointChangeFeedIntegrationTest extends BaseIntegrationTest {
 
             assertNotNull(reader.read(), "second row present");
             assertNull(reader.read(), "exactly two rows (all-INSERT frame of the full state)");
+        }
+    }
+
+    @Test
+    void laterCheckpointChangeFeedContainsOnlyChangedRows() throws Exception {
+        seedCustomersSchema();
+
+        // First checkpoint: two rows -> floor + a change-feed partition (delta == full on first build).
+        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, List.of(
+                rec("customers", Op.INSERT, 1L, key("id", intVal(1)),
+                        data("id", intVal(1), "name", strVal("Ann"), "amount", decVal("19.99"),
+                                "joined_on", strVal("2024-03-10"))),
+                rec("customers", Op.INSERT, 2L, key("id", intVal(2)),
+                        data("id", intVal(2), "name", strVal("Bob"), "amount", decVal("5.00"),
+                                "joined_on", strVal("2024-03-11")))));
+        checkpointService.buildCheckpoint(SITE);
+
+        // Second checkpoint: only id=1 changes -> the new change-feed partition holds just that row.
+        changelogSegmentService.persist(SITE, BATCH, "DELTA", 3L, List.of(
+                rec("customers", Op.UPDATE, 3L, key("id", intVal(1)),
+                        data("id", intVal(1), "name", strVal("Annie")))));
+        checkpointService.buildCheckpoint(SITE);
+
+        // The seq=3 partition is the delta: exactly one row (id=1), not the whole table.
+        List<String> keys = checkpointStorage.listKeys("egress/" + SITE + "/customers/");
+        String deltaKey = keys.stream().filter(k -> k.endsWith("seq=3.parquet")).findFirst().orElseThrow();
+
+        Path file = tempDir.resolve("delta.parquet");
+        Files.write(file, checkpointStorage.download(deltaKey));
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord row = reader.read();
+            assertNotNull(row, "the changed row is present");
+            assertEquals(1L, ((Number) row.get("id")).longValue(), "only the changed key id=1");
+            assertEquals("Annie", row.get("name").toString(), "carries the updated value");
+            assertNull(reader.read(), "exactly one changed row in the delta partition");
+        }
+
+        // The floor snapshot still holds the full state (both rows).
+        String floorKey = checkpointStorage.listKeys("checkpoints/" + SITE + "/customers/").stream()
+                .filter(k -> k.endsWith("seq=3/snapshot.parquet")).findFirst().orElseThrow();
+        Path floor = tempDir.resolve("floor.parquet");
+        Files.write(floor, checkpointStorage.download(floorKey));
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(floor))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertNotNull(reader.read());
+            assertNotNull(reader.read(), "floor keeps both rows");
+            assertNull(reader.read());
         }
     }
 

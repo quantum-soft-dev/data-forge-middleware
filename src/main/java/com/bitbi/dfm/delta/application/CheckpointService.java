@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -102,7 +103,12 @@ public class CheckpointService {
         }
 
         Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(seed, newRecords);
+        // The rows that actually changed since the last checkpoint (the new records folded on their
+        // own). The change-feed partition carries only these so Power BI Incremental Refresh does not
+        // re-ingest the whole table on each build; the full floor lives in the checkpoints/ snapshot.
+        Map<String, Map<String, FoldedRow>> delta = ChangelogFold.fold(Map.of(), newRecords);
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
+        LocalDate changeDate = LocalDate.now(ZoneOffset.UTC);
 
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
@@ -112,14 +118,27 @@ public class CheckpointService {
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
             checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
 
-            // Typed Parquet for Power BI — only for tables with a declared schema (CR §12). The same
-            // all-INSERT frame is both the immutable floor and the change-feed partition at the floor
-            // date, which Power BI Incremental Refresh reads on top of the floor.
+            // Typed Parquet for Power BI — only for tables with a declared schema (CR §12). The floor
+            // snapshot is the full state; the change-feed partition carries the full current row for
+            // each key that changed in this window (a partial UPDATE alone would be missing NOT NULL
+            // columns). Deletes are not tombstoned here — they drop out of the rebuilt floor snapshot.
             TableSchema tableSchema = schemas.get(tableName);
             if (tableSchema != null) {
                 byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
                 checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
-                checkpointStorage.uploadChangeFeed(siteId, tableName, LocalDate.now(), seq, parquet);
+
+                Map<String, FoldedRow> changedKeys = delta.get(tableName);
+                if (changedKeys != null && !changedKeys.isEmpty()) {
+                    List<Map<String, Value>> changedData = changedKeys.keySet().stream()
+                            .map(rows::get)               // full current row for each changed key
+                            .filter(java.util.Objects::nonNull)
+                            .map(FoldedRow::data)
+                            .toList();
+                    if (!changedData.isEmpty()) {
+                        byte[] deltaParquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, changedData);
+                        checkpointStorage.uploadChangeFeed(siteId, tableName, changeDate, seq, deltaParquet);
+                    }
+                }
             }
 
             checkpointRepository.save(checkpoint);
