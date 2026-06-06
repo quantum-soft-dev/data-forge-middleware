@@ -415,10 +415,35 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             @Override
             public void onError(Throwable t) {
-                // Periodic session dropped mid-stream — stage for resume (T5.1). A continuous session
-                // drops its unsealed tail; the client reconnects and continues from the watermark.
-                if (!continuous) {
+                if (continuous) {
+                    // A continuous session has no SessionEnd, so a transport drop must not leave its
+                    // batch IN_PROGRESS (which would block reconnect with ACTIVE_SESSION_EXISTS).
+                    // Durably seal whatever was received since the last seal; the client recovers via
+                    // GetSyncState and resumes from the advanced watermark.
+                    sealOnContinuousDrop();
+                } else {
+                    // Periodic session dropped mid-stream — stage for resume (T5.1); the batch is left
+                    // active on purpose so the reconnect re-attaches to it.
                     stageForResume();
+                }
+            }
+
+            /**
+             * Durably seal the in-progress continuous batch after a transport drop, without notifying
+             * the (broken) response stream. Best-effort: if the seal fails, fail the batch so it is not
+             * orphaned.
+             */
+            private void sealOnContinuousDrop() {
+                if (closed || committed || batchId == null || buffer == null) {
+                    return;
+                }
+                closed = true;
+                try {
+                    commitService.commit(siteId, batchId, sessionMode, firstSeq,
+                            buffer.lastSeq(), buffer.accepted());
+                    metrics.sessionCommitted();
+                } catch (RuntimeException e) {
+                    abortBatch();
                 }
             }
 

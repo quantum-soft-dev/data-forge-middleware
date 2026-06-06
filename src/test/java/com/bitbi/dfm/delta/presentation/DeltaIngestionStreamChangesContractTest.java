@@ -462,6 +462,28 @@ class DeltaIngestionStreamChangesContractTest {
                 argThat((List<ChangeRecord> r) -> r.size() == 50));
     }
 
+    @Test
+    void continuousDropSealsTailAndCompletesBatchInsteadOfOrphaning() throws Exception {
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> s = asyncStub.streamChanges(collect(received, new CountDownLatch(1)));
+        s.onNext(start(SessionMode.CONTINUOUS, 1L));
+        s.onNext(change("t", Op.INSERT, 1L));
+        s.onNext(change("t", Op.INSERT, 2L)); // < seal threshold, so still unsealed
+        s.onError(new RuntimeException("transport drop"));
+
+        // The unsealed tail is durably sealed and the batch completed (not left IN_PROGRESS).
+        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
+                argThat((List<ChangeRecord> r) -> r.size() == 2));
+        verify(batchLifecycle).completeBatch(batchId);
+        verify(batchLifecycle, never()).failBatch(batchId);
+    }
+
     private static Batch mockBatch(UUID id) {
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(id);
