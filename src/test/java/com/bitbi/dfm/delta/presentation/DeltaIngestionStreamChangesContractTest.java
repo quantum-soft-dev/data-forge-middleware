@@ -109,6 +109,42 @@ class DeltaIngestionStreamChangesContractTest {
         assertEquals(7L, received.get(1).getCommitted().getCommittedSeq());
     }
 
+    @Test
+    void secondConcurrentSessionRejectedWithActiveSessionExists() throws Exception {
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenThrow(new BatchLifecycleService.ActiveBatchExistsException(
+                        "Site already has an active batch"));
+
+        List<ServerEvent> received = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ServerEvent> responses = new StreamObserver<>() {
+            @Override
+            public void onNext(ServerEvent event) {
+                received.add(event);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                done.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                done.countDown();
+            }
+        };
+
+        StreamObserver<ClientEvent> request = asyncStub.streamChanges(responses);
+        request.onNext(ClientEvent.newBuilder().setStart(
+                SessionStart.newBuilder().setMode(SessionMode.DELTA).setFirstSeq(1).build()).build());
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError());
+        assertEquals(ErrorCode.ACTIVE_SESSION_EXISTS, received.get(0).getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
+    }
+
     private static ServerInterceptor authContext(UUID siteId, UUID accountId) {
         return new ServerInterceptor() {
             @Override

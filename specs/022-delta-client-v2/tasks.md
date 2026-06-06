@@ -28,7 +28,7 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 - [x] **T1.2** Bearer-token gRPC interceptor reusing Auth V2; derive `site_id` from token; reject missing/invalid _(tests: unit — valid binds `SITE_ID` context; missing / non-Bearer / invalid → UNAUTHENTICATED, handler not invoked. Cross-site enforcement is downstream in handlers via `DeltaAuthInterceptor.SITE_ID`)_
 - [x] **T1.3** `GetSyncState` RPC returns `last_applied_seq` / `schema_version` / `RecoveryAction` _(tests: contract — in-process gRPC; empty state → 0/PROCEED; existing watermark returned. `DeltaIngestionService` + `DeltaSyncStateService`)_
 - [x] **T1.4** `StreamChanges` skeleton: `SessionStart` → open batch via `BatchLifecycleService`; `SessionEnd` → complete batch; emit `SessionOpened` / `SessionCommitted` _(tests: contract — bidi happy-path opens+commits a batch. Interceptor extended to bind `ACCOUNT_ID`. Change persistence deferred to Task 2)_
-- [ ] **T1.5** One-active-session-per-site rule → `ACTIVE_SESSION_EXISTS` _(tests: unit/contract — second concurrent stream rejected)_
+- [x] **T1.5** One-active-session-per-site rule → `ACTIVE_SESSION_EXISTS` _(tests: contract — second concurrent SessionStart → in-band `ServerError{ACTIVE_SESSION_EXISTS}`, batch not completed. Reuses one-active-batch via `ActiveBatchExistsException`)_
 
 ## Task 2 — Changelog ingest (CR Phase 2)
 

@@ -93,7 +93,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             private void onSessionStart() {
                 long serverLastSeq = syncStateService.getSyncState(siteId).lastAppliedSeq();
-                Batch batch = batchLifecycleService.startBatch(accountId, siteId);
+                Batch batch;
+                try {
+                    batch = batchLifecycleService.startBatch(accountId, siteId);
+                } catch (BatchLifecycleService.ActiveBatchExistsException e) {
+                    // One active session per site (mirrors one-active-batch).
+                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
+                    return;
+                }
                 batchId = batch.getId();
                 lastSeq = serverLastSeq;
                 responseObserver.onNext(ServerEvent.newBuilder()
@@ -112,6 +119,18 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committed)
                                 .setSegmentS3Key("")
+                                .build())
+                        .build());
+                closed = true;
+                responseObserver.onCompleted();
+            }
+
+            private void emitError(ErrorCode code, String message, RecoveryAction action) {
+                responseObserver.onNext(ServerEvent.newBuilder()
+                        .setError(ServerError.newBuilder()
+                                .setCode(code)
+                                .setMessage(message == null ? "" : message)
+                                .setAction(action)
                                 .build())
                         .build());
                 closed = true;
