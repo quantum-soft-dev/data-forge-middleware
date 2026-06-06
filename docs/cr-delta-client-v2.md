@@ -433,9 +433,9 @@ At current scale the bandwidth delta over HTTP/2 + compressed JSONL is modest; g
 
 ## 18. Open questions / deferred decisions
 
-- **OQ-1 (keyless duplicates):** do keyless tables contain byte-identical duplicate rows? If yes, a row-multiplicity counter is required (§6); if no, the full-row key is treated as unique. *Pending answer.*
+- **OQ-1 (keyless duplicates): RESOLVED — no.** The client guarantees it sends only unique deltas. For keyless tables it does a set comparison and emits **only INSERT / DELETE** (a row that no longer matches → DELETE, a new row → INSERT); **no UPDATE** is produced for keyless tables (confirms §6). Full-row key is treated as unique → **no row-multiplicity counter needed**.
 - **OQ-2 (seq granularity):** per-site `seq` (chosen — simpler continuity) vs per-table `seq` (more parallelism). Revisit if per-table throughput becomes a bottleneck.
-- **OQ-3 (site type / ingestion flag):** how a site is marked as "Delta v2 ingestion" — reuse `site_type`, add an `ingestion_protocol` flag, or infer from first gRPC session. *To decide before Phase 1.*
+- **OQ-3 (site ingestion flag): RESOLVED.** Add a site field **`client_api_version`** (`V1` = legacy HTTP `/api/dfc`, `V2` = Delta gRPC). **`V2` is the default** for new sites; existing sites are **backfilled to `V1`** in the V29 migration so the legacy path keeps working. `site_type` (DBF / POSTGRES_CDC — data semantics) is orthogonal and unchanged.
 - **OQ-4 (checkpoint cadence):** default frequencies for the table checkpoint vs the Power BI floor; tune against real data volumes.
 - **OQ-5 (segment wire format at rest):** raw Protobuf vs JSONL for bronze segments (Protobuf assumed; JSONL easier to debug).
 

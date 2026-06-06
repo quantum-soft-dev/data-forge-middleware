@@ -17,14 +17,14 @@ Legend: `[ ]` todo · `[x]` done. Each subtask line ends with _(tests: …)_ des
 
 ## Task 0 — Pre-flight
 
-- [ ] **T0.1** Resolve OQ-1 (keyless duplicate rows) and record the decision in the CR _(no code; doc change)_
-- [ ] **T0.2** Resolve OQ-3 (how a site is flagged as Delta v2 ingestion) and record it in the CR _(no code; doc change)_
-- [ ] **T0.3** Create branch `feature/022-delta-client-v2` off `develop` _(no tests)_
+- [x] **T0.1** Resolve OQ-1 (keyless duplicate rows) and record the decision in the CR _(no code; doc change)_ — **no duplicates; keyless = INSERT/DELETE only, no UPDATE**
+- [x] **T0.2** Resolve OQ-3 (how a site is flagged as Delta v2 ingestion) and record it in the CR _(no code; doc change)_ — **`client_api_version` (V1/V2), default V2; existing backfilled to V1**
+- [x] **T0.3** Create branch `feature/022-delta-client-v2` off `develop` _(no tests)_
 - [ ] **T0.4** Add `spring-grpc` / `grpc-java` + protobuf gradle plugin; `delta-ingestion.proto` codegen wired into build _(tests: build compiles, generated stubs importable in a smoke test)_
 
 ## Task 1 — Contract & session skeleton (CR Phase 1)
 
-- [ ] **T1.1** Flyway `V29__delta_ingestion.sql`: `site_sync_state` table + JPA entity/repository _(tests: integration — migration applies; repo CRUD round-trip)_
+- [ ] **T1.1** Flyway `V29__delta_ingestion.sql`: `site_sync_state` table + JPA entity/repository; **add `sites.client_api_version` (V1/V2, default V2, backfill existing → V1)** _(tests: integration — migration applies; existing sites = V1; new default = V2; repo CRUD round-trip)_
 - [ ] **T1.2** Bearer-token gRPC interceptor reusing Auth V2; derive `site_id` from token; reject missing/invalid _(tests: unit — valid/expired/missing token; cross-site rejected)_
 - [ ] **T1.3** `GetSyncState` RPC returns `last_applied_seq` / `schema_version` / `RecoveryAction` _(tests: contract — in-process gRPC; empty state vs existing watermark)_
 - [ ] **T1.4** `StreamChanges` skeleton: `SessionStart` → open batch via `BatchLifecycleService`; `SessionEnd` → complete batch; emit `SessionOpened` / `SessionCommitted` _(tests: contract — happy-path session opens/commits a batch)_
