@@ -44,7 +44,8 @@ jobs:
       pull-requests: write
 
     env:
-      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      # forge dfm-app DB user password (same value used as DB_PASSWORD in app-deploy)
+      TF_VAR_db_password: ${{ secrets.APP_DB_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4

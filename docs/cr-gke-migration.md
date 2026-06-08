@@ -62,10 +62,26 @@ checksum on, path-style off).
   → kustomize apply → rollout) і `infra-deploy.yml` (Terraform plan/apply через WIF).
   Гілка→env: `develop`→dev, `stage`→stage, `main`→prod.
 
-**Потрібні GitHub-секрети** (repo/environment): `GCP_WIF_PROVIDER`, `GCP_WIF_SA`, `DB_PASSWORD`
-(=`TF_VAR_db_password`), `JWT_SECRET`, `AUTH0_MGMT_CLIENT_ID`, `AUTH0_MGMT_CLIENT_SECRET`,
-`GCS_HMAC_ACCESS_ID`, `GCS_HMAC_SECRET` (з Terraform-output), `REDIS_PASSWORD` (порожній для dev),
-`PLUGIN_BITBI_CLIENT_ID`.
+**Мапінг секретів** (наявні GitHub-секрети forge → потреби GKE, з `deploy-script/config/dev.json.template`):
+
+| Наявний секрет | Куди в GKE | Примітка |
+|---|---|---|
+| `APP_DB_PASSWORD` | `DB_PASSWORD` (k8s) + `TF_VAR_db_password` | пароль app-юзера `dfm-app` |
+| `JWT_SECRET` | `JWT_SECRET` | — |
+| `AUTH0_CLIENT_ID` | `AUTH0_MGMT_CLIENT_ID` | у forge це **Management API** client id |
+| `AUTH0_CLIENT_SECRET` | `AUTH0_MGMT_CLIENT_SECRET` | Management API secret |
+| `PLUGIN_BITBI_CLIENT_ID` | `PLUGIN_BITBI_CLIENT_ID` | — |
+| `DB_MASTER_PASSWORD` | (Фаза 5) `pg_dump` з AWS RDS | юзер `bitbi` |
+| `REDIS_PASSWORD` | — | не потрібен (GKE Redis без auth) |
+| `GHCR_PAT` | — | не потрібен (образи → Artifact Registry) |
+
+**Ще потрібні GitHub-секрети:** `GCP_WIF_PROVIDER`, `GCP_WIF_SA` (Workload Identity Federation),
+`GCS_HMAC_ACCESS_ID`, `GCS_HMAC_SECRET` (з `terraform output` після apply).
+
+**Несекретні dev-значення** вже вписані в overlay (Auth0 домен `dev-dfm.us.auth0.com`,
+audience `https://dev-dfm.bitbi.io`, claims namespace `https://dev.dfm.bitbi.io`,
+SPA client `2sTGyEnKDASQFT2qVbYHQeUpROOTvCJ9`). У GKE-dev `DB_USERNAME=dfm-app` (Cloud SQL),
+а не `dmf` як в AWS.
 
 ### Етап 3 — міграція даних і перепідключення bitbi-dev
 

@@ -5,11 +5,11 @@ metadata:
   namespace: forge
 data:
   AWS_S3_BUCKET_NAME: "dfm-dev-uploads"
-  # Auth0 dev tenant — REPLACE with the real forge dev values
-  # (same as the current forge AWS dev deployment / bitbi-secrets DFM_AUTH0_DOMAIN).
+  # Auth0 dev tenant (values from the current forge AWS dev deployment — non-secret).
   AUTH0_DOMAIN: "dev-dfm.us.auth0.com"
   AUTH0_ISSUER: "https://dev-dfm.us.auth0.com/"
   AUTH0_MGMT_AUDIENCE: "https://dev-dfm.us.auth0.com/api/v2/"
-  AUTH0_AUDIENCE: "https://api.dataforge.com"
+  AUTH0_AUDIENCE: "https://dev-dfm.bitbi.io"
+  AUTH0_CLAIMS_NAMESPACE: "https://dev.dfm.bitbi.io"
   # Device Authorization Flow verification page (internal-only dev: port-forward / cluster URL)
   DEVICE_AUTH_VERIFICATION_URI: "http://forge-frontend.forge.svc.cluster.local/device-verify"

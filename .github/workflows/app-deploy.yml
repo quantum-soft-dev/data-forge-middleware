@@ -106,20 +106,23 @@ jobs:
 
       - name: Sync forge-secrets
         env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          # APP_DB_PASSWORD = forge app DB user password (also TF_VAR_db_password for the dfm-app user)
+          DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          AUTH0_MGMT_CLIENT_ID: ${{ secrets.AUTH0_MGMT_CLIENT_ID }}
-          AUTH0_MGMT_CLIENT_SECRET: ${{ secrets.AUTH0_MGMT_CLIENT_SECRET }}
+          # In the forge AWS deploy these map to the Auth0 Management API M2M client.
+          AUTH0_MGMT_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
+          AUTH0_MGMT_CLIENT_SECRET: ${{ secrets.AUTH0_CLIENT_SECRET }}
           # GCS HMAC keys (Terraform output gcs_hmac_access_id / gcs_hmac_secret)
           AWS_ACCESS_KEY_ID: ${{ secrets.GCS_HMAC_ACCESS_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.GCS_HMAC_SECRET }}
-          SPRING_DATA_REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           PLUGIN_BITBI_CLIENT_ID: ${{ secrets.PLUGIN_BITBI_CLIENT_ID }}
         run: |
           PRIVATE_IP=$(gcloud sql instances describe ${{ steps.env.outputs.db_instance }} \
             --project=${{ steps.env.outputs.project }} \
             --format="value(ipAddresses[0].ipAddress)")
           kubectl get namespace forge >/dev/null 2>&1 || kubectl create namespace forge
+          # SPRING_DATA_REDIS_PASSWORD is empty: GKE Redis (in-cluster dev / Memorystore w/o AUTH)
+          # has no password. Wire a real secret here if Memorystore AUTH is enabled later.
           kubectl create secret generic forge-secrets \
             --from-literal=DB_URL="jdbc:postgresql://${PRIVATE_IP}:5432/dfm" \
             --from-literal=DB_USERNAME="dfm-app" \
@@ -129,7 +132,7 @@ jobs:
             --from-literal=AUTH0_MGMT_CLIENT_SECRET="${AUTH0_MGMT_CLIENT_SECRET}" \
             --from-literal=AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             --from-literal=AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
-            --from-literal=SPRING_DATA_REDIS_PASSWORD="${SPRING_DATA_REDIS_PASSWORD}" \
+            --from-literal=SPRING_DATA_REDIS_PASSWORD="" \
             --from-literal=PLUGIN_BITBI_CLIENT_ID="${PLUGIN_BITBI_CLIENT_ID}" \
             -n forge --dry-run=client -o yaml | kubectl apply -f -
 
