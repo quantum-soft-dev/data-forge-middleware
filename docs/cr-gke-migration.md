@@ -50,9 +50,22 @@ GCS-режим вмикається через legacy `serviceConfiguration`.
 `AWS_S3_BUCKET_NAME=dfm-dev-uploads`. AWS-режим: лишити дефолти (endpoint `s3.amazonaws.com`,
 checksum on, path-style off).
 
-### Етап 2 — інфра (Terraform), k8s (kustomize), CI/CD (GitHub Actions + WIF)
+### Етап 2 — інфра (Terraform), k8s (kustomize), CI/CD (GitHub Actions + WIF) ✅ (артефакти)
 
-Див. план переносу; додаються каталоги `infra/`, `k8s/`, воркфлоу `app-deploy.yml`/`infra-deploy.yml`.
+- **k8s/** — kustomize `base` + `overlays/{dev,stage,prod}`: `forge-backend`/`forge-frontend`,
+  HPA, PDB, WI-SA; dev internal-only + in-cluster `forge-redis`. Усі overlays проходять
+  `kubectl kustomize`. Хелпери в `deploy/gke/`.
+- **infra/** — `modules/forge-app` + `environments/{dev,stage,prod}` (лін: переюзає кластери/VPC/
+  Cloud SQL-інстанс bitbi; створює AR repo, SA+WI, БД `dfm`+юзер, GCS+HMAC, Memorystore для stage/prod).
+  Стан — спільний `bitbi-terraform-state` (`forge/environments/{env}`). `terraform validate` зелений.
+- **CI/CD** — `.github/workflows/app-deploy.yml` (build backend+frontend → push AR → sync `forge-secrets`
+  → kustomize apply → rollout) і `infra-deploy.yml` (Terraform plan/apply через WIF).
+  Гілка→env: `develop`→dev, `stage`→stage, `main`→prod.
+
+**Потрібні GitHub-секрети** (repo/environment): `GCP_WIF_PROVIDER`, `GCP_WIF_SA`, `DB_PASSWORD`
+(=`TF_VAR_db_password`), `JWT_SECRET`, `AUTH0_MGMT_CLIENT_ID`, `AUTH0_MGMT_CLIENT_SECRET`,
+`GCS_HMAC_ACCESS_ID`, `GCS_HMAC_SECRET` (з Terraform-output), `REDIS_PASSWORD` (порожній для dev),
+`PLUGIN_BITBI_CLIENT_ID`.
 
 ### Етап 3 — міграція даних і перепідключення bitbi-dev
 

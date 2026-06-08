@@ -1,0 +1,144 @@
+name: App Deploy (GKE)
+
+on:
+  push:
+    branches:
+      - develop      # -> dev    (bitbi-dev / dev-bitbi-cluster)
+      - stage        # -> stage  (bitbi-stage / stage-bitbi-cluster)
+      - main         # -> prod   (bitbi-production / prod-bitbi-cluster)
+    paths:
+      - "src/**"
+      - "frontend/**"
+      - "k8s/**"
+      - "Dockerfile"
+      - "build.gradle.kts"
+      - ".github/workflows/app-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+
+concurrency:
+  group: forge-app-${{ github.event.inputs.environment || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: "Deploy · ${{ github.event.inputs.environment || github.ref_name }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # ── Resolve env-specific variables ──────────────────────────────────────
+      - name: Resolve environment
+        id: env
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          if [ -z "$ENV" ]; then
+            case "${{ github.ref_name }}" in
+              develop) ENV=dev ;;
+              stage)   ENV=stage ;;
+              main)    ENV=prod ;;
+              *)       echo "Unsupported branch ${{ github.ref_name }}"; exit 1 ;;
+            esac
+          fi
+          case $ENV in
+            dev)   PROJECT=bitbi-dev;        CLUSTER=dev-bitbi-cluster;   DB_INSTANCE=dev-bitbi-db ;;
+            stage) PROJECT=bitbi-stage;      CLUSTER=stage-bitbi-cluster; DB_INSTANCE=stage-bitbi-db ;;
+            prod)  PROJECT=bitbi-production; CLUSTER=prod-bitbi-cluster;  DB_INSTANCE=prod-bitbi-db ;;
+          esac
+          {
+            echo "env=$ENV"
+            echo "project=$PROJECT"
+            echo "cluster=$CLUSTER"
+            echo "db_instance=$DB_INSTANCE"
+            echo "backend=us-central1-docker.pkg.dev/$PROJECT/forge-app/backend"
+            echo "frontend=us-central1-docker.pkg.dev/$PROJECT/forge-app/frontend"
+            echo "image_tag=${{ github.sha }}"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Build & push both images ────────────────────────────────────────────
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Build & push backend
+        run: |
+          docker build --target production \
+            -t ${{ steps.env.outputs.backend }}:${{ steps.env.outputs.image_tag }} \
+            -t ${{ steps.env.outputs.backend }}:latest \
+            .
+          docker push ${{ steps.env.outputs.backend }}:${{ steps.env.outputs.image_tag }}
+          docker push ${{ steps.env.outputs.backend }}:latest
+
+      - name: Build & push frontend
+        run: |
+          docker build \
+            -t ${{ steps.env.outputs.frontend }}:${{ steps.env.outputs.image_tag }} \
+            -t ${{ steps.env.outputs.frontend }}:latest \
+            frontend
+          docker push ${{ steps.env.outputs.frontend }}:${{ steps.env.outputs.image_tag }}
+          docker push ${{ steps.env.outputs.frontend }}:latest
+
+      # ── Deploy to GKE ────────────────────────────────────────────────────────
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ steps.env.outputs.cluster }}
+          location: us-central1
+          project_id: ${{ steps.env.outputs.project }}
+
+      - name: Sync forge-secrets
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          AUTH0_MGMT_CLIENT_ID: ${{ secrets.AUTH0_MGMT_CLIENT_ID }}
+          AUTH0_MGMT_CLIENT_SECRET: ${{ secrets.AUTH0_MGMT_CLIENT_SECRET }}
+          # GCS HMAC keys (Terraform output gcs_hmac_access_id / gcs_hmac_secret)
+          AWS_ACCESS_KEY_ID: ${{ secrets.GCS_HMAC_ACCESS_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GCS_HMAC_SECRET }}
+          SPRING_DATA_REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          PLUGIN_BITBI_CLIENT_ID: ${{ secrets.PLUGIN_BITBI_CLIENT_ID }}
+        run: |
+          PRIVATE_IP=$(gcloud sql instances describe ${{ steps.env.outputs.db_instance }} \
+            --project=${{ steps.env.outputs.project }} \
+            --format="value(ipAddresses[0].ipAddress)")
+          kubectl get namespace forge >/dev/null 2>&1 || kubectl create namespace forge
+          kubectl create secret generic forge-secrets \
+            --from-literal=DB_URL="jdbc:postgresql://${PRIVATE_IP}:5432/dfm" \
+            --from-literal=DB_USERNAME="dfm-app" \
+            --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
+            --from-literal=JWT_SECRET="${JWT_SECRET}" \
+            --from-literal=AUTH0_MGMT_CLIENT_ID="${AUTH0_MGMT_CLIENT_ID}" \
+            --from-literal=AUTH0_MGMT_CLIENT_SECRET="${AUTH0_MGMT_CLIENT_SECRET}" \
+            --from-literal=AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            --from-literal=SPRING_DATA_REDIS_PASSWORD="${SPRING_DATA_REDIS_PASSWORD}" \
+            --from-literal=PLUGIN_BITBI_CLIENT_ID="${PLUGIN_BITBI_CLIENT_ID}" \
+            -n forge --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy with Kustomize
+        run: |
+          cd k8s/overlays/${{ steps.env.outputs.env }}
+          kustomize edit set image \
+            us-central1-docker.pkg.dev/bitbi-production/forge-app/backend=${{ steps.env.outputs.backend }}:${{ steps.env.outputs.image_tag }} \
+            us-central1-docker.pkg.dev/bitbi-production/forge-app/frontend=${{ steps.env.outputs.frontend }}:${{ steps.env.outputs.image_tag }}
+          kubectl apply -k .
+          kubectl rollout status deployment/forge-backend -n forge --timeout=600s
+          kubectl rollout status deployment/forge-frontend -n forge --timeout=300s

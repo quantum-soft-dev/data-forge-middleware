@@ -1,0 +1,82 @@
+name: Infra Deploy (Terraform)
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-deploy.yml"
+  push:
+    branches:
+      - develop
+    paths:
+      - "infra/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      action:
+        description: "Terraform action"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+
+concurrency:
+  group: forge-infra-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: "Terraform · ${{ github.event.inputs.environment || 'dev' }}"
+    runs-on: ubuntu-latest
+    # prod/stage manual runs require approval via the matching GitHub Environment
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    env:
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve environment
+        id: env
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          echo "env=$ENV" >> "$GITHUB_OUTPUT"
+          echo "dir=infra/environments/$ENV" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SA }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform Init
+        working-directory: ${{ steps.env.outputs.dir }}
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        if: github.event_name == 'pull_request' || github.event.inputs.action == 'plan' || github.event_name == 'push'
+        working-directory: ${{ steps.env.outputs.dir }}
+        run: terraform plan -input=false -no-color
+
+      - name: Terraform Apply (dev auto on push / manual apply)
+        if: >-
+          (github.event_name == 'push' && github.ref_name == 'develop') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        working-directory: ${{ steps.env.outputs.dir }}
+        run: terraform apply -input=false -auto-approve
