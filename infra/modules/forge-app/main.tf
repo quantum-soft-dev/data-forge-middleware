@@ -87,7 +87,9 @@ resource "google_storage_bucket_iam_member" "app_object_admin" {
 }
 
 # HMAC keys authenticate as the app SA against the S3-compatible XML API.
+# Disabled where org policy iam.disableServiceAccountKeyCreation blocks SA keys.
 resource "google_storage_hmac_key" "app" {
+  count                 = var.create_hmac ? 1 : 0
   project               = var.project_id
   service_account_email = google_service_account.app.email
 }

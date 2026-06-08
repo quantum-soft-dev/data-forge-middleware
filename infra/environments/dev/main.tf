@@ -24,6 +24,8 @@ module "forge" {
 
   # dev uses in-cluster Redis (no Memorystore)
   create_redis = false
+  # org policy blocks SA HMAC keys in bitbi-dev — use a user-account HMAC instead
+  create_hmac = false
 }
 
 output "app_service_account_email" {

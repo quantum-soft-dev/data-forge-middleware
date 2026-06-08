@@ -42,15 +42,27 @@ fi
 # shellcheck disable=SC1090
 source "$GEN"
 
-# ── 2) Terraform apply (AR repo, SA+WI, dfm DB+user, GCS bucket+HMAC) ──────────
+# ── 2) Terraform apply (AR repo, SA+WI, dfm DB+user, GCS bucket; no SA HMAC) ───
 echo "[2/6] terraform apply (dev) ..."
 export TF_VAR_db_password="$DB_PASSWORD"
 terraform -chdir=infra/environments/dev init -input=false -reconfigure >/tmp/forge-tf-init.log 2>&1
 terraform -chdir=infra/environments/dev apply -input=false -auto-approve
-
-HMAC_ID="$(terraform -chdir=infra/environments/dev output -raw gcs_hmac_access_id)"
-HMAC_SECRET="$(terraform -chdir=infra/environments/dev output -raw gcs_hmac_secret)"
 BUCKET="$(terraform -chdir=infra/environments/dev output -raw uploads_bucket)"
+
+# GCS credentials: a USER-account HMAC key (org policy blocks SA HMAC).
+# Create one in the Cloud Console (project bitbi-dev):
+#   Cloud Storage → Settings → Interoperability → "Access keys for your user account" → Create key
+# then add to /tmp/forge-dev-gen.env:   HMAC_ID=GOOG...   HMAC_SECRET=...
+if [ -z "${HMAC_ID:-}" ] || [ -z "${HMAC_SECRET:-}" ]; then
+  echo "ERROR: HMAC_ID / HMAC_SECRET missing in $GEN."
+  echo "       Create a user-account HMAC key (Console → Cloud Storage → Settings →"
+  echo "       Interoperability → 'Access keys for your user account' → Create key),"
+  echo "       then append to $GEN:"
+  echo "         HMAC_ID=GOOG..."
+  echo "         HMAC_SECRET=..."
+  echo "       and re-run this script. (Infra is already applied; bucket: $BUCKET)"
+  exit 1
+fi
 echo "      HMAC access id: ${HMAC_ID:0:6}…  bucket: $BUCKET"
 
 # ── 3) Build & push images ────────────────────────────────────────────────────

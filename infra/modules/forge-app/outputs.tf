@@ -14,14 +14,14 @@ output "uploads_bucket" {
 }
 
 output "gcs_hmac_access_id" {
-  description = "GCS HMAC access id (use as AWS_ACCESS_KEY_ID for the S3-compatible client)"
-  value       = google_storage_hmac_key.app.access_id
+  description = "GCS HMAC access id (use as AWS_ACCESS_KEY_ID for the S3-compatible client). Empty when create_hmac=false."
+  value       = var.create_hmac ? google_storage_hmac_key.app[0].access_id : ""
   sensitive   = true
 }
 
 output "gcs_hmac_secret" {
-  description = "GCS HMAC secret (use as AWS_SECRET_ACCESS_KEY)"
-  value       = google_storage_hmac_key.app.secret
+  description = "GCS HMAC secret (use as AWS_SECRET_ACCESS_KEY). Empty when create_hmac=false."
+  value       = var.create_hmac ? google_storage_hmac_key.app[0].secret : ""
   sensitive   = true
 }
 

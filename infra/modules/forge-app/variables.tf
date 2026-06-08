@@ -55,6 +55,12 @@ variable "create_redis" {
   default     = false
 }
 
+variable "create_hmac" {
+  description = "Create a GCS HMAC key for the app SA. Set false where the org policy iam.disableServiceAccountKeyCreation blocks SA keys (then use a user-account HMAC instead)."
+  type        = bool
+  default     = true
+}
+
 variable "redis_tier" {
   description = "Memorystore tier (BASIC / STANDARD_HA)"
   type        = string
