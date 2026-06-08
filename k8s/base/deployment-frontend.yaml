@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-frontend
+  namespace: forge
+  labels:
+    app: forge-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forge-frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: forge-frontend
+    spec:
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: frontend
+          # Image is set per-environment via Kustomize overlay
+          image: us-central1-docker.pkg.dev/bitbi-production/forge-app/frontend:latest
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          # nginx proxies /api/* to BACKEND_URL and serves the SPA + runtime env-config.js
+          envFrom:
+            - configMapRef:
+                name: forge-frontend-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3

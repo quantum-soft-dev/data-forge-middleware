@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-frontend
+  namespace: forge
+  labels:
+    app: forge-frontend
+spec:
+  type: ClusterIP
+  selector:
+    app: forge-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP

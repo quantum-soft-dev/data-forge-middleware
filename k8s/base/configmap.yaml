@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forge-config
+  namespace: forge
+data:
+  # --- Spring / runtime ---------------------------------------------------------------
+  SPRING_PROFILES_ACTIVE: "prod"          # the AWS/GCS-capable profile (not localstack)
+  # --- Redis (in-cluster for dev; Memorystore for stage/prod via overlay) -------------
+  SPRING_DATA_REDIS_HOST: "forge-redis"
+  SPRING_DATA_REDIS_PORT: "6379"
+  # --- Object storage: GCS via S3-compatible XML API ----------------------------------
+  AWS_S3_ENDPOINT: "https://storage.googleapis.com"
+  AWS_S3_REGION: "auto"
+  AWS_S3_BUCKET_NAME: "dfm-uploads"       # overridden per environment in overlays
+  S3_PATH_STYLE_ACCESS: "true"
+  S3_CHECKSUM_ENABLED: "false"            # GCS rejects AWS chunked-encoding / flexible checksums
+  # --- Auth0 (non-secret; domain/audience/issuer). Mgmt client id/secret live in forge-secrets.
+  # Values are environment-specific and set/overridden in overlays.
+  AUTH0_AUDIENCE: "https://api.dataforge.com"
+  AUTH0_CLAIMS_NAMESPACE: "https://api.dataforge.com"
+  # --- App URLs (internal-only deployment) --------------------------------------------
+  APP_API_BASE_URL: "http://forge-backend.forge.svc.cluster.local:8080"
+  # --- Plugin (Bit BI) ----------------------------------------------------------------
+  PLUGIN_BITBI_ENABLED: "true"
