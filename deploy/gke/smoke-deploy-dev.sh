@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # One-shot SECRET-LESS smoke deploy of forge to the dev cluster (bitbi-dev / dev-bitbi-cluster).
 #
-# Uses EPHEMERAL generated secrets (DB password, JWT) + Terraform-generated GCS HMAC keys
-# + dummy Auth0-management / plugin values. Validates: Terraform infra, image build/push to
-# Artifact Registry, Cloud SQL connectivity + Flyway, GCS via S3-compat, in-cluster Redis,
-# rollout and health. Auth0-management and Bit BI plugin features are NOT exercised (dummy creds).
+# Uses EPHEMERAL generated secrets (DB password, JWT) + GCS HMAC keys + plugin dummy value.
+# Auth0 Management creds: the backend eagerly fetches a Management API token at boot and the
+# context FAILS if it's invalid — so AUTH0_MGMT_CLIENT_ID/SECRET must be REAL. Put them in
+# /tmp/forge-dev-gen.env (sourced below); they fall back to dummy values only, which will
+# crash-loop the backend. Validates: Terraform infra, image build/push to Artifact Registry,
+# Cloud SQL connectivity + Flyway, GCS via S3-compat, in-cluster Redis, rollout and health.
+# Bit BI plugin features are NOT exercised (dummy PLUGIN_BITBI_CLIENT_ID).
 #
 # Fully reversible:  terraform -chdir=infra/environments/dev destroy   &&   kubectl delete ns forge
 #
@@ -83,8 +86,8 @@ kubectl create secret generic forge-secrets \
   --from-literal=DB_USERNAME="dfm-app" \
   --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
   --from-literal=JWT_SECRET="${JWT_SECRET}" \
-  --from-literal=AUTH0_MGMT_CLIENT_ID="smoke-dummy-mgmt-client-id" \
-  --from-literal=AUTH0_MGMT_CLIENT_SECRET="smoke-dummy-mgmt-secret" \
+  --from-literal=AUTH0_MGMT_CLIENT_ID="${AUTH0_MGMT_CLIENT_ID:-smoke-dummy-mgmt-client-id}" \
+  --from-literal=AUTH0_MGMT_CLIENT_SECRET="${AUTH0_MGMT_CLIENT_SECRET:-smoke-dummy-mgmt-secret}" \
   --from-literal=AWS_ACCESS_KEY_ID="${HMAC_ID}" \
   --from-literal=AWS_SECRET_ACCESS_KEY="${HMAC_SECRET}" \
   --from-literal=SPRING_DATA_REDIS_PASSWORD="" \
