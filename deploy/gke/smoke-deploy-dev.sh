@@ -76,6 +76,15 @@ docker build -t "${FRONTEND_IMG}:${TAG}" -t "${FRONTEND_IMG}:latest" frontend
 docker push "${BACKEND_IMG}:${TAG}";  docker push "${BACKEND_IMG}:latest"
 docker push "${FRONTEND_IMG}:${TAG}"; docker push "${FRONTEND_IMG}:latest"
 
+# Capture the immutable pushed digests. The dev overlay pins :latest, so applying it does
+# NOT roll the deployment when the tag string is unchanged — and a cached rebuild can even
+# produce a byte-identical image under a new tag. Deploying by @sha256 digest below pins the
+# EXACT artifact we just pushed, guaranteeing a fresh rollout + pull regardless of caching.
+BACKEND_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "${BACKEND_IMG}:${TAG}")"
+FRONTEND_REF="$(docker inspect --format='{{index .RepoDigests 0}}' "${FRONTEND_IMG}:${TAG}")"
+echo "      backend  -> ${BACKEND_REF}"
+echo "      frontend -> ${FRONTEND_REF}"
+
 # ── 4) Target the cluster + create forge-secrets ──────────────────────────────
 echo "[4/6] kube credentials + forge-secrets ..."
 gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" --project "$PROJECT"
@@ -94,9 +103,11 @@ kubectl create secret generic forge-secrets \
   --from-literal=PLUGIN_BITBI_CLIENT_ID="smoke-dummy-plugin-client-id" \
   -n forge --dry-run=client -o yaml | kubectl apply -f -
 
-# ── 5) Deploy (overlay references :latest) ────────────────────────────────────
-echo "[5/6] kubectl apply -k k8s/overlays/dev ..."
+# ── 5) Deploy, then pin the exact pushed digests ──────────────────────────────
+echo "[5/6] kubectl apply -k k8s/overlays/dev (then pin @digest) ..."
 kubectl apply -k k8s/overlays/dev
+kubectl -n forge set image deploy/forge-backend  backend="${BACKEND_REF}"
+kubectl -n forge set image deploy/forge-frontend frontend="${FRONTEND_REF}"
 
 # ── 6) Wait for rollout + health ──────────────────────────────────────────────
 echo "[6/6] waiting for rollout (Flyway V1..V28 on first boot — allow several minutes) ..."
