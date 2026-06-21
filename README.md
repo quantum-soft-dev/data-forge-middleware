@@ -15,7 +15,7 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 
 ## Prerequisites
 
-- **Java 21** (Temurin/Corretto recommended)
+- **Java 25** (Temurin/Corretto recommended)
 - **PostgreSQL 16+** with partitioning support
 - **AWS S3** or LocalStack for development
 - **Keycloak** (optional, for admin endpoints)
@@ -26,7 +26,7 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 ### Option 0: DevContainer (Local Dev Environment)
 
 This repo includes a DevContainer that starts infrastructure (PostgreSQL, Redis, LocalStack S3, Keycloak)
-via `docker-compose.dev.yml` and provides a Java 21 + Node 20 dev environment.
+via `docker-compose.dev.yml` and provides a Java 25 + Node 20 dev environment.
 
 1. Configure backend env vars in `.env` (see `.env.example`).
 2. Configure frontend env vars in `frontend/.env.local` (see `frontend/.env.local.example`).
@@ -455,7 +455,7 @@ docker run -p 8080:8080 \
 
 ### Code Style
 
-- Follow Java 21 conventions
+- Follow Java 25 conventions
 - Use Lombok for boilerplate reduction
 - Domain-driven design principles
 - Package by layered feature (PbLF)

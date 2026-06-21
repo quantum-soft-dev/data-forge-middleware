@@ -3,7 +3,7 @@
 ## Tech Stack
 
 ### Backend
-- **Java 21** (LTS) + **Spring Boot 3.5.6** + **Spring Security 6** (Auth0 OAuth2)
+- **Java 25** (LTS) + **Spring Boot 3.5.6** + **Spring Security 6** (Auth0 OAuth2)
 - **Spring Data JPA** + **PostgreSQL 16** (partitioned tables) + **Flyway 11**
 - **AWS SDK v2** (S3) + **HikariCP** + **Micrometer** + **SpringDoc OpenAPI 3**
 - **Auth0 2.26.0** (Management API) + **Hypersistence Utils** (JSONB)

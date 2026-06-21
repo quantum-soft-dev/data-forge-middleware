@@ -4,7 +4,7 @@
 # ============================================
 # Stage 1: Build Stage
 # ============================================
-FROM gradle:8.5-jdk21-alpine AS builder
+FROM eclipse-temurin:25-jdk-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -33,7 +33,7 @@ RUN ls -lh build/libs/
 # ============================================
 # Stage 2: Runtime Stage (Production)
 # ============================================
-FROM eclipse-temurin:21-jre-alpine AS production
+FROM eclipse-temurin:25-jre-alpine AS production
 
 # Install curl for health checks
 RUN apk add --no-cache curl
@@ -77,7 +77,7 @@ ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
 # ============================================
 # Stage 3: Development Stage (Optional)
 # ============================================
-FROM eclipse-temurin:21-jdk-alpine AS development
+FROM eclipse-temurin:25-jdk-alpine AS development
 
 # Install curl and bash for debugging
 RUN apk add --no-cache curl bash
