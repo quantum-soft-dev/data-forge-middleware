@@ -79,16 +79,22 @@ public class Auth0SecurityConfig {
      */
     @Bean
     public JwtDecoder auth0JwtDecoder() {
-        NimbusJwtDecoder jwtDecoder = JwtDecoders.fromIssuerLocation(auth0Properties.api().issuer());
+        // Resolve the issuer/JWKS lazily on the first token validation rather than eagerly at startup.
+        // This mirrors Spring Boot's default behaviour for `issuer-uri` and lets the context start when
+        // the Auth0 tenant is unreachable (e.g. local Delta v2 gRPC testing). Behaviour is unchanged
+        // when Auth0 is configured — the network resolution simply happens on first admin/user request.
+        return new SupplierJwtDecoder(() -> {
+            NimbusJwtDecoder jwtDecoder = JwtDecoders.fromIssuerLocation(auth0Properties.api().issuer());
 
-        // Add custom validators (audience + default validators)
-        OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(auth0Properties.api().audience());
-        OAuth2TokenValidator<Jwt> defaultValidators = JwtValidators.createDefaultWithIssuer(auth0Properties.api().issuer());
-        OAuth2TokenValidator<Jwt> validator = new DelegatingOAuth2TokenValidator<>(defaultValidators, audienceValidator);
+            // Add custom validators (audience + default validators)
+            OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(auth0Properties.api().audience());
+            OAuth2TokenValidator<Jwt> defaultValidators = JwtValidators.createDefaultWithIssuer(auth0Properties.api().issuer());
+            OAuth2TokenValidator<Jwt> validator = new DelegatingOAuth2TokenValidator<>(defaultValidators, audienceValidator);
 
-        jwtDecoder.setJwtValidator(validator);
+            jwtDecoder.setJwtValidator(validator);
 
-        return jwtDecoder;
+            return jwtDecoder;
+        });
     }
 
     /**

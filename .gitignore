@@ -67,3 +67,6 @@ jacoco/
 deploy-script/parameters-*.json
 deploy-script/config/*.json
 !deploy-script/config/*.template
+
+# local dev: real Auth0 secrets (never commit)
+local-dev/auth0.env
