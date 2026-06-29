@@ -24,9 +24,18 @@ Auth0-less; behaviour is unchanged when Auth0 is configured:
 
 ```bash
 docker compose up -d postgres localstack redis
+./local-dev/ensure-bucket.sh          # make sure the S3 bucket exists
 ```
 
-localstack auto-creates the `dfm-uploads` bucket (see `docker/localstack/init-s3.sh`).
+`docker/localstack/init-s3.sh` is supposed to create the `dfm-uploads` bucket on a fresh
+localstack start, but a persisted/reused container can come up without it. When the bucket is
+missing the backend's `S3HealthIndicator` turns `/actuator/health` red (503) and Delta v2 S3
+writes (changelog segments / checkpoints) fail. `ensure-bucket.sh` is idempotent — run it any
+time, and always after `docker compose down -v`. Manual equivalent:
+
+```bash
+docker exec dfm-localstack awslocal s3 mb s3://dfm-uploads
+```
 
 ## 2. Run the backend (dev profile)
 
