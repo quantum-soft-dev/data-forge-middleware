@@ -426,4 +426,48 @@ describe('BatchDetailView', () => {
       expect(statusBadge).toHaveClass('bg-red-100', 'text-red-800');
     });
   });
+
+  describe('Delta v2 batches (T6.7)', () => {
+    const deltaBatch: BatchDetail = {
+      ...mockBatch,
+      uploadedFilesCount: 0,
+      totalSize: 0,
+      files: [],
+      deltaStats: [
+        { table: 'customers', inserts: 0, updates: 0, deletes: 3 },
+        { table: 'orders', inserts: 12, updates: 5, deletes: 1 },
+      ],
+    };
+
+    it('should render a per-table insert/update/delete stats table instead of the file list', () => {
+      renderWithQueryClient(
+        <BatchDetailView batch={deltaBatch} isLoading={false} error={null} />
+      );
+
+      expect(screen.getByText('Table Changes (2)')).toBeInTheDocument();
+      expect(screen.getByText('customers')).toBeInTheDocument();
+      expect(screen.getByText('orders')).toBeInTheDocument();
+      expect(screen.queryByText(/^Files \(/)).not.toBeInTheDocument();
+    });
+
+    it('should show tables/changes totals in the metadata grid', () => {
+      renderWithQueryClient(
+        <BatchDetailView batch={deltaBatch} isLoading={false} error={null} />
+      );
+
+      expect(screen.getByText('Tables')).toBeInTheDocument();
+      expect(screen.getByText('Changes')).toBeInTheDocument();
+      // 0+0+3 (customers) + 12+5+1 (orders) = 21
+      expect(screen.getByText('21')).toBeInTheDocument();
+    });
+
+    it('should still render the file list for v1 batches without deltaStats', () => {
+      renderWithQueryClient(
+        <BatchDetailView batch={mockBatch} isLoading={false} error={null} />
+      );
+
+      expect(screen.getByText(/^Files \(/)).toBeInTheDocument();
+      expect(screen.queryByText(/^Table Changes/)).not.toBeInTheDocument();
+    });
+  });
 });

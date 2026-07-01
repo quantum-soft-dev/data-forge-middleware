@@ -67,6 +67,7 @@ export function BatchDetailView({
     setSelectedFileIds(fileIds);
     onFileSelectionChange?.(fileIds);
   }, [onFileSelectionChange]);
+
   // Loading state
   if (isLoading) {
     return (
@@ -105,6 +106,13 @@ export function BatchDetailView({
       </div>
     );
   }
+
+  // T6.7: a Delta v2 batch has no uploaded_files — show per-table insert/update/delete
+  // stats instead (batch.uploadedFilesCount is always 0 for these).
+  const isDeltaBatch = (batch.deltaStats?.length ?? 0) > 0;
+  const deltaTotalChanges = isDeltaBatch
+    ? batch.deltaStats!.reduce((sum, t) => sum + t.inserts + t.updates + t.deletes, 0)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -184,62 +192,108 @@ export function BatchDetailView({
             </div>
           )}
 
-          <div>
-            <dt className="text-sm font-medium text-gray-500">Files</dt>
-            <dd className="mt-1 text-sm text-gray-900">
-              {batch.uploadedFilesCount} file{batch.uploadedFilesCount !== 1 ? 's' : ''}
-            </dd>
-          </div>
+          {isDeltaBatch ? (
+            <>
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Tables</dt>
+                <dd className="mt-1 text-sm text-gray-900">{batch.deltaStats!.length}</dd>
+              </div>
 
-          <div>
-            <dt className="text-sm font-medium text-gray-500">Total Size</dt>
-            <dd className="mt-1 text-sm text-gray-900">
-              {formatBytes(batch.totalSize)}
-            </dd>
-          </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Changes</dt>
+                <dd className="mt-1 text-sm text-gray-900">{deltaTotalChanges}</dd>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Files</dt>
+                <dd className="mt-1 text-sm text-gray-900">
+                  {batch.uploadedFilesCount} file{batch.uploadedFilesCount !== 1 ? 's' : ''}
+                </dd>
+              </div>
+
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Total Size</dt>
+                <dd className="mt-1 text-sm text-gray-900">
+                  {formatBytes(batch.totalSize)}
+                </dd>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Files section */}
-      <div>
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-medium text-gray-900">
-            Files ({batch.files.length})
+      {/* Files section (v1) or per-table Delta v2 stats */}
+      {isDeltaBatch ? (
+        <div>
+          <h3 className="mb-4 text-lg font-medium text-gray-900">
+            Table Changes ({batch.deltaStats!.length})
           </h3>
-
-          {/* T077, T099: Action buttons for selected files */}
-          <div className="flex items-center gap-2">
-            {/* T077: Download button for selected files */}
-            <DownloadButton
-              batchId={batch.id}
-              selectedFileIds={selectedFileIds}
-              batchStatus={batch.status}
-              zipFilename={`batch-${batch.id}.zip`}
-            />
-
-            {/* T099: Excel export button for selected CSV files */}
-            <ExcelButton
-              batchId={batch.id}
-              selectedFileIds={selectedFileIds}
-              batchStatus={batch.status}
-              excelFilename={`batch-${batch.id}.xlsx`}
-            />
-
-            {/* Spec 009: Compare files button */}
-            <CompareButton
-              batchId={batch.id}
-              siteId={batch.siteId}
-              selectedFileIds={selectedFileIds}
-              batchStatus={batch.status}
-            />
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase text-gray-500">Table</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Inserted</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Updated</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Deleted</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 bg-white">
+                {batch.deltaStats!.map((stat) => (
+                  <tr key={stat.table}>
+                    <td className="px-4 py-2 text-sm font-medium text-gray-900">{stat.table}</td>
+                    <td className="px-4 py-2 text-right text-sm text-gray-700">{stat.inserts}</td>
+                    <td className="px-4 py-2 text-right text-sm text-gray-700">{stat.updates}</td>
+                    <td className="px-4 py-2 text-right text-sm text-gray-700">{stat.deletes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
+      ) : (
+        <div>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-lg font-medium text-gray-900">
+              Files ({batch.files.length})
+            </h3>
 
-        <FileTable
-          files={batch.files}
-          onSelectionChange={handleSelectionChange}
-        />
-      </div>
+            {/* T077, T099: Action buttons for selected files */}
+            <div className="flex items-center gap-2">
+              {/* T077: Download button for selected files */}
+              <DownloadButton
+                batchId={batch.id}
+                selectedFileIds={selectedFileIds}
+                batchStatus={batch.status}
+                zipFilename={`batch-${batch.id}.zip`}
+              />
+
+              {/* T099: Excel export button for selected CSV files */}
+              <ExcelButton
+                batchId={batch.id}
+                selectedFileIds={selectedFileIds}
+                batchStatus={batch.status}
+                excelFilename={`batch-${batch.id}.xlsx`}
+              />
+
+              {/* Spec 009: Compare files button */}
+              <CompareButton
+                batchId={batch.id}
+                siteId={batch.siteId}
+                selectedFileIds={selectedFileIds}
+                batchStatus={batch.status}
+              />
+            </div>
+          </div>
+
+          <FileTable
+            files={batch.files}
+            onSelectionChange={handleSelectionChange}
+          />
+        </div>
+      )}
 
       {/* T107: Conditionally show Errors or Comparison History (Added 2025-11-10) */}
       {batch.hasErrors ? (
