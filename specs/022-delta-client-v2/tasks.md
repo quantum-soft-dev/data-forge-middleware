@@ -76,7 +76,7 @@ delete counts per table, computed once at commit and persisted alongside the seg
 - [x] **T6.3** Wire `ChangeRecordStats.computeByTable` into `ChangelogSegmentService.persist`, store on the segment _(tests: unit — persisted segment's stats match the records passed in)_
 - [x] **T6.4** `BatchDetailDto.deltaStats` (per-table list) sourced from `ChangelogSegmentRepository.findByBatchId`; wire into `BatchHistoryService.getBatchDetails` _(tests: unit service mapping — present for Delta batches, empty/absent for v1; contract — response shape)_
 - [x] **T6.5** `BatchSummaryDto.deltaRecordCount` / `.deltaTableCount` (list-view signal, not full breakdown); bulk-fetch segments for a page via new `ChangelogSegmentRepository.findByBatchIdIn` _(tests: unit — `listBatchHistory` mapping, no N+1)_
-- [ ] **T6.6** Frontend: extend `BatchSummary`/`BatchDetail` types; `BatchListView` shows "N changes • M tables" instead of "0 files • 0 B" for Delta batches _(tests: vitest)_
+- [x] **T6.6** Frontend: extend `BatchSummary`/`BatchDetail` types; `BatchListView` shows "N changes • M tables" instead of "0 files • 0 B" for Delta batches _(tests: vitest)_
 - [ ] **T6.7** Frontend: `BatchDetailView` renders a per-table insert/update/delete stats table for Delta batches _(tests: vitest)_
 - [ ] **T6.8** Docs: note the history stats surface in `docs/delta-client-v2-guide.md` / CR; refresh `SESSION-HANDOFF.md` _(no tests; doc change)_
 

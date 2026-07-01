@@ -590,6 +590,46 @@ describe('BatchListView', () => {
     });
   });
 
+  describe('Delta v2 batches (T6.6)', () => {
+    it('should show changes/tables instead of files for a Delta batch', () => {
+      const deltaBatch: BatchSummary = {
+        ...mockBatches[0],
+        uploadedFilesCount: 0,
+        totalSize: 0,
+        deltaRecordCount: 34,
+        deltaTableCount: 6,
+      };
+
+      render(
+        <BatchListView
+          batches={[deltaBatch]}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/34 changes • 6 tables/i)).toBeInTheDocument();
+      expect(screen.queryByText(/files/i)).not.toBeInTheDocument();
+    });
+
+    it('should still show file count for v1 batches without a Delta signal', () => {
+      render(
+        <BatchListView
+          batches={[mockBatches[0]]}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/5 files/i)).toBeInTheDocument();
+      expect(screen.queryByText(/changes/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe('Site Filter', () => {
     const mockSites = [
       { id: '123e4567-e89b-12d3-a456-426614174001', accountId: 'acc-1', domain: 'site1.com', name: 'Site 1', isActive: true, createdAt: '2025-01-01' },

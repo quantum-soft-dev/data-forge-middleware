@@ -289,7 +289,15 @@ export function BatchListView({
                     {siteLookup?.get(batch.siteId) && (
                       <span className="font-medium">{siteLookup.get(batch.siteId)} • </span>
                     )}
-                    {batch.uploadedFilesCount} files • {formatBytes(batch.totalSize)}
+                    {batch.deltaTableCount != null ? (
+                      <>
+                        {batch.deltaRecordCount ?? 0} changes • {batch.deltaTableCount} tables
+                      </>
+                    ) : (
+                      <>
+                        {batch.uploadedFilesCount} files • {formatBytes(batch.totalSize)}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
