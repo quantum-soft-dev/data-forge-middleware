@@ -2,12 +2,18 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.TableChangeStats;
+import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
+import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.*;
 
 /**
@@ -50,5 +56,26 @@ class ChangelogSegmentServiceTest {
 
         verify(storage, never()).delete(any());
         verify(repository, never()).deleteById(any());
+    }
+
+    @Test
+    void persistComputesPerTableStatsFromRecords() {
+        UUID site = UUID.randomUUID();
+        UUID batch = UUID.randomUUID();
+        List<ChangeRecord> records = List.of(
+                rec("orders", Op.INSERT, 1), rec("orders", Op.INSERT, 2), rec("customers", Op.DELETE, 3));
+        when(storage.uploadSegment(eq(site), eq(batch), any())).thenReturn("delta/site/segments/x.pb.gz");
+        ArgumentCaptor<ChangelogSegment> captor = ArgumentCaptor.forClass(ChangelogSegment.class);
+        when(repository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.persist(site, batch, "DELTA", 1L, records);
+
+        Map<String, TableChangeStats> stats = captor.getValue().getStats();
+        assertEquals(new TableChangeStats(2, 0, 0), stats.get("orders"));
+        assertEquals(new TableChangeStats(0, 0, 1), stats.get("customers"));
+    }
+
+    private static ChangeRecord rec(String table, Op op, long seq) {
+        return ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq).build();
     }
 }

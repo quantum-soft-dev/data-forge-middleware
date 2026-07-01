@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.springframework.stereotype.Service;
@@ -11,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -48,9 +50,10 @@ public class ChangelogSegmentService {
         String s3Key = storage.uploadSegment(siteId, batchId, content);
 
         long lastSeq = records.isEmpty() ? firstSeq - 1 : records.get(records.size() - 1).getSeq();
+        Map<String, TableChangeStats> stats = ChangeRecordStats.computeByTable(records);
 
         ChangelogSegment segment = ChangelogSegment.create(
-                siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, null);
+                siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, stats);
         return repository.save(segment);
     }
 
