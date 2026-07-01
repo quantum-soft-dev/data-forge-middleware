@@ -1,9 +1,9 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.TableStats;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -25,25 +25,15 @@ public final class SessionReconciler {
      * @return {@code true} if the actual records exactly match the declared counts
      */
     public static boolean reconcile(List<ChangeRecord> accepted, Map<String, TableStats> declared) {
-        Map<String, long[]> actual = new HashMap<>();
-        for (ChangeRecord record : accepted) {
-            long[] counts = actual.computeIfAbsent(record.getTable(), k -> new long[3]);
-            switch (record.getOp()) {
-                case INSERT -> counts[0]++;
-                case UPDATE -> counts[1]++;
-                case DELETE -> counts[2]++;
-                default -> {
-                }
-            }
-        }
+        Map<String, TableChangeStats> actual = ChangeRecordStats.computeByTable(accepted);
 
         if (!actual.keySet().equals(declared.keySet())) {
             return false;
         }
         for (Map.Entry<String, TableStats> entry : declared.entrySet()) {
-            long[] a = actual.get(entry.getKey());
+            TableChangeStats a = actual.get(entry.getKey());
             TableStats d = entry.getValue();
-            if (a[0] != d.getInserts() || a[1] != d.getUpdates() || a[2] != d.getDeletes()) {
+            if (a.inserts() != d.getInserts() || a.updates() != d.getUpdates() || a.deletes() != d.getDeletes()) {
                 return false;
             }
         }
