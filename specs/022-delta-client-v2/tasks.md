@@ -71,8 +71,8 @@ Delta v2 batches show "0 files" in Upload History (correct — Delta writes no `
 only changelog segments). Surface the real per-run signal instead: tables touched + insert/update/
 delete counts per table, computed once at commit and persisted alongside the segment.
 
-- [ ] **T6.1** Extract per-table I/U/D counting into `ChangeRecordStats.computeByTable(records)`; refactor `SessionReconciler.reconcile` to use it _(tests: unit — new `ChangeRecordStatsTest`; existing `SessionReconcilerTest` stays green unmodified in behavior)_
-- [ ] **T6.2** `V32__changelog_segment_stats.sql`: nullable `stats JSONB` on `changelog_segments`; `TableChangeStats` record + `ChangelogSegment.stats` (Hypersistence `JsonBinaryType`, mirrors `SiteSchema.schemaData`) _(tests: integration — persist/reload round-trip; null-safe for pre-migration rows)_
+- [x] **T6.1** Extract per-table I/U/D counting into `ChangeRecordStats.computeByTable(records)`; refactor `SessionReconciler.reconcile` to use it _(tests: unit — new `ChangeRecordStatsTest`; existing `SessionReconcilerTest` stays green unmodified in behavior)_
+- [x] **T6.2** `V32__changelog_segment_stats.sql`: nullable `stats JSONB` on `changelog_segments`; `TableChangeStats` record + `ChangelogSegment.stats` (Hypersistence `JsonBinaryType`, mirrors `SiteSchema.schemaData`) _(tests: integration — persist/reload round-trip; null-safe for pre-migration rows)_
 - [ ] **T6.3** Wire `ChangeRecordStats.computeByTable` into `ChangelogSegmentService.persist`, store on the segment _(tests: unit — persisted segment's stats match the records passed in)_
 - [ ] **T6.4** `BatchDetailDto.deltaStats` (per-table list) sourced from `ChangelogSegmentRepository.findByBatchId`; wire into `BatchHistoryService.getBatchDetails` _(tests: unit service mapping — present for Delta batches, empty/absent for v1; contract — response shape)_
 - [ ] **T6.5** `BatchSummaryDto.deltaRecordCount` / `.deltaTableCount` (list-view signal, not full breakdown); bulk-fetch segments for a page via new `ChangelogSegmentRepository.findByBatchIdIn` _(tests: unit — `listBatchHistory` mapping, no N+1)_

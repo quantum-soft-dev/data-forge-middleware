@@ -1,10 +1,13 @@
 package com.bitbi.dfm.delta.domain;
 
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -55,10 +58,22 @@ public class ChangelogSegment {
     private LocalDateTime createdAt;
 
     /**
+     * Per-table insert/update/delete counts for this segment's records, keyed by table name.
+     * Nullable: pre-existing segments (before this field was added) have no stats — batch history
+     * simply shows no per-table breakdown for them.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "stats", columnDefinition = "jsonb")
+    private Map<String, TableChangeStats> stats;
+
+    /**
      * Create a changelog segment record.
+     *
+     * @param stats per-table insert/update/delete counts, or {@code null} if not computed
      */
     public static ChangelogSegment create(UUID siteId, UUID batchId, long firstSeq, long lastSeq,
-                                          long recordCount, String contentHash, String s3Key, String mode) {
+                                          long recordCount, String contentHash, String s3Key, String mode,
+                                          Map<String, TableChangeStats> stats) {
         ChangelogSegment segment = new ChangelogSegment();
         segment.id = UUID.randomUUID();
         segment.siteId = siteId;
@@ -69,6 +84,7 @@ public class ChangelogSegment {
         segment.contentHash = contentHash;
         segment.s3Key = s3Key;
         segment.mode = mode;
+        segment.stats = stats;
         segment.createdAt = LocalDateTime.now();
         return segment;
     }

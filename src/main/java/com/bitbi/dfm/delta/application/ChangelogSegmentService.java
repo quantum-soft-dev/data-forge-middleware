@@ -50,7 +50,7 @@ public class ChangelogSegmentService {
         long lastSeq = records.isEmpty() ? firstSeq - 1 : records.get(records.size() - 1).getSeq();
 
         ChangelogSegment segment = ChangelogSegment.create(
-                siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode);
+                siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, null);
         return repository.save(segment);
     }
 
