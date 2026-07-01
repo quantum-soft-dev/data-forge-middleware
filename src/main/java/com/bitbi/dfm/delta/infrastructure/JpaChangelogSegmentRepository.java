@@ -32,6 +32,10 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findByBatchId(UUID batchId);
 
     @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId IN :batchIds")
+    java.util.List<ChangelogSegment> findByBatchIdIn(java.util.List<UUID> batchIds);
+
+    @Override
     @Query("SELECT DISTINCT s.siteId FROM ChangelogSegment s")
     java.util.List<UUID> findDistinctSiteIds();
 }

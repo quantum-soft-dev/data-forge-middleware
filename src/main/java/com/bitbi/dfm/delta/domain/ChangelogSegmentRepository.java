@@ -22,5 +22,11 @@ public interface ChangelogSegmentRepository {
 
     List<ChangelogSegment> findByBatchId(UUID batchId);
 
+    /**
+     * Bulk-fetch segments for a page of batches (batch history list view), avoiding one
+     * query per batch.
+     */
+    List<ChangelogSegment> findByBatchIdIn(List<UUID> batchIds);
+
     List<UUID> findDistinctSiteIds();
 }

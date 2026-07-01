@@ -113,9 +113,18 @@ public class BatchHistoryService {
                 ? projections.subList(0, pageSize)
                 : projections;
 
+        // Bulk-fetch each page batch's changelog segment (Delta v2 signal), one query for the
+        // whole page instead of one per batch.
+        Map<UUID, ChangelogSegment> segmentsByBatchId = pageItems.isEmpty()
+                ? Map.of()
+                : changelogSegmentRepository
+                        .findByBatchIdIn(pageItems.stream().map(BatchWithFileCountProjection::getId).toList())
+                        .stream()
+                        .collect(Collectors.toMap(ChangelogSegment::getBatchId, s -> s));
+
         // Convert projections to DTOs
         List<BatchSummaryDto> dtos = pageItems.stream()
-                .map(BatchSummaryDto::fromProjection)
+                .map(p -> BatchSummaryDto.fromProjection(p, segmentsByBatchId.get(p.getId())))
                 .collect(Collectors.toList());
 
         // Generate cursor for next page

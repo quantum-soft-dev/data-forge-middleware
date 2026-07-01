@@ -1,25 +1,32 @@
 package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
 import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
+import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
+import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.TableChangeStats;
+import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 /**
- * T6.4 — batch history detail surfaces a Delta v2 batch's per-table insert/update/delete
- * counts (from its changelog segment) instead of always showing an empty file list.
+ * T6.4/T6.5 — batch history surfaces a Delta v2 batch's real per-run signal (per-table
+ * insert/update/delete counts in detail, totals in the list view) instead of the always-zero
+ * file count (Delta writes no {@code uploaded_files}).
  */
 class BatchHistoryServiceTest {
 
@@ -61,5 +68,63 @@ class BatchHistoryServiceTest {
         BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
 
         assertTrue(dto.deltaStats().isEmpty());
+    }
+
+    @Test
+    void listBatchHistoryIncludesDeltaTotalsFromBulkFetchedSegments() {
+        UUID accountId = UUID.randomUUID();
+        Site site = Site.createForTesting(accountId, "delta.test", "Delta Test");
+        when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
+
+        UUID batchId = UUID.randomUUID();
+        BatchWithFileCountProjection projection = mock(BatchWithFileCountProjection.class);
+        when(projection.getId()).thenReturn(batchId);
+        when(projection.getSiteId()).thenReturn(site.getId());
+        when(projection.getStatus()).thenReturn("COMPLETED");
+        when(projection.getHasErrors()).thenReturn(false);
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getFileCount()).thenReturn(0);
+        when(projection.getTotalSize()).thenReturn(0L);
+        when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
+
+        ChangelogSegment segment = mock(ChangelogSegment.class);
+        when(segment.getBatchId()).thenReturn(batchId);
+        when(segment.getRecordCount()).thenReturn(34L);
+        when(segment.getStats()).thenReturn(Map.of(
+                "a", new TableChangeStats(1, 0, 0), "b", new TableChangeStats(0, 1, 0)));
+        when(changelogSegmentRepository.findByBatchIdIn(anyList())).thenReturn(List.of(segment));
+
+        CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
+
+        BatchSummaryDto dto = page.items().get(0);
+        assertEquals(34L, dto.deltaRecordCount());
+        assertEquals(2, dto.deltaTableCount());
+    }
+
+    @Test
+    void listBatchHistoryHasNullDeltaTotalsForV1Batches() {
+        UUID accountId = UUID.randomUUID();
+        Site site = Site.createForTesting(accountId, "v1.test", "V1 Test");
+        when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
+
+        UUID batchId = UUID.randomUUID();
+        BatchWithFileCountProjection projection = mock(BatchWithFileCountProjection.class);
+        when(projection.getId()).thenReturn(batchId);
+        when(projection.getSiteId()).thenReturn(site.getId());
+        when(projection.getStatus()).thenReturn("COMPLETED");
+        when(projection.getHasErrors()).thenReturn(false);
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getFileCount()).thenReturn(2);
+        when(projection.getTotalSize()).thenReturn(2048L);
+        when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
+        when(changelogSegmentRepository.findByBatchIdIn(anyList())).thenReturn(List.of());
+
+        CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
+
+        BatchSummaryDto dto = page.items().get(0);
+        assertNull(dto.deltaRecordCount());
+        assertNull(dto.deltaTableCount());
     }
 }
