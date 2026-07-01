@@ -35,8 +35,29 @@ Migrations: **V29, V30, V31** (no new migration for Task 3 frames — frame key 
 
 **Integration suite green**: `./gradlew integrationTest` → 164 tests, 0 failures (30 skipped). Per-commit gate green on every commit.
 
+## Task 6 — DONE ✅ (Batch history: Delta per-table stats, post-review addition)
+Upload History showed real Delta batches as "0 files" (correct — Delta writes no `uploaded_files` —
+but not useful). Added the real per-run signal:
+- **T6.1** `ChangeRecordStats.computeByTable` extracted from `SessionReconciler` (shared, behavior unchanged).
+- **T6.2** V32: nullable `stats` JSONB on `changelog_segments` + `ChangelogSegment.stats` (Hypersistence, mirrors `SiteSchema.schemaData`) + `TableChangeStats` record.
+- **T6.3** `ChangelogSegmentService.persist` computes and stores the per-table stats on commit.
+- **T6.4** `BatchDetailDto.deltaStats` (per-table list, sorted by table) via `ChangelogSegmentRepository.findByBatchId`.
+- **T6.5** `BatchSummaryDto.deltaRecordCount`/`.deltaTableCount` (list-view totals) via bulk `findByBatchIdIn` (one query per page, not per batch).
+- **T6.6/T6.7** Frontend: `BatchListView` shows "N changes • M tables"; `BatchDetailView` renders a Table/Inserted/Updated/Deleted breakdown (hides the file list/download-excel-compare actions, which don't apply) for Delta batches. v1 batches unaffected.
+- **T6.8** This entry + [docs/delta-client-v2-guide.md](../../docs/delta-client-v2-guide.md) "Upload History" section.
+
+All null/empty for v1 file-based batches. Backend gate + full frontend suite (797 tests) green on every commit.
+
+**Found mid-session, not yet actioned**: [ui-requirements.md](./ui-requirements.md) — a design brief (not
+written by this agent) for a much larger "Delta Sync" screen/tab (sync-state card, checkpoints table,
+force-rebuild/re-baseline actions) requiring **new backend endpoints** (`.../delta/sync-state`,
+`.../delta/checkpoints`, `.../delta/segments`, `.../delta/checkpoints/rebuild`, `.../delta/rebaseline`).
+Its §5 ("Screen 1") is exactly what Task 6 above implements; §6–§8 (the "Delta Sync" tab) are new, unscoped
+work — surfaced to the user, not started.
+
 ## Next ⬜
 - **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._ Egress is in place: floor `checkpoints/{site}/{table}/seq={seq}/snapshot.parquet` + change feed `egress/{site}/{table}/_change_date=…/`.
+- **Decide on `ui-requirements.md` §6–§8** ("Delta Sync" tab + new endpoints) — separate scope from Task 6, user's call whether/when to pick up.
 - **PR.3** — mark PR #39 ready, ensure CI `backend-test` green, address automated review, squash-merge. _Gated on the manual T4.4; user's call._
 
 **PR.2 DONE** ✅ — [`docs/delta-client-v2-guide.md`](../../docs/delta-client-v2-guide.md) (gRPC contract, auth, full lifecycle, value typing/FR-004, keyless rules, reconciliation, resume/gap/re-baseline, continuous mode, backpressure, error codes, type mapping, pseudocode). CR links it.

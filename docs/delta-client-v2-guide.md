@@ -434,6 +434,15 @@ You don't write these — they're how downstream tools read your data:
 
 Checkpoints (and therefore egress) are produced **asynchronously** by a server scheduler, not per session.
 
+## Upload History (dashboard) shows per-table stats, not files
+
+A Delta v2 session writes no `uploaded_files` — the `Batch` row it produces always has
+`uploadedFilesCount=0`. The dashboard's Upload History surfaces the real per-run signal instead:
+`GET /api/v1/history/batches/{batchId}` returns `deltaStats: [{table, inserts, updates, deletes}]`
+(computed once at commit from the accepted records and persisted on the segment), and the list
+endpoint returns lightweight `deltaRecordCount`/`deltaTableCount` totals. Both are empty/null for
+v1 file-based batches.
+
 ---
 
 ## End-to-end example (pseudocode)
