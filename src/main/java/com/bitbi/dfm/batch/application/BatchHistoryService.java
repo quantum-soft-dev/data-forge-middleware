@@ -8,6 +8,9 @@ import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
+import com.bitbi.dfm.batch.presentation.dto.DeltaTableStatsDto;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.slf4j.Logger;
@@ -20,6 +23,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -52,10 +57,13 @@ public class BatchHistoryService {
 
     private final JpaBatchRepository batchRepository;
     private final JpaSiteRepository siteRepository;
+    private final ChangelogSegmentRepository changelogSegmentRepository;
 
-    public BatchHistoryService(JpaBatchRepository batchRepository, JpaSiteRepository siteRepository) {
+    public BatchHistoryService(JpaBatchRepository batchRepository, JpaSiteRepository siteRepository,
+                               ChangelogSegmentRepository changelogSegmentRepository) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
+        this.changelogSegmentRepository = changelogSegmentRepository;
     }
 
     /**
@@ -249,6 +257,20 @@ public class BatchHistoryService {
         logger.info("Returning batch details for batchId={} with {} files",
                 batchId, batch.getUploadedFiles().size());
 
-        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles());
+        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles(), resolveDeltaStats(batchId));
+    }
+
+    /**
+     * Per-table insert/update/delete counts for a Delta v2 batch, sorted by table name for a
+     * stable display order. Empty for v1 file-based batches (no changelog segment).
+     */
+    private List<DeltaTableStatsDto> resolveDeltaStats(UUID batchId) {
+        return changelogSegmentRepository.findByBatchId(batchId).stream()
+                .map(ChangelogSegment::getStats)
+                .filter(Objects::nonNull)
+                .flatMap(stats -> stats.entrySet().stream())
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> DeltaTableStatsDto.of(entry.getKey(), entry.getValue()))
+                .toList();
     }
 }

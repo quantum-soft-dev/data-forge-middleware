@@ -344,7 +344,11 @@ class BatchHistoryContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.files[0].id").exists())
                 .andExpect(jsonPath("$.files[0].originalFileName").exists())
                 .andExpect(jsonPath("$.files[0].fileSize").isNumber())
-                .andExpect(jsonPath("$.files[0].uploadedAt").exists());
+                .andExpect(jsonPath("$.files[0].uploadedAt").exists())
+
+                // T6.4: deltaStats always present (empty for this v1 file-based batch)
+                .andExpect(jsonPath("$.deltaStats").isArray())
+                .andExpect(jsonPath("$.deltaStats").isEmpty());
     }
 
     /**
