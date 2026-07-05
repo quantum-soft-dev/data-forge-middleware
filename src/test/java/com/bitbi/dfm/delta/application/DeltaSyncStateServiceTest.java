@@ -9,6 +9,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -72,5 +74,76 @@ class DeltaSyncStateServiceTest {
 
         assertEquals(80L, state.getLastCheckpointSeq(), "checkpoint pointer must not regress");
         verify(repository, never()).save(any());
+    }
+
+    // --- B2: persistent rebaseline/rebuild request flags ---
+
+    @Test
+    void getSyncStateReportsNeedRebaselineWhenFlagSet() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        assertTrue(service.getSyncState(SITE).needRebaseline());
+    }
+
+    @Test
+    void getSyncStateReportsProceedWhenFlagNotSet() {
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+        assertFalse(service.getSyncState(SITE).needRebaseline());
+    }
+
+    @Test
+    void requestRebaselineSetsFlagAndPersistsCreatingRowIfAbsent() {
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
+
+        service.requestRebaseline(SITE);
+
+        ArgumentCaptor<SiteSyncState> saved = ArgumentCaptor.forClass(SiteSyncState.class);
+        verify(repository).save(saved.capture());
+        assertTrue(saved.getValue().isRebaselineRequested());
+    }
+
+    @Test
+    void requestRebuildSetsFlagAndPersists() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.requestRebuild(SITE);
+
+        assertTrue(state.isRebuildRequested());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void clearRebuildRequestedResetsFlag() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebuild();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.clearRebuildRequested(SITE);
+
+        assertFalse(state.isRebuildRequested());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void clearRebuildRequestedIsNoOpWhenRowAbsent() {
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
+        service.clearRebuildRequested(SITE);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void resetForRebaselineClearsRebaselineFlag() {
+        // The flag is consumed when the FULL_SNAPSHOT session actually starts
+        // (DeltaRebaselineService.reset -> resetForRebaseline).
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+
+        state.resetForRebaseline(41L);
+
+        assertFalse(state.isRebaselineRequested());
+        assertEquals(41L, state.getLastAppliedSeq());
     }
 }

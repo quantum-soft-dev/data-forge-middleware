@@ -43,6 +43,12 @@ public class SiteSyncState {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "rebaseline_requested", nullable = false)
+    private boolean rebaselineRequested = false;
+
+    @Column(name = "rebuild_requested", nullable = false)
+    private boolean rebuildRequested = false;
+
     /**
      * Create the initial sync state for a site (no changes applied yet).
      *
@@ -90,7 +96,29 @@ public class SiteSyncState {
         this.lastAppliedSeq = lastAppliedSeq;
         this.lastCheckpointSeq = 0L;
         this.lastCheckpointAt = null;
+        this.rebaselineRequested = false;
         this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Flag the site for a full re-baseline: {@code GetSyncState} answers NEED_REBASELINE until the
+     * client starts its FULL_SNAPSHOT session (which clears the flag via {@link #resetForRebaseline}).
+     */
+    public void requestRebaseline() {
+        this.rebaselineRequested = true;
+    }
+
+    /**
+     * Flag the site for a forced out-of-schedule checkpoint rebuild; cleared via
+     * {@link #clearRebuildRequested()} once the rebuild completes.
+     */
+    public void requestRebuild() {
+        this.rebuildRequested = true;
+    }
+
+    /** Clear the forced-rebuild flag after the rebuild attempt completes. */
+    public void clearRebuildRequested() {
+        this.rebuildRequested = false;
     }
 
     /**

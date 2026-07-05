@@ -36,8 +36,51 @@ public class DeltaSyncStateService {
                         state.getLastAppliedSeq(),
                         state.getLastCheckpointSeq(),
                         state.getSchemaVersion(),
-                        false))
+                        state.isRebaselineRequested()))
                 .orElseGet(() -> new SyncStateView(0L, 0L, 0, false));
+    }
+
+    /**
+     * Flag a site for a full re-baseline (creating the sync state row if absent): the next
+     * {@code GetSyncState} answers NEED_REBASELINE; the flag is consumed when the client starts
+     * its FULL_SNAPSHOT session ({@link SiteSyncState#resetForRebaseline}).
+     *
+     * @param siteId site identifier
+     */
+    @Transactional
+    public void requestRebaseline(UUID siteId) {
+        SiteSyncState state = repository.findBySiteId(siteId)
+                .orElseGet(() -> SiteSyncState.initial(siteId));
+        state.requestRebaseline();
+        repository.save(state);
+    }
+
+    /**
+     * Flag a site for a forced out-of-schedule checkpoint rebuild (creating the sync state row
+     * if absent); cleared via {@link #clearRebuildRequested} once the rebuild completes.
+     *
+     * @param siteId site identifier
+     */
+    @Transactional
+    public void requestRebuild(UUID siteId) {
+        SiteSyncState state = repository.findBySiteId(siteId)
+                .orElseGet(() -> SiteSyncState.initial(siteId));
+        state.requestRebuild();
+        repository.save(state);
+    }
+
+    /**
+     * Clear the forced-rebuild flag after the rebuild attempt completes. No-op when the site has
+     * no sync state row.
+     *
+     * @param siteId site identifier
+     */
+    @Transactional
+    public void clearRebuildRequested(UUID siteId) {
+        repository.findBySiteId(siteId).ifPresent(state -> {
+            state.clearRebuildRequested();
+            repository.save(state);
+        });
     }
 
     /**
