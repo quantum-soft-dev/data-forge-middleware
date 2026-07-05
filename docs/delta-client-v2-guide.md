@@ -472,7 +472,30 @@ A Delta v2 session writes no `uploaded_files` — the `Batch` row it produces al
 `GET /api/v1/history/batches/{batchId}` returns `deltaStats: [{table, inserts, updates, deletes}]`
 (computed once at commit from the accepted records and persisted on the segment), and the list
 endpoint returns lightweight `deltaRecordCount`/`deltaTableCount` totals. Both are empty/null for
-v1 file-based batches.
+v1 file-based batches. The batch detail additionally carries the session `mode`
+(DELTA / CONTINUOUS / FULL_SNAPSHOT) and `seqRange {first, last}` (feature 023, B9).
+
+## Delta Sync UI (feature 023)
+
+Since feature 023 the dashboard has a monitoring/management layer over Delta v2 — a **Delta Sync**
+tab on the site-detail page (V2 sites only) plus a sync-health badge in the site list. It is backed
+by REST endpoints under the existing UI namespaces (Auth0 OAuth2; owner routes verify site
+ownership, admin routes require ROLE_ADMIN):
+
+| Endpoint | Method | Access | Purpose |
+|---|---|---|---|
+| `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags; 404 until the client first connects |
+| `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with `hasCsv`/`hasParquet` presence flags |
+| `.../delta/checkpoints/{table}/download?format=csv\|parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click |
+| `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
+| `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
+| `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session starts |
+| `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
+
+All endpoints are documented in the OpenAPI spec (`/v3/api-docs`, Swagger UI).
+
+**Client-visible effect**: the "Request full re-baseline" UI action is now the public trigger for
+the `NEED_REBASELINE` recovery path described above — previously the flag had no public writer.
 
 ---
 
