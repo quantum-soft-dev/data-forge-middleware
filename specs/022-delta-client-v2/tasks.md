@@ -93,7 +93,7 @@ path are untouched.
 
 - [x] **T7.1** `ClientApiVersionGuard.assertHttpFileApiAllowed(siteId)` (site/application) + nested `HttpFileApiDisabledException` (carries `code = CLIENT_API_V2_REQUIRED`) _(tests: unit — V1 site passes; V2 site throws; unknown site no-op (auth layer owns that failure))_
 - [x] **T7.2** Enforce on legacy v1 endpoints: `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{batchId}/upload`, `POST /api/dfc/schema` → 409 + code. Fixtures: pin seeded sites to `V1`, add V2 site `store-v2.example.com` + its IN_PROGRESS batch _(tests: contract — V2 site rejected on all three with code; V1 site still 201/200 (existing tests); complete/fail/cancel still allowed for V2 site)_
-- [ ] **T7.3** Enforce on device HTTP endpoints: `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{batchId}/upload` → 409 + code via `DeviceControllerHelper` _(tests: contract — V2 site rejected with code; V1 site unaffected (existing tests); device error logging still works for V2 site)_
+- [x] **T7.3** Enforce on device HTTP endpoints: `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{batchId}/upload` → 409 + code via `DeviceControllerHelper` _(tests: contract — V2 site rejected with code; V1 site unaffected (existing tests); device error logging still works for V2 site)_
 - [ ] **T7.4** Docs: CR + `delta-client-v2-guide.md` (client migration note) + SESSION-HANDOFF refresh _(no tests; doc change)_
 
 ## Pre-PR (before opening the PR to `develop`)

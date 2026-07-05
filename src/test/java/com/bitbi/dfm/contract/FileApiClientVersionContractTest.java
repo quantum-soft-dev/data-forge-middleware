@@ -91,4 +91,53 @@ class FileApiClientVersionContractTest extends BaseIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk());
     }
+
+    // --- Device HTTP client API (/api/v1/device/**) ---
+
+    @Test
+    @DisplayName("Should reject /api/v1/device/batches/start with 409 CLIENT_API_V2_REQUIRED for V2 site")
+    void shouldRejectDeviceBatchStartWhenSiteIsV2() throws Exception {
+        mockMvc.perform(post("/api/v1/device/batches/start")
+                        .header("Authorization", v2Token())
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(EXPECTED_CODE))
+                .andExpect(jsonPath("$.status").value(409));
+    }
+
+    @Test
+    @DisplayName("Should reject /api/v1/device/files/batches/{id}/upload with 409 CLIENT_API_V2_REQUIRED for V2 site")
+    void shouldRejectDeviceFileUploadWhenSiteIsV2() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "files", "data.csv", "text/csv", "id,name\n1,test\n".getBytes());
+
+        mockMvc.perform(multipart("/api/v1/device/files/batches/" + V2_BATCH_ID + "/upload")
+                        .file(file)
+                        .header("Authorization", v2Token()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(EXPECTED_CODE));
+    }
+
+    @Test
+    @DisplayName("Should still allow /api/v1/device/batches/{id}/fail for V2 site (drain)")
+    void shouldAllowDeviceBatchFailWhenSiteIsV2() throws Exception {
+        mockMvc.perform(post("/api/v1/device/batches/" + V2_BATCH_ID + "/fail")
+                        .header("Authorization", v2Token())
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Should still allow /api/v1/device/errors for V2 site (no gRPC replacement yet)")
+    void shouldAllowDeviceErrorLoggingWhenSiteIsV2() throws Exception {
+        String errorBody = """
+                {"type": "UPLOAD_FAILED", "message": "connectivity check failed"}
+                """;
+
+        mockMvc.perform(post("/api/v1/device/errors")
+                        .header("Authorization", v2Token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(errorBody))
+                .andExpect(status().is2xxSuccessful());
+    }
 }

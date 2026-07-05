@@ -3,6 +3,7 @@ package com.bitbi.dfm.shared.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import com.bitbi.dfm.site.application.ClientApiVersionGuard;
 import com.bitbi.dfm.upload.application.FileUploadService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -147,5 +148,18 @@ public final class DeviceControllerHelper {
     public static ResponseEntity<?> handleConcurrentBatchLimitException(BatchLifecycleService.ConcurrentBatchLimitException e) {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .body(createErrorResponse(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests", e.getMessage()));
+    }
+
+    /**
+     * Handle ClientApiVersionGuard.HttpFileApiDisabledException and return 409 Conflict
+     * with machine-readable {@code code = CLIENT_API_V2_REQUIRED} (022, Task 7).
+     *
+     * @param e Exception raised for a V2 (Delta gRPC) site on an HTTP file-path write endpoint
+     * @return 409 Conflict response with {@code code} field
+     */
+    public static ResponseEntity<?> handleHttpFileApiDisabledException(ClientApiVersionGuard.HttpFileApiDisabledException e) {
+        Map<String, Object> error = createErrorResponse(HttpStatus.CONFLICT, "Conflict", e.getMessage());
+        error.put("code", ClientApiVersionGuard.ERROR_CODE);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 }
