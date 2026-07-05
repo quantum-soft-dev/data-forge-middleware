@@ -15,6 +15,14 @@
 export type SiteType = 'DBF' | 'POSTGRES_CDC';
 
 /**
+ * Client ingestion API version — a separate axis from SiteType.
+ *
+ * V1 = legacy HTTP client API (full snapshot uploads)
+ * V2 = Delta gRPC client API (changelog ingest + checkpoints)
+ */
+export type ClientApiVersion = 'V1' | 'V2';
+
+/**
  * Site entity representing a monitored domain/website.
  *
  * @property id - Unique site identifier
@@ -25,6 +33,7 @@ export type SiteType = 'DBF' | 'POSTGRES_CDC';
  * @property retentionDays - Retention period in days for batch cleanup
  * @property createdAt - Creation timestamp (ISO 8601 string)
  * @property siteType - Site type determining data ingestion method
+ * @property clientApiVersion - Client ingestion API version (V1 legacy HTTP, V2 Delta gRPC)
  */
 export interface Site {
   id: string;
@@ -35,6 +44,7 @@ export interface Site {
   retentionDays: number;
   createdAt: string;
   siteType: SiteType;
+  clientApiVersion: ClientApiVersion;
 }
 
 /**

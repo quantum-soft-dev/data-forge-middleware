@@ -108,6 +108,15 @@ export function SiteListItem({
                 >
                   {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' : 'DBF'}
                 </Badge>
+                {site.clientApiVersion === 'V2' ? (
+                  <Badge className="border-transparent bg-[#EBF2FB] text-[#3C82D8] hover:bg-[#E0ECFA]">
+                    Delta v2
+                  </Badge>
+                ) : (
+                  <Badge className="border-transparent bg-[#F5F5F4] text-[#736F6D] hover:bg-[#EFEFEF]">
+                    v1
+                  </Badge>
+                )}
               </div>
               <p className="text-sm text-muted-foreground truncate">{site.name}</p>
               <p className="text-xs text-muted-foreground mt-1">
