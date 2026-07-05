@@ -6,7 +6,11 @@
  * TanStack Query; the empty state replaces the entire tab body (D9a).
  */
 
-import { useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries';
+import { toast } from 'sonner';
+import { useDeltaCheckpoints, useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries';
+import { presignCheckpointDownload } from '@/features/delta-sync/api/deltaSyncApi';
+import type { DeltaCheckpointFormat } from '@/features/delta-sync/model/types';
+import { CheckpointsCard } from '@/features/delta-sync/ui/CheckpointsCard';
 import { computeLag, getSyncSeverity } from '@/features/delta-sync/model/severity';
 import { useLagHistory } from '@/features/delta-sync/model/useLagHistory';
 import { ActivityCard } from '@/features/delta-sync/ui/ActivityCard';
@@ -23,8 +27,20 @@ export interface DeltaSyncWidgetProps {
 
 export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetProps) {
   const syncStateQuery = useDeltaSyncState(siteId, { admin });
+  const checkpointsQuery = useDeltaCheckpoints(siteId, { admin });
   // Throughput bars are admin-only while P2 (owner lite segments) is pending.
   const segmentsQuery = useDeltaSegments(siteId, { enabled: canManage, limit: 20 });
+
+  // Every click mints a fresh presigned URL (15-min TTL) — never cached (§9).
+  const handleDownload = async (tableName: string, format: DeltaCheckpointFormat) => {
+    try {
+      const download = await presignCheckpointDownload(siteId, tableName, format, { admin });
+      window.open(download.downloadUrl, '_blank', 'noopener');
+      toast.success('Download link generated · valid 15 minutes');
+    } catch {
+      toast.error('Something went wrong. Please try again.');
+    }
+  };
 
   const lag = syncStateQuery.data ? computeLag(syncStateQuery.data) : null;
   const lagSamples = useLagHistory(lag, syncStateQuery.dataUpdatedAt ?? 0);
@@ -61,6 +77,12 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         severity={severity}
         segments={segmentsQuery.data}
         showThroughput={canManage}
+      />
+      <CheckpointsCard
+        checkpoints={checkpointsQuery.data ?? []}
+        canManage={canManage}
+        onDownload={handleDownload}
+        rebuildQueued={state.rebuildRequested}
       />
     </div>
   );

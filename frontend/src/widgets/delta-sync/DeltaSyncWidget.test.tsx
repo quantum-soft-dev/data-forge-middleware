@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { DeltaSyncWidget } from './DeltaSyncWidget'
-import { useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries'
+import { useDeltaCheckpoints, useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries'
 import type { DeltaSyncState } from '@/features/delta-sync/model/types'
 
 vi.mock('@/features/delta-sync/api/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/delta-sync/api/queries')>()
-  return { ...actual, useDeltaSyncState: vi.fn(), useDeltaSegments: vi.fn() }
+  return { ...actual, useDeltaSyncState: vi.fn(), useDeltaSegments: vi.fn(), useDeltaCheckpoints: vi.fn() }
 })
 
 const mockedUseDeltaSyncState = vi.mocked(useDeltaSyncState)
 const mockedUseDeltaSegments = vi.mocked(useDeltaSegments)
+const mockedUseDeltaCheckpoints = vi.mocked(useDeltaCheckpoints)
 
 const state: DeltaSyncState = {
   lastAppliedSeq: 4821,
@@ -38,6 +39,11 @@ beforeEach(() => {
     isLoading: false,
     isError: false,
   } as ReturnType<typeof useDeltaSegments>)
+  mockedUseDeltaCheckpoints.mockReturnValue({
+    data: [],
+    isLoading: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useDeltaCheckpoints>)
 })
 
 describe('DeltaSyncWidget (F5)', () => {
