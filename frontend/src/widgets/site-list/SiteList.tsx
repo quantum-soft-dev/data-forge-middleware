@@ -26,6 +26,8 @@ import {
 import { AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useNavigate } from '@tanstack/react-router';
+import { useDeltaSyncHealth } from '@/features/delta-sync/api/queries';
+import { SyncHealthPill } from '@/features/delta-sync/ui/SyncHealthPill';
 
 interface SiteListProps {
   /**
@@ -54,6 +56,10 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
   const userSitesQuery = useSites({ enabled: !isAdminContext }); // disabled when admin context
 
   const { data: sites, isLoading, error } = isAdminContext ? adminSitesQuery : userSitesQuery;
+
+  // Bulk sync health for all V2 sites of the account — one request per 30s poll (B10/F11).
+  const healthQuery = useDeltaSyncHealth({ accountId });
+  const healthBySiteId = new Map((healthQuery.data ?? []).map((entry) => [entry.siteId, entry]));
 
   // Use admin or user mutations based on context
   const userUpdateMutation = useUpdateSiteStatus();
@@ -157,6 +163,13 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
         <SiteListItem
           key={site.id}
           site={site}
+          statusSlot={
+            <SyncHealthPill
+              clientApiVersion={site.clientApiVersion}
+              health={healthBySiteId.get(site.id)}
+              isLoading={healthQuery.isLoading}
+            />
+          }
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
           onOpen={handleOpen}

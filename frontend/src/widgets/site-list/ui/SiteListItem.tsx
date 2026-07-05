@@ -30,6 +30,8 @@ import { format } from 'date-fns';
 
 interface SiteListItemProps {
   site: Site;
+  /** Right-aligned status content (023, F11 — sync health pill). Wraps under the name on narrow widths. */
+  statusSlot?: React.ReactNode;
   /** Open the site-detail page (023, F3). Makes the site info block clickable. */
   onOpen?: (siteId: string) => void;
   onActivate?: (siteId: string) => void;
@@ -42,6 +44,7 @@ interface SiteListItemProps {
 
 export function SiteListItem({
   site,
+  statusSlot,
   onOpen,
   onActivate,
   onDeactivate,
@@ -87,7 +90,7 @@ export function SiteListItem({
     <>
       <Card>
         <CardContent className="p-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             {/* Site info (clickable when onOpen is provided) */}
             <div
               className={`flex-1 min-w-0${onOpen ? ' cursor-pointer' : ''}`}
@@ -158,6 +161,13 @@ export function SiteListItem({
                 </div>
               )}
             </div>
+
+            {/* Sync health (023, F11) — right-aligned, wraps under the name before the actions */}
+            {statusSlot !== undefined && (
+              <div className="order-3 basis-full sm:order-none sm:basis-auto sm:ml-auto flex items-center">
+                {statusSlot}
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex items-center gap-2">
