@@ -39,15 +39,18 @@ public class FileUploadController {
     private final TokenService tokenService;
     private final com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService;
     private final com.bitbi.dfm.site.domain.SiteRepository siteRepository;
+    private final com.bitbi.dfm.site.application.ClientApiVersionGuard clientApiVersionGuard;
 
     public FileUploadController(FileUploadService fileUploadService,
                                 TokenService tokenService,
                                 com.bitbi.dfm.batch.application.BatchLifecycleService batchLifecycleService,
-                                com.bitbi.dfm.site.domain.SiteRepository siteRepository) {
+                                com.bitbi.dfm.site.domain.SiteRepository siteRepository,
+                                com.bitbi.dfm.site.application.ClientApiVersionGuard clientApiVersionGuard) {
         this.fileUploadService = fileUploadService;
         this.tokenService = tokenService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteRepository = siteRepository;
+        this.clientApiVersionGuard = clientApiVersionGuard;
     }
 
     /**
@@ -99,6 +102,8 @@ public class FileUploadController {
                             .body(createErrorResponse(HttpStatus.FORBIDDEN,
                                   "Cannot upload files to inactive site. Please activate the site first."));
                 }
+
+                clientApiVersionGuard.assertHttpFileApiAllowed(batch.getSiteId());
             } catch (com.bitbi.dfm.batch.application.BatchLifecycleService.BatchNotFoundException e) {
                 logger.warn("Batch not found during authorization check: {}", batchId);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -130,6 +135,12 @@ public class FileUploadController {
             response.put("files", uploadedFiles);
 
             return ResponseEntity.ok(response);
+
+        } catch (com.bitbi.dfm.site.application.ClientApiVersionGuard.HttpFileApiDisabledException e) {
+            logger.warn("HTTP file API disabled for V2 site: {}", e.getMessage());
+            Map<String, Object> error = createErrorResponse(HttpStatus.CONFLICT, e.getMessage());
+            error.put("code", com.bitbi.dfm.site.application.ClientApiVersionGuard.ERROR_CODE);
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
 
         } catch (FileUploadService.BatchNotFoundException e) {
             logger.warn("Batch not found: {}", batchId);

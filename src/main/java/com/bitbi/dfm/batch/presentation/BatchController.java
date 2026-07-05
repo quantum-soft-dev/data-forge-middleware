@@ -4,6 +4,7 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.presentation.dto.BatchResponseDto;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
+import com.bitbi.dfm.site.application.ClientApiVersionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -35,10 +36,13 @@ public class BatchController {
 
     private final BatchLifecycleService batchLifecycleService;
     private final AuthorizationHelper authorizationHelper;
+    private final ClientApiVersionGuard clientApiVersionGuard;
 
-    public BatchController(BatchLifecycleService batchLifecycleService, AuthorizationHelper authorizationHelper) {
+    public BatchController(BatchLifecycleService batchLifecycleService, AuthorizationHelper authorizationHelper,
+                           ClientApiVersionGuard clientApiVersionGuard) {
         this.batchLifecycleService = batchLifecycleService;
         this.authorizationHelper = authorizationHelper;
+        this.clientApiVersionGuard = clientApiVersionGuard;
     }
 
     /**
@@ -59,6 +63,8 @@ public class BatchController {
             UUID siteId = authorizationHelper.getAuthenticatedSiteId();
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
 
+            clientApiVersionGuard.assertHttpFileApiAllowed(siteId);
+
             logger.info("Starting batch: siteId={}", siteId);
 
             Batch batch = batchLifecycleService.startBatch(accountId, siteId);
@@ -70,6 +76,11 @@ public class BatchController {
             logger.warn("Unauthorized batch start: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
+
+        } catch (ClientApiVersionGuard.HttpFileApiDisabledException e) {
+            logger.warn("HTTP file API disabled for V2 site: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(createV2RejectionResponse(e));
 
         } catch (BatchLifecycleService.ActiveBatchExistsException e) {
             logger.warn("Active batch exists: {}", e.getMessage());
@@ -337,6 +348,12 @@ public class BatchController {
         error.put("status", status.value());
         error.put("error", status.getReasonPhrase());
         error.put("message", message);
+        return error;
+    }
+
+    private Map<String, Object> createV2RejectionResponse(ClientApiVersionGuard.HttpFileApiDisabledException e) {
+        Map<String, Object> error = createErrorResponse(HttpStatus.CONFLICT, e.getMessage());
+        error.put("code", ClientApiVersionGuard.ERROR_CODE);
         return error;
     }
 }
