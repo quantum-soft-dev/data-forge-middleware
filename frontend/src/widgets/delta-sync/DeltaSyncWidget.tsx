@@ -6,12 +6,21 @@
  * TanStack Query; the empty state replaces the entire tab body (D9a).
  */
 
+import { useState } from 'react';
 import { toast } from 'sonner';
-import { useDeltaCheckpoints, useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries';
+import {
+  useDeltaCheckpoints,
+  useDeltaSegments,
+  useDeltaSyncState,
+  useRebuildCheckpoint,
+  useRequestRebaseline,
+} from '@/features/delta-sync/api/queries';
 import { presignCheckpointDownload } from '@/features/delta-sync/api/deltaSyncApi';
 import type { DeltaCheckpointFormat } from '@/features/delta-sync/model/types';
 import { CheckpointsCard } from '@/features/delta-sync/ui/CheckpointsCard';
 import { RecentSegmentsCard } from '@/features/delta-sync/ui/RecentSegmentsCard';
+import { RebaselineCard } from '@/features/delta-sync/ui/RebaselineCard';
+import { RebaselineDialog, RebuildCheckpointDialog } from '@/features/delta-sync/ui/DeltaSyncDialogs';
 import { computeLag, getSyncSeverity } from '@/features/delta-sync/model/severity';
 import { useLagHistory } from '@/features/delta-sync/model/useLagHistory';
 import { ActivityCard } from '@/features/delta-sync/ui/ActivityCard';
@@ -31,6 +40,28 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
   const checkpointsQuery = useDeltaCheckpoints(siteId, { admin });
   // Throughput bars are admin-only while P2 (owner lite segments) is pending.
   const segmentsQuery = useDeltaSegments(siteId, { enabled: canManage, limit: 20 });
+
+  const [rebuildDialogOpen, setRebuildDialogOpen] = useState(false);
+  const [rebaselineDialogOpen, setRebaselineDialogOpen] = useState(false);
+
+  const rebuildMutation = useRebuildCheckpoint(siteId);
+  const rebaselineMutation = useRequestRebaseline(siteId, { admin });
+
+  const handleRebuildConfirm = () => {
+    setRebuildDialogOpen(false);
+    rebuildMutation.mutate(undefined, {
+      onSuccess: () => toast.success('Checkpoint rebuild scheduled'),
+      onError: () => toast.error('Something went wrong. Please try again.'),
+    });
+  };
+
+  const handleRebaselineConfirm = () => {
+    setRebaselineDialogOpen(false);
+    rebaselineMutation.mutate(undefined, {
+      onSuccess: () => toast.success('Full re-baseline requested'),
+      onError: () => toast.error('Something went wrong. Please try again.'),
+    });
+  };
 
   // Every click mints a fresh presigned URL (15-min TTL) — never cached (§9).
   const handleDownload = async (tableName: string, format: DeltaCheckpointFormat) => {
@@ -83,11 +114,26 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         checkpoints={checkpointsQuery.data ?? []}
         canManage={canManage}
         onDownload={handleDownload}
+        onRebuild={() => setRebuildDialogOpen(true)}
         rebuildQueued={state.rebuildRequested}
       />
       {canManage && (
         <RecentSegmentsCard segments={segmentsQuery.data ?? []} isLoading={segmentsQuery.isLoading} />
       )}
+      <RebaselineCard
+        rebaselineRequested={state.rebaselineRequested}
+        onRequest={() => setRebaselineDialogOpen(true)}
+      />
+      <RebuildCheckpointDialog
+        open={rebuildDialogOpen}
+        onOpenChange={setRebuildDialogOpen}
+        onConfirm={handleRebuildConfirm}
+      />
+      <RebaselineDialog
+        open={rebaselineDialogOpen}
+        onOpenChange={setRebaselineDialogOpen}
+        onConfirm={handleRebaselineConfirm}
+      />
     </div>
   );
 }
