@@ -1,10 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   formatBytes,
   formatDateTime,
   formatDate,
   formatTime,
   formatDuration,
+  formatNumber,
+  formatRelativeTime,
+  formatShortDate,
 } from './formatters';
 
 describe('formatBytes', () => {
@@ -91,5 +94,45 @@ describe('formatDuration', () => {
   it('should format hours', () => {
     expect(formatDuration(3600000)).toBe('1.0h');
     expect(formatDuration(7200000)).toBe('2.0h');
+  });
+});
+
+describe('formatNumber', () => {
+  it('formats with en-US thousands separators', () => {
+    expect(formatNumber(0)).toBe('0');
+    expect(formatNumber(999)).toBe('999');
+    expect(formatNumber(4821)).toBe('4,821');
+    expect(formatNumber(1204500)).toBe('1,204,500');
+  });
+
+  it('handles negative values', () => {
+    expect(formatNumber(-1500)).toBe('-1,500');
+  });
+});
+
+describe('formatRelativeTime', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders a relative phrase with suffix', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-05T12:00:00Z'));
+
+    expect(formatRelativeTime('2026-07-05T09:00:00Z')).toBe('about 3 hours ago');
+    expect(formatRelativeTime('2026-07-05T11:59:40Z')).toBe('less than a minute ago');
+  });
+});
+
+describe('formatShortDate', () => {
+  it('formats as "MMM DD, HH:mm" for dense table cells', () => {
+    // Zero-padded day and 24h time per the design spec ("Jul 05, 12:41").
+    // Timezone-agnostic assertions, consistent with the formatDateTime tests above.
+    expect(formatShortDate('2026-07-05T12:41:00Z')).toMatch(/^Jul \d{2}, \d{2}:\d{2}$/);
+    expect(formatShortDate('2026-01-09T09:05:00Z')).toMatch(/^Jan \d{2}, \d{2}:\d{2}$/);
+  });
+
+  it('never renders seconds', () => {
+    expect(formatShortDate('2026-07-05T12:41:33Z')).not.toMatch(/:\d{2}:\d{2}/);
   });
 });
