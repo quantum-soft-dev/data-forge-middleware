@@ -79,4 +79,25 @@ public class AsyncConfiguration {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * Single-thread executor for forced checkpoint rebuilds (feature 023, B7).
+     *
+     * <p>One thread serializes admin-triggered rebuilds (a checkpoint build can be heavy); a
+     * small queue absorbs bursts across sites.</p>
+     *
+     * @return configured executor for forced checkpoint rebuilds
+     */
+    @Bean(name = "deltaRebuildExecutor")
+    public Executor deltaRebuildExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(20);
+        executor.setThreadNamePrefix("delta-rebuild-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
+    }
 }

@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
+import com.bitbi.dfm.delta.application.DeltaCheckpointRebuildService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
@@ -18,13 +19,16 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -49,15 +53,18 @@ public class DeltaSyncAdminController {
 
     private final DeltaSyncStateService syncStateService;
     private final DeltaCheckpointQueryService checkpointQueryService;
+    private final DeltaCheckpointRebuildService checkpointRebuildService;
     private final ChangelogSegmentService changelogSegmentService;
     private final SiteService siteService;
 
     public DeltaSyncAdminController(DeltaSyncStateService syncStateService,
                                     DeltaCheckpointQueryService checkpointQueryService,
+                                    DeltaCheckpointRebuildService checkpointRebuildService,
                                     ChangelogSegmentService changelogSegmentService,
                                     SiteService siteService) {
         this.syncStateService = syncStateService;
         this.checkpointQueryService = checkpointQueryService;
+        this.checkpointRebuildService = checkpointRebuildService;
         this.changelogSegmentService = changelogSegmentService;
         this.siteService = siteService;
     }
@@ -157,6 +164,36 @@ public class DeltaSyncAdminController {
         return checkpointQueryService.presignDownload(siteId, tableName, format)
                 .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Queue a forced out-of-schedule checkpoint rebuild.
+     * <p>
+     * POST /api/v1/sites/{siteId}/delta/checkpoints/rebuild
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 202 Accepted once the rebuild is flagged and scheduled
+     */
+    @PostMapping("/checkpoints/rebuild")
+    @Operation(
+            summary = "Rebuild checkpoint now (admin)",
+            description = "Sets the persistent rebuild_requested flag (shown as 'Rebuild queued' in the UI) and runs "
+                    + "the checkpoint build asynchronously outside the regular schedule; the flag is cleared when "
+                    + "the rebuild completes."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Checkpoint rebuild scheduled",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Map<String, String>> rebuildCheckpoint(@PathVariable UUID siteId) {
+        siteService.getSite(siteId); // 404 when the site does not exist
+        checkpointRebuildService.requestRebuild(siteId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "scheduled"));
     }
 
     /**
