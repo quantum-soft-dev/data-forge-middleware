@@ -31,6 +31,15 @@ public interface ChangelogSegmentRepository {
     List<UUID> findDistinctSiteIds();
 
     /**
+     * The most recent segments of a site, newest first (Delta Sync UI, B6).
+     *
+     * @param siteId site identifier
+     * @param limit  maximum segments to return
+     * @return up to {@code limit} segments ordered by createdAt desc (firstSeq desc as tie-breaker)
+     */
+    List<ChangelogSegment> findRecentBySiteId(UUID siteId, int limit);
+
+    /**
      * Pick pending egress work: for every site with un-egressed segments, the earliest one
      * (lowest {@code first_seq}) — so delta files publish in seq order per site — locked with
      * {@code FOR UPDATE SKIP LOCKED} so concurrent workers (or instances) never double-process.

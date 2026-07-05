@@ -1,9 +1,11 @@
 package com.bitbi.dfm.delta.presentation;
 
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
+import com.bitbi.dfm.delta.presentation.dto.DeltaSegmentResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaSyncStateResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
@@ -42,15 +44,21 @@ import java.util.UUID;
 @SecurityRequirement(name = "oauth2")
 public class DeltaSyncAdminController {
 
+    private static final int DEFAULT_SEGMENTS_LIMIT = 20;
+    private static final int MAX_SEGMENTS_LIMIT = 100;
+
     private final DeltaSyncStateService syncStateService;
     private final DeltaCheckpointQueryService checkpointQueryService;
+    private final ChangelogSegmentService changelogSegmentService;
     private final SiteService siteService;
 
     public DeltaSyncAdminController(DeltaSyncStateService syncStateService,
                                     DeltaCheckpointQueryService checkpointQueryService,
+                                    ChangelogSegmentService changelogSegmentService,
                                     SiteService siteService) {
         this.syncStateService = syncStateService;
         this.checkpointQueryService = checkpointQueryService;
+        this.changelogSegmentService = changelogSegmentService;
         this.siteService = siteService;
     }
 
@@ -149,5 +157,42 @@ public class DeltaSyncAdminController {
         return checkpointQueryService.presignDownload(siteId, tableName, format)
                 .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * List the most recent changelog segments of any site, newest first.
+     * <p>
+     * GET /api/v1/sites/{siteId}/delta/segments?limit=20
+     * </p>
+     * <p>Admin only — owner lite projection deferred until product decision P2
+     * (specs/022-delta-client-v2/ui-redesign-tasks.md).</p>
+     *
+     * @param siteId site identifier
+     * @param limit  maximum segments to return (default 20, max 100)
+     * @return segments ordered by createdAt desc (empty array when none)
+     */
+    @GetMapping("/segments")
+    @Operation(
+            summary = "List recent changelog segments (admin)",
+            description = "Returns the site's most recent changelog segments (seq range, record count, session mode, "
+                    + "created time), newest first. Storage keys are never exposed."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Segments retrieved",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<List<DeltaSegmentResponseDto>> listSegments(
+            @PathVariable UUID siteId,
+            @RequestParam(defaultValue = "" + DEFAULT_SEGMENTS_LIMIT) int limit) {
+        siteService.getSite(siteId); // 404 when the site does not exist
+        int effectiveLimit = Math.clamp(limit, 1, MAX_SEGMENTS_LIMIT);
+        List<DeltaSegmentResponseDto> response = changelogSegmentService.listRecentSegments(siteId, effectiveLimit).stream()
+                .map(DeltaSegmentResponseDto::fromEntity)
+                .toList();
+        return ResponseEntity.ok(response);
     }
 }

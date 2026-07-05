@@ -68,6 +68,18 @@ public class ChangelogSegmentService {
     }
 
     /**
+     * The most recent segments of a site, newest first (Delta Sync UI, B6 — admin surface).
+     *
+     * @param siteId site identifier
+     * @param limit  maximum segments to return
+     * @return up to {@code limit} segments ordered by createdAt desc
+     */
+    @Transactional(readOnly = true)
+    public List<ChangelogSegment> listRecentSegments(UUID siteId, int limit) {
+        return repository.findRecentBySiteId(siteId, limit);
+    }
+
+    /**
      * Delete all changelog segments (object storage + metadata) for a batch. Called before a batch is
      * removed by retention/admin so the {@code changelog_segments.batch_id} foreign key does not block
      * the delete and no S3 segment object is orphaned.

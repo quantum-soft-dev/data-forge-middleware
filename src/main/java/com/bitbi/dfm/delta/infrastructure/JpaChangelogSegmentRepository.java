@@ -42,6 +42,15 @@ public interface JpaChangelogSegmentRepository
     @Override
     @Query(value = """
             SELECT * FROM changelog_segments s
+            WHERE s.site_id = :siteId
+            ORDER BY s.created_at DESC, s.first_seq DESC
+            LIMIT :limit
+            """, nativeQuery = true)
+    java.util.List<ChangelogSegment> findRecentBySiteId(UUID siteId, int limit);
+
+    @Override
+    @Query(value = """
+            SELECT * FROM changelog_segments s
             WHERE s.egress_at IS NULL
               AND NOT EXISTS (SELECT 1 FROM changelog_segments e
                               WHERE e.site_id = s.site_id
