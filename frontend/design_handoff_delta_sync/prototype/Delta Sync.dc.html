@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; background: #FFFFFF; }
+    @keyframes dfPulse { 0% { box-shadow: 0 0 0 0 rgba(22,163,74,.45); } 70% { box-shadow: 0 0 0 6px rgba(22,163,74,0); } 100% { box-shadow: 0 0 0 0 rgba(22,163,74,0); } }
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#FFFFFF;font-family:'Geist',ui-sans-serif,system-ui,sans-serif;color:#2B2827;-webkit-font-smoothing:antialiased;padding-bottom:80px">
+
+  <!-- ===== Prototype control strip ===== -->
+  <div style="display:flex;justify-content:center;padding:14px 24px 0">
+    <div style="display:flex;align-items:center;gap:14px;background:#F5F5F4;border-radius:9999px;padding:6px 8px 6px 18px">
+      <span style="font-size:12px;color:#736F6D">Prototype · viewing as</span>
+      <div style="display:flex;gap:4px;background:rgba(0,0,0,0.04);border-radius:9999px;padding:3px">
+        <button onClick="{{ setOwner }}" style="padding:4px 14px;border-radius:9999px;font-size:13px;font-weight:500;font-family:inherit;border:none;cursor:pointer;background:{{ roleOwnerBg }};color:{{ roleOwnerColor }};box-shadow:{{ roleOwnerShadow }}">Owner</button>
+        <button onClick="{{ setAdmin }}" style="padding:4px 14px;border-radius:9999px;font-size:13px;font-weight:500;font-family:inherit;border:none;cursor:pointer;background:{{ roleAdminBg }};color:{{ roleAdminColor }};box-shadow:{{ roleAdminShadow }}">Admin</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== App header ===== -->
+  <div style="max-width:1120px;margin:16px auto 0;padding:0 24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);padding:10px 16px">
+      <div style="display:flex;align-items:center;gap:24px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <img src="assets/data-forge-icon.svg" alt="" style="width:26px;height:26px">
+          <span style="font-size:17px;font-weight:600;letter-spacing:-0.24px">Data Forge</span>
+        </div>
+        <nav style="display:flex;gap:2px">
+          <a style="padding:6px 12px;border-radius:8px;font-size:14px;color:#736F6D;cursor:pointer;text-decoration:none" style-hover="background:#F5F5F4;color:#2B2827">Dashboard</a>
+          <a onClick="{{ goSites }}" style="padding:6px 12px;border-radius:8px;font-size:14px;cursor:pointer;text-decoration:none;color:{{ navSitesColor }};background:{{ navSitesBg }}" style-hover="background:#F5F5F4;color:#2B2827">Sites</a>
+          <a style="padding:6px 12px;border-radius:8px;font-size:14px;color:#736F6D;cursor:pointer;text-decoration:none" style-hover="background:#F5F5F4;color:#2B2827">Upload history</a>
+          <a style="padding:6px 12px;border-radius:8px;font-size:14px;color:#736F6D;cursor:pointer;text-decoration:none" style-hover="background:#F5F5F4;color:#2B2827">Admin</a>
+        </nav>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9999px;background:#fff;box-shadow:0 0 1.75px rgba(0,0,0,0.25),0 0 0 0.5px rgba(0,0,0,0.04);color:#736F6D">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+        </span>
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9999px;background:#EBF2FB;color:#3C82D8;font-size:13px;font-weight:500">MK</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================== -->
+  <!-- SCREEN: Sites list                                  -->
+  <!-- ================================================== -->
+  <sc-if value="{{ isSites }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Sites list" style="max-width:1120px;margin:28px auto 0;padding:0 24px;display:flex;flex-direction:column;gap:16px">
+      <div>
+        <h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.33px;line-height:1.1">Sites</h1>
+        <p style="margin:6px 0 0;font-size:14px;color:#736F6D">All your active sites. Sync health is shown for Delta v2 sites.</p>
+      </div>
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);overflow:hidden">
+        <sc-for list="{{ sites }}" as="site" hint-placeholder-count="5">
+          <div onClick="{{ site.onOpen }}" style="display:flex;align-items:center;gap:16px;padding:13px 20px;border-bottom:1px solid rgba(0,0,0,0.06);cursor:pointer;background:#fff" style-hover="background:#FAFAFA">
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;background:#fff;border:1px solid rgba(24,22,22,0.08);box-shadow:0 5px 4.375px rgba(0,0,0,0.01),0 5px 6.125px rgba(0,0,0,0.05);color:#736F6D;flex-shrink:0">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14a9 3 0 0 0 18 0V5"></path><path d="M3 12a9 3 0 0 0 18 0"></path></svg>
+            </span>
+            <div style="display:flex;flex-direction:column;gap:4px;min-width:280px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:14px;font-weight:500">{{ site.name }}</span>
+                <span style="display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:9999px;background:rgba(22,163,74,0.10);color:#15803D;font-size:11px;font-weight:500">
+                  <span style="width:5px;height:5px;border-radius:9999px;background:#16A34A"></span>
+                  Active
+                </span>
+                <span style="display:inline-flex;align-items:center;padding:1px 8px;border-radius:9999px;background:#F5F5F4;color:#736F6D;font-size:11px;font-weight:500">{{ site.type }}</span>
+                <span style="display:inline-flex;align-items:center;padding:1px 8px;border-radius:9999px;font-size:11px;font-weight:500;background:{{ site.apiBg }};color:{{ site.apiColor }}">{{ site.api }}</span>
+              </div>
+              <span style="font-size:12px;color:#A3A3A3">Created {{ site.created }} · Retention {{ site.retention }} days</span>
+            </div>
+            <div style="flex:1;display:flex;justify-content:flex-end;padding-right:4px">
+              <sc-if value="{{ site.health }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 11px;border-radius:9999px;font-size:12px;font-weight:500;background:{{ site.healthBg }};color:{{ site.healthColor }}">
+                  <span style="width:6px;height:6px;border-radius:9999px;background:{{ site.healthColor }}"></span>
+                  {{ site.healthLabel }}
+                </span>
+              </sc-if>
+              <sc-if value="{{ site.noHealth }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:12px;color:#A3A3A3">Snapshot uploads</span>
+              </sc-if>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              <button onClick="{{ stop }}" style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;background:#fff;border:1px solid rgba(0,0,0,0.12);color:#736F6D" style-hover="background:#F5F5F4">Deactivate</button>
+              <button onClick="{{ stop }}" style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;background:#fff;border:1px solid rgba(239,68,68,0.35);color:#B91C1C" style-hover="background:#FEF2F2">Delete</button>
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A3A3A3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="m9 18 6-6-6-6"></path></svg>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ================================================== -->
+  <!-- Site detail shell (sync + batch screens)            -->
+  <!-- ================================================== -->
+  <sc-if value="{{ isSiteDetail }}" hint-placeholder-val="{{ true }}">
+    <div style="max-width:1120px;margin:24px auto 0;padding:0 24px">
+      <a onClick="{{ goSites }}" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#736F6D;cursor:pointer;text-decoration:none" style-hover="color:#2B2827">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>
+        All sites
+      </a>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap">
+        <h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.33px;line-height:1.1">{{ siteName }}</h1>
+        <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:9999px;background:#F5F5F4;color:#736F6D;font-size:12px;font-weight:500">{{ siteType }}</span>
+        <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:9999px;font-size:12px;font-weight:500;background:{{ siteApiBg }};color:{{ siteApiColor }}">{{ siteApi }}</span>
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:9999px;background:rgba(22,163,74,0.10);color:#16A34A;font-size:12px;font-weight:500">
+          <span style="width:6px;height:6px;border-radius:9999px;background:#16A34A"></span>
+          Active
+        </span>
+      </div>
+      <p style="margin:6px 0 0;font-size:14px;color:#736F6D">{{ siteSubline }}</p>
+
+      <!-- Tabs: first iteration has no Overview — Upload history is the default tab -->
+      <div style="display:flex;gap:6px;margin-top:18px">
+        <button onClick="{{ goBatch }}" style="padding:7px 16px;border-radius:8px;font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;background:{{ tabBatchBg }};border:1px solid {{ tabBatchBorder }};color:{{ tabBatchColor }}" style-hover="background:#F5F5F4">Upload history</button>
+        <sc-if value="{{ siteIsV2 }}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{ goSync }}" style="padding:7px 16px;border-radius:8px;font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;background:{{ tabSyncBg }};border:1px solid {{ tabSyncBorder }};color:{{ tabSyncColor }}" style-hover="background:#F5F5F4">Delta Sync</button>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ================================================== -->
+  <!-- SCREEN: Delta Sync tab                              -->
+  <!-- ================================================== -->
+  <sc-if value="{{ isSync }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Delta Sync tab" style="max-width:1120px;margin:20px auto 0;padding:0 24px;display:flex;flex-direction:column;gap:16px">
+
+      <!-- Empty state: client has never connected -->
+      <sc-if value="{{ syncEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);padding:56px 24px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:9999px;background:#EBF2FB;color:#3C82D8">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14a9 3 0 0 0 18 0V5"></path><path d="M3 12a9 3 0 0 0 18 0"></path></svg>
+          </span>
+          <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px">No sync activity yet</div>
+          <p style="margin:0;font-size:13px;color:#736F6D;max-width:400px;line-height:1.45">The Delta client for this site has not connected yet. Sync state, checkpoints and activity will appear after the first session.</p>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ hasSyncState }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+
+      <!-- ===== Sync state (metric shell) ===== -->
+      <div style="background:#EFEFEF;border-radius:16px;padding:10px;display:grid;grid-template-columns:1fr 340px;gap:10px">
+
+        <!-- Lag card -->
+        <div style="background:#fff;border-radius:12px;box-shadow:0 1px 1.75px rgba(0,0,0,0.25),0 0 0.5px rgba(0,0,0,0.04);padding:20px 24px;display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;background:#fff;border:1px solid rgba(24,22,22,0.08);box-shadow:0 5px 4.375px rgba(0,0,0,0.01),0 5px 6.125px rgba(0,0,0,0.05);color:#3C82D8">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+              </span>
+              <div>
+                <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Sync lag</div>
+                <div style="font-size:12px;color:#A3A3A3">Records applied by the client but not yet checkpointed</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <sc-if value="{{ rebaselinePending }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 11px;border-radius:9999px;font-size:12px;font-weight:500;background:rgba(245,158,11,0.12);color:#B45309">Full snapshot scheduled</span>
+              </sc-if>
+              <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 11px;border-radius:9999px;font-size:12px;font-weight:500;background:{{ sevBg }};color:{{ sevText }}">
+                <span style="width:6px;height:6px;border-radius:9999px;background:{{ sevColor }}"></span>
+                {{ sevLabel }}
+              </span>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:baseline;gap:10px">
+            <span style="font-size:34px;font-weight:500;letter-spacing:-0.42px;line-height:1.1;font-variant-numeric:tabular-nums;color:{{ sevText }}">{{ lagFmt }}</span>
+            <span style="font-size:14px;color:#736F6D">records behind checkpoint</span>
+          </div>
+
+          <!-- Lag track: distance between checkpoint and applied pointers -->
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#736F6D;margin-bottom:8px">
+              <span>Last checkpoint · seq <span style="font-variant-numeric:tabular-nums;color:#2B2827;font-weight:500">{{ checkpointSeqFmt }}</span></span>
+              <span>Applied · seq <span style="font-variant-numeric:tabular-nums;color:#2B2827;font-weight:500">{{ appliedSeqFmt }}</span></span>
+            </div>
+            <div style="position:relative;height:34px">
+              <div style="position:absolute;left:0;right:0;top:6px;height:10px;border-radius:9999px;overflow:hidden;background:#F5F5F4">
+                <div style="position:absolute;left:0;top:0;bottom:0;width:22.4%;background:rgba(22,163,74,0.10)"></div>
+                <div style="position:absolute;left:22.4%;top:0;bottom:0;width:48.3%;background:rgba(245,158,11,0.10)"></div>
+                <div style="position:absolute;left:70.7%;top:0;bottom:0;right:0;background:rgba(239,68,68,0.10)"></div>
+              </div>
+              <div style="position:absolute;left:0;top:6px;height:10px;border-radius:9999px;transition:width .6s ease,background .6s ease;width:{{ lagPct }}%;background:{{ sevColor }}"></div>
+              <div style="position:absolute;top:2px;height:18px;width:1px;background:rgba(0,0,0,0.18);left:22.4%"></div>
+              <div style="position:absolute;top:2px;height:18px;width:1px;background:rgba(0,0,0,0.18);left:70.7%"></div>
+              <div style="position:absolute;top:0;width:14px;height:14px;border-radius:9999px;background:#fff;border:3px solid {{ sevColor }};transform:translateX(-50%);transition:left .6s ease,border-color .6s ease;left:{{ lagPct }}%;top:4px;box-sizing:border-box"></div>
+              <div style="position:absolute;top:24px;font-size:11px;color:#A3A3A3;left:22.4%;transform:translateX(-50%)">1k · watch</div>
+              <div style="position:absolute;top:24px;font-size:11px;color:#A3A3A3;left:70.7%;transform:translateX(-50%)">10k · critical</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right column: checkpoint + activity -->
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="flex:1;background:#fff;border-radius:12px;box-shadow:0 1px 1.75px rgba(0,0,0,0.25),0 0 0.5px rgba(0,0,0,0.04);padding:16px 18px;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:13px;font-weight:500;color:#403C3B">Last checkpoint</span>
+              <sc-if value="{{ rebuildScheduled }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-flex;padding:2px 9px;border-radius:9999px;font-size:11px;font-weight:500;background:#EBF2FB;color:#3C82D8">Rebuild queued</span>
+              </sc-if>
+            </div>
+            <div style="font-size:22px;font-weight:500;letter-spacing:-0.33px;font-variant-numeric:tabular-nums">seq {{ checkpointSeqFmt }}</div>
+            <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#736F6D">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              {{ lastCheckpointRel }}
+            </div>
+          </div>
+          <div style="flex:1;background:#fff;border-radius:12px;box-shadow:0 1px 1.75px rgba(0,0,0,0.25),0 0 0.5px rgba(0,0,0,0.04);padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:13px;font-weight:500;color:#403C3B">Schema version</span>
+              <a style="font-size:12px;color:#3C82D8;cursor:pointer;text-decoration:none" style-hover="text-decoration:underline">View schema</a>
+            </div>
+            <div style="font-size:16px;font-weight:500">v 12</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(0,0,0,0.06);padding-top:10px">
+              <span style="font-size:13px;font-weight:500;color:#403C3B">Last activity</span>
+              <sc-if value="{{ stalled }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:9999px;font-size:11px;font-weight:500;background:rgba(249,115,22,0.12);color:#C2410C">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+                  Sync stalled?
+                </span>
+              </sc-if>
+              <sc-if value="{{ notStalled }}" hint-placeholder-val="{{ true }}">
+                <span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;color:#16A34A;font-weight:500">{{ liveDot }} live · {{ updatedRel }}</span>
+              </sc-if>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== Activity: lag history + segment throughput ===== -->
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);padding:18px 24px;display:grid;grid-template-columns:1fr 1px 1fr;gap:24px">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <div style="font-size:14px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Lag history</div>
+            <div style="font-size:12px;color:#A3A3A3">Sampled on each poll · since page open</div>
+          </div>
+          <svg viewBox="0 0 240 56" preserveAspectRatio="none" style="width:100%;height:56px;display:block">
+            <polygon points="{{ sparkArea }}" fill="{{ sparkFill }}"></polygon>
+            <polyline points="{{ sparkPoints }}" fill="none" stroke="{{ sevColor }}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>
+          </svg>
+        </div>
+        <div style="background:rgba(0,0,0,0.06)"></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <div style="font-size:14px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Segment throughput</div>
+            <div style="font-size:12px;color:#A3A3A3">Records per changelog segment · last 16 segments</div>
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:6px;height:56px">
+            <sc-for list="{{ segBars }}" as="bar" hint-placeholder-count="16">
+              <div title="{{ bar.label }}" style="flex:1;border-radius:3px 3px 2px 2px;background:linear-gradient(180deg,#3C82D8,#C9DCF4);height:{{ bar.h }}px"></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== Checkpoints ===== -->
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid rgba(0,0,0,0.06)">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;background:#fff;border:1px solid rgba(24,22,22,0.08);box-shadow:0 5px 4.375px rgba(0,0,0,0.01),0 5px 6.125px rgba(0,0,0,0.05);color:#736F6D">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"></path><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path></svg>
+            </span>
+            <div>
+              <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Checkpoints</div>
+              <div style="font-size:12px;color:#A3A3A3">Materialized snapshot per table · download links valid 15 minutes</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:flex;gap:3px;background:rgba(0,0,0,0.04);border-radius:8px;padding:3px">
+              <button onClick="{{ showTable }}" style="padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;font-family:inherit;border:none;cursor:pointer;background:{{ viewTableBg }};color:{{ viewTableColor }};box-shadow:{{ viewTableShadow }}">Table</button>
+              <button onClick="{{ showCards }}" style="padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;font-family:inherit;border:none;cursor:pointer;background:{{ viewCardsBg }};color:{{ viewCardsColor }};box-shadow:{{ viewCardsShadow }}">Cards</button>
+            </div>
+            <sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{ openRebuild }}" style="display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;background:#fff;border:1px solid rgba(0,0,0,0.12);color:#2B2827" style-hover="background:#F5F5F4">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
+                Rebuild checkpoint now
+              </button>
+            </sc-if>
+          </div>
+        </div>
+
+        <!-- Table view -->
+        <sc-if value="{{ cpTableView }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:6px 8px 10px">
+            <div style="display:grid;grid-template-columns:1.4fr .8fr 1fr 1fr 1fr;padding:10px 14px;font-size:12px;font-weight:500;color:#736F6D">
+              <span>Table</span><span style="text-align:right">Seq</span><span style="text-align:right">Rows</span><span style="padding-left:28px">Last updated</span><span style="padding-left:28px">Files</span>
+            </div>
+            <sc-for list="{{ checkpoints }}" as="cp" hint-placeholder-count="6">
+              <div style="display:grid;grid-template-columns:1.4fr .8fr 1fr 1fr 1fr;align-items:center;padding:9px 14px;border-top:1px solid rgba(0,0,0,0.06);font-size:14px" style-hover="background:#FAFAFA">
+                <span style="display:flex;align-items:center;gap:8px;font-weight:500">
+                  {{ cp.table }}
+                  <sc-if value="{{ cp.stale }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:inline-flex;padding:1px 8px;border-radius:9999px;font-size:11px;font-weight:500;background:rgba(245,158,11,0.12);color:#B45309">stale</span>
+                  </sc-if>
+                </span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums;color:#736F6D">{{ cp.seqFmt }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums">{{ cp.rowsFmt }}</span>
+                <span style="padding-left:28px;font-size:13px;color:{{ cp.updatedColor }}">{{ cp.updated }}</span>
+                <span style="display:flex;align-items:center;gap:6px;padding-left:28px">
+                  <sc-if value="{{ cp.hasParquet }}" hint-placeholder-val="{{ true }}">
+                    <a onClick="{{ cp.onDownload }}" style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:9999px;font-size:12px;font-weight:500;background:#EBF2FB;color:#3C82D8;cursor:pointer;text-decoration:none" style-hover="background:#E0ECFA">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>
+                      Parquet
+                    </a>
+                  </sc-if>
+                  <sc-if value="{{ cp.parquetPending }}" hint-placeholder-val="{{ false }}">
+                    <span title="Full Parquet snapshot has not been materialized yet" style="display:inline-flex;align-items:center;padding:2px 10px;border-radius:9999px;font-size:12px;font-weight:500;border:1px dashed rgba(0,0,0,0.18);color:#A3A3A3">Parquet pending</span>
+                  </sc-if>
+                  <sc-if value="{{ cp.hasCsv }}" hint-placeholder-val="{{ true }}">
+                    <a onClick="{{ cp.onDownload }}" title="Legacy · used by Bit BI" style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:9999px;font-size:12px;font-weight:500;background:#F5F5F4;color:#736F6D;cursor:pointer;text-decoration:none" style-hover="background:#EFEFEF">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>
+                      CSV
+                    </a>
+                  </sc-if>
+                  <sc-if value="{{ cp.noFiles }}" hint-placeholder-val="{{ false }}">
+                    <span style="color:#A3A3A3;font-size:13px">—</span>
+                  </sc-if>
+                </span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <!-- Cards view -->
+        <sc-if value="{{ cpCardsView }}" hint-placeholder-val="{{ false }}">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:16px 20px 20px">
+            <sc-for list="{{ checkpoints }}" as="cp" hint-placeholder-count="6">
+              <div style="border:1px solid rgba(0,0,0,0.08);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px" style-hover="border-color:rgba(0,0,0,0.16)">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="font-size:14px;font-weight:500">{{ cp.table }}</span>
+                  <sc-if value="{{ cp.stale }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:inline-flex;padding:1px 8px;border-radius:9999px;font-size:11px;font-weight:500;background:rgba(245,158,11,0.12);color:#B45309">stale</span>
+                  </sc-if>
+                </div>
+                <div style="font-size:22px;font-weight:500;letter-spacing:-0.33px;font-variant-numeric:tabular-nums;line-height:1.1">{{ cp.rowsFmt }}<span style="font-size:12px;font-weight:400;color:#A3A3A3;letter-spacing:0"> rows</span></div>
+                <div style="height:4px;border-radius:9999px;background:#F5F5F4;overflow:hidden">
+                  <div style="height:100%;border-radius:9999px;background:#3C82D8;width:{{ cp.weightPct }}%"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:12px;color:#736F6D">
+                  <span style="font-variant-numeric:tabular-nums">seq {{ cp.seqFmt }}</span>
+                  <span style="color:{{ cp.updatedColor }}">{{ cp.updated }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <sc-if value="{{ cp.hasParquet }}" hint-placeholder-val="{{ true }}">
+                    <a onClick="{{ cp.onDownload }}" style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:9999px;font-size:12px;font-weight:500;background:#EBF2FB;color:#3C82D8;cursor:pointer;text-decoration:none" style-hover="background:#E0ECFA">Parquet</a>
+                  </sc-if>
+                  <sc-if value="{{ cp.parquetPending }}" hint-placeholder-val="{{ false }}">
+                    <span title="Full Parquet snapshot has not been materialized yet" style="display:inline-flex;align-items:center;padding:2px 10px;border-radius:9999px;font-size:12px;font-weight:500;border:1px dashed rgba(0,0,0,0.18);color:#A3A3A3">Parquet pending</span>
+                  </sc-if>
+                  <sc-if value="{{ cp.hasCsv }}" hint-placeholder-val="{{ true }}">
+                    <a onClick="{{ cp.onDownload }}" title="Legacy · used by Bit BI" style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:9999px;font-size:12px;font-weight:500;background:#F5F5F4;color:#736F6D;cursor:pointer;text-decoration:none" style-hover="background:#EFEFEF">CSV</a>
+                  </sc-if>
+                  <sc-if value="{{ cp.noFiles }}" hint-placeholder-val="{{ false }}">
+                    <span style="color:#A3A3A3;font-size:12px">no files yet</span>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- ===== Recent segments (admin) ===== -->
+      <sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ true }}">
+        <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16)">
+          <div onClick="{{ toggleSegments }}" style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;cursor:pointer" style-hover="background:#FAFAFA">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9999px;background:#fff;border:1px solid rgba(24,22,22,0.08);box-shadow:0 5px 4.375px rgba(0,0,0,0.01),0 5px 6.125px rgba(0,0,0,0.05);color:#736F6D">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg>
+              </span>
+              <div>
+                <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Recent segments</div>
+                <div style="font-size:12px;color:#A3A3A3">Last 20 changelog segments · admin only</div>
+              </div>
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#736F6D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .2s;transform:rotate({{ segChevronDeg }}deg)"><path d="m6 9 6 6 6-6"></path></svg>
+          </div>
+          <sc-if value="{{ segmentsOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:0 8px 10px;border-top:1px solid rgba(0,0,0,0.06)">
+              <div style="display:grid;grid-template-columns:1.2fr .8fr .9fr 1fr;padding:10px 14px;font-size:12px;font-weight:500;color:#736F6D">
+                <span>Seq range</span><span style="text-align:right">Records</span><span style="padding-left:32px">Mode</span><span style="text-align:right">Created</span>
+              </div>
+              <sc-for list="{{ segments }}" as="seg" hint-placeholder-count="8">
+                <div style="display:grid;grid-template-columns:1.2fr .8fr .9fr 1fr;align-items:center;padding:8px 14px;border-top:1px solid rgba(0,0,0,0.06);font-size:13px" style-hover="background:#FAFAFA">
+                  <span style="font-variant-numeric:tabular-nums">{{ seg.range }}</span>
+                  <span style="text-align:right;font-variant-numeric:tabular-nums">{{ seg.records }}</span>
+                  <span style="padding-left:32px"><span style="display:inline-flex;padding:1px 9px;border-radius:9999px;font-size:11px;font-weight:500;background:{{ seg.modeBg }};color:{{ seg.modeColor }}">{{ seg.mode }}</span></span>
+                  <span style="text-align:right;color:#736F6D;font-variant-numeric:tabular-nums">{{ seg.created }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- ===== Re-baseline ===== -->
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:20px">
+        <div>
+          <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Full re-baseline</div>
+          <div style="font-size:13px;color:#736F6D;margin-top:3px">The client will re-send a full snapshot on next connect. Use when the changelog and checkpoints have diverged.</div>
+        </div>
+        <sc-if value="{{ rebaselineAvailable }}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{ openRebaseline }}" style="flex-shrink:0;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;background:#fff;border:1px solid rgba(239,68,68,0.35);color:#B91C1C" style-hover="background:#FEF2F2">Request full re-baseline</button>
+        </sc-if>
+        <sc-if value="{{ rebaselinePending }}" hint-placeholder-val="{{ false }}">
+          <span style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:9999px;font-size:12px;font-weight:500;background:rgba(245,158,11,0.12);color:#B45309;flex-shrink:0">Full snapshot scheduled on next connect</span>
+        </sc-if>
+      </div>
+
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <!-- ================================================== -->
+  <!-- SCREEN: Batch detail (Delta stats)                  -->
+  <!-- ================================================== -->
+  <sc-if value="{{ isBatch }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Batch detail — Delta stats" style="max-width:1120px;margin:20px auto 0;padding:0 24px;display:flex;flex-direction:column;gap:16px">
+
+      <!-- Batch meta -->
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);padding:20px 24px">
+        <div style="display:flex;align-items:flex-start;gap:16px">
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:9999px;background:rgba(22,163,74,0.10);color:#16A34A;flex-shrink:0">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
+          </span>
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span style="font-size:17px;font-weight:500;letter-spacing:-0.24px">Batch #d3f8e0f1</span>
+              <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:9999px;background:rgba(22,163,74,0.10);color:#16A34A;font-size:12px;font-weight:500">Completed</span>
+              <sc-if value="{{ batchIsDelta }}" hint-placeholder-val="{{ true }}">
+                <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:9999px;background:#EBF2FB;color:#3C82D8;font-size:12px;font-weight:500">Delta session</span>
+                <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:9999px;background:#F5F5F4;color:#736F6D;font-size:12px;font-weight:500">CONTINUOUS</span>
+              </sc-if>
+              <sc-if value="{{ batchIsV1 }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:9999px;background:#F5F5F4;color:#736F6D;font-size:12px;font-weight:500">12 files · 48.2 MB</span>
+              </sc-if>
+            </div>
+            <div style="display:flex;gap:28px;margin-top:12px;font-size:13px;color:#736F6D;flex-wrap:wrap">
+              <span>Started <span style="color:#2B2827;font-variant-numeric:tabular-nums">Jul 05, 2026 09:14</span></span>
+              <span>Completed <span style="color:#2B2827;font-variant-numeric:tabular-nums">Jul 05, 2026 09:31</span></span>
+              <sc-if value="{{ batchIsDelta }}" hint-placeholder-val="{{ true }}">
+                <span>Seq range <span style="color:#2B2827;font-variant-numeric:tabular-nums">47,214 – 48,090</span></span>
+              </sc-if>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table changes (delta batches) -->
+      <sc-if value="{{ batchIsDelta }}" hint-placeholder-val="{{ true }}">
+        <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16)">
+          <div style="padding:16px 20px;border-bottom:1px solid rgba(0,0,0,0.06)">
+            <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Table changes</div>
+            <div style="font-size:12px;color:#A3A3A3;margin-top:2px">Delta sessions carry no files — changes are applied directly to each table.</div>
+          </div>
+          <div style="padding:6px 8px 10px">
+            <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr;padding:10px 14px;font-size:12px;font-weight:500;color:#736F6D">
+              <span>Table</span><span style="text-align:right">Inserted</span><span style="text-align:right">Updated</span><span style="text-align:right">Deleted</span><span style="text-align:right">Total</span>
+            </div>
+            <sc-for list="{{ batchStats }}" as="row" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr;align-items:center;padding:9px 14px;border-top:1px solid rgba(0,0,0,0.06);font-size:14px" style-hover="background:#FAFAFA">
+                <span style="font-weight:500">{{ row.table }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums;color:#16A34A">{{ row.ins }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums;color:#3B82F6">{{ row.upd }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums;color:#EF4444">{{ row.del }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:500">{{ row.total }}</span>
+              </div>
+            </sc-for>
+            <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr;align-items:center;padding:11px 14px;border-top:1px solid rgba(0,0,0,0.12);font-size:14px;font-weight:600">
+              <span>Total</span>
+              <span style="text-align:right;font-variant-numeric:tabular-nums;color:#16A34A">{{ batchTotIns }}</span>
+              <span style="text-align:right;font-variant-numeric:tabular-nums;color:#3B82F6">{{ batchTotUpd }}</span>
+              <span style="text-align:right;font-variant-numeric:tabular-nums;color:#EF4444">{{ batchTotDel }}</span>
+              <span style="text-align:right;font-variant-numeric:tabular-nums">{{ batchTotAll }}</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- Files (v1 batches — existing behavior, out of redesign scope) -->
+      <sc-if value="{{ batchIsV1 }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.02),0 0 1.75px rgba(0,0,0,0.16);padding:16px 20px">
+          <div style="font-size:15px;font-weight:500;letter-spacing:-0.24px;color:#403C3B">Files</div>
+          <div style="font-size:13px;color:#736F6D;margin-top:6px">Existing file table and Download / Excel / Compare actions — unchanged for v1 batches, out of scope for this redesign.</div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <!-- ===== Modals ===== -->
+  <sc-if value="{{ showRebuildModal }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50" onClick="{{ closeModal }}">
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.08),0 0 1.75px rgba(0,0,0,0.16);width:420px;max-width:calc(100vw - 48px);padding:24px" onClick="{{ stop }}">
+        <div style="font-size:17px;font-weight:500;letter-spacing:-0.24px">Rebuild checkpoint now?</div>
+        <p style="margin:10px 0 0;font-size:14px;color:#736F6D;line-height:1.45">A checkpoint rebuild will be scheduled outside the regular schedule. This can be a heavy operation on large tables.</p>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:22px">
+          <button onClick="{{ closeModal }}" style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;background:#fff;border:1px solid rgba(0,0,0,0.12);color:#2B2827" style-hover="background:#F5F5F4">Cancel</button>
+          <button onClick="{{ confirmRebuild }}" style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;background:#3C82D8;border:1px solid #3C82D8;color:#fff" style-hover="background:#3676C4">Rebuild now</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showRebaselineModal }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50" onClick="{{ closeModal }}">
+      <div style="background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.08),0 0 1.75px rgba(0,0,0,0.16);width:460px;max-width:calc(100vw - 48px);padding:24px" onClick="{{ stop }}">
+        <div style="font-size:17px;font-weight:500;letter-spacing:-0.24px">Request full re-baseline?</div>
+        <div style="margin-top:12px;border-radius:8px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);padding:12px 14px;display:flex;gap:10px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#B91C1C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+          <p style="margin:0;font-size:13px;color:#B91C1C;line-height:1.45">The client will re-send a full snapshot on next connect. This may take a while for large datasets and cannot be cancelled once the client starts.</p>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:22px">
+          <button onClick="{{ closeModal }}" style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;background:#fff;border:1px solid rgba(0,0,0,0.12);color:#2B2827" style-hover="background:#F5F5F4">Cancel</button>
+          <button onClick="{{ confirmRebaseline }}" style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer;background:#EF4444;border:1px solid #EF4444;color:#fff" style-hover="background:#DC2626">Request re-baseline</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ===== Toast (illustrative — implemented with the product's Sonner) ===== -->
+  <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:60;display:flex;align-items:center;gap:10px;background:#fff;border-radius:10px;box-shadow:0 20px 87.5px rgba(0,0,0,0.10),0 0 1.75px rgba(0,0,0,0.20);padding:12px 18px;font-size:14px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
+      {{ toastMsg }}
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;scenario&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;healthy&quot;, &quot;watch&quot;, &quot;critical&quot;, &quot;stalled&quot;, &quot;empty&quot;], &quot;default&quot;: &quot;watch&quot;, &quot;tsType&quot;: &quot;'healthy' | 'watch' | 'critical' | 'stalled' | 'empty'&quot;, &quot;section&quot;: &quot;Simulation&quot; },
+  &quot;defaultRole&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;owner&quot;, &quot;admin&quot;], &quot;default&quot;: &quot;admin&quot;, &quot;tsType&quot;: &quot;'owner' | 'admin'&quot;, &quot;section&quot;: &quot;Simulation&quot; },
+  &quot;pollMs&quot;: { &quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 2500, &quot;min&quot;: 500, &quot;max&quot;: 15000, &quot;unit&quot;: &quot;ms&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Simulation&quot; }
+}">
+class Component extends DCLogic {
+  state = {
+    scen: null, applied: 0, checkpoint: 0, hist: null,
+    screen: 'sync', role: null, cpView: 'table',
+    segmentsOpen: false, modal: null, toast: null,
+    rebaselined: false, rebuildScheduled: false,
+    site: { name: 'store-berlin-01', type: 'POSTGRES_CDC', v2: true },
+  };
+
+  SCENARIOS = {
+    healthy:  { applied: 48213, checkpoint: 48101, histBase: 110,   drift: [15, 60],  commitEvery: 6,  cpRel: '8 minutes ago' },
+    watch:    { applied: 50230, checkpoint: 47890, histBase: 2200,  drift: [30, 90],  commitEvery: 9,  cpRel: '2 hours ago' },
+    critical: { applied: 61120, checkpoint: 46900, histBase: 14000, drift: [80, 220], commitEvery: 14, cpRel: '9 hours ago' },
+    stalled:  { applied: 47932, checkpoint: 47890, histBase: 42,    drift: [0, 0],    commitEvery: 0,  cpRel: '26 hours ago' },
+    empty:    { applied: 0, checkpoint: 0, histBase: 1, drift: [0, 0], commitEvery: 0, cpRel: '' },
+  };
+
+  scenKey() {
+    const k = this.props.scenario ?? 'watch';
+    return this.SCENARIOS[k] ? k : 'watch';
+  }
+
+  mkHist(key) {
+    this._histCache = this._histCache || {};
+    if (!this._histCache[key]) {
+      const base = this.SCENARIOS[key].histBase;
+      const arr = [];
+      let v = base * 0.55;
+      for (let i = 0; i < 40; i++) {
+        v = Math.max(base * 0.15, v + (Math.random() - 0.42) * base * 0.22);
+        arr.push(Math.round(v));
+      }
+      arr[39] = base;
+      this._histCache[key] = arr;
+    }
+    return this._histCache[key];
+  }
+
+  componentDidMount() {
+    const ms = this.props.pollMs ?? 2500;
+    this._timer = setInterval(() => {
+      this.setState((prev) => {
+        const key = this.scenKey();
+        const base = this.SCENARIOS[key];
+        let { applied, checkpoint, hist, scen } = prev;
+        if (scen !== key || !hist) {
+          applied = base.applied; checkpoint = base.checkpoint;
+          hist = this.mkHist(key).slice();
+        }
+        if (base.drift[1] > 0) {
+          applied += Math.round(base.drift[0] + Math.random() * (base.drift[1] - base.drift[0]));
+          if (Math.random() < 1 / base.commitEvery) {
+            checkpoint = Math.min(applied, applied - Math.round(base.histBase * (0.55 + Math.random() * 0.4)));
+          }
+        }
+        const lag = Math.max(0, applied - checkpoint);
+        hist = [...hist.slice(-39), lag];
+        return { scen: key, applied, checkpoint, hist };
+      });
+    }, ms);
+  }
+
+  componentWillUnmount() { clearInterval(this._timer); clearTimeout(this._toastT); }
+
+  fmt(n) { return n.toLocaleString('en-US'); }
+
+  toast(msg) {
+    clearTimeout(this._toastT);
+    this.setState({ toast: msg });
+    this._toastT = setTimeout(() => this.setState({ toast: null }), 3500);
+  }
+
+  severity(lag, stalled) {
+    if (stalled) return { label: 'Stalled', color: '#F97316', text: '#C2410C', bg: 'rgba(249,115,22,0.12)' };
+    if (lag > 10000) return { label: 'Critical', color: '#EF4444', text: '#B91C1C', bg: 'rgba(239,68,68,0.12)' };
+    if (lag > 1000) return { label: 'Elevated', color: '#F59E0B', text: '#B45309', bg: 'rgba(245,158,11,0.12)' };
+    return { label: 'Healthy', color: '#16A34A', text: '#15803D', bg: 'rgba(22,163,74,0.12)' };
+  }
+
+  renderVals() {
+    const key = this.scenKey();
+    const base = this.SCENARIOS[key];
+    const syncEmpty = key === 'empty';
+    const live = this.state.scen === key && this.state.hist;
+    const applied = live ? this.state.applied : base.applied;
+    const checkpoint = live ? this.state.checkpoint : base.checkpoint;
+    const hist = live ? this.state.hist : this.mkHist(key);
+    const lag = Math.max(0, applied - checkpoint);
+    const stalled = key === 'stalled';
+    const sev = this.severity(lag, stalled);
+    const lagPct = Math.min(100, Math.sqrt(lag / 20000) * 100);
+
+    // sparkline
+    const max = Math.max(...hist, 1) * 1.15;
+    const pts = hist.map((v, i) => `${(i / (hist.length - 1)) * 240},${52 - (v / max) * 44}`).join(' ');
+    const sparkArea = `0,56 ${pts} 240,56`;
+
+    // segment bars
+    const segCounts = [93, 124, 61, 210, 88, 45, 132, 77, 190, 66, 101, 54, 88, 240, 73, 120];
+    const segBars = segCounts.map((v) => ({ h: Math.round(8 + (v / 240) * 40), label: `${v} records` }));
+
+    const role = this.state.role ?? (this.props.defaultRole ?? 'admin');
+    const isAdmin = role === 'admin';
+    const screen = this.state.screen;
+    const site = this.state.site;
+
+    const dl = () => this.toast('Download link generated · valid 15 minutes');
+    const CP = [
+      { table: 'order_items', seq: 47890, rows: 3891204, updated: '3 hours ago', pq: true,  csv: true,  stale: false },
+      { table: 'orders',      seq: 47890, rows: 1204500, updated: '3 hours ago', pq: true,  csv: true,  stale: false },
+      { table: 'payments',    seq: 47885, rows: 964201,  updated: '3 hours ago', pq: true,  csv: true,  stale: false },
+      { table: 'customers',   seq: 47790, rows: 88412,   updated: '5 hours ago', pq: false, csv: true,  stale: false },
+      { table: 'inventory',   seq: 46210, rows: 45003,   updated: '26 hours ago', pq: false, csv: false, stale: true },
+      { table: 'products',    seq: 47802, rows: 12344,   updated: '5 hours ago', pq: true,  csv: false, stale: false },
+    ];
+    const maxRows = Math.max(...CP.map((c) => c.rows));
+    const checkpoints = CP.map((c) => ({
+      table: c.table, seqFmt: this.fmt(c.seq), rowsFmt: this.fmt(c.rows),
+      updated: c.updated, updatedColor: c.stale ? '#B45309' : '#736F6D',
+      stale: c.stale, hasParquet: c.pq, parquetPending: !c.pq && c.csv,
+      hasCsv: c.csv, noFiles: !c.pq && !c.csv,
+      weightPct: Math.max(2, Math.round((c.rows / maxRows) * 100)),
+      onDownload: dl,
+    }));
+
+    const modeStyles = {
+      DELTA: { bg: '#EBF2FB', color: '#3C82D8' },
+      CONTINUOUS: { bg: 'rgba(22,163,74,0.10)', color: '#15803D' },
+      FULL_SNAPSHOT: { bg: 'rgba(245,158,11,0.12)', color: '#B45309' },
+    };
+    const SEG = [
+      [48120, 48213, 93, 'CONTINUOUS', 'Jul 05, 12:41'],
+      [47996, 48119, 124, 'CONTINUOUS', 'Jul 05, 12:39'],
+      [47786, 47995, 210, 'DELTA', 'Jul 05, 12:31'],
+      [47698, 47785, 88, 'DELTA', 'Jul 05, 12:18'],
+      [47566, 47697, 132, 'DELTA', 'Jul 05, 11:54'],
+      [47489, 47565, 77, 'DELTA', 'Jul 05, 11:32'],
+      [47299, 47488, 190, 'DELTA', 'Jul 05, 11:07'],
+      [1, 47298, 47298, 'FULL_SNAPSHOT', 'Jul 04, 22:10'],
+    ];
+    const segments = SEG.map((s) => ({
+      range: `${this.fmt(s[0])} – ${this.fmt(s[1])}`, records: this.fmt(s[2]),
+      mode: s[3], modeBg: modeStyles[s[3]].bg, modeColor: modeStyles[s[3]].color, created: s[4],
+    }));
+
+    const BATCH = [
+      ['order_items', 4912, 8455, 312],
+      ['orders', 1240, 3180, 86],
+      ['payments', 1198, 402, 14],
+      ['customers', 38, 214, 2],
+      ['products', 6, 89, 1],
+    ];
+    const batchStats = BATCH.map((b) => ({
+      table: b[0], ins: '+' + this.fmt(b[1]), upd: this.fmt(b[2]), del: '\u2212' + this.fmt(b[3]),
+      total: this.fmt(b[1] + b[2] + b[3]),
+    }));
+    const tot = BATCH.reduce((a, b) => [a[0] + b[1], a[1] + b[2], a[2] + b[3]], [0, 0, 0]);
+
+    const openSite = (name, type, v2) => () =>
+      this.setState({ site: { name, type, v2 }, screen: v2 ? 'sync' : 'batch' });
+    const siteHealth = (label, color, bg) => ({ healthLabel: label, healthColor: color, healthBg: bg, health: true, noHealth: false });
+    const sevSite = this.severity(lag, stalled);
+    const berlinHealth = syncEmpty
+      ? siteHealth('No sync yet', '#736F6D', 'rgba(0,0,0,0.06)')
+      : siteHealth(stalled ? 'Stalled · 26 h' : `Lag ${lag >= 1000 ? (lag / 1000).toFixed(1) + 'k' : this.fmt(lag)}`, sevSite.text, sevSite.bg);
+    const sites = [
+      { name: 'store-berlin-01', created: 'Mar 12, 2026', retention: 90, type: 'POSTGRES_CDC', api: 'Delta v2', apiBg: '#EBF2FB', apiColor: '#3C82D8',
+        ...berlinHealth, onOpen: openSite('store-berlin-01', 'POSTGRES_CDC', true) },
+      { name: 'store-hamburg-02', created: 'Feb 02, 2026', retention: 90, type: 'POSTGRES_CDC', api: 'Delta v2', apiBg: '#EBF2FB', apiColor: '#3C82D8',
+        ...siteHealth('Synced · lag 12', '#15803D', 'rgba(22,163,74,0.12)'), onOpen: openSite('store-hamburg-02', 'POSTGRES_CDC', true) },
+      { name: 'store-munich-03', created: 'Jan 18, 2026', retention: 60, type: 'POSTGRES_CDC', api: 'Delta v2', apiBg: '#EBF2FB', apiColor: '#3C82D8',
+        ...siteHealth('Lag 18.2k', '#B91C1C', 'rgba(239,68,68,0.12)'), onOpen: openSite('store-munich-03', 'POSTGRES_CDC', true) },
+      { name: 'kiosk-04', created: 'Dec 05, 2025', retention: 30, type: 'DBF', api: 'Delta v2', apiBg: '#EBF2FB', apiColor: '#3C82D8',
+        ...siteHealth('Stalled · 26 h', '#C2410C', 'rgba(249,115,22,0.12)'), onOpen: openSite('kiosk-04', 'DBF', true) },
+      { name: 'warehouse-legacy', created: 'Sep 11, 2025', retention: 180, type: 'DBF', api: 'v1', apiBg: '#F5F5F4', apiColor: '#736F6D',
+        health: false, noHealth: true, onOpen: openSite('warehouse-legacy', 'DBF', false) },
+    ];
+
+    const seg = (active) => active
+      ? { bg: '#fff', color: '#2B2827', shadow: '0 1px 1.75px rgba(0,0,0,0.2)' }
+      : { bg: 'transparent', color: '#736F6D', shadow: 'none' };
+    const rOwner = seg(role === 'owner'), rAdmin = seg(role === 'admin');
+    const vTable = seg(this.state.cpView === 'table'), vCards = seg(this.state.cpView === 'cards');
+    const tab = (active) => active
+      ? { bg: '#f8f8f8', border: '#3C82D8', color: '#3C82D8' }
+      : { bg: 'transparent', border: 'transparent', color: '#736F6D' };
+    const tSync = tab(screen === 'sync'), tBatch = tab(screen === 'batch');
+
+    const liveDot = React.createElement('span', {
+      style: { width: '7px', height: '7px', borderRadius: '9999px', background: '#16A34A',
+               display: 'inline-block', animation: 'dfPulse 2s ease-out infinite' },
+    });
+
+    return {
+      // navigation
+      isSites: screen === 'sites', isSync: screen === 'sync', isBatch: screen === 'batch',
+      isSiteDetail: screen !== 'sites',
+      goSites: () => this.setState({ screen: 'sites' }),
+      goSync: () => this.setState({ screen: 'sync' }),
+      goBatch: () => this.setState({ screen: 'batch' }),
+      navSitesColor: screen === 'sites' ? '#3C82D8' : '#736F6D',
+      navSitesBg: screen === 'sites' ? '#EBF2FB' : 'transparent',
+      tabSyncBg: tSync.bg, tabSyncBorder: tSync.border, tabSyncColor: tSync.color,
+      tabBatchBg: tBatch.bg, tabBatchBorder: tBatch.border, tabBatchColor: tBatch.color,
+
+      // current site
+      siteName: site.name, siteType: site.type,
+      siteApi: site.v2 ? 'Delta v2' : 'v1',
+      siteApiBg: site.v2 ? '#EBF2FB' : '#F5F5F4',
+      siteApiColor: site.v2 ? '#3C82D8' : '#736F6D',
+      siteIsV2: site.v2,
+      siteSubline: site.v2
+        ? 'Changelog stream over gRPC. Metrics refresh every 15 seconds.'
+        : 'Full snapshot uploads over HTTP (v1).',
+      batchIsDelta: site.v2, batchIsV1: !site.v2,
+
+      // role
+      isAdmin, rebaselineAvailable: !this.state.rebaselined,
+      setOwner: () => this.setState({ role: 'owner' }),
+      setAdmin: () => this.setState({ role: 'admin' }),
+      roleOwnerBg: rOwner.bg, roleOwnerColor: rOwner.color, roleOwnerShadow: rOwner.shadow,
+      roleAdminBg: rAdmin.bg, roleAdminColor: rAdmin.color, roleAdminShadow: rAdmin.shadow,
+
+      // sync state
+      syncEmpty, hasSyncState: !syncEmpty,
+      lagFmt: this.fmt(lag), appliedSeqFmt: this.fmt(applied), checkpointSeqFmt: this.fmt(checkpoint),
+      lagPct: lagPct.toFixed(1), sevColor: sev.color, sevText: sev.text, sevBg: sev.bg, sevLabel: sev.label,
+      lastCheckpointRel: base.cpRel, stalled, notStalled: !stalled,
+      updatedRel: 'updated just now', liveDot,
+      sparkPoints: pts, sparkArea, sparkFill: sev.color + '1F',
+      segBars,
+
+      // checkpoints
+      checkpoints,
+      cpTableView: this.state.cpView === 'table', cpCardsView: this.state.cpView === 'cards',
+      showTable: () => this.setState({ cpView: 'table' }),
+      showCards: () => this.setState({ cpView: 'cards' }),
+      viewTableBg: vTable.bg, viewTableColor: vTable.color, viewTableShadow: vTable.shadow,
+      viewCardsBg: vCards.bg, viewCardsColor: vCards.color, viewCardsShadow: vCards.shadow,
+
+      // segments
+      segments, segmentsOpen: this.state.segmentsOpen,
+      segChevronDeg: this.state.segmentsOpen ? 180 : 0,
+      toggleSegments: () => this.setState((s) => ({ segmentsOpen: !s.segmentsOpen })),
+
+      // actions
+      rebuildScheduled: this.state.rebuildScheduled,
+      rebaselinePending: this.state.rebaselined,
+      showRebuildModal: this.state.modal === 'rebuild',
+      showRebaselineModal: this.state.modal === 'rebaseline',
+      openRebuild: () => this.setState({ modal: 'rebuild' }),
+      openRebaseline: () => this.setState({ modal: 'rebaseline' }),
+      closeModal: () => this.setState({ modal: null }),
+      stop: (e) => e.stopPropagation(),
+      confirmRebuild: () => { this.setState({ modal: null, rebuildScheduled: true }); this.toast('Checkpoint rebuild scheduled'); },
+      confirmRebaseline: () => { this.setState({ modal: null, rebaselined: true }); this.toast('Full re-baseline requested'); },
+
+      // toast
+      toastOn: !!this.state.toast, toastMsg: this.state.toast,
+
+      // batch
+      batchStats,
+      batchTotIns: '+' + this.fmt(tot[0]), batchTotUpd: this.fmt(tot[1]),
+      batchTotDel: '\u2212' + this.fmt(tot[2]), batchTotAll: this.fmt(tot[0] + tot[1] + tot[2]),
+
+      // sites
+      sites,
+    };
+  }
+}
+</script>
+</body>
+</html>
