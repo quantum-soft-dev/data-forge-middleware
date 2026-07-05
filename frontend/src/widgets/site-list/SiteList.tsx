@@ -25,6 +25,7 @@ import {
 } from '@/features/site-crud/model/queries';
 import { AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { useNavigate } from '@tanstack/react-router';
 
 interface SiteListProps {
   /**
@@ -42,6 +43,7 @@ interface SiteListProps {
 }
 
 export function SiteList({ accountId, compact = false }: SiteListProps) {
+  const navigate = useNavigate();
   // Use admin or user queries based on context
   // When accountId is provided (admin context), only admin query runs
   // When accountId is not provided (user context), only user query runs
@@ -88,6 +90,15 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
       toast.success('Site deleted successfully');
     } catch (error: any) {
       toast.error(error?.response?.data?.message || 'Failed to delete site');
+    }
+  };
+
+  // 023, F3: a row click opens the site-detail shell (owner or admin entry)
+  const handleOpen = (siteId: string) => {
+    if (accountId) {
+      navigate({ to: '/admin/sites/$siteId', params: { siteId } });
+    } else {
+      navigate({ to: '/account/sites/$siteId', params: { siteId } });
     }
   };
 
@@ -148,6 +159,7 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
           site={site}
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
+          onOpen={handleOpen}
           onDelete={handleDelete}
           onUpdateRetention={accountId ? handleRetentionUpdate : undefined}
           showRetentionControls={!!accountId}

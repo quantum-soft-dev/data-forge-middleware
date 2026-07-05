@@ -15,6 +15,7 @@ import {
   activateUserSite,
   deleteUserSite,
   listAdminSites,
+  getAdminSite,
   createAdminSite,
   deactivateAdminSite,
   activateAdminSite,
@@ -155,6 +156,17 @@ export function useAdminSites(accountId: string) {
     enabled: !!accountId,
     staleTime: 30000,
     gcTime: 300000,
+  });
+}
+
+/**
+ * Fetch a single site by id (admin view) — 023, F3 admin site-detail page.
+ */
+export function useAdminSite(siteId: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: siteKeys.detail(siteId),
+    queryFn: () => getAdminSite(siteId),
+    enabled: (options?.enabled ?? true) && !!siteId,
   });
 }
 

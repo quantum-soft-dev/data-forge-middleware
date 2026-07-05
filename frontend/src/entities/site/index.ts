@@ -7,7 +7,7 @@
  */
 
 // Types
-export type { Site, CreateSiteRequest, CreateSiteResponse } from './model/types';
+export type { Site, CreateSiteRequest, CreateSiteResponse, SiteType, ClientApiVersion } from './model/types';
 export { SiteStatus, AdminActionType } from './model/types';
 
 // API functions
@@ -20,6 +20,7 @@ export {
   deleteUserSite,
   // Admin operations
   listAdminSites,
+  getAdminSite,
   createAdminSite,
   deactivateAdminSite,
   activateAdminSite,

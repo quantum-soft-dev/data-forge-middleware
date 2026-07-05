@@ -20,6 +20,9 @@ const PluginHistoryPage = lazy(() => import('@/pages/admin/plugins/PluginHistory
 const AdminSettingsPage = lazy(() => import('@/pages/admin/settings/AdminSettingsPage'))
 const MyPluginsPage = lazy(() => import('@/pages/account/plugins').then(m => ({ default: m.MyPluginsPage })))
 const DeviceVerifyPage = lazy(() => import('@/pages/device-verify/DeviceVerifyPage'))
+const SiteDetailPage = lazy(() => import('@/pages/site-detail/SiteDetailPage'))
+// Admin entry into the same site-detail shell (023, F3 / design D4)
+const AdminSiteDetailPage = () => <SiteDetailPage admin />
 
 // Root route
 const rootRoute = createRootRoute({
@@ -93,6 +96,12 @@ const pluginHistoryRoute = createRoute({
   component: () => <AuthenticationGuard component={PluginHistoryPage} />,
 })
 
+const adminSiteDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/sites/$siteId',
+  component: () => <AuthenticationGuard component={AdminSiteDetailPage} />,
+})
+
 const adminSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin/settings',
@@ -104,6 +113,12 @@ const siteManagementRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/account/sites',
   component: () => <UserOnlyGuard component={SiteManagementPage} />,
+})
+
+const siteDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account/sites/$siteId',
+  component: () => <UserOnlyGuard component={SiteDetailPage} />,
 })
 
 const uploadHistoryRoute = createRoute({
@@ -161,6 +176,8 @@ const routeTree = rootRoute.addChildren([
   pluginHistoryRoute,
   adminSettingsRoute,
   siteManagementRoute,
+  siteDetailRoute,
+  adminSiteDetailRoute,
   uploadHistoryRoute,
   batchDetailRoute,
   comparisonListRoute,

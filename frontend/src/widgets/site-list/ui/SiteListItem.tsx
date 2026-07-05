@@ -30,6 +30,8 @@ import { format } from 'date-fns';
 
 interface SiteListItemProps {
   site: Site;
+  /** Open the site-detail page (023, F3). Makes the site info block clickable. */
+  onOpen?: (siteId: string) => void;
   onActivate?: (siteId: string) => void;
   onDeactivate?: (siteId: string) => void;
   onDelete?: (siteId: string) => void;
@@ -40,6 +42,7 @@ interface SiteListItemProps {
 
 export function SiteListItem({
   site,
+  onOpen,
   onActivate,
   onDeactivate,
   onDelete,
@@ -85,8 +88,13 @@ export function SiteListItem({
       <Card>
         <CardContent className="p-4">
           <div className="flex items-center justify-between gap-4">
-            {/* Site info */}
-            <div className="flex-1 min-w-0">
+            {/* Site info (clickable when onOpen is provided) */}
+            <div
+              className={`flex-1 min-w-0${onOpen ? ' cursor-pointer' : ''}`}
+              onClick={onOpen ? () => onOpen(site.id) : undefined}
+              role={onOpen ? 'link' : undefined}
+              aria-label={onOpen ? `Open ${site.siteName}` : undefined}
+            >
               <div className="flex items-center gap-2 mb-1">
                 <h3 className="font-semibold text-lg truncate">{site.siteName}</h3>
                 <Badge variant={site.isActive ? 'default' : 'secondary'}>
