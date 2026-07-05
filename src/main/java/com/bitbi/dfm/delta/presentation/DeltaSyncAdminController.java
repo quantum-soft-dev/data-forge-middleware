@@ -197,6 +197,36 @@ public class DeltaSyncAdminController {
     }
 
     /**
+     * Request a full re-baseline of any site.
+     * <p>
+     * POST /api/v1/sites/{siteId}/delta/rebaseline
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 202 Accepted once the flag is raised
+     */
+    @PostMapping("/rebaseline")
+    @Operation(
+            summary = "Request full re-baseline (admin)",
+            description = "Raises the persistent rebaseline_requested flag: on its next connect the Delta client is "
+                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is cleared when the "
+                    + "FULL_SNAPSHOT session actually starts."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Re-baseline requested",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Map<String, String>> requestRebaseline(@PathVariable UUID siteId) {
+        siteService.getSite(siteId); // 404 when the site does not exist
+        syncStateService.requestRebaseline(siteId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "requested"));
+    }
+
+    /**
      * List the most recent changelog segments of any site, newest first.
      * <p>
      * GET /api/v1/sites/{siteId}/delta/segments?limit=20

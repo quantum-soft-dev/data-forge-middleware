@@ -19,15 +19,18 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -159,6 +162,37 @@ public class DeltaSyncUserController {
         return checkpointQueryService.presignDownload(siteId, tableName, format)
                 .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Request a full re-baseline of an owned site.
+     * <p>
+     * POST /api/v1/account/sites/{siteId}/delta/rebaseline
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 202 Accepted once the flag is raised
+     */
+    @PostMapping("/rebaseline")
+    @Operation(
+            summary = "Request full re-baseline",
+            description = "Raises the persistent rebaseline_requested flag: on its next connect the Delta client is "
+                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is cleared when the "
+                    + "FULL_SNAPSHOT session actually starts."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Re-baseline requested",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Map<String, String>> requestRebaseline(@PathVariable UUID siteId) {
+        requireOwnedSite(siteId);
+        syncStateService.requestRebaseline(siteId);
+        logger.info("Full re-baseline requested by owner: siteId={}", siteId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "requested"));
     }
 
     /**
