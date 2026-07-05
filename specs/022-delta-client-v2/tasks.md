@@ -96,6 +96,25 @@ path are untouched.
 - [x] **T7.3** Enforce on device HTTP endpoints: `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{batchId}/upload` → 409 + code via `DeviceControllerHelper` _(tests: contract — V2 site rejected with code; V1 site unaffected (existing tests); device error logging still works for V2 site)_
 - [x] **T7.4** Docs: CR + `delta-client-v2-guide.md` (client migration note) + SESSION-HANDOFF refresh _(no tests; doc change)_
 
+## Task 8 — Event-driven delta Parquet egress (replaces floor/change-feed egress)
+
+Consumer model change (user decision): egress is a **sequence of per-segment delta Parquet files**
+loaded in `seq` order, produced **as sessions commit** (worker pool, not the daily cron). A full
+table is just the delta file of a `FULL_SNAPSHOT` session (all-INSERT) — the server never rebuilds
+a floor for egress. Files carry typed columns from `site_schemas` plus `_op` (I/U/D) and `_seq`;
+client v1 is keyless (INSERT/DELETE only), DELETE rows carry the key columns. The durable work
+queue is `changelog_segments` itself (`egress_at IS NULL` = pending, picked with
+`FOR UPDATE SKIP LOCKED`, per-site head first → per-site seq order, multi-instance safe). The
+checkpoint cron stays for Bit BI CSV + retention frames; the floor `snapshot.parquet` and
+`_change_date` change-feed (T4.2b/T4.3) are **removed**.
+
+- [ ] **T8.1** V33: nullable `egress_at` on `changelog_segments`; `ChangelogSegment.markEgressed()`; repository `findNextPendingEgress(limit)` — per-site **head** pending segments, `FOR UPDATE SKIP LOCKED` _(tests: integration — only per-site earliest pending returned; egressed excluded; pre-migration rows pending-safe)_
+- [ ] **T8.2** Delta Parquet writer: schema = mapped table schema + non-null `_op` string + `_seq` long; INSERT/UPDATE rows from `data`, DELETE rows from `key` _(tests: unit — round-trip via logicalTypeModel, ops/seq preserved, DELETE carries key values, typed columns match)_
+- [ ] **T8.3** `DeltaEgressService.egressSegment(id)`: read segment records from S3, group by table, write `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` for schema'd tables, mark segment egressed; `delta.egress.segments` counter _(tests: integration — S3 objects + `egress_at` set; schema-less tables skipped but segment still marked; idempotent re-run)_
+- [ ] **T8.4** `DeltaEgressWorker`: bounded pool (`delta.egress.max-concurrent`, default 2) + `wake()` after session commit (SessionEnd + continuous seal) + fallback sweep (`delta.egress.sweep-ms`); drain picks via T8.1 query until empty _(tests: integration — committed session produces delta parquet without cron; two pending segments of one site egress in seq order)_
+- [ ] **T8.5** Remove floor Parquet + change-feed egress: `CheckpointService` writes CSV + frame only; drop `Checkpoint.attachParquet` / `uploadParquet` / `uploadChangeFeed` (+ V34 drops `checkpoints.s3_key_parquet`); delete obsolete tests (CheckpointParquet / CheckpointChangeFeed integration) _(tests: existing checkpoint CSV/frame suites stay green)_
+- [ ] **T8.6** Docs: CR §12 + §8.D (en+ru) — egress = sequential delta Parquet; guide "What the server produces" rewrite (file contract, `_op`/`_seq`, full = FULL_SNAPSHOT segment); SESSION-HANDOFF refresh _(no tests; doc change)_
+
 ## Pre-PR (before opening the PR to `develop`)
 
 - [x] **PR.1** `./gradlew integrationTest` 100% green — 164 tests, 0 failures (30 skipped)
