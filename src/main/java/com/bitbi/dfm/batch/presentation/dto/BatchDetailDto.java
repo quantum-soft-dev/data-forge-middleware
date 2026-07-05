@@ -26,6 +26,8 @@ import java.util.UUID;
  * @param completedAt         Batch completion timestamp (null if in progress)
  * @param files               List of file metadata (simplified for client)
  * @param deltaStats          Per-table insert/update/delete counts for Delta v2 sessions (empty for v1 file-based batches)
+ * @param mode                Delta session mode (DELTA, CONTINUOUS or FULL_SNAPSHOT; null for v1 batches)
+ * @param seqRange            Sequence range covered by the Delta session (null for v1 batches)
  * @author Data Forge Team (Feature: 008-upload-history-user)
  * @version 1.0.0
  * @see com.bitbi.dfm.batch.presentation.BatchHistoryController
@@ -60,7 +62,13 @@ public record BatchDetailDto(
         List<FileMetadataDto> files,
 
         @Schema(description = "Per-table insert/update/delete counts for Delta v2 sessions (empty for v1 file-based batches)")
-        List<DeltaTableStatsDto> deltaStats
+        List<DeltaTableStatsDto> deltaStats,
+
+        @Schema(description = "Delta session mode (DELTA, CONTINUOUS or FULL_SNAPSHOT; null for v1 batches)", example = "CONTINUOUS")
+        String mode,
+
+        @Schema(description = "Sequence range covered by the Delta session (null for v1 batches)")
+        DeltaSeqRangeDto seqRange
 ) {
     /**
      * Create DTO from Batch entity and UploadedFile list (v1 file-based batch, no Delta stats).
@@ -70,7 +78,7 @@ public record BatchDetailDto(
      * @return BatchDetailDto
      */
     public static BatchDetailDto fromEntityAndFiles(Batch batch, List<UploadedFile> files) {
-        return fromEntityAndFiles(batch, files, List.of());
+        return fromEntityAndFiles(batch, files, List.of(), null, null);
     }
 
     /**
@@ -79,10 +87,13 @@ public record BatchDetailDto(
      * @param batch      Batch entity
      * @param files      List of UploadedFile entities
      * @param deltaStats Per-table insert/update/delete counts (empty for v1 batches)
+     * @param mode       Delta session mode (null for v1 batches)
+     * @param seqRange   Sequence range covered by the session (null for v1 batches)
      * @return BatchDetailDto
      */
     public static BatchDetailDto fromEntityAndFiles(Batch batch, List<UploadedFile> files,
-                                                    List<DeltaTableStatsDto> deltaStats) {
+                                                    List<DeltaTableStatsDto> deltaStats,
+                                                    String mode, DeltaSeqRangeDto seqRange) {
         List<FileMetadataDto> fileDtos = files.stream()
                 .map(FileMetadataDto::fromEntity)
                 .toList();
@@ -97,7 +108,9 @@ public record BatchDetailDto(
                 batch.getStartedAt().toInstant(ZoneOffset.UTC),
                 batch.getCompletedAt() != null ? batch.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
                 fileDtos,
-                deltaStats
+                deltaStats,
+                mode,
+                seqRange
         );
     }
 }

@@ -68,6 +68,38 @@ class BatchHistoryServiceTest {
         BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
 
         assertTrue(dto.deltaStats().isEmpty());
+        assertNull(dto.mode(), "v1 batch has no session mode");
+        assertNull(dto.seqRange(), "v1 batch has no seq range");
+    }
+
+    @Test
+    void getBatchDetailsExposesModeAndSeqRangeAcrossSegments() {
+        // B9: mode + seqRange {first,last} from the batch's changelog segments
+        // (min firstSeq / max lastSeq over all segments of the session).
+        UUID accountId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        Batch batch = Batch.start(accountId, siteId);
+
+        ChangelogSegment first = mock(ChangelogSegment.class);
+        when(first.getStats()).thenReturn(Map.of("orders", new TableChangeStats(2, 1, 0)));
+        when(first.getMode()).thenReturn("CONTINUOUS");
+        when(first.getFirstSeq()).thenReturn(4801L);
+        when(first.getLastSeq()).thenReturn(4950L);
+
+        ChangelogSegment second = mock(ChangelogSegment.class);
+        when(second.getStats()).thenReturn(Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(second.getMode()).thenReturn("CONTINUOUS");
+        when(second.getFirstSeq()).thenReturn(4951L);
+        when(second.getLastSeq()).thenReturn(5100L);
+
+        when(batchRepository.findByIdWithFiles(batch.getId())).thenReturn(Optional.of(batch));
+        when(changelogSegmentRepository.findByBatchId(batch.getId())).thenReturn(List.of(second, first));
+
+        BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
+
+        assertEquals("CONTINUOUS", dto.mode());
+        assertEquals(4801L, dto.seqRange().first());
+        assertEquals(5100L, dto.seqRange().last());
     }
 
     @Test

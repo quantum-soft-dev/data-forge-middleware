@@ -8,6 +8,7 @@ import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
+import com.bitbi.dfm.batch.presentation.dto.DeltaSeqRangeDto;
 import com.bitbi.dfm.batch.presentation.dto.DeltaTableStatsDto;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
@@ -266,20 +267,40 @@ public class BatchHistoryService {
         logger.info("Returning batch details for batchId={} with {} files",
                 batchId, batch.getUploadedFiles().size());
 
-        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles(), resolveDeltaStats(batchId));
+        List<ChangelogSegment> segments = changelogSegmentRepository.findByBatchId(batchId);
+        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles(),
+                resolveDeltaStats(segments), resolveMode(segments), resolveSeqRange(segments));
     }
 
     /**
      * Per-table insert/update/delete counts for a Delta v2 batch, sorted by table name for a
      * stable display order. Empty for v1 file-based batches (no changelog segment).
      */
-    private List<DeltaTableStatsDto> resolveDeltaStats(UUID batchId) {
-        return changelogSegmentRepository.findByBatchId(batchId).stream()
+    private static List<DeltaTableStatsDto> resolveDeltaStats(List<ChangelogSegment> segments) {
+        return segments.stream()
                 .map(ChangelogSegment::getStats)
                 .filter(Objects::nonNull)
                 .flatMap(stats -> stats.entrySet().stream())
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> DeltaTableStatsDto.of(entry.getKey(), entry.getValue()))
                 .toList();
+    }
+
+    /** Session mode of a Delta v2 batch — all segments of one session share it. Null for v1 batches. */
+    private static String resolveMode(List<ChangelogSegment> segments) {
+        return segments.isEmpty() ? null : segments.get(0).getMode();
+    }
+
+    /**
+     * Sequence range covered by a Delta v2 batch: min first_seq / max last_seq over the session's
+     * segments (B9). Null for v1 batches.
+     */
+    private static DeltaSeqRangeDto resolveSeqRange(List<ChangelogSegment> segments) {
+        if (segments.isEmpty()) {
+            return null;
+        }
+        long first = segments.stream().mapToLong(ChangelogSegment::getFirstSeq).min().orElseThrow();
+        long last = segments.stream().mapToLong(ChangelogSegment::getLastSeq).max().orElseThrow();
+        return new DeltaSeqRangeDto(first, last);
     }
 }
