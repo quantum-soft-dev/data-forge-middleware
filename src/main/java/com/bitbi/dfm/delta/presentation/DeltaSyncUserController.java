@@ -1,6 +1,9 @@
 package com.bitbi.dfm.delta.presentation;
 
+import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
+import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaSyncStateResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
@@ -21,8 +24,10 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -45,13 +50,16 @@ public class DeltaSyncUserController {
     private static final Logger logger = LoggerFactory.getLogger(DeltaSyncUserController.class);
 
     private final DeltaSyncStateService syncStateService;
+    private final DeltaCheckpointQueryService checkpointQueryService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
 
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
+                                   DeltaCheckpointQueryService checkpointQueryService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
+        this.checkpointQueryService = checkpointQueryService;
         this.siteService = siteService;
         this.authorizationHelper = authorizationHelper;
     }
@@ -83,6 +91,73 @@ public class DeltaSyncUserController {
         requireOwnedSite(siteId);
         return syncStateService.findSyncState(siteId)
                 .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state)))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * List the per-table checkpoints of an owned site.
+     * <p>
+     * GET /api/v1/account/sites/{siteId}/delta/checkpoints
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return checkpoints sorted by table name (empty array when none)
+     */
+    @GetMapping("/checkpoints")
+    @Operation(
+            summary = "List delta checkpoints",
+            description = "Returns the site's per-table checkpoint rows (seq, row count, last update, file-presence "
+                    + "flags), sorted by table name. Download URLs are issued by the separate download endpoint."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Checkpoints retrieved",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<List<DeltaCheckpointResponseDto>> listCheckpoints(@PathVariable UUID siteId) {
+        requireOwnedSite(siteId);
+        List<DeltaCheckpointResponseDto> response = checkpointQueryService.listCheckpoints(siteId).stream()
+                .map(DeltaCheckpointResponseDto::fromEntity)
+                .toList();
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Issue a fresh presigned download URL for one checkpoint file of an owned site.
+     * <p>
+     * GET /api/v1/account/sites/{siteId}/delta/checkpoints/{tableName}/download?format=csv|parquet
+     * </p>
+     *
+     * @param siteId    site identifier
+     * @param tableName checkpoint table name
+     * @param format    file format: {@code csv} or {@code parquet}
+     * @return presigned download URL (15-minute expiry)
+     */
+    @GetMapping("/checkpoints/{tableName}/download")
+    @Operation(
+            summary = "Presign a checkpoint download",
+            description = "Issues a fresh presigned S3 URL (15-minute expiry) for one checkpoint file. Called per "
+                    + "click — the URL is never cached or embedded in the checkpoint list."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Presigned URL issued",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = DeltaCheckpointDownloadResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Unsupported format",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site, checkpoint or requested file not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<DeltaCheckpointDownloadResponseDto> downloadCheckpoint(@PathVariable UUID siteId,
+                                                                                 @PathVariable String tableName,
+                                                                                 @RequestParam String format) {
+        requireOwnedSite(siteId);
+        return checkpointQueryService.presignDownload(siteId, tableName, format)
+                .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
