@@ -29,4 +29,15 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findByBatchIdIn(List<UUID> batchIds);
 
     List<UUID> findDistinctSiteIds();
+
+    /**
+     * Pick pending egress work: for every site with un-egressed segments, the earliest one
+     * (lowest {@code first_seq}) — so delta files publish in seq order per site — locked with
+     * {@code FOR UPDATE SKIP LOCKED} so concurrent workers (or instances) never double-process.
+     * Must run inside a transaction.
+     *
+     * @param limit maximum segments to claim
+     * @return per-site head pending segments, oldest first
+     */
+    List<ChangelogSegment> findNextPendingEgress(int limit);
 }

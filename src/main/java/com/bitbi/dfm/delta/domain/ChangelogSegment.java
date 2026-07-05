@@ -67,6 +67,13 @@ public class ChangelogSegment {
     private Map<String, TableChangeStats> stats;
 
     /**
+     * When the segment's delta Parquet egress was materialized; {@code null} = pending (the
+     * segment is the durable egress work queue entry, Task 8).
+     */
+    @Column(name = "egress_at")
+    private LocalDateTime egressAt;
+
+    /**
      * Create a changelog segment record.
      *
      * @param stats per-table insert/update/delete counts, or {@code null} if not computed
@@ -87,6 +94,13 @@ public class ChangelogSegment {
         segment.stats = stats;
         segment.createdAt = LocalDateTime.now();
         return segment;
+    }
+
+    /**
+     * Mark the segment's delta Parquet egress as done (removes it from the pending queue).
+     */
+    public void markEgressed() {
+        this.egressAt = LocalDateTime.now();
     }
 
     @PrePersist
