@@ -1,5 +1,6 @@
 package com.bitbi.dfm.site.presentation.dto;
 
+import com.bitbi.dfm.site.domain.ClientApiVersion;
 import com.bitbi.dfm.site.domain.Site;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,7 @@ class SiteResponseDtoTest {
         when(site.getIsActive()).thenReturn(true);
         when(site.getRetentionDays()).thenReturn(45);
         when(site.getCreatedAt()).thenReturn(createdAt);
+        when(site.getClientApiVersion()).thenReturn(ClientApiVersion.V2);
 
         // When
         SiteResponseDto dto = SiteResponseDto.fromEntity(site);
@@ -47,6 +49,28 @@ class SiteResponseDtoTest {
         assertEquals(true, dto.isActive());
         assertEquals(45, dto.retentionDays());
         assertEquals(createdAt.toInstant(ZoneOffset.UTC), dto.createdAt());
+        assertEquals(ClientApiVersion.V2, dto.clientApiVersion());
+    }
+
+    @Test
+    @DisplayName("fromEntity should map V1 clientApiVersion")
+    void fromEntity_shouldMapV1ClientApiVersion() {
+        // Given
+        Site site = mock(Site.class);
+        when(site.getId()).thenReturn(UUID.randomUUID());
+        when(site.getAccountId()).thenReturn(UUID.randomUUID());
+        when(site.getSiteName()).thenReturn("legacy.example.com");
+        when(site.getDisplayName()).thenReturn("Legacy Site");
+        when(site.getIsActive()).thenReturn(true);
+        when(site.getRetentionDays()).thenReturn(45);
+        when(site.getCreatedAt()).thenReturn(LocalDateTime.now());
+        when(site.getClientApiVersion()).thenReturn(ClientApiVersion.V1);
+
+        // When
+        SiteResponseDto dto = SiteResponseDto.fromEntity(site);
+
+        // Then
+        assertEquals(ClientApiVersion.V1, dto.clientApiVersion());
     }
 
     @Test
@@ -68,8 +92,8 @@ class SiteResponseDtoTest {
 
         // Then
         assertNotNull(dto);
-        // Verify DTO only contains safe fields (7 original + siteType = 8 total)
-        assertEquals(8, dto.getClass().getRecordComponents().length);
+        // Verify DTO only contains safe fields (7 original + siteType + clientApiVersion = 9 total)
+        assertEquals(9, dto.getClass().getRecordComponents().length);
         // Verify no clientSecret-like field exists in DTO
         assertDoesNotThrow(() -> {
             dto.id();

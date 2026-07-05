@@ -1,5 +1,6 @@
 package com.bitbi.dfm.site.presentation.dto;
 
+import com.bitbi.dfm.site.domain.ClientApiVersion;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteType;
 
@@ -21,6 +22,7 @@ import java.util.UUID;
  * @param retentionDays Retention period in days for batch cleanup
  * @param createdAt Creation timestamp
  * @param siteType Site type (DBF or POSTGRES_CDC)
+ * @param clientApiVersion Client ingestion API version (V1 legacy HTTP or V2 Delta gRPC)
  */
 public record SiteResponseDto(
     UUID id,
@@ -30,7 +32,8 @@ public record SiteResponseDto(
     Boolean isActive,
     Integer retentionDays,
     Instant createdAt,
-    SiteType siteType
+    SiteType siteType,
+    ClientApiVersion clientApiVersion
 ) {
 
     /**
@@ -48,7 +51,8 @@ public record SiteResponseDto(
             site.getIsActive(),
             site.getRetentionDays(),
             site.getCreatedAt().toInstant(ZoneOffset.UTC),
-            site.getSiteType()
+            site.getSiteType(),
+            site.getClientApiVersion()
         );
     }
 }
