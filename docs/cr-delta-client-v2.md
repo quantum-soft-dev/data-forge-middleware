@@ -291,11 +291,11 @@ Scheduler (e.g. nightly)                 Server
  │   load latest checkpoint@M                   │
  │   fold changelog (M, now] → current state    │
  │   write checkpoint@now (all-INSERT frame):   │
- │     ├─ snapshot.csv.gz   → legacy (Bit BI)    │
- │     └─ snapshot.parquet  → Power BI floor     │
- │   materialize Parquet change-feed partitions  │
+ │     └─ snapshot.csv.gz   → legacy (Bit BI)    │
  │   prune changelog segments older than retention│
 ```
+
+Parquet egress is **not** built here — it is materialized per segment at session commit (§12, Task 8).
 
 ### E. Consumers (pull only)
 
@@ -340,10 +340,12 @@ Bit BI and any legacy consumer keep using `GET /api/v1/plugins/bit-bi/sites/{sit
 
 ---
 
-## 12. Power BI / Bit BI egress
+## 12. Parquet / Bit BI egress
 
-- **Power BI** consumes the **Parquet change feed** (`egress/{siteId}/{table}/_change_date=…/`) via Incremental Refresh, with the **checkpoint Parquet** as the immutable floor underneath. The snapshot is modeled as an all-`INSERT` frame, so Power BI folds one uniform changelog (latest-per-key, honor deletes). See the egress design discussion; this CR produces the artifacts it reads.
-- **Bit BI** is unchanged (§11).
+- **Consumers** read a **sequential delta Parquet stream** per table: `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (zero-padded sequences, so listing order = apply order). Each file is one committed segment's records: typed columns from `site_schemas` (all nullable) plus service columns `_op` (INSERT/UPDATE/DELETE) and `_seq`; DELETE rows carry the key columns. Files are applied sequentially by seq; a `FULL_SNAPSHOT` session's file is all-INSERT — a full table by construction — so there is no separate server-built floor.
+- Files are materialized **event-driven, per committed segment** (Task 8): `changelog_segments` is the durable queue (`egress_at IS NULL` = pending, claimed per-site head with `FOR UPDATE SKIP LOCKED`), a session commit wakes a bounded worker pool (`delta.egress.max-concurrent`), and a low-frequency sweep (`delta.egress.sweep-ms`) retries segments missed by a crash. Latency is seconds after `SessionCommitted`, independent of the checkpoint cron. Only tables with a declared schema are materialized.
+- **Bit BI** is unchanged (§11): reconstructed checkpoint CSV.
+- _Retired_: the checkpoint-built floor `snapshot.parquet` and the `_change_date` change-feed partitions (original T4.2b/T4.3 design) — superseded by the delta stream.
 
 This egress is **read-only and file-based**; it is intentionally decoupled from the gRPC ingestion path.
 

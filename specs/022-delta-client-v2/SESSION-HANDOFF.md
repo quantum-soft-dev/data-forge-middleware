@@ -63,17 +63,21 @@ work — surfaced to the user, not started.
 - **Fixtures**: `test-data.sql` sites pinned to `V1` explicitly (post-V29 they silently took the V2 column default — enforcement would have broken every file-path test); test-scoped `test-data-v2-site.sql` adds `store-v2.example.com` (V2) + its IN_PROGRESS batch. Contract suite: `FileApiClientVersionContractTest` (8 tests: 5 reject, 3 still-open).
 - Docs: CR §14 (en+ru) + guide section "HTTP file API is closed for V2 sites".
 
+## Task 8 — DONE ✅ (Event-driven delta Parquet egress; floor/change-feed retired)
+User decision: egress = **sequence of per-segment delta Parquet files** applied in seq order; full
+table = the delta file of a `FULL_SNAPSHOT` session; produced **as sessions commit**, not by cron.
+- **Contract**: `egress/{site}/{table}/delta/seq={first}-{last}.parquet` (zero-padded → lexicographic = apply order); typed columns from `site_schemas` (all nullable) + non-null `_op` (INSERT/UPDATE/DELETE) + `_seq`; DELETE rows carry key columns (client v1 is keyless: INSERT/DELETE only, full rows). Only schema'd tables materialize.
+- **Queue**: `changelog_segments` itself — V33 `egress_at` (NULL = pending; pre-existing rows backfilled so no historical storm) + partial index; picked per-site **head** `FOR UPDATE SKIP LOCKED` (`findNextPendingEgress`) → per-site seq order, sites in parallel, multi-instance safe.
+- **Flow**: `DeltaSessionCommitService` registers an afterCommit wake → `DeltaEgressWorker` (bounded pool `delta.egress.max-concurrent`=2, discard-on-saturation, drain-until-empty) → `DeltaEgressService.egressNextPending` (claim+egress in one txn; crash → rollback → still pending). Fallback sweep `delta.egress.sweep-ms`=60s (test profiles: 1h so tests see only explicit wakes). Meter `delta.egress.segments`.
+- **Retired (T8.5)**: floor `snapshot.parquet` + `_change_date` change-feed; V34 drops `checkpoints.s3_key_parquet`; obsolete integration tests deleted. Checkpoint cron now = Bit BI CSV + frame + retention only. This supersedes the old "Task 4 egress follow-ups" concerns.
+- **Follow-ups**: a poison segment retries via sweep forever (warn-log only, no dead-letter); `ParquetCheckpointWriter.toParquet`/`ParquetSchemaMapper.toAvroSchema` no longer called from prod (kept as tested primitives of the shared writer); egress files are never pruned server-side (consumer owns lifecycle).
+
 ## Next ⬜
 - **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._ Egress is in place: floor `checkpoints/{site}/{table}/seq={seq}/snapshot.parquet` + change feed `egress/{site}/{table}/_change_date=…/`.
 - **Decide on `ui-requirements.md` §6–§8** ("Delta Sync" tab + new endpoints) — separate scope from Task 6, user's call whether/when to pick up.
 - **PR.3** — mark PR #39 ready, ensure CI `backend-test` green, address automated review, squash-merge. _Gated on the manual T4.4; user's call._
 
 **PR.2 DONE** ✅ — [`docs/delta-client-v2-guide.md`](../../docs/delta-client-v2-guide.md) (gRPC contract, auth, full lifecycle, value typing/FR-004, keyless rules, reconciliation, resume/gap/re-baseline, continuous mode, backpressure, error codes, type mapping, pseudocode). CR links it.
-
-### Task 4 egress follow-ups (deferred, not blocking)
-- **Change-feed is floor-only / all-INSERT.** Steady-state per-op DELTA egress (an `op` column so Power BI honors deletes/updates across partitions) is not built — only the floor frame is materialized into `_change_date`. Continuous-mode (T5.4) seals raw segments but does **not** yet materialize delta egress partitions.
-- **Change date = build date (`LocalDate.now()`)**, not `source_ts`. Correct for the floor; revisit when per-record delta egress arrives.
-- Re-checkpointing twice in one day leaves two files in the same `_change_date` partition (`seq=…` differ); both are full all-INSERT frames so Power BI's latest-per-key fold dedupes, but it's wasteful — fine for the floor, reconsider for deltas.
 
 ## Gotchas / deferred / follow-ups
 - **gRPC server NOT wired into Spring Boot lifecycle** — `DeltaIngestionService` is tested via in-process gRPC only; no netty `Server` bean listens on a port. Wire before end-to-end use.

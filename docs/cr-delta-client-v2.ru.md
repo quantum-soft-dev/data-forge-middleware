@@ -290,11 +290,11 @@ Scheduler (например, ночью)              Server
  │   взять последний checkpoint@M               │
  │   свернуть changelog (M, now] → состояние     │
  │   записать checkpoint@now (кадр из INSERT):   │
- │     ├─ snapshot.csv.gz   → legacy (Bit BI)    │
- │     └─ snapshot.parquet  → пол Power BI        │
- │   материализовать Parquet change-feed партиции │
+ │     └─ snapshot.csv.gz   → legacy (Bit BI)    │
  │   прунить сегменты changelog старше retention  │
 ```
+
+Parquet-egress здесь **не** строится — он материализуется посегментно при коммите сессии (§12, Task 8).
 
 ### E. Потребители (только pull)
 
@@ -338,10 +338,12 @@ Bit BI и любой legacy-потребитель продолжают испо
 
 ---
 
-## 12. Egress для Power BI / Bit BI
+## 12. Egress: Parquet / Bit BI
 
-- **Power BI** потребляет **Parquet change feed** (`egress/{siteId}/{table}/_change_date=…/`) через Incremental Refresh, с **Parquet-checkpoint** как иммутабельным полом под ним. Снимок моделируется как кадр из одних `INSERT`, поэтому Power BI фолдит один однородный changelog (latest-per-key, с учётом удалений). Этот CR производит артефакты, которые он читает.
-- **Bit BI** без изменений (§11).
+- **Потребители** читают **последовательный поток дельта-Parquet** на таблицу: `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (seq с нулевым паддингом — порядок листинга = порядок применения). Один файл = записи одного закоммиченного сегмента: типизированные колонки из `site_schemas` (все nullable) плюс служебные `_op` (INSERT/UPDATE/DELETE) и `_seq`; строки DELETE несут колонки ключа. Файлы применяются последовательно по seq; файл `FULL_SNAPSHOT`-сессии — из одних INSERT, т.е. полная таблица по построению — отдельного серверного «пола» нет.
+- Файлы материализуются **событийно, на каждый закоммиченный сегмент** (Task 8): durable-очередь — сама `changelog_segments` (`egress_at IS NULL` = pending, выборка головы по сайту `FOR UPDATE SKIP LOCKED`), коммит сессии будит ограниченный пул воркеров (`delta.egress.max-concurrent`), редкий sweep (`delta.egress.sweep-ms`) добирает пропущенное после сбоя. Латентность — секунды после `SessionCommitted`, независимо от checkpoint-крона. Материализуются только таблицы с задекларированной схемой.
+- **Bit BI** без изменений (§11): реконструированный checkpoint CSV.
+- _Выведено_: строившиеся чекпоинтом floor `snapshot.parquet` и партиции change-feed `_change_date` (исходный дизайн T4.2b/T4.3) — вытеснены дельта-потоком.
 
 Этот egress — **read-only и файловый**; он намеренно развязан с gRPC-путём приёма.
 

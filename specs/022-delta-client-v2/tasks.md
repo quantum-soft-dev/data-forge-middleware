@@ -113,7 +113,7 @@ checkpoint cron stays for Bit BI CSV + retention frames; the floor `snapshot.par
 - [x] **T8.3** `DeltaEgressService.egressSegment(id)`: read segment records from S3, group by table, write `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` for schema'd tables, mark segment egressed; `delta.egress.segments` counter _(tests: integration — S3 objects + `egress_at` set; schema-less tables skipped but segment still marked; idempotent re-run)_
 - [x] **T8.4** `DeltaEgressWorker`: bounded pool (`delta.egress.max-concurrent`, default 2) + `wake()` after session commit (SessionEnd + continuous seal) + fallback sweep (`delta.egress.sweep-ms`); drain picks via T8.1 query until empty _(tests: integration — committed session produces delta parquet without cron; two pending segments of one site egress in seq order)_
 - [x] **T8.5** Remove floor Parquet + change-feed egress: `CheckpointService` writes CSV + frame only; drop `Checkpoint.attachParquet` / `uploadParquet` / `uploadChangeFeed` (+ V34 drops `checkpoints.s3_key_parquet`); delete obsolete tests (CheckpointParquet / CheckpointChangeFeed integration) _(tests: existing checkpoint CSV/frame suites stay green)_
-- [ ] **T8.6** Docs: CR §12 + §8.D (en+ru) — egress = sequential delta Parquet; guide "What the server produces" rewrite (file contract, `_op`/`_seq`, full = FULL_SNAPSHOT segment); SESSION-HANDOFF refresh _(no tests; doc change)_
+- [x] **T8.6** Docs: CR §12 + §8.D (en+ru) — egress = sequential delta Parquet; guide "What the server produces" rewrite (file contract, `_op`/`_seq`, full = FULL_SNAPSHOT segment); SESSION-HANDOFF refresh _(no tests; doc change)_
 
 ## Pre-PR (before opening the PR to `develop`)
 

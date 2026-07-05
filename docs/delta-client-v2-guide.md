@@ -449,11 +449,16 @@ You don't write these — they're how downstream tools read your data:
 
 - **Bit BI** keeps using `GET /api/v1/plugins/bit-bi/sites/{siteId}/files`; the CSV it downloads is the
   **reconstructed checkpoint** (latest `snapshot.csv.gz` per table), unchanged for Bit BI.
-- **Power BI** reads a typed **Parquet change feed** (`egress/{siteId}/{table}/_change_date=YYYY-MM-DD/`) on top
-  of an immutable **checkpoint floor** (`checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet`) via
-  Incremental Refresh.
+- **Analytics consumers** read a **sequential delta Parquet stream** per table:
+  `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (zero-padded sequences — listing order is
+  apply order). Each file is one committed session segment: typed columns from your submitted schema
+  (all nullable) plus service columns `_op` (`INSERT`/`UPDATE`/`DELETE`) and `_seq`. `DELETE` rows
+  carry the key columns. Apply the files sequentially by seq; a `FULL_SNAPSHOT` session produces an
+  all-`INSERT` file — a full table — so bootstrap and re-baseline need no special handling. Only
+  tables with a submitted schema are materialized.
 
-Checkpoints (and therefore egress) are produced **asynchronously** by a server scheduler, not per session.
+Delta files appear **within seconds of `SessionCommitted`** — a session commit wakes a bounded egress
+worker pool (no cron involved). The Bit BI checkpoint CSV is still built by the async scheduler.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
