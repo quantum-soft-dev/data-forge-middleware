@@ -65,6 +65,18 @@ public final class ParquetCheckpointWriter {
      */
     public static byte[] toParquet(String tableName, TableSchema tableSchema, List<Map<String, Value>> rows) {
         Schema avro = ParquetSchemaMapper.toAvroSchema(tableName, tableSchema);
+        List<GenericRecord> records = new java.util.ArrayList<>(rows.size());
+        for (Map<String, Value> row : rows) {
+            records.add(toRecord(avro, tableSchema, row));
+        }
+        return write(avro, records, tableName);
+    }
+
+    /**
+     * Write pre-built Avro records to an in-memory Parquet file (shared by the checkpoint and
+     * delta writers).
+     */
+    static byte[] write(Schema avro, List<GenericRecord> records, String tableName) {
         InMemoryOutputFile output = new InMemoryOutputFile();
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(output)
                 .withSchema(avro)
@@ -72,13 +84,20 @@ public final class ParquetCheckpointWriter {
                 .withConf(new PlainParquetConfiguration())
                 .withCompressionCodec(CODEC)
                 .build()) {
-            for (Map<String, Value> row : rows) {
-                writer.write(toRecord(avro, tableSchema, row));
+            for (GenericRecord record : records) {
+                writer.write(record);
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("Failed to write Parquet snapshot for table " + tableName, e);
+            throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
         }
         return output.toByteArray();
+    }
+
+    /**
+     * Coerce a wire value to the (possibly nullable-union) field schema's declared type.
+     */
+    static Object coerceValue(Value value, Schema fieldSchema) {
+        return coerce(value, branch(fieldSchema));
     }
 
     /**

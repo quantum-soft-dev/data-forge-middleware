@@ -49,6 +49,27 @@ public final class ParquetSchemaMapper {
         return Schema.createRecord(tableName, null, NAMESPACE, false, fields);
     }
 
+    /**
+     * Build the Avro record schema for a <b>delta</b> Parquet file (Task 8): non-null {@code _op}
+     * (INSERT/UPDATE/DELETE) and {@code _seq} service columns first, then every declared column —
+     * all forced nullable regardless of the declared constraint, because a keyed DELETE carries
+     * only its key columns and a keyed UPDATE only its after-image.
+     *
+     * @param tableName   table name (a valid PG / Avro identifier)
+     * @param tableSchema the stored schema
+     * @return an Avro record schema for delta rows
+     */
+    public static Schema toDeltaAvroSchema(String tableName, TableSchema tableSchema) {
+        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size() + 2);
+        fields.add(new Schema.Field("_op", Schema.create(Schema.Type.STRING), null, null));
+        fields.add(new Schema.Field("_seq", Schema.create(Schema.Type.LONG), null, null));
+        for (ColumnDefinition column : tableSchema.columns()) {
+            Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), avroType(column.type()));
+            fields.add(new Schema.Field(column.name(), union, null, Schema.Field.NULL_DEFAULT_VALUE));
+        }
+        return Schema.createRecord(tableName, null, NAMESPACE, false, fields);
+    }
+
     private static Schema avroType(String pgType) {
         String type = pgType.trim().toLowerCase(Locale.ROOT);
         String base = type;
