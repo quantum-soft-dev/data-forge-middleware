@@ -5,6 +5,7 @@ import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -38,6 +39,18 @@ public class DeltaSyncStateService {
                         state.getSchemaVersion(),
                         state.isRebaselineRequested()))
                 .orElseGet(() -> new SyncStateView(0L, 0L, 0, false));
+    }
+
+    /**
+     * Fetch the raw sync state entity for a site, if the client has ever synced. Used by the
+     * REST presentation (B4) which needs the full row incl. timestamps and request flags.
+     *
+     * @param siteId site identifier
+     * @return the sync state row, or empty when the client never connected
+     */
+    @Transactional(readOnly = true)
+    public Optional<SiteSyncState> findSyncState(UUID siteId) {
+        return repository.findBySiteId(siteId);
     }
 
     /**

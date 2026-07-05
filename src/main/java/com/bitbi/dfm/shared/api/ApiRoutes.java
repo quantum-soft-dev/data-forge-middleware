@@ -440,6 +440,27 @@ public final class ApiRoutes {
      */
     public static final String SITES_DELETE_BY_ACCOUNT = ACCOUNTS + "/{accountId}/sites/{siteId}";
 
+    // Delta Sync (feature 023 — UI over Delta Client v2)
+    /**
+     * Base path for owner-facing delta sync endpoints.
+     * <p>
+     * Path Variable: {siteId} - Site ID<br>
+     * Requires: Authenticated user (Auth0 OAuth2 with accountId claim); site must belong to the account<br>
+     * Sub-resources: /sync-state, /checkpoints, /rebaseline
+     * </p>
+     */
+    public static final String DELTA_SYNC_USER = SITES_USER + "/{siteId}/delta";
+
+    /**
+     * Base path for admin-facing delta sync endpoints.
+     * <p>
+     * Path Variable: {siteId} - Site ID<br>
+     * Requires: ROLE_ADMIN (Auth0)<br>
+     * Sub-resources: /sync-state, /checkpoints, /segments, /checkpoints/rebuild, /rebaseline
+     * </p>
+     */
+    public static final String DELTA_SYNC_ADMIN = SITES + "/{siteId}/delta";
+
     // Batches (Admin)
     /**
      * Base path for batch administration endpoints.
