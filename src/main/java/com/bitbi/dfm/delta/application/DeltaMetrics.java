@@ -16,6 +16,7 @@ import java.util.function.Supplier;
  *   <li>{@code delta.reconciliation.failures} — sessions rejected at SessionEnd (CR §10)</li>
  *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
+ *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  * </ul>
  *
  * @author Data Forge Team
@@ -32,6 +33,7 @@ public class DeltaMetrics {
     private final Counter reconciliationFailures;
     private final Timer checkpointDuration;
     private final DistributionSummary seqLag;
+    private final Counter egressSegments;
 
     public DeltaMetrics(MeterRegistry registry) {
         this.sessionsStarted = Counter.builder("delta.sessions.started")
@@ -48,6 +50,9 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.seqLag = DistributionSummary.builder("delta.seq.lag")
                 .description("Committed seq beyond the last checkpoint at session commit")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.egressSegments = Counter.builder("delta.egress.segments")
+                .description("Changelog segments materialized as delta Parquet egress")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
     }
 
@@ -76,5 +81,10 @@ public class DeltaMetrics {
     /** Time a checkpoint build, returning the supplier's value. */
     public <T> T timeCheckpoint(Supplier<T> build) {
         return checkpointDuration.record(build);
+    }
+
+    /** A changelog segment's delta Parquet egress was materialized. */
+    public void segmentEgressed() {
+        egressSegments.increment();
     }
 }

@@ -89,6 +89,32 @@ public class S3CheckpointStorage {
     }
 
     /**
+     * Upload one segment's delta Parquet file for a table (event-driven egress, Task 8).
+     *
+     * <p>Layout: {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet} with zero-padded
+     * sequences, so a consumer listing the prefix gets files in apply order lexicographically.</p>
+     *
+     * @return the S3 key written
+     */
+    public String uploadDelta(UUID siteId, String tableName, long firstSeq, long lastSeq, byte[] content) {
+        String s3Key = String.format("egress/%s/%s/delta/seq=%019d-%019d.parquet",
+                siteId, tableName, firstSeq, lastSeq);
+        try {
+            PutObjectRequest request = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .contentType("application/vnd.apache.parquet")
+                    .contentLength((long) content.length)
+                    .build();
+            s3Client.putObject(request, RequestBody.fromBytes(content));
+            log.info("Stored delta Parquet: key={}, size={}", s3Key, content.length);
+            return s3Key;
+        } catch (S3Exception e) {
+            throw new CheckpointStorageException("Failed to store delta Parquet: " + s3Key, e);
+        }
+    }
+
+    /**
      * Upload a Parquet change-feed partition for a table (Power BI Incremental Refresh gold layer).
      *
      * <p>Layout: {@code egress/{siteId}/{table}/_change_date={YYYY-MM-DD}/seq={seq}.parquet}. The
