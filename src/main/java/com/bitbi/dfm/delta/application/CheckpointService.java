@@ -6,15 +6,10 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
-import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
-import com.bitbi.dfm.site.application.SiteSchemaService;
-import com.bitbi.dfm.site.domain.TableSchema;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,7 +36,6 @@ public class CheckpointService {
     private final CheckpointRepository checkpointRepository;
     private final DeltaSyncStateService syncStateService;
     private final S3CheckpointStorage checkpointStorage;
-    private final SiteSchemaService siteSchemaService;
     private final DeltaMetrics metrics;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
@@ -49,14 +43,12 @@ public class CheckpointService {
                              CheckpointRepository checkpointRepository,
                              DeltaSyncStateService syncStateService,
                              S3CheckpointStorage checkpointStorage,
-                             SiteSchemaService siteSchemaService,
                              DeltaMetrics metrics) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
         this.syncStateService = syncStateService;
         this.checkpointStorage = checkpointStorage;
-        this.siteSchemaService = siteSchemaService;
         this.metrics = metrics;
     }
 
@@ -103,43 +95,15 @@ public class CheckpointService {
         }
 
         Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(seed, newRecords);
-        // The rows that actually changed since the last checkpoint (the new records folded on their
-        // own). The change-feed partition carries only these so Power BI Incremental Refresh does not
-        // re-ingest the whole table on each build; the full floor lives in the checkpoints/ snapshot.
-        Map<String, Map<String, FoldedRow>> delta = ChangelogFold.fold(Map.of(), newRecords);
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
-        LocalDate changeDate = LocalDate.now(ZoneOffset.UTC);
 
-        Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
-
+        // Parquet egress is per-segment and event-driven (Task 8, DeltaEgressService); the
+        // checkpoint materializes only the legacy CSV (Bit BI, §11) and the frame seed.
         state.forEach((tableName, rows) -> {
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
 
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
             checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
-
-            // Typed Parquet for Power BI — only for tables with a declared schema (CR §12). The floor
-            // snapshot is the full state; the change-feed partition carries the full current row for
-            // each key that changed in this window (a partial UPDATE alone would be missing NOT NULL
-            // columns). Deletes are not tombstoned here — they drop out of the rebuilt floor snapshot.
-            TableSchema tableSchema = schemas.get(tableName);
-            if (tableSchema != null) {
-                byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
-                checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
-
-                Map<String, FoldedRow> changedKeys = delta.get(tableName);
-                if (changedKeys != null && !changedKeys.isEmpty()) {
-                    List<Map<String, Value>> changedData = changedKeys.keySet().stream()
-                            .map(rows::get)               // full current row for each changed key
-                            .filter(java.util.Objects::nonNull)
-                            .map(FoldedRow::data)
-                            .toList();
-                    if (!changedData.isEmpty()) {
-                        byte[] deltaParquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, changedData);
-                        checkpointStorage.uploadChangeFeed(siteId, tableName, changeDate, seq, deltaParquet);
-                    }
-                }
-            }
 
             checkpointRepository.save(checkpoint);
         });
@@ -154,10 +118,6 @@ public class CheckpointService {
         Map<String, Map<String, Object>> dataRows = new LinkedHashMap<>();
         rows.forEach((identity, row) -> dataRows.put(identity, ValueMapper.toMap(row.data())));
         return dataRows;
-    }
-
-    private static List<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
-        return rows.values().stream().map(FoldedRow::data).toList();
     }
 
     private Checkpoint findOrCreate(UUID siteId, String tableName, long seq, long rowCount) {

@@ -17,7 +17,6 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -65,30 +64,6 @@ public class S3CheckpointStorage {
     }
 
     /**
-     * Upload a typed Parquet snapshot for a table checkpoint (Power BI floor).
-     *
-     * <p>Layout: {@code checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet}.</p>
-     *
-     * @return the S3 key written
-     */
-    public String uploadParquet(UUID siteId, String tableName, long seq, byte[] content) {
-        String s3Key = String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq);
-        try {
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(s3Key)
-                    .contentType("application/vnd.apache.parquet")
-                    .contentLength((long) content.length)
-                    .build();
-            s3Client.putObject(request, RequestBody.fromBytes(content));
-            log.info("Stored checkpoint Parquet: key={}, size={}", s3Key, content.length);
-            return s3Key;
-        } catch (S3Exception e) {
-            throw new CheckpointStorageException("Failed to store checkpoint Parquet: " + s3Key, e);
-        }
-    }
-
-    /**
      * Upload one segment's delta Parquet file for a table (event-driven egress, Task 8).
      *
      * <p>Layout: {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet} with zero-padded
@@ -111,32 +86,6 @@ public class S3CheckpointStorage {
             return s3Key;
         } catch (S3Exception e) {
             throw new CheckpointStorageException("Failed to store delta Parquet: " + s3Key, e);
-        }
-    }
-
-    /**
-     * Upload a Parquet change-feed partition for a table (Power BI Incremental Refresh gold layer).
-     *
-     * <p>Layout: {@code egress/{siteId}/{table}/_change_date={YYYY-MM-DD}/seq={seq}.parquet}. The
-     * {@code _change_date} hive-style partition is the column Power BI refreshes on.</p>
-     *
-     * @return the S3 key written
-     */
-    public String uploadChangeFeed(UUID siteId, String tableName, LocalDate changeDate, long seq, byte[] content) {
-        String s3Key = String.format("egress/%s/%s/_change_date=%s/seq=%d.parquet",
-                siteId, tableName, changeDate, seq);
-        try {
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(s3Key)
-                    .contentType("application/vnd.apache.parquet")
-                    .contentLength((long) content.length)
-                    .build();
-            s3Client.putObject(request, RequestBody.fromBytes(content));
-            log.info("Stored change-feed partition: key={}, size={}", s3Key, content.length);
-            return s3Key;
-        } catch (S3Exception e) {
-            throw new CheckpointStorageException("Failed to store change-feed partition: " + s3Key, e);
         }
     }
 
