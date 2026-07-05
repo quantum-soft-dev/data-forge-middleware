@@ -41,8 +41,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * T3.4 — the Bit BI {@code /sites/{siteId}/files} endpoint serves the reconstructed checkpoint CSV
  * for V2 (Delta) sites, while V1 (legacy) sites keep returning their uploaded files unchanged.
  *
- * <p>{@code store-01} is a seeded site under the plugin account; it is {@code V2} by the V29 DB
- * default. The V1 leg flips it to {@code V1} to prove the legacy path is untouched.</p>
+ * <p>{@code store-01} is a seeded site under the plugin account; fixtures pin seeded sites to
+ * {@code V1} (022 Task 7), so setup flips it to {@code V2} explicitly. The V1 leg flips it back
+ * to prove the legacy path is untouched.</p>
  */
 @DisplayName("Bit BI Plugin API — checkpoint CSV files (T3.4)")
 class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
@@ -50,7 +51,7 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
     private static final String API_KEY_HEADER = "X-Plugin-Api-Key";
     private static final String VALID_API_KEY = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
-    /** store-01 — seeded site under ACCOUNT_ID; V2 by DB default, owns a seeded COMPLETED batch. */
+    /** store-01 — seeded site under ACCOUNT_ID; flipped to V2 in setup, owns a seeded COMPLETED batch. */
     private static final UUID SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
     private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
@@ -70,6 +71,8 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        jdbc.update("UPDATE sites SET client_api_version = 'V2' WHERE id = ?", SITE_ID);
+
         AccountPlugin plugin = mock(AccountPlugin.class);
         when(plugin.getId()).thenReturn(1L);
         when(plugin.getAccountId()).thenReturn(ACCOUNT_ID);
