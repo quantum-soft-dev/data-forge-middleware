@@ -1,5 +1,7 @@
 package com.bitbi.dfm.delta.domain;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -18,6 +20,15 @@ public interface SiteSyncStateRepository {
      * @return optional sync state
      */
     Optional<SiteSyncState> findBySiteId(UUID siteId);
+
+    /**
+     * Bulk-fetch sync states for a set of sites in one query (Delta Sync UI, B10 —
+     * site-list health badge; avoids one query per site under 30 s polling).
+     *
+     * @param siteIds site identifiers
+     * @return sync states of the sites that have one
+     */
+    List<SiteSyncState> findBySiteIdIn(Collection<UUID> siteIds);
 
     /**
      * Save (insert or update) the sync state.
