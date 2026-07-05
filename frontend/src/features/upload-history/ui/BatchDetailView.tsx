@@ -17,6 +17,7 @@ import { ExcelButton } from './ExcelButton';
 import { CompareButton } from './CompareButton';
 import { ComparisonHistorySection } from './ComparisonHistorySection';
 import { ErrorListView } from './ErrorListView';
+import { DeltaBatchDetail } from './DeltaBatchDetail';
 import { useBatchErrors } from '@/entities/batch/api/queries';
 
 interface BatchDetailViewProps {
@@ -107,12 +108,51 @@ export function BatchDetailView({
     );
   }
 
-  // T6.7: a Delta v2 batch has no uploaded_files — show per-table insert/update/delete
-  // stats instead (batch.uploadedFilesCount is always 0 for these).
+  // F10 (023): a Delta v2 batch has no uploaded_files — the redesigned delta surfaces
+  // (meta card + Table changes) replace the entire file UI. An empty Delta session
+  // (no stats, no files — e.g. an empty CONTINUOUS session) gets a dedicated empty state.
   const isDeltaBatch = (batch.deltaStats?.length ?? 0) > 0;
-  const deltaTotalChanges = isDeltaBatch
-    ? batch.deltaStats!.reduce((sum, t) => sum + t.inserts + t.updates + t.deletes, 0)
-    : 0;
+  const isEmptySession = !isDeltaBatch && batch.files.length === 0;
+
+  if (isDeltaBatch || isEmptySession) {
+    return (
+      <div className="space-y-6">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          >
+            <ArrowLeft className="mr-1 h-4 w-4" />
+            Back to list
+          </button>
+        )}
+
+        {isDeltaBatch ? (
+          <DeltaBatchDetail batch={batch} siteName={siteName} />
+        ) : (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
+            <p className="text-gray-600">No changes in this session</p>
+          </div>
+        )}
+
+        {batch.hasErrors && (
+          <div>
+            <h3 className="mb-4 text-lg font-medium text-gray-900">Batch Errors</h3>
+            <ErrorListView
+              batchId={batch.id}
+              errors={errors}
+              isLoading={isLoadingErrors}
+              error={errorsError?.message ?? null}
+              currentPage={errorPage}
+              pageSize={errorPageSize}
+              onPageChange={setErrorPage}
+              onPageSizeChange={setErrorPageSize}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -192,70 +232,25 @@ export function BatchDetailView({
             </div>
           )}
 
-          {isDeltaBatch ? (
-            <>
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Tables</dt>
-                <dd className="mt-1 text-sm text-gray-900">{batch.deltaStats!.length}</dd>
-              </div>
+          <div>
+            <dt className="text-sm font-medium text-gray-500">Files</dt>
+            <dd className="mt-1 text-sm text-gray-900">
+              {batch.uploadedFilesCount} file{batch.uploadedFilesCount !== 1 ? 's' : ''}
+            </dd>
+          </div>
 
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Changes</dt>
-                <dd className="mt-1 text-sm text-gray-900">{deltaTotalChanges}</dd>
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Files</dt>
-                <dd className="mt-1 text-sm text-gray-900">
-                  {batch.uploadedFilesCount} file{batch.uploadedFilesCount !== 1 ? 's' : ''}
-                </dd>
-              </div>
-
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Total Size</dt>
-                <dd className="mt-1 text-sm text-gray-900">
-                  {formatBytes(batch.totalSize)}
-                </dd>
-              </div>
-            </>
-          )}
+          <div>
+            <dt className="text-sm font-medium text-gray-500">Total Size</dt>
+            <dd className="mt-1 text-sm text-gray-900">
+              {formatBytes(batch.totalSize)}
+            </dd>
+          </div>
         </div>
       </div>
 
-      {/* Files section (v1) or per-table Delta v2 stats */}
-      {isDeltaBatch ? (
-        <div>
-          <h3 className="mb-4 text-lg font-medium text-gray-900">
-            Table Changes ({batch.deltaStats!.length})
-          </h3>
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-2 text-left text-xs font-medium uppercase text-gray-500">Table</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Inserted</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Updated</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-gray-500">Deleted</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 bg-white">
-                {batch.deltaStats!.map((stat) => (
-                  <tr key={stat.table}>
-                    <td className="px-4 py-2 text-sm font-medium text-gray-900">{stat.table}</td>
-                    <td className="px-4 py-2 text-right text-sm text-gray-700">{stat.inserts}</td>
-                    <td className="px-4 py-2 text-right text-sm text-gray-700">{stat.updates}</td>
-                    <td className="px-4 py-2 text-right text-sm text-gray-700">{stat.deletes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <div>
-          <div className="mb-4 flex items-center justify-between">
+      {/* Files section (v1 file-based batches) */}
+      <div>
+        <div className="mb-4 flex items-center justify-between">
             <h3 className="text-lg font-medium text-gray-900">
               Files ({batch.files.length})
             </h3>
@@ -288,12 +283,11 @@ export function BatchDetailView({
             </div>
           </div>
 
-          <FileTable
-            files={batch.files}
-            onSelectionChange={handleSelectionChange}
-          />
-        </div>
-      )}
+        <FileTable
+          files={batch.files}
+          onSelectionChange={handleSelectionChange}
+        />
+      </div>
 
       {/* T107: Conditionally show Errors or Comparison History (Added 2025-11-10) */}
       {batch.hasErrors ? (

@@ -427,47 +427,65 @@ describe('BatchDetailView', () => {
     });
   });
 
-  describe('Delta v2 batches (T6.7)', () => {
+  // F10 (023, DoD #1): the three delta states
+  describe('Delta v2 batch surfaces (F10)', () => {
     const deltaBatch: BatchDetail = {
       ...mockBatch,
+      id: 'd3f8e0f1-1111-2222-3333-444455556666',
       uploadedFilesCount: 0,
-      totalSize: 0,
       files: [],
+      mode: 'CONTINUOUS',
+      seqRange: { first: 4801, last: 5100 },
       deltaStats: [
-        { table: 'customers', inserts: 0, updates: 0, deletes: 3 },
-        { table: 'orders', inserts: 12, updates: 5, deletes: 1 },
+        { table: 'orders', inserts: 120, updates: 45, deletes: 3 },
+        { table: 'customers', inserts: 10, updates: 0, deletes: 7 },
       ],
     };
 
-    it('should render a per-table insert/update/delete stats table instead of the file list', () => {
-      renderWithQueryClient(
-        <BatchDetailView batch={deltaBatch} isLoading={false} error={null} />
-      );
+    it('renders the redesigned delta surfaces and hides the entire file UI', () => {
+      renderWithQueryClient(<BatchDetailView batch={deltaBatch} isLoading={false} />);
 
-      expect(screen.getByText('Table Changes (2)')).toBeInTheDocument();
-      expect(screen.getByText('customers')).toBeInTheDocument();
-      expect(screen.getByText('orders')).toBeInTheDocument();
+      // Meta card: short id, chips
+      expect(screen.getByText('Batch #d3f8e0f1')).toBeInTheDocument();
+      expect(screen.getByText('Delta session')).toBeInTheDocument();
+      expect(screen.getByText('CONTINUOUS')).toBeInTheDocument();
+      expect(screen.getByText('4,801 – 5,100')).toBeInTheDocument();
+
+      // Table changes with signed colored values, sorted by table name, Total row
+      expect(screen.getByText('Table changes')).toBeInTheDocument();
+      const rows = screen.getAllByTestId(/delta-stats-row-/);
+      expect(rows[0]).toHaveAttribute('data-testid', 'delta-stats-row-customers');
+      expect(rows[1]).toHaveAttribute('data-testid', 'delta-stats-row-orders');
+      expect(screen.getByText('+120')).toBeInTheDocument();
+      expect(screen.getByText('−3')).toBeInTheDocument();
+      const totalRow = screen.getByTestId('delta-stats-total-row');
+      expect(totalRow).toHaveTextContent('+130');
+      expect(totalRow).toHaveTextContent('45');
+      expect(totalRow).toHaveTextContent('−10');
+      expect(totalRow).toHaveTextContent('185');
+
+      // File UI hidden
+      expect(screen.queryByText(/^Files \(/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /download/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /excel/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /compare/i })).not.toBeInTheDocument();
+    });
+
+    it('shows the empty-session state when both deltaStats and files are empty', () => {
+      const emptyBatch: BatchDetail = { ...mockBatch, uploadedFilesCount: 0, files: [], deltaStats: [] };
+      renderWithQueryClient(<BatchDetailView batch={emptyBatch} isLoading={false} />);
+
+      expect(screen.getByText('No changes in this session')).toBeInTheDocument();
+      expect(screen.queryByTestId('delta-batch-detail')).not.toBeInTheDocument();
       expect(screen.queryByText(/^Files \(/)).not.toBeInTheDocument();
     });
 
-    it('should show tables/changes totals in the metadata grid', () => {
-      renderWithQueryClient(
-        <BatchDetailView batch={deltaBatch} isLoading={false} error={null} />
-      );
+    it('keeps the unchanged v1 behavior when files are present', () => {
+      renderWithQueryClient(<BatchDetailView batch={mockBatch} isLoading={false} />);
 
-      expect(screen.getByText('Tables')).toBeInTheDocument();
-      expect(screen.getByText('Changes')).toBeInTheDocument();
-      // 0+0+3 (customers) + 12+5+1 (orders) = 21
-      expect(screen.getByText('21')).toBeInTheDocument();
-    });
-
-    it('should still render the file list for v1 batches without deltaStats', () => {
-      renderWithQueryClient(
-        <BatchDetailView batch={mockBatch} isLoading={false} error={null} />
-      );
-
-      expect(screen.getByText(/^Files \(/)).toBeInTheDocument();
-      expect(screen.queryByText(/^Table Changes/)).not.toBeInTheDocument();
+      expect(screen.getByText('Files (3)')).toBeInTheDocument();
+      expect(screen.queryByTestId('delta-batch-detail')).not.toBeInTheDocument();
+      expect(screen.queryByText('No changes in this session')).not.toBeInTheDocument();
     });
   });
 });

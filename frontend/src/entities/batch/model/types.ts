@@ -105,6 +105,10 @@ export interface BatchDetail {
   files: FileMetadata[];
   /** Per-table insert/update/delete counts for Delta v2 sessions (empty for v1 file-based batches) */
   deltaStats?: DeltaTableStat[];
+  /** Delta session mode (DELTA | CONTINUOUS | FULL_SNAPSHOT); null/absent for v1 batches (B9). */
+  mode?: string | null;
+  /** Sequence range covered by the Delta session; null/absent for v1 batches (B9). */
+  seqRange?: { first: number; last: number } | null;
 }
 
 /**
