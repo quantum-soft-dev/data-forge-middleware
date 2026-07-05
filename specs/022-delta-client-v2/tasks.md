@@ -80,6 +80,22 @@ delete counts per table, computed once at commit and persisted alongside the seg
 - [x] **T6.7** Frontend: `BatchDetailView` renders a per-table insert/update/delete stats table for Delta batches _(tests: vitest)_
 - [x] **T6.8** Docs: note the history stats surface in `docs/delta-client-v2-guide.md` / CR; refresh `SESSION-HANDOFF.md` _(no tests; doc change)_
 
+## Task 7 — Disable HTTP file API for V2 sites (strangler enforcement)
+
+With Delta Client v2 as the go-forward ingestion path, sites flagged `client_api_version = V2`
+must no longer push whole CSV files over HTTP. Enforcement is **per-site** (strangler): V1 sites
+keep working unchanged; V2 sites get **409 Conflict** with machine-readable `code:
+"CLIENT_API_V2_REQUIRED"` on the guarded write endpoints. Drain/read endpoints (batch
+complete/fail/cancel/get, file metadata) and client error logging (`/api/dfc/error`,
+`/api/v1/device/errors`) stay available for all sites — Delta v2 has no error-reporting RPC yet.
+Token issuance (`/api/dfc/auth`, `/api/v1/device/authorize|token|auth/**`) and the gRPC Delta
+path are untouched.
+
+- [ ] **T7.1** `ClientApiVersionGuard.assertHttpFileApiAllowed(siteId)` (site/application) + nested `HttpFileApiDisabledException` (carries `code = CLIENT_API_V2_REQUIRED`) _(tests: unit — V1 site passes; V2 site throws; unknown site no-op (auth layer owns that failure))_
+- [ ] **T7.2** Enforce on legacy v1 endpoints: `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{batchId}/upload`, `POST /api/dfc/schema` → 409 + code. Fixtures: pin seeded sites to `V1`, add V2 site `store-v2.example.com` + its IN_PROGRESS batch _(tests: contract — V2 site rejected on all three with code; V1 site still 201/200 (existing tests); complete/fail/cancel still allowed for V2 site)_
+- [ ] **T7.3** Enforce on device HTTP endpoints: `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{batchId}/upload` → 409 + code via `DeviceControllerHelper` _(tests: contract — V2 site rejected with code; V1 site unaffected (existing tests); device error logging still works for V2 site)_
+- [ ] **T7.4** Docs: CR + `delta-client-v2-guide.md` (client migration note) + SESSION-HANDOFF refresh _(no tests; doc change)_
+
 ## Pre-PR (before opening the PR to `develop`)
 
 - [x] **PR.1** `./gradlew integrationTest` 100% green — 164 tests, 0 failures (30 skipped)
