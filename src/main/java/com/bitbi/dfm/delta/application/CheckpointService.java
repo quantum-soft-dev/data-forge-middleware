@@ -6,7 +6,10 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
+import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.site.domain.TableSchema;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +39,7 @@ public class CheckpointService {
     private final CheckpointRepository checkpointRepository;
     private final DeltaSyncStateService syncStateService;
     private final S3CheckpointStorage checkpointStorage;
+    private final SiteSchemaService siteSchemaService;
     private final DeltaMetrics metrics;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
@@ -43,12 +47,14 @@ public class CheckpointService {
                              CheckpointRepository checkpointRepository,
                              DeltaSyncStateService syncStateService,
                              S3CheckpointStorage checkpointStorage,
+                             SiteSchemaService siteSchemaService,
                              DeltaMetrics metrics) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
         this.syncStateService = syncStateService;
         this.checkpointStorage = checkpointStorage;
+        this.siteSchemaService = siteSchemaService;
         this.metrics = metrics;
     }
 
@@ -97,13 +103,22 @@ public class CheckpointService {
         Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(seed, newRecords);
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
 
-        // Parquet egress is per-segment and event-driven (Task 8, DeltaEgressService); the
-        // checkpoint materializes only the legacy CSV (Bit BI, §11) and the frame seed.
+        Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
+
+        // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
+        // additionally materializes the full per-table load: typed Parquet (target format, B3)
+        // for tables with a declared schema, plus the legacy CSV (Bit BI, §11) and the frame seed.
         state.forEach((tableName, rows) -> {
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
 
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
             checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
+
+            TableSchema tableSchema = schemas.get(tableName);
+            if (tableSchema != null) {
+                byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
+                checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
+            }
 
             checkpointRepository.save(checkpoint);
         });
@@ -112,6 +127,10 @@ public class CheckpointService {
         checkpointStorage.uploadFrame(siteId, seq, ChangelogCodec.serialize(CheckpointFrame.toRecords(state)));
         syncStateService.recordCheckpoint(siteId, seq);
         return state;
+    }
+
+    private static List<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
+        return rows.values().stream().map(FoldedRow::data).toList();
     }
 
     private static Map<String, Map<String, Object>> toDataRows(Map<String, FoldedRow> rows) {

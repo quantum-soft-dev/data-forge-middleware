@@ -42,6 +42,9 @@ public class Checkpoint {
     @Column(name = "s3_key_csv", length = 1000)
     private String s3KeyCsv;
 
+    @Column(name = "s3_key_parquet", length = 1000)
+    private String s3KeyParquet;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -70,6 +73,11 @@ public class Checkpoint {
 
     public void attachCsv(String s3KeyCsv) {
         this.s3KeyCsv = s3KeyCsv;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void attachParquet(String s3KeyParquet) {
+        this.s3KeyParquet = s3KeyParquet;
         this.updatedAt = LocalDateTime.now();
     }
 

@@ -456,6 +456,11 @@ You don't write these — they're how downstream tools read your data:
   carry the key columns. Apply the files sequentially by seq; a `FULL_SNAPSHOT` session produces an
   all-`INSERT` file — a full table — so bootstrap and re-baseline need no special handling. Only
   tables with a submitted schema are materialized.
+- **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
+  `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
+  Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
+  UI (presigned URL, 15 min). Parquet is the target format; the checkpoint CSV is the legacy Bit BI
+  path and will go away once Bit BI migrates.
 
 Delta files appear **within seconds of `SessionCommitted`** — a session commit wakes a bounded egress
 worker pool (no cron involved). The Bit BI checkpoint CSV is still built by the async scheduler.
