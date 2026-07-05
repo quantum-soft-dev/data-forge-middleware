@@ -11,6 +11,7 @@ import { useDeltaCheckpoints, useDeltaSegments, useDeltaSyncState } from '@/feat
 import { presignCheckpointDownload } from '@/features/delta-sync/api/deltaSyncApi';
 import type { DeltaCheckpointFormat } from '@/features/delta-sync/model/types';
 import { CheckpointsCard } from '@/features/delta-sync/ui/CheckpointsCard';
+import { RecentSegmentsCard } from '@/features/delta-sync/ui/RecentSegmentsCard';
 import { computeLag, getSyncSeverity } from '@/features/delta-sync/model/severity';
 import { useLagHistory } from '@/features/delta-sync/model/useLagHistory';
 import { ActivityCard } from '@/features/delta-sync/ui/ActivityCard';
@@ -84,6 +85,9 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         onDownload={handleDownload}
         rebuildQueued={state.rebuildRequested}
       />
+      {canManage && (
+        <RecentSegmentsCard segments={segmentsQuery.data ?? []} isLoading={segmentsQuery.isLoading} />
+      )}
     </div>
   );
 }
