@@ -4,6 +4,10 @@ import userEvent from '@testing-library/user-event'
 import { SiteDetailShell } from './SiteDetailShell'
 import type { Site } from '@/entities/site'
 
+vi.mock('@/widgets/delta-sync/DeltaSyncWidget', () => ({
+  DeltaSyncWidget: () => <div data-testid="delta-sync-widget">delta sync</div>,
+}))
+
 vi.mock('@/widgets/upload-history/BatchListWidget', () => ({
   BatchListWidget: ({ siteId }: { siteId?: string }) => (
     <div data-testid="batch-list" data-site-id={siteId}>batch list</div>

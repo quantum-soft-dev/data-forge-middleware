@@ -11,6 +11,7 @@ import { ArrowLeft, CheckCircle2, XCircle } from 'lucide-react';
 import { Badge } from '@/shared/ui/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 import { BatchListWidget } from '@/widgets/upload-history/BatchListWidget';
+import { DeltaSyncWidget } from '@/widgets/delta-sync/DeltaSyncWidget';
 import type { Site } from '@/entities/site';
 import { formatDate } from '@/shared/lib/formatters';
 
@@ -18,13 +19,13 @@ interface SiteDetailShellProps {
   site: Site;
   /** Admin capability flag: gates rebuild button + segments card inside Delta Sync. */
   canManage: boolean;
+  /** True when the page is mounted under the admin route (switches API namespace). */
+  admin?: boolean;
   /** Breadcrumb navigation back to the site list. */
   onBack: () => void;
-  /** Content of the Delta Sync tab (only mounted for V2 sites). */
-  deltaSyncContent?: React.ReactNode;
 }
 
-export function SiteDetailShell({ site, canManage, onBack, deltaSyncContent }: SiteDetailShellProps) {
+export function SiteDetailShell({ site, canManage, admin = false, onBack }: SiteDetailShellProps) {
   const isV2 = site.clientApiVersion === 'V2';
 
   return (
@@ -84,11 +85,7 @@ export function SiteDetailShell({ site, canManage, onBack, deltaSyncContent }: S
         </TabsContent>
         {isV2 && (
           <TabsContent value="delta-sync" className="mt-4">
-            {deltaSyncContent ?? (
-              <p className="text-sm text-muted-foreground" data-can-manage={canManage}>
-                Delta Sync monitoring is being set up.
-              </p>
-            )}
+            <DeltaSyncWidget siteId={site.id} admin={admin} canManage={canManage} />
           </TabsContent>
         )}
       </Tabs>

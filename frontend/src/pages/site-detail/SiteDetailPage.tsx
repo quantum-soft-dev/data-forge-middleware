@@ -61,7 +61,7 @@ export function SiteDetailPage({ admin = false }: SiteDetailPageProps) {
           </div>
         )}
         {!isLoading && site && (
-          <SiteDetailShell site={site} canManage={canManage} onBack={handleBack} />
+          <SiteDetailShell site={site} canManage={canManage} admin={admin} onBack={handleBack} />
         )}
       </main>
     </div>
