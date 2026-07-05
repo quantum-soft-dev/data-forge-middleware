@@ -366,6 +366,7 @@ At current scale the bandwidth delta over HTTP/2 + compressed JSONL is modest; g
 - Existing legacy DBF/CDC HTTP sites keep working on the old path. Sites move to Delta Client v2 individually; on first `FULL_SNAPSHOT` session a site's changelog/checkpoint lineage begins.
 - Once a site is on v2, its Bit BI CSV is served from checkpoints (§11) instead of raw uploads — transparent to Bit BI.
 - The legacy server-side diff (`CsvDiffService`, `DbfSqlGenerationStrategy`) is **deprecated** as sources migrate, and retired when no site depends on it.
+- **HTTP file path closed per site (Task 7).** Once a site is flagged `client_api_version = V2`, the HTTP file-path **write** endpoints reject it with `409 Conflict` and machine-readable `code: "CLIENT_API_V2_REQUIRED"` (`ClientApiVersionGuard`): `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{batchId}/upload`, `POST /api/dfc/schema`, `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{batchId}/upload`. Drain endpoints (batch complete/complete-with-warnings/fail/cancel/get, file metadata) stay open so an in-flight batch can be closed after the flip, and the client error-log endpoints (`POST /api/dfc/error`, `/api/v1/device/errors`) stay open for **all** sites — Delta v2 has no error-reporting RPC yet. V1 sites are unaffected.
 
 ---
 

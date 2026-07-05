@@ -68,7 +68,28 @@ A client integration is three RPCs:
 | Reliability | best-effort (malformed lines skipped) | **hard-fail** reconciliation at `SessionEnd` |
 | Power BI | none | typed Parquet change feed + checkpoint floor |
 
-CDC v1 still works and is unchanged; v2 is the go-forward path for new clients.
+CDC v1 keeps working **only for sites still flagged `client_api_version = V1`**; v2 is the
+go-forward path, and new sites are created as `V2`.
+
+### HTTP file API is closed for V2 sites
+
+Once a site is flagged `V2`, the write endpoints of both HTTP client APIs reject it with
+**`409 Conflict`** and a machine-readable code:
+
+```json
+{"status": 409, "error": "Conflict", "code": "CLIENT_API_V2_REQUIRED", "message": "Site … uses Delta Client v2 (gRPC ingestion); the HTTP file API is disabled for this site"}
+```
+
+Rejected for V2 sites: `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{batchId}/upload`,
+`POST /api/dfc/schema`, `POST /api/v1/device/batches/start`,
+`POST /api/v1/device/files/batches/{batchId}/upload`.
+
+Still available for V2 sites: batch drain (`…/complete`, `…/complete-with-warnings`, `…/fail`,
+`…/cancel`, `GET …/{id}`), file metadata reads, token issuance, and the client error log
+(`POST /api/dfc/error`, `POST /api/v1/device/errors`) — Delta v2 has no error-reporting RPC yet.
+
+If your client receives `CLIENT_API_V2_REQUIRED`, migrate the site to the gRPC flow described in
+this guide — do not retry the HTTP upload.
 
 ---
 

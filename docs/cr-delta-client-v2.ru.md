@@ -364,6 +364,7 @@ Bit BI и любой legacy-потребитель продолжают испо
 - Существующие legacy DBF/CDC HTTP-сайты продолжают работать на старом пути. Сайты переходят на Delta Client v2 поодиночке; на первой `FULL_SNAPSHOT`-сессии у сайта начинается линия changelog/checkpoint.
 - Как только сайт на v2, его CSV для Bit BI отдаётся из checkpoint'ов (§11) вместо сырых upload'ов — прозрачно для Bit BI.
 - Серверный legacy-дифф (`CsvDiffService`, `DbfSqlGenerationStrategy`) **депрекейтится** по мере миграции источников и выводится, когда от него не зависит ни один сайт.
+- **HTTP-путь файлов закрывается посайтово (Task 7).** Как только сайт помечен `client_api_version = V2`, **write**-эндпоинты HTTP файлового пути отклоняют его с `409 Conflict` и машиночитаемым `code: "CLIENT_API_V2_REQUIRED"` (`ClientApiVersionGuard`): `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{batchId}/upload`, `POST /api/dfc/schema`, `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{batchId}/upload`. Drain-эндпоинты (complete/complete-with-warnings/fail/cancel/get батча, метаданные файлов) остаются открыты — начатый до переключения батч можно закрыть; клиентский error-лог (`POST /api/dfc/error`, `/api/v1/device/errors`) остаётся открыт для **всех** сайтов — в Delta v2 пока нет RPC для репортинга ошибок. V1-сайты не затронуты.
 
 ---
 

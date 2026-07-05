@@ -55,6 +55,14 @@ force-rebuild/re-baseline actions) requiring **new backend endpoints** (`.../del
 Its §5 ("Screen 1") is exactly what Task 6 above implements; §6–§8 (the "Delta Sync" tab) are new, unscoped
 work — surfaced to the user, not started.
 
+## Task 7 — DONE ✅ (HTTP file API disabled for V2 sites, strangler)
+- **T7.1** `ClientApiVersionGuard` (site/application): `assertHttpFileApiAllowed(siteId)` — V2 site → `HttpFileApiDisabledException` → **409 + `code: CLIENT_API_V2_REQUIRED`**; V1/unknown sites pass through.
+- **T7.2** Legacy v1 write endpoints guarded: `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{id}/upload`, `POST /api/dfc/schema`.
+- **T7.3** Device HTTP write endpoints guarded: `POST /api/v1/device/batches/start`, `POST /api/v1/device/files/batches/{id}/upload` (`DeviceControllerHelper.handleHttpFileApiDisabledException`).
+- **Still open for V2 sites** (deliberate): batch drain (complete/fail/cancel/get, file metadata), client error logging (`/api/dfc/error`, `/api/v1/device/errors` — Delta v2 has no error-reporting RPC yet), token issuance; gRPC path untouched.
+- **Fixtures**: `test-data.sql` sites pinned to `V1` explicitly (post-V29 they silently took the V2 column default — enforcement would have broken every file-path test); test-scoped `test-data-v2-site.sql` adds `store-v2.example.com` (V2) + its IN_PROGRESS batch. Contract suite: `FileApiClientVersionContractTest` (8 tests: 5 reject, 3 still-open).
+- Docs: CR §14 (en+ru) + guide section "HTTP file API is closed for V2 sites".
+
 ## Next ⬜
 - **T4.4** — **manual** Power BI Incremental Refresh validation (no automated test; checklist in plan.md). _Cannot be run by the agent._ Egress is in place: floor `checkpoints/{site}/{table}/seq={seq}/snapshot.parquet` + change feed `egress/{site}/{table}/_change_date=…/`.
 - **Decide on `ui-requirements.md` §6–§8** ("Delta Sync" tab + new endpoints) — separate scope from Task 6, user's call whether/when to pick up.
