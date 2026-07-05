@@ -62,7 +62,8 @@ class DeltaIngestionStreamChangesContractTest {
         when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle);
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class));
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService, rebaselineService,

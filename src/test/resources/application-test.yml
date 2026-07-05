@@ -5,6 +5,9 @@
 delta:
   grpc:
     enabled: false
+  egress:
+    # Slow sweep so tests exercise the explicit commit-time wake, not the fallback
+    sweep-ms: 3600000
 
 spring:
   main:

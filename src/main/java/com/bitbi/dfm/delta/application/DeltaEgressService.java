@@ -53,6 +53,22 @@ public class DeltaEgressService {
     }
 
     /**
+     * Claim and materialize the next pending segment (per-site head, {@code SKIP LOCKED}); the
+     * claim and the egress share one transaction, so a crash rolls the segment back to pending.
+     *
+     * @return {@code true} if a segment was processed, {@code false} when the queue is empty
+     */
+    @Transactional
+    public boolean egressNextPending() {
+        List<ChangelogSegment> next = segmentRepository.findNextPendingEgress(1);
+        if (next.isEmpty()) {
+            return false;
+        }
+        egressSegment(next.get(0));
+        return true;
+    }
+
+    /**
      * Write the segment's delta Parquet files and mark it egressed.
      *
      * @param segment the committed changelog segment to materialize

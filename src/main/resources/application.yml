@@ -169,6 +169,11 @@ delta:
     enabled: ${DELTA_GRPC_ENABLED:true}
     # Port for the Delta v2 gRPC server (separate from the HTTP server.port)
     port: ${DELTA_GRPC_PORT:9090}
+  egress:
+    # Concurrent delta-Parquet egress workers per instance (Task 8)
+    max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
+    # Fallback sweep interval (ms) picking up segments missed by the commit-time wake
+    sweep-ms: ${DELTA_EGRESS_SWEEP_MS:60000}
 
 # OpenAPI Configuration
 springdoc:

@@ -16,7 +16,8 @@ import static org.mockito.Mockito.*;
 
 /**
  * #9 — the commit service runs persist + advance-watermark + complete-batch as one ordered unit
- * (atomic via @Transactional), and writes no segment for an empty session.
+ * (atomic via @Transactional), writes no segment for an empty session, and wakes the egress
+ * worker after a segment-producing commit (T8.4; outside a transaction the wake is immediate).
  */
 class DeltaSessionCommitServiceTest {
 
@@ -26,8 +27,9 @@ class DeltaSessionCommitServiceTest {
     private final ChangelogSegmentService segmentService = mock(ChangelogSegmentService.class);
     private final DeltaSyncStateService syncStateService = mock(DeltaSyncStateService.class);
     private final BatchLifecycleService batchLifecycleService = mock(BatchLifecycleService.class);
+    private final DeltaEgressWorker egressWorker = mock(DeltaEgressWorker.class);
     private final DeltaSessionCommitService commit =
-            new DeltaSessionCommitService(segmentService, syncStateService, batchLifecycleService);
+            new DeltaSessionCommitService(segmentService, syncStateService, batchLifecycleService, egressWorker);
 
     @Test
     void persistsThenAdvancesThenCompletes() {
@@ -46,6 +48,18 @@ class DeltaSessionCommitServiceTest {
     }
 
     @Test
+    void wakesEgressWorkerAfterSegmentProducingCommit() {
+        ChangelogSegment segment = mock(ChangelogSegment.class);
+        when(segment.getS3Key()).thenReturn("delta/site/segments/b.pb.gz");
+        when(segmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
+
+        commit.commit(SITE, BATCH, "DELTA", 1L, 1L,
+                List.of(ChangeRecord.newBuilder().setSeq(1L).build()));
+
+        verify(egressWorker).wake();
+    }
+
+    @Test
     void emptySessionWritesNoSegmentButStillCompletesBatch() {
         String key = commit.commit(SITE, BATCH, "DELTA", 1L, 0L, List.of());
 
@@ -53,5 +67,6 @@ class DeltaSessionCommitServiceTest {
         verify(segmentService, never()).persist(any(), any(), any(), anyLong(), any());
         verify(syncStateService).advanceWatermark(SITE, 0L);
         verify(batchLifecycleService).completeBatch(BATCH);
+        verify(egressWorker, never()).wake();
     }
 }

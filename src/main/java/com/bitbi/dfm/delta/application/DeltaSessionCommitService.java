@@ -5,6 +5,8 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.UUID;
@@ -26,13 +28,16 @@ public class DeltaSessionCommitService {
     private final ChangelogSegmentService changelogSegmentService;
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
+    private final DeltaEgressWorker egressWorker;
 
     public DeltaSessionCommitService(ChangelogSegmentService changelogSegmentService,
                                      DeltaSyncStateService syncStateService,
-                                     BatchLifecycleService batchLifecycleService) {
+                                     BatchLifecycleService batchLifecycleService,
+                                     DeltaEgressWorker egressWorker) {
         this.changelogSegmentService = changelogSegmentService;
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
+        this.egressWorker = egressWorker;
     }
 
     /**
@@ -56,9 +61,27 @@ public class DeltaSessionCommitService {
         if (!records.isEmpty()) {
             ChangelogSegment segment = changelogSegmentService.persist(siteId, batchId, mode, firstSeq, records);
             segmentKey = segment.getS3Key();
+            wakeEgressAfterCommit();
         }
         syncStateService.advanceWatermark(siteId, committedSeq);
         batchLifecycleService.completeBatch(batchId);
         return segmentKey;
+    }
+
+    /**
+     * Wake the delta egress worker once this transaction commits (T8.4) — the worker must see the
+     * committed segment row. Outside a transaction (unit tests) the wake is immediate.
+     */
+    private void wakeEgressAfterCommit() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    egressWorker.wake();
+                }
+            });
+        } else {
+            egressWorker.wake();
+        }
     }
 }
