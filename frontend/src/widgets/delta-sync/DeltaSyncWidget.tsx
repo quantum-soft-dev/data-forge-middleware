@@ -6,7 +6,10 @@
  * TanStack Query; the empty state replaces the entire tab body (D9a).
  */
 
-import { useDeltaSyncState } from '@/features/delta-sync/api/queries';
+import { useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries';
+import { computeLag, getSyncSeverity } from '@/features/delta-sync/model/severity';
+import { useLagHistory } from '@/features/delta-sync/model/useLagHistory';
+import { ActivityCard } from '@/features/delta-sync/ui/ActivityCard';
 import { SyncStateShell } from '@/features/delta-sync/ui/SyncStateShell';
 import { DeltaSyncEmptyState } from '@/features/delta-sync/ui/DeltaSyncEmptyState';
 
@@ -20,6 +23,11 @@ export interface DeltaSyncWidgetProps {
 
 export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetProps) {
   const syncStateQuery = useDeltaSyncState(siteId, { admin });
+  // Throughput bars are admin-only while P2 (owner lite segments) is pending.
+  const segmentsQuery = useDeltaSegments(siteId, { enabled: canManage, limit: 20 });
+
+  const lag = syncStateQuery.data ? computeLag(syncStateQuery.data) : null;
+  const lagSamples = useLagHistory(lag, syncStateQuery.dataUpdatedAt ?? 0);
 
   if (syncStateQuery.isLoading) {
     return (
@@ -43,9 +51,17 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
     return <DeltaSyncEmptyState />;
   }
 
+  const severity = getSyncSeverity(computeLag(state), state.updatedAt);
+
   return (
     <div className="space-y-4" data-can-manage={canManage}>
       <SyncStateShell state={state} />
+      <ActivityCard
+        lagSamples={lagSamples}
+        severity={severity}
+        segments={segmentsQuery.data}
+        showThroughput={canManage}
+      />
     </div>
   );
 }

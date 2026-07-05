@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { DeltaSyncWidget } from './DeltaSyncWidget'
-import { useDeltaSyncState } from '@/features/delta-sync/api/queries'
+import { useDeltaSegments, useDeltaSyncState } from '@/features/delta-sync/api/queries'
 import type { DeltaSyncState } from '@/features/delta-sync/model/types'
 
 vi.mock('@/features/delta-sync/api/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/delta-sync/api/queries')>()
-  return { ...actual, useDeltaSyncState: vi.fn() }
+  return { ...actual, useDeltaSyncState: vi.fn(), useDeltaSegments: vi.fn() }
 })
 
 const mockedUseDeltaSyncState = vi.mocked(useDeltaSyncState)
+const mockedUseDeltaSegments = vi.mocked(useDeltaSegments)
 
 const state: DeltaSyncState = {
   lastAppliedSeq: 4821,
@@ -26,11 +27,17 @@ function mockQuery(partial: { isLoading?: boolean; isError?: boolean; data?: Del
     isLoading: partial.isLoading ?? false,
     isError: partial.isError ?? false,
     data: partial.data,
+    dataUpdatedAt: partial.data ? Date.now() : 0,
   } as ReturnType<typeof useDeltaSyncState>)
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockedUseDeltaSegments.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  } as ReturnType<typeof useDeltaSegments>)
 })
 
 describe('DeltaSyncWidget (F5)', () => {
