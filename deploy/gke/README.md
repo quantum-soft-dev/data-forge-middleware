@@ -51,6 +51,45 @@ kubectl -n forge port-forward svc/forge-frontend 8081:80
 
 In CI this is automated by `.github/workflows/app-deploy.yml` (Workload Identity Federation).
 
+## External access — GKE Gateway (dev)
+
+Dev is exposed through a **GKE Gateway** (GatewayClass `gke-l7-global-external-managed`),
+the modern replacement for the retired ingress-nginx path and the equivalent of bitbi's
+global external L7 Ingress. Manifests: [`k8s/overlays/dev/gateway.yaml`](../../k8s/overlays/dev/gateway.yaml)
+(Gateway + HTTPRoutes + `HealthCheckPolicy`). The frontend nginx reverse-proxies `/api/*`
+to `forge-backend`, so a single route to `forge-frontend` serves both the admin UI and the API.
+
+Out-of-band GCP resources (created via gcloud; move to Terraform when promoting to stage/prod):
+
+```bash
+# reserved global static IP (Gateway references it by NAME via spec.addresses NamedAddress)
+gcloud compute addresses create forge-dev-ip --global --project bitbi-dev --ip-version=IPV4
+#   -> forge-dev-ip = 136.68.136.183
+
+# Google-managed TLS cert via Certificate Manager + a cert map referenced by the
+# `networking.gke.io/certmap` annotation on the Gateway
+gcloud certificate-manager certificates create forge-dev-cert --domains=dev.dfm.bitbi.io --project bitbi-dev
+gcloud certificate-manager maps create forge-dev-certmap --project bitbi-dev
+gcloud certificate-manager maps entries create forge-dev-entry \
+  --map=forge-dev-certmap --certificates=forge-dev-cert --hostname=dev.dfm.bitbi.io --project bitbi-dev
+```
+
+**DNS (required to finish):** create an `A` record `dev.dfm.bitbi.io -> 136.68.136.183`.
+The managed cert stays `PROVISIONING` and HTTPS returns the self-signed placeholder until
+DNS resolves to the Gateway IP; once Google validates the domain the cert flips to `ACTIVE`.
+
+> The HTTPS listener references a placeholder self-signed Secret `forge-dev-tls-placeholder`
+> only to satisfy the Gateway API webhook (`certificateRefs` is required for `mode: Terminate`);
+> the `certmap` annotation's Google-managed cert takes precedence at the load balancer.
+
+Check status:
+
+```bash
+kubectl -n forge get gateway forge-gateway -o wide
+gcloud certificate-manager certificates describe forge-dev-cert --project bitbi-dev \
+  --format='value(managed.state)'
+```
+
 ## Placeholders to fill before a real deploy
 
 Overlay ConfigMaps contain `REPLACE_*` / `dev-dfm.us.auth0.com` placeholders for Auth0

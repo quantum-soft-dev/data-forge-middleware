@@ -1,0 +1,105 @@
+# External GKE Gateway for forge dev (replaces the retired ingress-nginx path).
+#
+# GatewayClass gke-l7-global-external-managed is the modern equivalent of the
+# global external L7 Ingress bitbi uses (dev.bitbi.io). TLS is a Google-managed
+# certificate provisioned via Certificate Manager (map `forge-dev-certmap`,
+# referenced by the certmap annotation) — it stays PROVISIONING until DNS for
+# dev.dfm.bitbi.io points at the reserved static IP `forge-dev-ip`.
+#
+# Out-of-band prerequisites (created via gcloud; see deploy/gke/README.md):
+#   - global static IP `forge-dev-ip`            (136.68.136.183)
+#   - managed cert `forge-dev-cert` + map `forge-dev-certmap` for dev.dfm.bitbi.io
+#
+# The frontend nginx reverse-proxies /api/* to forge-backend, so a single route
+# to forge-frontend covers both the admin UI and the client/admin API.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: forge-gateway
+  namespace: forge
+  annotations:
+    networking.gke.io/certmap: forge-dev-certmap
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    # GKE global external Gateways only accept NamedAddress (the reserved static
+    # IP resource name), not a literal IPAddress. forge-dev-ip = 136.68.136.183.
+    - type: NamedAddress
+      value: forge-dev-ip
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        # The Google-managed cert is supplied by the `networking.gke.io/certmap`
+        # annotation and takes precedence at the load balancer. This placeholder
+        # self-signed Secret exists only to satisfy the Gateway API webhook, which
+        # requires certificateRefs when mode is Terminate.
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: forge-dev-tls-placeholder
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# Primary route: all HTTPS traffic for the host -> frontend (nginx fans /api -> backend).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forge-frontend-route
+  namespace: forge
+spec:
+  parentRefs:
+    - name: forge-gateway
+      sectionName: https
+  hostnames:
+    - dev.dfm.bitbi.io
+  rules:
+    - backendRefs:
+        - name: forge-frontend
+          port: 80
+---
+# Redirect plain HTTP -> HTTPS (301).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forge-https-redirect
+  namespace: forge
+spec:
+  parentRefs:
+    - name: forge-gateway
+      sectionName: http
+  hostnames:
+    - dev.dfm.bitbi.io
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+---
+# Container-native LB health check hits the frontend nginx /health endpoint.
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: forge-frontend-hc
+  namespace: forge
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        requestPath: /health
+        port: 80
+  targetRef:
+    group: ""
+    kind: Service
+    name: forge-frontend
