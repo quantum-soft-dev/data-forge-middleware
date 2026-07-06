@@ -8,7 +8,7 @@
 **Формат работы**: отдельная ветка `feature/023-delta-sync-ui` от `develop`; TDD, WIP=1, один атомарный коммит на задачу (см. CLAUDE.md Development Policy). Backend-задачи — до frontend (§7 ТЗ: эндпоинты — предпосылка UI).
 
 **Открытые продуктовые решения** (блокируют только помеченные задачи):
-- [ ] **P1**: Geist глобально? (рекомендация: да) → блокирует F13
+- [x] **P1**: Geist глобально? — **ДА** (решение продукта 2026-07-06) → F13 выполнена
 - [ ] **P2**: owner'у доступна lite-проекция сегментов (recordCount+createdAt)? (рекомендация: да) → влияет на B6/F6
 
 > **Статус на старте реализации (2026-07-05)**: P1 и P2 не решены продуктом → по договорённости **F13 пропущена**, **B6 реализован admin-only** (owner-lite-проекция не открыта), в **F6** Segment throughput рендерится только для admin (`canManage`); owner видит Lag history на всю ширину карточки. При положительном решении P2 — добавить owner-lite endpoint в B6 и вернуть throughput owner'у; при P1 — выполнить F13.
@@ -49,7 +49,7 @@
 - [x] **F10** `feat(upload-history): delta batch detail redesign` — при `deltaStats.length > 0`: скрыть Files/FileTable/Download/Excel/Compare; meta card (зелёный check-circle, «Batch #» + 8 симв. UUID, чипы Completed + «Delta session» + серый mode-чип, meta-строка Started/Completed/Seq range); «Table changes» (`1.6fr 1fr×4`, +зелёный/синий/−красный, Total-строка 600, client-side сортировка по имени). Оба пусто → «No changes in this session»; files-путь v1 не меняется. Тесты: три состояния (DoD п.1).
 - [x] **F11** `feat(site-list): sync health pill` — на bulk-данных B10: Healthy «Synced · lag 12» / Elevated «Lag 2.3k» / Critical / Stalled «Stalled · 26 h» / «No sync yet» (серый); V1 — muted «Snapshot uploads»; во время загрузки — ничего; на узкой ширине пилл переносится под имя раньше кнопок.
 - [x] **F12** `docs: UI layer over Delta v2` — CLAUDE.md «Recent Changes» + guide (DoD п.4).
-- [ ] **F13** *(после P1 — пропущена, P1 не решён)* `feat(shared): adopt Geist font globally` — self-hosted Geist 400/500/600, проверка существующих экранов.
+- [x] **F13** `feat(shared): adopt Geist font globally` — self-hosted Geist 400/500/600, проверка существующих экранов.
 
 ## Definition of Done (из ТЗ §10)
 
