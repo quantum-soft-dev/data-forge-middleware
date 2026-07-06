@@ -37,6 +37,13 @@ export default {
         },
         hairline: 'rgba(0,0,0,0.12)',
         separator: 'rgba(0,0,0,0.06)',
+        danger: {
+          text: '#B91C1C',
+          solid: '#EF4444',
+          'solid-hover': '#DC2626',
+          border: 'rgba(239,68,68,0.35)',
+          bg: '#FEF2F2',
+        },
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
