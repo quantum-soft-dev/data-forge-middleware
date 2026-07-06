@@ -15,6 +15,7 @@ import { Header } from '@/widgets/header/Header'
 import { DashboardCharts } from '@/widgets/dashboard-charts'
 import { GlobalErrorsWidget } from '@/widgets/global-errors/GlobalErrorsWidget'
 import { useAuth } from '@/entities/user-session/api/useAuth'
+import { PageHeader } from '@/shared/ui/page-header'
 
 export default function DashboardPage() {
   const { hasRole, isRolesLoading } = useAuth()
@@ -24,15 +25,13 @@ export default function DashboardPage() {
   const showGlobalErrors = !isRolesLoading && !isAdmin
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Overview of subscriber metrics and growth trends
-          </p>
-        </div>
+        <PageHeader
+          title="Dashboard"
+          subtitle="Overview of subscriber metrics and growth trends"
+        />
 
         {/* Global Errors Widget - only shown for regular users with accountId */}
         {showGlobalErrors && (
