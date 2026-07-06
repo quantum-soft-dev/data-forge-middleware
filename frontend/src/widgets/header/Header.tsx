@@ -6,12 +6,21 @@
  *
  * Per FR-008: Navigation menu with links to Dashboard and Accounts pages.
  * Role-based access: User Management visible only for ADMIN role.
+ * Monitoring visual language (024, T013): hairline bottom border,
+ * ink/ink-secondary links, brand active accent.
  */
 
 import { Link } from '@tanstack/react-router'
 import { User } from 'lucide-react'
 import { LogoutButton } from '@/features/auth/logout/LogoutButton'
 import { useAuth } from '@/entities/user-session/api/useAuth'
+import { Badge } from '@/shared/ui/ui/badge'
+
+const NAV_LINK_CLASSES =
+  'text-sm font-medium text-ink-secondary hover:text-ink transition-colors'
+const NAV_LINK_ACTIVE = {
+  className: 'text-sm font-medium text-brand hover:text-brand',
+}
 
 export function Header() {
   const { user, hasRole, isRolesLoading } = useAuth()
@@ -21,7 +30,7 @@ export function Header() {
   const userName = user?.name || user?.email || 'User'
 
   return (
-    <header className="border-b border-gray-200 bg-white shadow-sm">
+    <header className="border-b border-separator bg-white">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           {/* Logo / Title */}
@@ -31,32 +40,20 @@ export function Header() {
               alt="DataForge Logo"
               className="h-8 w-8"
             />
-            <h1 className="text-xl font-bold text-gray-900">
+            <h1 className="text-base font-medium tracking-[-0.24px] text-ink">
               DataForge Middleware
             </h1>
           </Link>
 
           {/* Navigation Menu */}
           <nav className="flex items-center space-x-6">
-            <Link
-              to="/dashboard"
-              className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-              activeProps={{
-                className: 'text-sm font-medium text-primary hover:text-primary',
-              }}
-            >
+            <Link to="/dashboard" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
               Dashboard
             </Link>
 
             {/* Site Management - only visible for regular users (not admins) */}
             {!isAdmin && (
-              <Link
-                to="/account/sites"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
+              <Link to="/account/sites" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
                 Site Management
               </Link>
             )}
@@ -65,10 +62,8 @@ export function Header() {
             {!isAdmin && (
               <Link
                 to="/account/upload-history"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
+                className={NAV_LINK_CLASSES}
+                activeProps={NAV_LINK_ACTIVE}
               >
                 Upload History
               </Link>
@@ -76,64 +71,40 @@ export function Header() {
 
             {/* Plugins - only visible for regular users (not admins) */}
             {!isAdmin && (
-              <Link
-                to="/account/plugins"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
+              <Link to="/account/plugins" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
                 Plugins
               </Link>
             )}
 
             {/* User Management - only visible for ADMIN role */}
             {isAdmin && (
-              <Link
-                to="/admin/users"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
+              <Link to="/admin/users" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
                 User Management
               </Link>
             )}
 
             {/* Plugins - only visible for ADMIN role */}
             {isAdmin && (
-              <Link
-                to="/admin/plugins"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
+              <Link to="/admin/plugins" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
                 Plugins
               </Link>
             )}
 
             {/* Settings - only visible for ADMIN role */}
             {isAdmin && (
-              <Link
-                to="/admin/settings"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
+              <Link to="/admin/settings" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
                 Settings
               </Link>
             )}
 
             {/* Current User Info */}
-            <div className="flex items-center gap-2 ml-4 border-l border-gray-300 pl-4 text-sm text-gray-600">
-              <User className="h-4 w-4" />
+            <div className="ml-4 flex items-center gap-2 border-l border-separator pl-4 text-sm text-ink-secondary">
+              <User className="h-4 w-4" strokeWidth={1.5} />
               <span className="font-medium">{userName}</span>
               {isAdmin && (
-                <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                <Badge variant="info" className="ml-1 px-2 py-0.5">
                   Admin
-                </span>
+                </Badge>
               )}
             </div>
 
