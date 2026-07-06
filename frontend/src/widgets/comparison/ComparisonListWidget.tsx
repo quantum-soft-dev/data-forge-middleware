@@ -145,7 +145,7 @@ export function ComparisonListWidget({
 
       {/* Pagination Controls */}
       {!isLoading && data && data.totalPages > 1 && (
-        <div className="flex items-center justify-between border-t pt-4">
+        <div className="flex items-center justify-between border-t border-separator pt-4">
           <div className="text-sm text-muted-foreground">
             Page {page + 1} of {data.totalPages} ({data.totalElements} total)
             {shouldUseVirtualization && ' (virtualized for performance)'}
