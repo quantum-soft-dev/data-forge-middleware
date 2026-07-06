@@ -10,7 +10,7 @@
 import { formatNumber } from '@/shared/lib/formatters';
 import type { DeltaSegment } from '../model/types';
 import type { SyncSeverity } from '../model/severity';
-import { severityTokens, monitoringTokens as t } from '../model/tokens';
+import { severityTokens, monitoringTokens as t } from '@/shared/ui/tokens';
 import { sparklinePoints } from '../model/useLagHistory';
 
 const SPARK_WIDTH = 400;

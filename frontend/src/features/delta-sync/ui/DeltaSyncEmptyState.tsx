@@ -5,7 +5,7 @@
  */
 
 import { Database } from 'lucide-react';
-import { monitoringTokens as t } from '../model/tokens';
+import { monitoringTokens as t } from '@/shared/ui/tokens';
 
 export function DeltaSyncEmptyState() {
   return (

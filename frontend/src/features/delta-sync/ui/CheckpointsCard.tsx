@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react';
 import { RefreshCw, Table as TableIcon } from 'lucide-react';
 import { formatNumber, formatRelativeTime } from '@/shared/lib/formatters';
 import type { DeltaCheckpoint, DeltaCheckpointFormat } from '../model/types';
-import { monitoringTokens as t, severityTokens } from '../model/tokens';
+import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 const FILTER_THRESHOLD = 15;

@@ -11,7 +11,7 @@
 import type { ClientApiVersion } from '@/entities/site';
 import type { DeltaSyncHealth } from '../model/types';
 import { formatLagShort, getSyncSeverity } from '../model/severity';
-import { monitoringTokens as t, severityTokens } from '../model/tokens';
+import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface SyncHealthPillProps {
   clientApiVersion: ClientApiVersion;

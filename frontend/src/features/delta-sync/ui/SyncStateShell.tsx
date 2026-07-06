@@ -17,7 +17,7 @@ import {
   isStalled,
   lagTrackPercent,
 } from '../model/severity';
-import { monitoringTokens as t, severityTokens } from '../model/tokens';
+import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface SyncStateShellProps {
   state: DeltaSyncState;

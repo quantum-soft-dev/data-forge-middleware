@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { ChevronDown, Layers } from 'lucide-react';
 import { formatNumber, formatShortDate } from '@/shared/lib/formatters';
 import type { DeltaSegment, DeltaSessionMode } from '../model/types';
-import { monitoringTokens as t, severityTokens } from '../model/tokens';
+import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 const MODE_CHIP_STYLES: Record<DeltaSessionMode, { background: string; color: string }> = {
   DELTA: { background: t.blue50, color: t.primary },

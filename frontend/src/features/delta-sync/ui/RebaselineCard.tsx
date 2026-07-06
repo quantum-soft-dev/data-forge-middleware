@@ -7,7 +7,7 @@
  * when the client starts its FULL_SNAPSHOT session and the button returns.
  */
 
-import { monitoringTokens as t, severityTokens } from '../model/tokens';
+import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface RebaselineCardProps {
   /** Persistent rebaseline_requested flag from the sync-state DTO. */
