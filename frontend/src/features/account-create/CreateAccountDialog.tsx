@@ -52,13 +52,13 @@ export function CreateAccountDialog({ open, onClose }: CreateAccountDialogProps)
       >
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
-          <h2 id="dialog-title" className="text-xl font-semibold text-gray-900">
+          <h2 id="dialog-title" className="text-[17px] font-medium tracking-[-0.24px] text-ink">
             Create Account
           </h2>
           <button
             onClick={onClose}
             disabled={createMutation.isPending}
-            className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-lg p-1 text-ink-muted hover:bg-secondary hover:text-ink focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Close dialog"
           >
             <X className="h-5 w-5" />
