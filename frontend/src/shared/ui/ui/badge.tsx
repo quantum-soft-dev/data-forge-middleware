@@ -2,34 +2,121 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/shared/lib/utils"
+import { monitoringTokens, severityTokens } from "@/shared/ui/tokens"
 
+/**
+ * Monitoring status pill (024, T004): rounded-full, 12px/500, 10–12% alpha
+ * background + darker full-color text, optional 6px leading dot.
+ * Exemplar: features/delta-sync/ui/SyncHealthPill.tsx.
+ */
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
   {
     variants: {
       variant: {
-        default:
-          "border-transparent bg-primary text-primary-foreground hover:bg-primary/80",
-        secondary:
-          "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        destructive:
-          "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
-        outline: "text-foreground",
+        info: "",
+        neutral: "",
+        success: "",
+        warning: "",
+        critical: "",
+        stalled: "",
+        outline: "border border-hairline text-ink-secondary",
+        /** @deprecated alias of `info` — removed in T035 */
+        default: "",
+        /** @deprecated alias of `neutral` — removed in T035 */
+        secondary: "",
+        /** @deprecated alias of `critical` — removed in T035 */
+        destructive: "",
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: "info",
     },
   }
 )
 
+type CanonicalVariant =
+  | "info"
+  | "neutral"
+  | "success"
+  | "warning"
+  | "critical"
+  | "stalled"
+  | "outline"
+
+const ALIASES: Record<string, CanonicalVariant> = {
+  default: "info",
+  secondary: "neutral",
+  destructive: "critical",
+}
+
+interface VariantColors {
+  background?: string
+  color?: string
+  dot?: string
+}
+
+const variantColors: Record<CanonicalVariant, VariantColors> = {
+  info: {
+    background: monitoringTokens.blue50,
+    color: monitoringTokens.primary,
+    dot: monitoringTokens.primary,
+  },
+  neutral: {
+    background: monitoringTokens.subtleBg,
+    color: monitoringTokens.textSecondary,
+    dot: monitoringTokens.textMuted,
+  },
+  success: {
+    background: severityTokens.healthy.bg,
+    color: severityTokens.healthy.text,
+    dot: severityTokens.healthy.dot,
+  },
+  warning: {
+    background: severityTokens.elevated.bg,
+    color: severityTokens.elevated.text,
+    dot: severityTokens.elevated.dot,
+  },
+  critical: {
+    background: severityTokens.critical.bg,
+    color: severityTokens.critical.text,
+    dot: severityTokens.critical.dot,
+  },
+  stalled: {
+    background: severityTokens.stalled.bg,
+    color: severityTokens.stalled.text,
+    dot: severityTokens.stalled.dot,
+  },
+  outline: { dot: monitoringTokens.textMuted },
+}
+
 export interface BadgeProps
   extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
+    VariantProps<typeof badgeVariants> {
+  /** Render a 6px status dot in the variant's dot color. */
+  dot?: boolean
+}
 
-function Badge({ className, variant, ...props }: BadgeProps) {
+function Badge({ className, variant, dot, style, children, ...props }: BadgeProps) {
+  const canonical: CanonicalVariant =
+    (variant && (ALIASES[variant] ?? (variant as CanonicalVariant))) || "info"
+  const colors = variantColors[canonical]
+
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <div
+      className={cn(badgeVariants({ variant }), className)}
+      style={{ background: colors.background, color: colors.color, ...style }}
+      {...props}
+    >
+      {dot ? (
+        <span
+          aria-hidden="true"
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ background: colors.dot }}
+        />
+      ) : null}
+      {children}
+    </div>
   )
 }
 
