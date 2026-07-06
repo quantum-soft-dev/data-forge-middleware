@@ -38,16 +38,16 @@ export function PluginList({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-        <span className="ml-3 text-sm text-gray-500">Loading plugins...</span>
+        <Loader2 className="h-8 w-8 animate-spin text-ink-muted" />
+        <span className="ml-3 text-sm text-ink-secondary">Loading plugins...</span>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
-        <p className="text-sm text-red-600">
+      <div className="rounded-lg border border-danger-border bg-danger-bg p-4 text-center">
+        <p className="text-sm text-danger-text">
           Failed to load plugins: {error.message}
         </p>
       </div>
@@ -66,10 +66,10 @@ export function PluginList({
 
   if (!hasPlugins) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-        <Plug className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-4 text-sm text-gray-500">No plugins available</p>
-        <p className="text-xs text-gray-400">
+      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <Plug className="mx-auto h-12 w-12 text-ink-muted" />
+        <p className="mt-4 text-sm text-ink-secondary">No plugins available</p>
+        <p className="text-xs text-ink-muted">
           Plugins will appear here when they become available.
         </p>
       </div>

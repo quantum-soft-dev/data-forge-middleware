@@ -216,9 +216,9 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
       />
 
       {isError ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
-          <AlertCircle className="mx-auto h-8 w-8 text-red-400" />
-          <p className="mt-2 text-sm text-red-600">
+        <div className="rounded-lg border border-danger-border bg-danger-bg p-4 text-center">
+          <AlertCircle className="mx-auto h-8 w-8 text-danger-solid" />
+          <p className="mt-2 text-sm text-danger-text">
             Failed to load batches: {error?.message || 'Unknown error'}
           </p>
         </div>
@@ -238,8 +238,8 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
 
           {/* Pagination */}
           {data && data.totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-gray-200 pt-4 mt-4">
-              <div className="text-sm text-gray-500">
+            <div className="flex items-center justify-between border-t border-separator pt-4 mt-4">
+              <div className="text-sm text-ink-secondary">
                 Page {data.page + 1} of {data.totalPages} ({data.totalElements} total)
               </div>
               <div className="flex items-center gap-2">
@@ -344,7 +344,7 @@ export function BatchSqlTab({ pluginId }: BatchSqlTabProps) {
             <AlertDialogAction
               onClick={handleConfirmDelete}
               disabled={deleteMutation.isPending}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-danger-solid hover:bg-danger-solid-hover"
             >
               {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
