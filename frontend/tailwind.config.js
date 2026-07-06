@@ -17,6 +17,10 @@ export default {
       },
     },
     extend: {
+      aria: {
+        // enables aria-invalid: variant for form error states (024, T009)
+        invalid: 'invalid="true"',
+      },
       fontFamily: {
         // Geist globally (023, F13; product decision P1 = yes)
         sans: ['"Geist Sans"', 'Geist', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
