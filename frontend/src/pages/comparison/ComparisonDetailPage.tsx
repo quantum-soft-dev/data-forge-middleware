@@ -46,21 +46,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 /**
  * Status badge colors mapping.
  */
-const statusColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
-  PENDING: 'secondary',
-  IN_PROGRESS: 'default',
-  COMPLETED: 'default', // Badge doesn't have 'success', use 'default' with green styling
-  FAILED: 'destructive',
+const statusColors: Record<string, 'neutral' | 'info' | 'success' | 'critical'> = {
+  PENDING: 'neutral',
+  IN_PROGRESS: 'info',
+  COMPLETED: 'success',
+  FAILED: 'critical',
 };
 
 /**
  * Change type badge colors mapping.
  */
-const changeTypeColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
-  ADDED: 'default', // No 'success' variant, use 'default' with green styling via CSS
-  MODIFIED: 'default',
-  UNCHANGED: 'secondary',
-  REMOVED: 'destructive',
+const changeTypeColors: Record<string, 'success' | 'info' | 'neutral' | 'critical'> = {
+  ADDED: 'success',
+  MODIFIED: 'info',
+  UNCHANGED: 'neutral',
+  REMOVED: 'critical',
 };
 
 /**
@@ -249,7 +249,7 @@ export function ComparisonDetailPage(): React.ReactElement {
             Back
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">Comparison #{comparison.id}</h1>
+            <h1 className="text-[22px] font-medium tracking-[-0.33px] text-ink tabular-nums">Comparison #{comparison.id}</h1>
             <p className="text-muted-foreground">
               Created {new Date(comparison.createdAt).toLocaleString()}
             </p>
