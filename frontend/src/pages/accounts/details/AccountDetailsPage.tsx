@@ -60,12 +60,12 @@ export default function AccountDetailsPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-surface-hover">
         <Header />
         <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
           <div className="flex items-center justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" />
-            <span className="ml-3 text-sm text-gray-600">Loading account details...</span>
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
+            <span className="ml-3 text-sm text-ink-secondary">Loading account details...</span>
           </div>
         </main>
       </div>
@@ -74,11 +74,11 @@ export default function AccountDetailsPage() {
 
   if (isError || !account) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-surface-hover">
         <Header />
         <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-medium text-red-800">
+          <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
+            <p className="text-sm font-medium text-danger-text">
               {error instanceof Error ? error.message : 'Failed to load account details'}
             </p>
           </div>
@@ -92,7 +92,7 @@ export default function AccountDetailsPage() {
   const isAdmin = !account.company // Admins don't have company
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -100,15 +100,15 @@ export default function AccountDetailsPage() {
         <div className="mb-8">
           <button
             onClick={handleBack}
-            className="mb-4 flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            className="mb-4 flex items-center gap-2 text-sm text-ink-secondary hover:text-ink"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to User Management
           </button>
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Account Details</h1>
-              <p className="mt-2 text-sm text-gray-600">
+              <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Account Details</h1>
+              <p className="mt-2 text-sm text-ink-secondary">
                 View and manage account information
               </p>
             </div>
@@ -118,7 +118,7 @@ export default function AccountDetailsPage() {
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowResetPasswordDialog(true)}
-                  className="flex items-center gap-2 rounded-md bg-orange-100 px-3 py-1.5 text-sm font-medium text-orange-700 transition-colors hover:bg-orange-200"
+                  className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-secondary"
                   aria-label={`Reset password for ${account.email}`}
                   title="Reset password to temporary value"
                 >
@@ -157,12 +157,12 @@ export default function AccountDetailsPage() {
         {/* Sites Section - Only show for non-admin accounts */}
         {!isAdmin && (
           <div className="mb-8">
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-ink-secondary mb-4">
               Manage sites for this user account
             </p>
             <button
               onClick={handleManageSites}
-              className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-hover focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
             >
               <Globe className="h-4 w-4" />
               Manage Sites
@@ -172,8 +172,8 @@ export default function AccountDetailsPage() {
 
         {/* Admin Action Log Section */}
         <div>
-          <h2 className="text-xl font-bold text-gray-900 mb-4">Audit Log</h2>
-          <p className="text-sm text-gray-600 mb-4">
+          <h2 className="text-xl font-bold text-ink mb-4">Audit Log</h2>
+          <p className="text-sm text-ink-secondary mb-4">
             History of administrative actions performed on this account
           </p>
           <AdminActionLogList accountId={id} />
