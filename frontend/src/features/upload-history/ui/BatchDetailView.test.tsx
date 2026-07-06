@@ -149,7 +149,7 @@ describe('BatchDetailView', () => {
 
       expect(screen.getByText(/upload session/i)).toBeInTheDocument();
       expect(screen.getByText(new RegExp(mockBatch.id))).toBeInTheDocument();
-      expect(screen.getByText(mockBatch.status)).toBeInTheDocument();
+      expect(screen.getByText('Completed')).toBeInTheDocument();
     });
 
     it('should display success icon when hasErrors is false', () => {
@@ -393,7 +393,7 @@ describe('BatchDetailView', () => {
         />
       );
 
-      const statusBadge = screen.getByText('COMPLETED');
+      const statusBadge = screen.getByText('Completed');
       expect(statusBadge).toHaveStyle({ background: severityTokens.healthy.bg, color: severityTokens.healthy.text });
     });
 
@@ -408,7 +408,7 @@ describe('BatchDetailView', () => {
         />
       );
 
-      const statusBadge = screen.getByText('IN_PROGRESS');
+      const statusBadge = screen.getByText('In progress');
       expect(statusBadge).toHaveStyle({ background: monitoringTokens.blue50, color: monitoringTokens.primary });
     });
 
@@ -423,7 +423,7 @@ describe('BatchDetailView', () => {
         />
       );
 
-      const statusBadge = screen.getByText('FAILED');
+      const statusBadge = screen.getByText('Failed');
       expect(statusBadge).toHaveStyle({ background: severityTokens.critical.bg, color: severityTokens.critical.text });
     });
   });

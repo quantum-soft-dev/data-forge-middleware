@@ -46,6 +46,13 @@ interface BatchListViewProps {
 const FILTER_SELECT_CLASSES =
   'h-8 rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring';
 
+const STATUS_LABELS: Record<string, string> = {
+  COMPLETED: 'Completed',
+  COMPLETED_WITH_WARNINGS: 'Completed (Warnings)',
+  IN_PROGRESS: 'In progress',
+  FAILED: 'Failed',
+};
+
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'info' | 'critical'> = {
   COMPLETED: 'success',
   COMPLETED_WITH_WARNINGS: 'warning',
@@ -284,7 +291,7 @@ export function BatchListView({
                       {batch.status === 'IN_PROGRESS' && (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       )}
-                      {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : batch.status}
+                      {STATUS_LABELS[batch.status] ?? batch.status}
                     </Badge>
                   </div>
                   <div className="mt-0.5 text-xs text-ink-secondary tabular-nums">

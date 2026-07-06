@@ -14,6 +14,11 @@ import { BatchListView } from './BatchListView';
 import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import type { BatchSummary } from '@/entities/batch/model/types';
 
+/** The status <select> options share labels with pills — pick the pill (rounded-full). */
+const getPill = (label: string) =>
+  screen.getAllByText(label).find((el) => el.className.includes('rounded-full'))!;
+
+
 // Helper to generate ISO date string relative to now
 const daysAgo = (days: number, hoursOffset = 0): string => {
   const date = new Date();
@@ -201,9 +206,9 @@ describe('BatchListView', () => {
       );
 
       // mockBatches has: 1 COMPLETED, 1 FAILED, 1 IN_PROGRESS, 1 COMPLETED_WITH_WARNINGS
-      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-      expect(screen.getByText('FAILED')).toBeInTheDocument();
-      expect(screen.getByText('IN_PROGRESS')).toBeInTheDocument();
+      expect(getPill('Completed')).toBeInTheDocument();
+      expect(getPill('Failed')).toBeInTheDocument();
+      expect(getPill('In progress')).toBeInTheDocument();
       expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
     });
 
@@ -277,7 +282,7 @@ describe('BatchListView', () => {
 
       // Success pill with dot should be present
       void container;
-      const pill = screen.getByText('COMPLETED');
+      const pill = getPill('Completed');
       expect(pill).toHaveStyle({ background: severityTokens.healthy.bg });
       expect(pill.querySelector('span')).not.toBeNull(); // dot
     });
@@ -298,7 +303,7 @@ describe('BatchListView', () => {
 
       // Critical pill should be present for FAILED status
       void container;
-      expect(screen.getByText('FAILED')).toHaveStyle({
+      expect(getPill('Failed')).toHaveStyle({
         background: severityTokens.critical.bg,
         color: severityTokens.critical.text,
       });
@@ -342,7 +347,7 @@ describe('BatchListView', () => {
       const loader = container.querySelector('[class*="lucide-loader"]');
       expect(loader).toBeInTheDocument();
       expect(loader).toHaveClass('animate-spin');
-      expect(screen.getByText('IN_PROGRESS')).toHaveStyle({
+      expect(getPill('In progress')).toHaveStyle({
         background: monitoringTokens.blue50,
       });
     });
@@ -359,19 +364,19 @@ describe('BatchListView', () => {
       );
 
       // COMPLETED status should have the success pill treatment
-      expect(screen.getByText('COMPLETED')).toHaveStyle({
+      expect(getPill('Completed')).toHaveStyle({
         background: severityTokens.healthy.bg,
         color: severityTokens.healthy.text,
       });
 
       // FAILED status should have the critical pill treatment
-      expect(screen.getByText('FAILED')).toHaveStyle({
+      expect(getPill('Failed')).toHaveStyle({
         background: severityTokens.critical.bg,
         color: severityTokens.critical.text,
       });
 
       // IN_PROGRESS status should have the info pill treatment
-      expect(screen.getByText('IN_PROGRESS')).toHaveStyle({
+      expect(getPill('In progress')).toHaveStyle({
         background: monitoringTokens.blue50,
         color: monitoringTokens.primary,
       });
@@ -697,9 +702,9 @@ describe('BatchListView', () => {
       );
 
       // Initially should show all 4 batches - check by counting status badges
-      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-      expect(screen.getByText('FAILED')).toBeInTheDocument();
-      expect(screen.getByText('IN_PROGRESS')).toBeInTheDocument();
+      expect(getPill('Completed')).toBeInTheDocument();
+      expect(getPill('Failed')).toBeInTheDocument();
+      expect(getPill('In progress')).toBeInTheDocument();
       expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
 
       // Select Site 2 (has only mockBatches[3])
@@ -708,10 +713,10 @@ describe('BatchListView', () => {
 
       // Should only show the batch from Site 2 (COMPLETED_WITH_WARNINGS)
       expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
-      // Other batches should not be visible
-      expect(screen.queryByText('COMPLETED')).not.toBeInTheDocument();
-      expect(screen.queryByText('FAILED')).not.toBeInTheDocument();
-      expect(screen.queryByText('IN_PROGRESS')).not.toBeInTheDocument();
+      // Other batches should not be visible (pill lookup — select options share labels)
+      expect(screen.queryAllByText('Completed').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
+      expect(screen.queryAllByText('Failed').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
+      expect(screen.queryAllByText('In progress').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
     });
 
     it('should include site filter in clear filters', async () => {

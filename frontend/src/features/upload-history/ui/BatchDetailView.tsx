@@ -22,6 +22,13 @@ import { ErrorListView } from './ErrorListView';
 import { DeltaBatchDetail } from './DeltaBatchDetail';
 import { useBatchErrors } from '@/entities/batch/api/queries';
 
+const STATUS_LABELS: Record<string, string> = {
+  COMPLETED: 'Completed',
+  COMPLETED_WITH_WARNINGS: 'Completed (Warnings)',
+  IN_PROGRESS: 'In progress',
+  FAILED: 'Failed',
+};
+
 interface BatchDetailViewProps {
   /** Batch details with file list */
   batch?: BatchDetail;
@@ -206,7 +213,7 @@ export function BatchDetailView({
             dot
             className="px-3 py-1 text-sm"
           >
-            {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : batch.status}
+            {STATUS_LABELS[batch.status] ?? batch.status}
           </Badge>
         </div>
 
