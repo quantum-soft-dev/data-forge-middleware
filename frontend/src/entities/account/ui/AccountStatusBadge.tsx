@@ -2,13 +2,15 @@
  * AccountStatusBadge Component
  *
  * Per T030: Display account status indicators.
- * Shows isActive and isBlocked states with color-coded badges.
+ * Shows isActive and isBlocked states as monitoring pills (024, T032).
  *
  * Features:
- * - Active/Inactive status (green/red)
- * - Auth0 blocked status (red/green)
+ * - Active/Inactive status (success/critical)
+ * - Auth0 blocked status (critical/success)
  * - Accessibility with ARIA labels
  */
+
+import { Badge } from '@/shared/ui/ui/badge'
 
 interface AccountStatusBadgeProps {
   isActive: boolean
@@ -24,29 +26,23 @@ export function AccountStatusBadge({
   return (
     <div className={`flex flex-wrap gap-2 ${className}`}>
       {/* Account Active Status */}
-      <span
-        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-          isActive
-            ? 'bg-green-100 text-green-800'
-            : 'bg-red-100 text-red-800'
-        }`}
+      <Badge
+        variant={isActive ? 'success' : 'critical'}
+        dot
         aria-label={`Account status: ${isActive ? 'Active' : 'Inactive'}`}
       >
-        {isActive ? '● Active' : '● Inactive'}
-      </span>
+        {isActive ? 'Active' : 'Inactive'}
+      </Badge>
 
       {/* Auth0 Blocked Status */}
       {isBlocked !== undefined && (
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            isBlocked
-              ? 'bg-red-100 text-red-800'
-              : 'bg-green-100 text-green-800'
-          }`}
+        <Badge
+          variant={isBlocked ? 'critical' : 'success'}
+          dot
           aria-label={`Auth0 status: ${isBlocked ? 'Blocked' : 'Active'}`}
         >
-          {isBlocked ? '● Blocked' : '● Auth0 Active'}
-        </span>
+          {isBlocked ? 'Blocked' : 'Auth0 Active'}
+        </Badge>
       )}
     </div>
   )
