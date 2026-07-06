@@ -23,11 +23,11 @@ interface ComparisonHistorySectionProps {
 /**
  * Badge colors for comparison status
  */
-const statusColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
-  PENDING: 'secondary',
-  IN_PROGRESS: 'default',
-  COMPLETED: 'default',
-  FAILED: 'destructive',
+const statusColors: Record<string, 'neutral' | 'info' | 'success' | 'critical'> = {
+  PENDING: 'neutral',
+  IN_PROGRESS: 'info',
+  COMPLETED: 'success',
+  FAILED: 'critical',
 };
 
 /**

@@ -4,6 +4,6 @@
 
 export * from './model/types';
 export * from './model/severity';
-export * from './model/tokens';
+export * from '@/shared/ui/tokens';
 export * from './api/deltaSyncApi';
 export * from './api/queries';

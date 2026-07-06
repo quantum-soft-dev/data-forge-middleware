@@ -186,7 +186,7 @@ export function ComparisonSummary({ summary, className }: ComparisonSummaryProps
             Comparing batch <span className="font-mono text-foreground">{summary.currentBatchId}</span> with{' '}
             <span className="font-mono text-foreground">{summary.targetBatchId}</span>
           </div>
-          <Badge variant={changePercentage > 50 ? 'destructive' : changePercentage > 20 ? 'default' : 'secondary'}>
+          <Badge variant={changePercentage > 50 ? 'critical' : changePercentage > 20 ? 'info' : 'neutral'}>
             {changePercentage}% Changed
           </Badge>
         </div>

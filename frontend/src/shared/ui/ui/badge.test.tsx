@@ -50,22 +50,6 @@ describe('Badge (monitoring pills, T004)', () => {
     expect(badge.style.background).toBe('');
   });
 
-  it('maps deprecated aliases onto monitoring variants', () => {
-    render(
-      <>
-        <Badge variant="default">a-default</Badge>
-        <Badge variant="secondary">a-secondary</Badge>
-        <Badge variant="destructive">a-destructive</Badge>
-      </>,
-    );
-    expect(screen.getByText('a-default')).toHaveStyle({ background: monitoringTokens.blue50 });
-    expect(screen.getByText('a-secondary')).toHaveStyle({ background: monitoringTokens.subtleBg });
-    expect(screen.getByText('a-destructive')).toHaveStyle({
-      background: severityTokens.critical.bg,
-      color: severityTokens.critical.text,
-    });
-  });
-
   it('renders a 6px leading dot when dot is set', () => {
     render(<Badge variant="success" dot data-testid="pill" />);
     const dot = screen.getByTestId('pill').querySelector('span');

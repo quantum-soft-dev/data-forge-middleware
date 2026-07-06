@@ -151,7 +151,7 @@ export function ComparisonSummaryWidget({
               </CardDescription>
             </div>
             <Badge
-              variant={changePercentage > 50 ? 'destructive' : changePercentage > 20 ? 'default' : 'secondary'}
+              variant={changePercentage > 50 ? 'critical' : changePercentage > 20 ? 'info' : 'neutral'}
               className="text-lg px-3 py-1"
             >
               {changePercentage}% Changed

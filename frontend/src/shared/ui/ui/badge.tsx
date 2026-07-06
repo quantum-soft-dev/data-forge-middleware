@@ -21,12 +21,6 @@ const badgeVariants = cva(
         critical: "",
         stalled: "",
         outline: "border border-hairline text-ink-secondary",
-        /** @deprecated alias of `info` — removed in T035 */
-        default: "",
-        /** @deprecated alias of `neutral` — removed in T035 */
-        secondary: "",
-        /** @deprecated alias of `critical` — removed in T035 */
-        destructive: "",
       },
     },
     defaultVariants: {
@@ -43,12 +37,6 @@ type CanonicalVariant =
   | "critical"
   | "stalled"
   | "outline"
-
-const ALIASES: Record<string, CanonicalVariant> = {
-  default: "info",
-  secondary: "neutral",
-  destructive: "critical",
-}
 
 interface VariantColors {
   background?: string
@@ -98,9 +86,7 @@ export interface BadgeProps
 }
 
 function Badge({ className, variant, dot, style, children, ...props }: BadgeProps) {
-  const canonical: CanonicalVariant =
-    (variant && (ALIASES[variant] ?? (variant as CanonicalVariant))) || "info"
-  const colors = variantColors[canonical]
+  const colors = variantColors[variant ?? "info"]
 
   return (
     <div
