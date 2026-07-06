@@ -9,22 +9,21 @@
 
 import { Header } from '@/widgets/header/Header';
 import { BatchListWidget } from '@/widgets/upload-history/BatchListWidget';
+import { PageHeader } from '@/shared/ui/page-header';
 
 /**
  * T039: Upload history page
  */
 export default function UploadHistoryPage() {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <div className="container mx-auto px-4 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Upload History</h1>
-          <p className="mt-2 text-gray-600">
-            View your upload sessions and their status
-          </p>
-        </div>
+        <PageHeader
+          title="Upload History"
+          subtitle="View your upload sessions and their status"
+        />
 
         <BatchListWidget />
       </div>
