@@ -81,9 +81,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
       // Default fallback UI
       return (
-        <div className="flex min-h-screen items-center justify-center bg-surface-hover p-4">
+        <div className="flex min-h-screen items-center justify-center bg-white p-4">
           <div className="w-full max-w-2xl">
-            <div className="rounded-2xl bg-white p-8 shadow-card">
+            <div className="rounded-2xl bg-white p-8 shadow-panel">
               {/* Error Icon */}
               <div className="mb-6 flex justify-center">
                 <div className="flex h-16 w-16 items-center justify-center rounded-full bg-danger-bg">

@@ -164,7 +164,7 @@ export default function DeviceVerifyPage() {
   };
 
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <main className="container mx-auto py-8 max-w-lg px-4 sm:px-6 lg:px-8">

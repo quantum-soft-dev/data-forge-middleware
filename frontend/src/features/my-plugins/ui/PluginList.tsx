@@ -66,7 +66,7 @@ export function PluginList({
 
   if (!hasPlugins) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <Plug className="mx-auto h-12 w-12 text-ink-muted" />
         <p className="mt-4 text-sm text-ink-secondary">No plugins available</p>
         <p className="text-xs text-ink-muted">

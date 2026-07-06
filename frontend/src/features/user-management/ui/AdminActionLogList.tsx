@@ -89,7 +89,7 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
     return (
       <div className="space-y-3">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="animate-pulse rounded-lg bg-white shadow-card p-4">
+          <div key={i} className="animate-pulse rounded-lg bg-white shadow-panel p-4">
             <div className="flex items-start justify-between">
               <div className="flex-1 space-y-2">
                 <div className="h-4 w-32 rounded bg-gray-200" />
@@ -118,7 +118,7 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
   // Empty state
   if (!data || data.content.length === 0) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <UserPlus className="mx-auto h-12 w-12 text-ink-muted" />
         <p className="mt-4 text-sm font-medium text-ink-secondary">No audit logs yet</p>
         <p className="mt-1 text-xs text-ink-secondary">
@@ -142,7 +142,7 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
           return (
             <div
               key={log.id}
-              className="rounded-lg bg-white shadow-card p-4 transition-shadow hover:shadow-md"
+              className="rounded-lg bg-white shadow-panel p-4 transition-shadow hover:shadow-md"
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-3">
@@ -185,7 +185,7 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
 
       {/* Pagination controls */}
       {showPagination && (
-        <div className="flex items-center justify-between rounded-lg bg-white shadow-card px-4 py-3">
+        <div className="flex items-center justify-between rounded-lg bg-white shadow-panel px-4 py-3">
           <div className="flex items-center gap-2">
             <p className="text-sm text-ink-secondary">
               Showing <span className="font-medium">{page * pageSize + 1}</span> to{' '}

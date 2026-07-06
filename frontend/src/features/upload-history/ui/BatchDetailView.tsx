@@ -111,7 +111,7 @@ export function BatchDetailView({
   // No data state
   if (!batch) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <p className="text-ink-secondary">Batch not found.</p>
       </div>
     );
@@ -139,7 +139,7 @@ export function BatchDetailView({
         {isDeltaBatch ? (
           <DeltaBatchDetail batch={batch} siteName={siteName} />
         ) : (
-          <div className="rounded-lg bg-white p-8 text-center shadow-card">
+          <div className="rounded-lg bg-white p-8 text-center shadow-panel">
             <p className="text-ink-secondary">No changes in this session</p>
           </div>
         )}
@@ -177,7 +177,7 @@ export function BatchDetailView({
       )}
 
       {/* Batch metadata card */}
-      <div className="rounded-lg bg-white p-6 shadow-card">
+      <div className="rounded-lg bg-white p-6 shadow-panel">
         <div className="flex items-start justify-between">
           {/* Status and basic info */}
           <div className="flex items-center space-x-4">

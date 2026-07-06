@@ -44,7 +44,7 @@ describe('dashboard chart widgets (monitoring cards, T015)', () => {
     expect(heading.className).not.toContain('font-semibold');
 
     const card = heading.closest('div');
-    expect(card?.className).toContain('shadow-card');
+    expect(card?.className).toContain('shadow-panel');
     expect(card?.className).not.toContain('border-gray-200');
     expect(card?.className).not.toContain('shadow-sm');
   });

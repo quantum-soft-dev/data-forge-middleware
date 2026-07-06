@@ -38,7 +38,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
   return (
     <div className="space-y-4" data-testid="delta-batch-detail">
       {/* Meta card */}
-      <div className="rounded-[10px] bg-white p-5 shadow-card">
+      <div className="rounded-[10px] bg-white p-5 shadow-panel">
         <div className="flex flex-wrap items-center gap-3">
           <div
             className="flex h-10 w-10 items-center justify-center rounded-full"
@@ -96,7 +96,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
       </div>
 
       {/* Table changes card */}
-      <div className="rounded-[10px] bg-white p-5 shadow-card">
+      <div className="rounded-[10px] bg-white p-5 shadow-panel">
         <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">Table changes</h3>
         <p className="mt-0.5 text-xs text-ink-secondary">
           Delta sessions carry no files — changes are applied directly to each table.

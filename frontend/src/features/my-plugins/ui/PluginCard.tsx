@@ -41,7 +41,7 @@ export function PluginCard({
   const version = availablePlugin?.version
 
   return (
-    <div className="rounded-lg bg-white p-4 shadow-card">
+    <div className="rounded-lg bg-white p-4 shadow-panel">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">

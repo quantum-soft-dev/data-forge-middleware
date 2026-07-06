@@ -31,9 +31,11 @@ describe('tailwind monitoring theme (T003)', () => {
     expect(theme.colors.separator).toBe(monitoringTokens.separator);
   });
 
-  it('exposes the monitoring shadows', () => {
-    expect(theme.boxShadow.card).toBe(monitoringTokens.cardShadow);
-    expect(theme.boxShadow['card-inner']).toBe(monitoringTokens.innerCardShadow);
+  it('exposes the monitoring shadows (keys must not collide with color names)', () => {
+    expect(theme.boxShadow.panel).toBe(monitoringTokens.cardShadow);
+    expect(theme.boxShadow['panel-inner']).toBe(monitoringTokens.innerCardShadow);
     expect(theme.boxShadow['icon-circle']).toBe(monitoringTokens.iconCircleShadow);
+    // "shadow-card" would resolve as a *shadow color* utility (colors.card = white)
+    expect(theme.boxShadow.card).toBeUndefined();
   });
 });

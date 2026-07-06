@@ -20,7 +20,7 @@ import { PageHeader } from '@/shared/ui/page-header';
 
 export function SiteManagementPage() {
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <main className="container mx-auto py-6 space-y-6 max-w-4xl px-4">

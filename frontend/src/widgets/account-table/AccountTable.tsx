@@ -143,7 +143,7 @@ export function AccountTable({
 
   if (isLoading) {
     return (
-      <div className="overflow-hidden rounded-lg bg-white shadow-card shadow">
+      <div className="overflow-hidden rounded-lg bg-white shadow-panel shadow">
         <div className="px-6 py-12 text-center">
           {/* Skeleton rows */}
           {[...Array(5)].map((_, i) => (
@@ -160,7 +160,7 @@ export function AccountTable({
 
   if (accounts.length === 0) {
     return (
-      <div className="overflow-hidden rounded-lg bg-white shadow-card shadow">
+      <div className="overflow-hidden rounded-lg bg-white shadow-panel shadow">
         <div className="px-6 py-12 text-center">
           <p className="text-sm text-ink-secondary">
             No accounts found. Try adjusting your filters.
@@ -171,7 +171,7 @@ export function AccountTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg bg-white shadow-card shadow">
+    <div className="overflow-hidden rounded-lg bg-white shadow-panel shadow">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-surface-subtle">

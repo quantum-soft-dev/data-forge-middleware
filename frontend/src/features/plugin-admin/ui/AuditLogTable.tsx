@@ -34,7 +34,7 @@ export function AuditLogTable({
 }: AuditLogTableProps) {
   if (isLoading) {
     return (
-      <div className="rounded-lg bg-white p-8 shadow-card">
+      <div className="rounded-lg bg-white p-8 shadow-panel">
         <div className="flex items-center justify-center">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
           <span className="ml-3 text-sm text-ink-secondary">Loading audit logs...</span>
@@ -45,14 +45,14 @@ export function AuditLogTable({
 
   if (logs.length === 0) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <p className="text-sm text-ink-secondary">No audit logs found</p>
       </div>
     )
   }
 
   return (
-    <div className="overflow-hidden rounded-lg bg-white shadow-card">
+    <div className="overflow-hidden rounded-lg bg-white shadow-panel">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-separator">
           <thead className="bg-white">

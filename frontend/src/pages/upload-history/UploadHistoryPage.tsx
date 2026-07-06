@@ -16,7 +16,7 @@ import { PageHeader } from '@/shared/ui/page-header';
  */
 export default function UploadHistoryPage() {
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <div className="container mx-auto px-4 py-8">

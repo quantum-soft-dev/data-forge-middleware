@@ -164,7 +164,7 @@ export function PluginTabFilters({
       </div>
 
       {showFilters && (
-        <div className="mt-3 rounded-lg bg-white p-4 shadow-card">
+        <div className="mt-3 rounded-lg bg-white p-4 shadow-panel">
           <h3 className="mb-3 text-sm font-medium text-ink">Filter Options</h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {/* Site Filter */}

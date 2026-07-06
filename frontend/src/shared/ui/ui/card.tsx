@@ -10,7 +10,7 @@ const Card = React.forwardRef<
     ref={ref}
     className={cn(
       // Monitoring card (024, T006): borderless white r10 + layered soft shadow
-      "rounded-lg bg-card text-card-foreground shadow-card",
+      "rounded-lg bg-card text-card-foreground shadow-panel",
       className
     )}
     {...props}

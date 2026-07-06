@@ -95,7 +95,7 @@ export function SqlHistoryWidget({ pluginId }: SqlHistoryWidgetProps) {
 
   if (!data || data.content.length === 0) {
     return (
-      <div className="rounded-lg bg-white p-6 text-center shadow-card">
+      <div className="rounded-lg bg-white p-6 text-center shadow-panel">
         <Database className="mx-auto h-12 w-12 text-ink-muted" />
         <h3 className="mt-4 text-lg font-medium text-ink">No Accounts Found</h3>
         <p className="mt-2 text-sm text-ink-secondary">

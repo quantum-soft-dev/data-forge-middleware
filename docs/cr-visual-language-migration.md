@@ -20,7 +20,7 @@ is fully removed — enforced by grep audits (see Verification).
    `--ring` brand, `--radius` 10px. `.dark` block untouched (out of scope).
 3. **Tailwind theme** (`tailwind.config.js`) — semantic utilities mirroring the tokens:
    `ink.*` text scale, `brand.*`, `surface.{subtle,hover,active,shell}`, `hairline`/`separator`,
-   `danger.*`, `warn.*`, `shadow-card`/`shadow-card-inner`/`shadow-icon-circle`,
+   `danger.*`, `warn.*`, `shadow-panel`/`shadow-panel-inner`/`shadow-icon-circle`,
    `aria-invalid:` variant.
 
 ### Restyled primitives (`shared/ui/ui/*`)
@@ -29,7 +29,7 @@ is fully removed — enforced by grep audits (see Verification).
   (6px status dot); 12px/500; old variants deleted.
 - **Button** — `default` brand solid, `outline` hairline, new `destructive-outline`,
   `destructive` solid red for dialog confirms, `compact` (h-8) size, rounded-lg.
-- **Card** — borderless white r10 + layered `shadow-card`; CardTitle 15px/500 −0.24px.
+- **Card** — borderless white r10 + layered `shadow-panel`; CardTitle 15px/500 −0.24px.
 - **Table** — 12px/500 headers (no uppercase), hairline rows, `#FAFAFA` hover, `tableCellNumeric`.
 - **Tabs** — site-detail pill treatment is now the default.
 - **Input/Select/Checkbox** — hairline borders, brand focus, `aria-invalid` danger treatment.

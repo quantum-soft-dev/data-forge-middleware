@@ -21,7 +21,7 @@ export default function PluginHistoryPage() {
   })
 
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -54,7 +54,7 @@ export default function PluginHistoryPage() {
         </div>
 
         {/* History widget */}
-        <section className="rounded-lg bg-white p-6 shadow-card">
+        <section className="rounded-lg bg-white p-6 shadow-panel">
           <PluginHistoryWidget pluginId={pluginId} accountId={accountId} />
         </section>
       </main>

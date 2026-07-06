@@ -138,7 +138,7 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
   // Empty state
   if (files.length === 0) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <p className="text-ink-secondary">No files in this batch.</p>
       </div>
     );
@@ -159,7 +159,7 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
       </div>
 
       {/* Table with scrolling */}
-      <div className="overflow-hidden rounded-lg bg-white shadow-card">
+      <div className="overflow-hidden rounded-lg bg-white shadow-panel">
         <div className="max-h-[400px] overflow-y-auto">
           <table className="min-w-full divide-y divide-separator">
             <thead className="sticky top-0 z-10 bg-white">

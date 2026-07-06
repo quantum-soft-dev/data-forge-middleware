@@ -235,7 +235,7 @@ describe('PluginListView', () => {
         <PluginListView plugins={mockPlugins} isLoading={false} />
       )
 
-      const card = container.querySelector('.shadow-card')
+      const card = container.querySelector('.shadow-panel')
       expect(card).toBeInTheDocument()
     })
   })

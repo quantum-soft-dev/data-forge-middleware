@@ -144,7 +144,7 @@ function LogEntry({ entry }: { entry: PluginLogEntry }) {
   const { actionType, success, errorMessage, metadata, occurredAt, siteDomain } = entry
 
   return (
-    <div className="rounded-lg bg-white p-4 shadow-card">
+    <div className="rounded-lg bg-white p-4 shadow-panel">
       <div className="flex items-start justify-between">
         <div className="flex flex-wrap items-center gap-2">
           {getActionIcon(actionType, success)}
@@ -237,7 +237,7 @@ export function PluginLogsTab({ pluginId }: PluginLogsTabProps) {
 
             if (!data || visibleLogs.length === 0) {
               return (
-                <div className="rounded-lg bg-white p-8 text-center shadow-card">
+                <div className="rounded-lg bg-white p-8 text-center shadow-panel">
                   <FileText className="mx-auto h-12 w-12 text-ink-muted" />
                   <p className="mt-4 text-sm text-ink-secondary">No log entries</p>
                   <p className="text-xs text-ink-muted">

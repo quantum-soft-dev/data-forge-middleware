@@ -18,7 +18,7 @@ import { PageHeader } from '@/shared/ui/page-header'
 
 export function MyPluginsPage() {
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <main className="container mx-auto py-8 max-w-4xl px-4 sm:px-6 lg:px-8">

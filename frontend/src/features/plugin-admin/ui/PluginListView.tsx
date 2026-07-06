@@ -25,7 +25,7 @@ export function PluginListView({
 }: PluginListViewProps) {
   if (isLoading) {
     return (
-      <div className="rounded-lg bg-white p-8 shadow-card">
+      <div className="rounded-lg bg-white p-8 shadow-panel">
         <div className="flex items-center justify-center">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
           <span className="ml-3 text-sm text-ink-secondary">Loading plugins...</span>
@@ -36,7 +36,7 @@ export function PluginListView({
 
   if (plugins.length === 0) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <Plug className="mx-auto h-12 w-12 text-ink-muted" />
         <p className="mt-4 text-sm text-ink-secondary">No plugins registered</p>
       </div>
@@ -48,7 +48,7 @@ export function PluginListView({
       {plugins.map((plugin) => (
         <div
           key={plugin.pluginId}
-          className="rounded-lg bg-white p-4 shadow-card"
+          className="rounded-lg bg-white p-4 shadow-panel"
         >
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">

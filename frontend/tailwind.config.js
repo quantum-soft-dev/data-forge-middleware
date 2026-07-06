@@ -98,9 +98,11 @@ export default {
         sm: 'calc(var(--radius) - 4px)',
       },
       boxShadow: {
-        // Monitoring layered shadows (024, T003) — values mirror shared/ui/tokens.ts
-        card: '0 20px 87.5px rgba(0,0,0,0.02), 0 0 1.75px rgba(0,0,0,0.16)',
-        'card-inner': '0 1px 1.75px rgba(0,0,0,0.25), 0 0 0.5px rgba(0,0,0,0.04)',
+        // Monitoring layered shadows (024, T003) — values mirror shared/ui/tokens.ts.
+        // NB: keys must not collide with color names ("card" is a shadcn color,
+        // which would turn shadow-card into a white *shadow color* utility).
+        panel: '0 20px 87.5px rgba(0,0,0,0.02), 0 0 1.75px rgba(0,0,0,0.16)',
+        'panel-inner': '0 1px 1.75px rgba(0,0,0,0.25), 0 0 0.5px rgba(0,0,0,0.04)',
         'icon-circle': '0 5px 4.375px rgba(0,0,0,0.01), 0 5px 6.125px rgba(0,0,0,0.05)',
       },
       keyframes: {

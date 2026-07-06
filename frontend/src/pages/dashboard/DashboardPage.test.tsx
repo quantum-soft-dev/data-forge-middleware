@@ -18,7 +18,7 @@ describe('DashboardPage (monitoring scaffold, T014)', () => {
   it('renders the monitoring page scaffold and PageHeader', () => {
     const { container } = render(<DashboardPage />);
     const scaffold = container.firstElementChild as HTMLElement;
-    expect(scaffold.className).toContain('bg-surface-hover');
+    expect(scaffold.className).toContain('bg-white');
     expect(scaffold.className).not.toContain('bg-gray-50');
 
     const title = screen.getByRole('heading', { name: 'Dashboard' });

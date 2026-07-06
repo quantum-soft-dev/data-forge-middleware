@@ -14,7 +14,7 @@ primitive variants — modeled here so implementation and review share one vocab
 | `text` / `textSecondary` / `textMuted` / `title` | `#2B2827` / `#736F6D` / `#A3A3A3` / `#403C3B` | CSS vars `--foreground`/`--muted-foreground`; Tailwind `ink.*` |
 | `subtleBg` / `hoverRow` / `metricShell` | `#F5F5F4` / `#FAFAFA` / `#EFEFEF` | hover states, page bg, metric shells |
 | `border` / `separator` / `iconWellBorder` | `rgba(0,0,0,0.12)` / `rgba(0,0,0,0.06)` / `rgba(24,22,22,0.08)` | CSS var `--border`; Tailwind `border-hairline`/`border-separator` |
-| `cardShadow` / `innerCardShadow` / `iconCircleShadow` | layered soft shadows (see tokens.ts) | Tailwind `shadow-card` / `shadow-card-inner` / `shadow-icon-circle` |
+| `cardShadow` / `innerCardShadow` / `iconCircleShadow` | layered soft shadows (see tokens.ts) | Tailwind `shadow-panel` / `shadow-panel-inner` / `shadow-icon-circle` |
 | `barGradient` | `linear-gradient(180deg,#3C82D8,#C9DCF4)` | inline style (charts/bars only) |
 
 ### `severityTokens` (record keyed by `SyncSeverity`, reused as generic status palette)

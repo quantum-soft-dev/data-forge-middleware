@@ -155,7 +155,7 @@ export function BatchListView({
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <div className="flex items-center gap-3 rounded-lg bg-white p-3 shadow-card">
+      <div className="flex items-center gap-3 rounded-lg bg-white p-3 shadow-panel">
         <Filter className="h-4 w-4 text-ink-muted" strokeWidth={1.5} />
 
         {/* Site filter */}
@@ -228,7 +228,7 @@ export function BatchListView({
 
       {/* Empty/filtered state */}
       {filteredBatches.length === 0 && (
-        <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <div className="rounded-lg bg-white p-8 text-center shadow-panel">
           {isFetchingNextPage && isFilterActive ? (
             <>
               <Loader2 className="h-6 w-6 animate-spin text-ink-muted mx-auto mb-2" />
@@ -258,7 +258,7 @@ export function BatchListView({
 
       {/* Batch list with scrolling */}
       {filteredBatches.length > 0 && (
-        <div className="max-h-[600px] overflow-y-auto divide-y divide-separator rounded-lg bg-white shadow-card">
+        <div className="max-h-[600px] overflow-y-auto divide-y divide-separator rounded-lg bg-white shadow-panel">
           {filteredBatches.map((batch) => (
             <div
               key={batch.id}

@@ -7,7 +7,7 @@ describe('Card (monitoring treatment, T006)', () => {
   it('renders borderless white card with the layered monitoring shadow', () => {
     render(<Card data-testid="card">body</Card>);
     const card = screen.getByTestId('card');
-    expect(card.className).toContain('shadow-card');
+    expect(card.className).toContain('shadow-panel');
     expect(card.className).toContain('bg-card');
     expect(card.className).toContain('rounded-lg'); // --radius is 10px (T002)
     expect(card.className).not.toContain('shadow-sm');

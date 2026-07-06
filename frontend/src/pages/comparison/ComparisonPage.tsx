@@ -115,7 +115,7 @@ export function ComparisonPage() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         {/* Batch Selection Section */}
-        <div className="rounded-lg bg-white shadow-card p-6">
+        <div className="rounded-lg bg-white shadow-panel p-6">
           <h2 className="mb-4 text-[17px] font-medium tracking-[-0.24px]">Select Batches</h2>
           
           <div className="grid gap-4 md:grid-cols-2">
@@ -172,7 +172,7 @@ export function ComparisonPage() {
         </div>
 
         {/* File Selection Section */}
-        <div className="rounded-lg bg-white shadow-card p-6">
+        <div className="rounded-lg bg-white shadow-panel p-6">
           <h2 className="mb-4 text-[17px] font-medium tracking-[-0.24px]">Select Files</h2>
           <p className="mb-4 text-sm text-ink-secondary">
             Choose specific files to compare, or select all files from the current batch.

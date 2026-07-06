@@ -33,7 +33,7 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
   }
 
   return (
-    <div className={`rounded-lg bg-white p-6 shadow-card ${className}`}>
+    <div className={`rounded-lg bg-white p-6 shadow-panel ${className}`}>
       {/* Header with status badges */}
       <div className="mb-4 flex items-start justify-between">
         <div className="flex-1">

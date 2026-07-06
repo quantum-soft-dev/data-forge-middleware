@@ -278,7 +278,7 @@ export function BatchSqlTable({
 
   if (batches.length === 0) {
     return (
-      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
         <Database className="mx-auto h-12 w-12 text-ink-muted" />
         <p className="mt-4 text-sm text-ink-secondary">No completed batches</p>
         <p className="text-xs text-ink-muted">

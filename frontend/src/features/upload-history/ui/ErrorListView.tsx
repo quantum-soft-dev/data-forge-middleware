@@ -94,7 +94,7 @@ export function ErrorListView({
             Back to batch details
           </button>
         )}
-        <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <div className="rounded-lg bg-white p-8 text-center shadow-panel">
           <AlertCircle className="mx-auto h-12 w-12 text-ink-muted" />
           <p className="mt-2 text-ink-secondary">No errors found for this batch.</p>
         </div>
@@ -158,7 +158,7 @@ export function ErrorListView({
           return (
             <div
               key={err.id}
-              className="rounded-lg bg-white p-4 shadow-card"
+              className="rounded-lg bg-white p-4 shadow-panel"
             >
               {/* Error header */}
               <div className="flex items-start justify-between">

@@ -20,7 +20,7 @@ export default function BatchDetailPage() {
 
   if (!batchId) {
     return (
-      <div className="min-h-screen bg-surface-hover">
+      <div className="min-h-screen bg-white">
         <Header />
         <div className="container mx-auto px-4 py-8">
           <div className="rounded-lg border border-red-200 bg-red-50 p-4">
@@ -32,7 +32,7 @@ export default function BatchDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <div className="container mx-auto px-4 py-8">

@@ -20,7 +20,7 @@ const COLORS = {
 
 export function PieChartWidget({ data }: PieChartWidgetProps) {
   return (
-    <div className="rounded-lg bg-white p-4 shadow-card">
+    <div className="rounded-lg bg-white p-4 shadow-panel">
       <h3 className="mb-4 text-[15px] font-medium tracking-[-0.24px] text-ink-title">
         Status Distribution
       </h3>

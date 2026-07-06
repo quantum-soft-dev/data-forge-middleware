@@ -12,7 +12,7 @@ describe('UploadHistoryPage (monitoring scaffold, T021)', () => {
   it('renders the monitoring scaffold with PageHeader', () => {
     const { container } = render(<UploadHistoryPage />);
     const scaffold = container.firstElementChild as HTMLElement;
-    expect(scaffold.className).toContain('bg-surface-hover');
+    expect(scaffold.className).toContain('bg-white');
     expect(scaffold.className).not.toContain('bg-gray-50');
 
     const title = screen.getByRole('heading', { name: 'Upload History' });

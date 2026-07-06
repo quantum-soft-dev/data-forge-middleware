@@ -60,7 +60,7 @@ export default function AccountDetailsPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-surface-hover">
+      <div className="min-h-screen bg-white">
         <Header />
         <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
           <div className="flex items-center justify-center py-12">
@@ -74,7 +74,7 @@ export default function AccountDetailsPage() {
 
   if (isError || !account) {
     return (
-      <div className="min-h-screen bg-surface-hover">
+      <div className="min-h-screen bg-white">
         <Header />
         <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
           <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
@@ -92,7 +92,7 @@ export default function AccountDetailsPage() {
   const isAdmin = !account.company // Admins don't have company
 
   return (
-    <div className="min-h-screen bg-surface-hover">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">

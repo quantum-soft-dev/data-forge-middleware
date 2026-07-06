@@ -26,7 +26,7 @@
 
 - [x] **T003** [A3] Extend Tailwind theme with semantic monitoring utilities
   `frontend/tailwind.config.js`: `theme.extend` — `colors.ink{DEFAULT,secondary,muted,title}`, `colors.brand{DEFAULT,hover,50,100}`, `boxShadow{card,card-inner,icon-circle}`, `borderColor{hairline,separator}` per research D1/data-model §1.
-  Tests first: a small utility test rendering a div with `shadow-card`/`text-ink-secondary` and asserting compiled class presence (or config unit test reading resolved theme).
+  Tests first: a small utility test rendering a div with `shadow-panel`/`text-ink-secondary` and asserting compiled class presence (or config unit test reading resolved theme).
   Commit: `feat(ui): add monitoring semantic utilities to tailwind theme (T003)`
 
 - [x] **T004** [A4] Restyle Badge primitive → alpha pills + dot
@@ -40,7 +40,7 @@
   Commit: `feat(ui): button primitive to monitoring variants (T005)`
 
 - [x] **T006** [A6] Restyle Card primitive
-  `frontend/src/shared/ui/ui/card.tsx`: `rounded-[10px] bg-white shadow-card` (drop border); `CardTitle` → `text-[15px] font-medium text-ink-title` tracking −0.24px; header/content paddings per `CheckpointsCard.tsx:58` exemplar.
+  `frontend/src/shared/ui/ui/card.tsx`: `rounded-[10px] bg-white shadow-panel` (drop border); `CardTitle` → `text-[15px] font-medium text-ink-title` tracking −0.24px; header/content paddings per `CheckpointsCard.tsx:58` exemplar.
   Tests first: update card tests; title typography assertion.
   Commit: `feat(ui): card primitive to monitoring card treatment (T006)`
 
