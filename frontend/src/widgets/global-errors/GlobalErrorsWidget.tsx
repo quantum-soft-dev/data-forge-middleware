@@ -51,9 +51,9 @@ export function GlobalErrorsWidget({ pageSize = 10 }: GlobalErrorsWidgetProps) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <div className="flex items-center gap-2">
-          <CardTitle className="text-lg font-semibold">Global Errors</CardTitle>
+          <CardTitle>Global Errors</CardTitle>
           {unreadCount > 0 && (
-            <Badge variant="destructive" className="rounded-full px-2">
+            <Badge variant="critical" className="px-2">
               {unreadCount > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : unreadCount}
             </Badge>
           )}
