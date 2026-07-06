@@ -37,6 +37,11 @@ export default {
         },
         hairline: 'rgba(0,0,0,0.12)',
         separator: 'rgba(0,0,0,0.06)',
+        surface: {
+          subtle: '#F5F5F4',
+          hover: '#FAFAFA',
+          shell: '#EFEFEF',
+        },
         danger: {
           text: '#B91C1C',
           solid: '#EF4444',
