@@ -16,6 +16,7 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/shared/ui/ui/card';
 import { Badge } from '@/shared/ui/ui/badge';
+import { severityTokens } from '@/shared/ui/tokens';
 import { Button } from '@/shared/ui/ui/button';
 import { FileText, Calendar, Trash2 } from 'lucide-react';
 import { Comparison } from '@/features/file-comparison/hooks/useComparisons';
@@ -53,12 +54,12 @@ export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProp
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const { mutate: deleteComparison, isPending: isDeleting } = useDeleteComparison();
 
-  const statusColors = {
-    PENDING: 'bg-gray-100 text-gray-800 border-gray-200',
-    COMPLETED: 'bg-green-100 text-green-800 border-green-200',
-    FAILED: 'bg-red-100 text-red-800 border-red-200',
-    IN_PROGRESS: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-  };
+  const statusVariants = {
+    PENDING: 'neutral',
+    COMPLETED: 'success',
+    FAILED: 'critical',
+    IN_PROGRESS: 'warning',
+  } as const;
 
   const handleDelete = () => {
     deleteComparison(comparison.id.toString(), {
@@ -94,7 +95,7 @@ export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProp
                 </div>
               </CardDescription>
             </div>
-            <Badge className={statusColors[comparison.status]}>
+            <Badge variant={statusVariants[comparison.status]} dot>
               {comparison.status}
             </Badge>
           </div>
@@ -112,19 +113,19 @@ export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProp
             {comparison.status !== 'IN_PROGRESS' && (
               <div className="grid grid-cols-3 gap-4 mt-4">
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-orange-600">
+                  <div className="text-[22px] font-medium tabular-nums" style={{ color: severityTokens.stalled.text }}>
                     {comparison.filesChanged}
                   </div>
                   <div className="text-xs text-muted-foreground">Changed</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">
+                  <div className="text-[22px] font-medium tabular-nums" style={{ color: severityTokens.healthy.text }}>
                     {comparison.filesAdded}
                   </div>
                   <div className="text-xs text-muted-foreground">Added</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-gray-600">
+                  <div className="text-[22px] font-medium tabular-nums text-ink-secondary">
                     {comparison.filesUnchanged}
                   </div>
                   <div className="text-xs text-muted-foreground">Unchanged</div>
@@ -133,7 +134,7 @@ export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProp
             )}
 
             {comparison.errorMessage && (
-              <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+              <div className="mt-2 rounded-lg border border-danger-border bg-danger-bg p-2 text-sm text-danger-text">
                 Error: {comparison.errorMessage}
               </div>
             )}
