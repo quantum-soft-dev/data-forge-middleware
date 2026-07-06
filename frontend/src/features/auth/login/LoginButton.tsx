@@ -30,9 +30,9 @@ export function LoginButton() {
     <button
       onClick={handleLogin}
       disabled={isLoading}
-      className="group relative w-full overflow-hidden rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all duration-200 hover:scale-[1.02] hover:shadow-xl disabled:opacity-50 disabled:hover:scale-100"
+      className="group relative w-full overflow-hidden rounded-lg bg-brand px-6 py-3 text-base font-medium text-white shadow-lg transition-all duration-200 hover:scale-[1.02] hover:shadow-xl disabled:opacity-50 disabled:hover:scale-100"
     >
-      <div className="absolute inset-0 bg-gradient-to-r from-blue-700 to-purple-700 opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+      <div className="absolute inset-0 bg-brand-hover opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
       <div className="relative flex items-center justify-center gap-2">
         {isLoading ? (
           <>

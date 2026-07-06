@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens'
 import { ActionTypeBadge } from './ActionTypeBadge'
 import type { PluginActionType } from '../model/types'
 
@@ -36,48 +37,42 @@ describe('ActionTypeBadge', () => {
       render(<ActionTypeBadge actionType="ACTIVATE" />)
 
       const badge = screen.getByText('Activate')
-      expect(badge).toHaveClass('bg-green-100')
-      expect(badge).toHaveClass('text-green-800')
+      expect(badge).toHaveStyle({ background: severityTokens.healthy.bg, color: severityTokens.healthy.text })
     })
 
     it('should have yellow styling for DEACTIVATE', () => {
       render(<ActionTypeBadge actionType="DEACTIVATE" />)
 
       const badge = screen.getByText('Deactivate')
-      expect(badge).toHaveClass('bg-yellow-100')
-      expect(badge).toHaveClass('text-yellow-800')
+      expect(badge).toHaveStyle({ background: monitoringTokens.subtleBg, color: monitoringTokens.textSecondary })
     })
 
     it('should have blue styling for REACTIVATE', () => {
       render(<ActionTypeBadge actionType="REACTIVATE" />)
 
       const badge = screen.getByText('Reactivate')
-      expect(badge).toHaveClass('bg-blue-100')
-      expect(badge).toHaveClass('text-blue-800')
+      expect(badge).toHaveStyle({ background: monitoringTokens.blue50, color: monitoringTokens.primary })
     })
 
     it('should have purple styling for EVENT_DISPATCHED', () => {
       render(<ActionTypeBadge actionType="EVENT_DISPATCHED" />)
 
       const badge = screen.getByText('Event Dispatched')
-      expect(badge).toHaveClass('bg-purple-100')
-      expect(badge).toHaveClass('text-purple-800')
+      expect(badge).toHaveStyle({ background: monitoringTokens.blue50, color: monitoringTokens.primary })
     })
 
     it('should have red styling for EVENT_FAILED', () => {
       render(<ActionTypeBadge actionType="EVENT_FAILED" />)
 
       const badge = screen.getByText('Event Failed')
-      expect(badge).toHaveClass('bg-red-100')
-      expect(badge).toHaveClass('text-red-800')
+      expect(badge).toHaveStyle({ background: severityTokens.critical.bg, color: severityTokens.critical.text })
     })
 
     it('should have orange styling for EVENT_TIMEOUT', () => {
       render(<ActionTypeBadge actionType="EVENT_TIMEOUT" />)
 
       const badge = screen.getByText('Event Timeout')
-      expect(badge).toHaveClass('bg-orange-100')
-      expect(badge).toHaveClass('text-orange-800')
+      expect(badge).toHaveStyle({ background: severityTokens.stalled.bg, color: severityTokens.stalled.text })
     })
   })
 
@@ -96,7 +91,7 @@ describe('ActionTypeBadge', () => {
       expect(badge).toHaveClass('inline-flex')
       expect(badge).toHaveClass('rounded-full')
       expect(badge).toHaveClass('px-2.5')
-      expect(badge).toHaveClass('py-0.5')
+      expect(badge).toHaveClass('py-1')
       expect(badge).toHaveClass('text-xs')
       expect(badge).toHaveClass('font-medium')
     })

@@ -130,7 +130,7 @@ export class ErrorBoundary extends Component<Props, State> {
                       {this.state.errorInfo && (
                         <div>
                           <p className="text-sm font-medium text-ink-secondary">Component Stack:</p>
-                          <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-surface-subtle p-2 text-xs text-gray-800">
+                          <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-surface-subtle p-2 text-xs text-ink-secondary">
                             {this.state.errorInfo.componentStack}
                           </pre>
                         </div>
@@ -138,7 +138,7 @@ export class ErrorBoundary extends Component<Props, State> {
                       {this.state.error.stack && (
                         <div>
                           <p className="text-sm font-medium text-ink-secondary">Stack Trace:</p>
-                          <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-surface-subtle p-2 text-xs text-gray-800">
+                          <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-surface-subtle p-2 text-xs text-ink-secondary">
                             {this.state.error.stack}
                           </pre>
                         </div>
@@ -152,7 +152,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
                 <button
                   onClick={this.handleReset}
-                  className="rounded-lg bg-blue-600 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  className="rounded-lg bg-brand px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-brand-hover focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 >
                   Try Again
                 </button>

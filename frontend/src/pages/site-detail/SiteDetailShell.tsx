@@ -5,7 +5,7 @@
  * the high-fidelity spec for this shell: breadcrumb "All sites" (13px, arrow 14px),
  * 22px/500 title with pill chips (type grey, API blue-50/blue or grey, Active
  * green 10%-alpha with 6px dot), 14px secondary subline, and pill tabs (7×16px,
- * r8; active = #f8f8f8 bg + #3C82D8 border/text). No Overview tab: "Upload
+ * r8; active = surface-active bg + brand border/text). No Overview tab: "Upload
  * history" (default; the existing Batch List locked to this site) and "Delta Sync"
  * (rendered ONLY for clientApiVersion === 'V2' — absent from navigation for V1).
  */

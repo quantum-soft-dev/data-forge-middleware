@@ -54,7 +54,7 @@ export function BatchCleanupPanel({ accountId }: BatchCleanupPanelProps) {
     <Card>
       <CardContent className="p-6 space-y-4">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900">Batch Cleanup</h3>
+          <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink">Batch Cleanup</h3>
           <p className="text-sm text-muted-foreground">
             Run retention cleanup for this user’s sites. Use dry run to preview candidates.
           </p>
@@ -65,7 +65,7 @@ export function BatchCleanupPanel({ accountId }: BatchCleanupPanelProps) {
             <Label htmlFor="cleanup-site">Site</Label>
             <select
               id="cleanup-site"
-              className="h-9 w-full rounded border border-gray-200 px-3 text-sm"
+              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm"
               value={siteId}
               onChange={(event) => setSiteId(event.target.value)}
               disabled={isRunning}
@@ -136,7 +136,7 @@ export function BatchCleanupPanel({ accountId }: BatchCleanupPanelProps) {
         </div>
 
         {result && (
-          <div className="rounded border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+          <div className="rounded-lg bg-surface-subtle p-4 text-sm text-ink-secondary">
             <div>Candidates: {result.candidates}</div>
             <div>Deleted batches: {result.deletedBatches}</div>
             <div>Deleted files: {result.deletedFiles}</div>

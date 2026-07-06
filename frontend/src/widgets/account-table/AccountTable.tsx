@@ -13,6 +13,7 @@ import {
 } from '@tanstack/react-table'
 import { formatDistanceToNow } from 'date-fns'
 import { Pencil, Trash2 } from 'lucide-react'
+import { Badge } from '@/shared/ui/ui/badge'
 import type { Account } from '@/entities/account/model/types'
 import { Pagination } from './Pagination'
 
@@ -37,25 +38,25 @@ const createColumns = (
   columnHelper.accessor('name', {
     header: 'Name',
     cell: (info) => (
-      <div className="font-medium text-gray-900">{info.getValue()}</div>
+      <div className="font-medium text-ink">{info.getValue()}</div>
     ),
   }),
   columnHelper.accessor('email', {
     header: 'Email',
     cell: (info) => (
-      <div className="text-gray-600">{info.getValue()}</div>
+      <div className="text-ink-secondary">{info.getValue()}</div>
     ),
   }),
   columnHelper.accessor('phone', {
     header: 'Phone',
     cell: (info) => (
-      <div className="text-gray-600">{info.getValue() || '—'}</div>
+      <div className="text-ink-secondary">{info.getValue() || '—'}</div>
     ),
   }),
   columnHelper.accessor('company', {
     header: 'Company',
     cell: (info) => (
-      <div className="text-gray-600">{info.getValue() || '—'}</div>
+      <div className="text-ink-secondary">{info.getValue() || '—'}</div>
     ),
   }),
   columnHelper.accessor('status', {
@@ -63,15 +64,9 @@ const createColumns = (
     cell: (info) => {
       const status = info.getValue()
       return (
-        <span
-          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-            status === 'active'
-              ? 'bg-green-100 text-green-800'
-              : 'bg-gray-100 text-gray-800'
-          }`}
-        >
+        <Badge variant={status === 'active' ? 'success' : 'neutral'} dot>
           {status === 'active' ? 'Active' : 'Inactive'}
-        </span>
+        </Badge>
       )
     },
   }),
@@ -81,12 +76,12 @@ const createColumns = (
       try {
         const date = new Date(info.getValue())
         return (
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-ink-secondary">
             {formatDistanceToNow(date, { addSuffix: true })}
           </div>
         )
       } catch {
-        return <div className="text-sm text-gray-500">—</div>
+        return <div className="text-sm text-ink-secondary">—</div>
       }
     },
   }),
@@ -100,7 +95,7 @@ const createColumns = (
           {onEdit && (
             <button
               onClick={() => onEdit(account)}
-              className="rounded-md p-1 text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="rounded-md p-1 text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-ring"
               aria-label="Edit account"
               title="Edit"
             >
@@ -148,14 +143,14 @@ export function AccountTable({
 
   if (isLoading) {
     return (
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow">
+      <div className="overflow-hidden rounded-lg bg-white shadow-card shadow">
         <div className="px-6 py-12 text-center">
           {/* Skeleton rows */}
           {[...Array(5)].map((_, i) => (
             <div
               key={i}
               data-testid={`skeleton-row-${i}`}
-              className="mb-4 h-12 animate-pulse rounded bg-gray-100"
+              className="mb-4 h-12 animate-pulse rounded bg-surface-subtle"
             />
           ))}
         </div>
@@ -165,9 +160,9 @@ export function AccountTable({
 
   if (accounts.length === 0) {
     return (
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow">
+      <div className="overflow-hidden rounded-lg bg-white shadow-card shadow">
         <div className="px-6 py-12 text-center">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-ink-secondary">
             No accounts found. Try adjusting your filters.
           </p>
         </div>
@@ -176,16 +171,16 @@ export function AccountTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow">
+    <div className="overflow-hidden rounded-lg bg-white shadow-card shadow">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+          <thead className="bg-surface-subtle">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                    className="px-6 py-3 text-left text-xs font-medium text-ink-secondary"
                   >
                     {header.isPlaceholder
                       ? null
@@ -200,7 +195,7 @@ export function AccountTable({
           </thead>
           <tbody className="divide-y divide-gray-200 bg-white">
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="hover:bg-gray-50">
+              <tr key={row.id} className="hover:bg-surface-hover">
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="whitespace-nowrap px-6 py-4">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

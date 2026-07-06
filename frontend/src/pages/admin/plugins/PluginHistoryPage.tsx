@@ -21,7 +21,7 @@ export default function PluginHistoryPage() {
   })
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -39,7 +39,7 @@ export default function PluginHistoryPage() {
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
             <History className="h-8 w-8 text-ink-secondary" />
-            <h1 className="text-3xl font-bold text-ink">
+            <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">
               SQL Generation History
             </h1>
           </div>

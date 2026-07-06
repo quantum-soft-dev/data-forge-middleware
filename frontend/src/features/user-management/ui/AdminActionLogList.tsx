@@ -47,9 +47,9 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
       case 'UNLOCK_ACCOUNT':
         return { icon: Unlock, label: 'Unlocked Account', color: 'text-green-600 bg-green-50' }
       case 'RESET_PASSWORD':
-        return { icon: KeyRound, label: 'Reset Password', color: 'text-purple-600 bg-purple-50' }
+        return { icon: KeyRound, label: 'Reset Password', color: 'text-brand bg-brand-50' }
       default:
-        return { icon: UserPlus, label: actionType, color: 'text-gray-600 bg-gray-50' }
+        return { icon: UserPlus, label: actionType, color: 'text-ink-secondary bg-surface-subtle' }
     }
   }
 
@@ -89,11 +89,11 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
     return (
       <div className="space-y-3">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="animate-pulse rounded-lg border border-gray-200 bg-white p-4">
+          <div key={i} className="animate-pulse rounded-lg bg-white shadow-card p-4">
             <div className="flex items-start justify-between">
               <div className="flex-1 space-y-2">
                 <div className="h-4 w-32 rounded bg-gray-200" />
-                <div className="h-3 w-48 rounded bg-gray-100" />
+                <div className="h-3 w-48 rounded bg-surface-subtle" />
               </div>
               <div className="h-6 w-20 rounded-full bg-gray-200" />
             </div>
@@ -118,10 +118,10 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
   // Empty state
   if (!data || data.content.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-        <UserPlus className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-4 text-sm font-medium text-gray-600">No audit logs yet</p>
-        <p className="mt-1 text-xs text-gray-500">
+      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <UserPlus className="mx-auto h-12 w-12 text-ink-muted" />
+        <p className="mt-4 text-sm font-medium text-ink-secondary">No audit logs yet</p>
+        <p className="mt-1 text-xs text-ink-secondary">
           Administrative actions will appear here
         </p>
       </div>
@@ -142,7 +142,7 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
           return (
             <div
               key={log.id}
-              className="rounded-lg border border-gray-200 bg-white p-4 transition-shadow hover:shadow-md"
+              className="rounded-lg bg-white shadow-card p-4 transition-shadow hover:shadow-md"
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-3">
@@ -154,18 +154,18 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
                   {/* Action details */}
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-semibold text-gray-900">
+                      <h4 className="text-sm font-semibold text-ink">
                         {actionInfo.label}
                       </h4>
                       {getStatusBadge(log.status)}
                     </div>
 
-                    <p className="mt-1 text-xs text-gray-500">
+                    <p className="mt-1 text-xs text-ink-secondary">
                       {formatTimestamp(log.createdAt)}
                     </p>
 
                     {log.ipAddress && (
-                      <p className="mt-1 text-xs text-gray-400">
+                      <p className="mt-1 text-xs text-ink-muted">
                         IP: {log.ipAddress}
                       </p>
                     )}
@@ -185,9 +185,9 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
 
       {/* Pagination controls */}
       {showPagination && (
-        <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
+        <div className="flex items-center justify-between rounded-lg bg-white shadow-card px-4 py-3">
           <div className="flex items-center gap-2">
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-ink-secondary">
               Showing <span className="font-medium">{page * pageSize + 1}</span> to{' '}
               <span className="font-medium">
                 {Math.min((page + 1) * pageSize, totalElements)}
@@ -200,20 +200,20 @@ export function AdminActionLogList({ accountId }: AdminActionLogListProps) {
             <button
               onClick={() => setPage(Math.max(0, page - 1))}
               disabled={page === 0}
-              className="rounded border border-gray-300 px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded border border-hairline px-3 py-1 text-sm font-medium text-ink-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Previous page"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
 
-            <span className="text-sm text-gray-600">
+            <span className="text-sm text-ink-secondary">
               Page {page + 1} of {totalPages}
             </span>
 
             <button
               onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
-              className="rounded border border-gray-300 px-3 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded border border-hairline px-3 py-1 text-sm font-medium text-ink-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Next page"
             >
               <ChevronRight className="h-4 w-4" />

@@ -89,7 +89,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
         <div className="bg-white rounded-lg p-6 max-w-md w-full">
           <h2 className="text-xl font-bold mb-4">Account Created Successfully</h2>
           <div className="mb-4">
-            <p className="text-sm text-gray-600 mb-2">
+            <p className="text-sm text-ink-secondary mb-2">
               Account created for: <strong>{createdAccountData.email}</strong>
             </p>
           </div>
@@ -97,15 +97,15 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
           {/* Show temporary password if available */}
           {createdAccountData.temporaryPassword && (
             <div className="mb-4">
-              <p className="text-sm text-gray-600 mb-2">
+              <p className="text-sm text-ink-secondary mb-2">
                 Temporary password (save this now - it will not be shown again):
               </p>
-              <div className="bg-gray-100 p-3 rounded font-mono text-sm break-all flex items-start justify-between">
+              <div className="bg-surface-subtle p-3 rounded font-mono text-sm break-all flex items-start justify-between">
                 <span className="flex-1">{createdAccountData.temporaryPassword}</span>
                 <button
                   type="button"
                   onClick={() => copyToClipboard(createdAccountData.temporaryPassword!)}
-                  className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 flex-shrink-0"
+                  className="ml-2 px-3 py-1 bg-brand text-white rounded-lg text-sm hover:bg-brand-hover flex-shrink-0"
                 >
                   Copy
                 </button>
@@ -116,15 +116,15 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
           {/* Show password reset URL if available */}
           {createdAccountData.passwordResetUrl && (
             <div className="mb-4">
-              <p className="text-sm text-gray-600 mb-2">
+              <p className="text-sm text-ink-secondary mb-2">
                 Password reset link:
               </p>
-              <div className="bg-gray-100 p-3 rounded font-mono text-xs break-all flex items-start justify-between">
+              <div className="bg-surface-subtle p-3 rounded font-mono text-xs break-all flex items-start justify-between">
                 <span className="flex-1">{createdAccountData.passwordResetUrl}</span>
                 <button
                   type="button"
                   onClick={() => copyToClipboard(createdAccountData.passwordResetUrl!)}
-                  className="ml-2 px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 flex-shrink-0"
+                  className="ml-2 px-3 py-1 bg-brand text-white rounded-lg text-sm hover:bg-brand-hover flex-shrink-0"
                 >
                   Copy
                 </button>
@@ -140,7 +140,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
           <button
             type="button"
             onClick={handleClose}
-            className="w-full px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            className="w-full px-4 py-2 bg-blue-500 text-white rounded hover:bg-brand"
           >
             Close
           </button>
@@ -152,14 +152,14 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div>
-        <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="email" className="block text-sm font-medium text-ink-secondary mb-1">
           Email Address *
         </label>
         <input
           {...register('email')}
           type="email"
           id="email"
-          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-hairline rounded focus:outline-none focus:ring-2 focus:ring-ring"
           disabled={isSubmitting}
           aria-invalid={errors.email ? 'true' : 'false'}
           aria-describedby={errors.email ? 'email-error' : undefined}
@@ -172,14 +172,14 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
       </div>
 
       <div>
-        <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="name" className="block text-sm font-medium text-ink-secondary mb-1">
           Full Name *
         </label>
         <input
           {...register('name')}
           type="text"
           id="name"
-          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-hairline rounded focus:outline-none focus:ring-2 focus:ring-ring"
           disabled={isSubmitting}
           aria-invalid={errors.name ? 'true' : 'false'}
           aria-describedby={errors.name ? 'name-error' : undefined}
@@ -192,7 +192,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
       </div>
 
       <div>
-        <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="phone" className="block text-sm font-medium text-ink-secondary mb-1">
           Phone Number
         </label>
         <input
@@ -200,7 +200,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
           type="tel"
           id="phone"
           placeholder="+1234567890"
-          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-hairline rounded focus:outline-none focus:ring-2 focus:ring-ring"
           disabled={isSubmitting}
           aria-invalid={errors.phone ? 'true' : 'false'}
           aria-describedby={errors.phone ? 'phone-error' : undefined}
@@ -215,14 +215,14 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
       {/* Only show Company field for USER role, not for ADMIN */}
       {selectedRole === 'USER' && (
         <div>
-          <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
+          <label htmlFor="company" className="block text-sm font-medium text-ink-secondary mb-1">
             Company
           </label>
           <input
             {...register('company')}
             type="text"
             id="company"
-            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border border-hairline rounded focus:outline-none focus:ring-2 focus:ring-ring"
             disabled={isSubmitting}
             aria-invalid={errors.company ? 'true' : 'false'}
             aria-describedby={errors.company ? 'company-error' : undefined}
@@ -236,13 +236,13 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
       )}
 
       <div>
-        <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="role" className="block text-sm font-medium text-ink-secondary mb-1">
           Role *
         </label>
         <select
           {...register('role')}
           id="role"
-          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-hairline rounded focus:outline-none focus:ring-2 focus:ring-ring"
           disabled={isSubmitting}
           aria-invalid={errors.role ? 'true' : 'false'}
           aria-describedby={errors.role ? 'role-error' : undefined}
@@ -270,7 +270,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
         <button
           type="submit"
           disabled={isSubmitting}
-          className="flex-1 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          className="flex-1 px-4 py-2 bg-blue-500 text-white rounded hover:bg-brand disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           {isSubmitting ? 'Creating...' : 'Create Account'}
         </button>
@@ -279,7 +279,7 @@ export function CreateAccountForm({ onSuccess, onCancel }: CreateAccountFormProp
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
-            className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 disabled:bg-gray-100 disabled:cursor-not-allowed"
+            className="px-4 py-2 border border-hairline rounded hover:bg-surface-hover disabled:bg-surface-subtle disabled:cursor-not-allowed"
           >
             Cancel
           </button>

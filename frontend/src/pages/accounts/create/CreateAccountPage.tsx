@@ -32,7 +32,7 @@ export default function CreateAccountPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
@@ -40,21 +40,21 @@ export default function CreateAccountPage() {
         <div className="mb-8">
           <button
             onClick={handleCancel}
-            className="mb-4 flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            className="mb-4 flex items-center gap-2 text-sm text-ink-secondary hover:text-ink"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to User Management
           </button>
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Create New Account</h1>
-            <p className="mt-2 text-sm text-gray-600">
+            <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Create New Account</h1>
+            <p className="mt-2 text-sm text-ink-secondary">
               Create a new user account with Auth0 authentication integration
             </p>
           </div>
         </div>
 
         {/* Form card */}
-        <div className="rounded-lg bg-white p-6 shadow-sm border border-gray-200">
+        <div className="rounded-lg bg-white p-6 shadow-sm border border-separator">
           <CreateAccountForm
             onSuccess={handleSuccess}
             onCancel={handleCancel}

@@ -148,8 +148,8 @@ export function ComparisonSummary({ summary, className }: ComparisonSummaryProps
 
           {/* Files Unchanged */}
           <div className="flex items-center gap-3 rounded-lg border p-4">
-            <div className="rounded-full bg-gray-100 p-2 dark:bg-gray-800">
-              <FileCheck className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+            <div className="rounded-full bg-surface-subtle p-2 dark:bg-gray-800">
+              <FileCheck className="h-5 w-5 text-ink-secondary dark:text-ink-muted" />
             </div>
             <div>
               <p className="text-2xl font-bold">{summary.filesUnchanged}</p>
@@ -159,8 +159,8 @@ export function ComparisonSummary({ summary, className }: ComparisonSummaryProps
 
           {/* Total Change Size */}
           <div className="flex items-center gap-3 rounded-lg border p-4">
-            <div className="rounded-full bg-purple-100 p-2 dark:bg-purple-900">
-              <Database className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+            <div className="rounded-full bg-brand-50 p-2">
+              <Database className="h-5 w-5 text-brand" />
             </div>
             <div>
               <p className="text-2xl font-bold">{formatBytes(summary.totalChangeSize)}</p>

@@ -60,8 +60,8 @@ export function DeleteAccountButton({ account, onSuccess }: DeleteAccountButtonP
                 <AlertTriangle className="h-6 w-6 text-red-600" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-900">Delete Account</h2>
-                <p className="mt-1 text-sm text-gray-600">
+                <h2 className="text-lg font-bold text-ink">Delete Account</h2>
+                <p className="mt-1 text-sm text-ink-secondary">
                   This action cannot be undone.
                 </p>
               </div>
@@ -74,10 +74,10 @@ export function DeleteAccountButton({ account, onSuccess }: DeleteAccountButtonP
             </div>
 
             <div className="mb-4">
-              <p className="text-sm text-gray-700 mb-2">
+              <p className="text-sm text-ink-secondary mb-2">
                 Account to delete: <strong>{account.email}</strong>
               </p>
-              <p className="text-sm text-gray-700 mb-2">
+              <p className="text-sm text-ink-secondary mb-2">
                 Type the email address to confirm:
               </p>
               <input
@@ -85,7 +85,7 @@ export function DeleteAccountButton({ account, onSuccess }: DeleteAccountButtonP
                 value={confirmEmail}
                 onChange={(e) => setConfirmEmail(e.target.value)}
                 placeholder={account.email}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500"
+                className="w-full px-3 py-2 border border-hairline rounded-md focus:outline-none focus:ring-2 focus:ring-red-500"
                 autoFocus
               />
             </div>
@@ -98,7 +98,7 @@ export function DeleteAccountButton({ account, onSuccess }: DeleteAccountButtonP
                   setConfirmEmail('')
                 }}
                 disabled={deleteMutation.isPending}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                className="flex-1 px-4 py-2 border border-hairline rounded-md text-sm font-medium text-ink-secondary hover:bg-surface-hover disabled:opacity-50"
               >
                 Cancel
               </button>

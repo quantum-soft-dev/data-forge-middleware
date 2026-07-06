@@ -36,7 +36,7 @@ export function RebuildCheckpointDialog({ open, onOpenChange, onConfirm }: Confi
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm} className="bg-[#3C82D8] hover:bg-[#3676C4]">
+          <AlertDialogAction onClick={onConfirm} className="bg-brand hover:bg-brand-hover">
             Rebuild now
           </AlertDialogAction>
         </AlertDialogFooter>

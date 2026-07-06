@@ -137,7 +137,7 @@ export function PluginTabFilters({
           <Filter className="h-4 w-4" />
           Filters
           {hasActiveFilters && (
-            <span className="ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white">
+            <span className="ml-1 rounded-full bg-brand px-2 py-0.5 text-xs text-white">
               Active
             </span>
           )}

@@ -48,9 +48,9 @@ export function RoleGuard({ requiredRole, children }: RoleGuardProps) {
   if (!hasRequiredRole) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">403</h1>
-        <h2 className="text-2xl font-semibold text-gray-700 mb-2">Access Denied</h2>
-        <p className="text-gray-600">
+        <h1 className="text-4xl font-bold text-ink mb-4">403</h1>
+        <h2 className="text-[22px] font-medium tracking-[-0.33px] text-ink-secondary mb-2">Access Denied</h2>
+        <p className="text-ink-secondary">
           You do not have permission to access this page.
         </p>
       </div>

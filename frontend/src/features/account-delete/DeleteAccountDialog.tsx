@@ -55,13 +55,13 @@ export function DeleteAccountDialog({ account, open, onClose }: DeleteAccountDia
       >
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
-          <h2 id="dialog-title" className="text-xl font-semibold text-gray-900">
+          <h2 id="dialog-title" className="text-[17px] font-medium tracking-[-0.24px] text-ink">
             Delete Account
           </h2>
           <button
             onClick={onClose}
             disabled={deleteMutation.isPending}
-            className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-lg p-1 text-ink-muted hover:bg-secondary hover:text-ink focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Close dialog"
           >
             <X className="h-5 w-5" />
@@ -70,19 +70,19 @@ export function DeleteAccountDialog({ account, open, onClose }: DeleteAccountDia
 
         {/* Content */}
         <div className="mb-6">
-          <p className="text-sm text-gray-700 mb-4">
+          <p className="text-sm text-ink-secondary mb-4">
             Are you sure you want to delete this account? This action will deactivate the account.
           </p>
 
           {/* Account details for verification */}
-          <div className="rounded-md bg-gray-50 p-4 space-y-2">
+          <div className="rounded-md bg-surface-subtle p-4 space-y-2">
             <div>
-              <span className="text-xs font-medium text-gray-500">Name:</span>
-              <p className="text-sm font-semibold text-gray-900">{account.name}</p>
+              <span className="text-xs font-medium text-ink-secondary">Name:</span>
+              <p className="text-sm font-semibold text-ink">{account.name}</p>
             </div>
             <div>
-              <span className="text-xs font-medium text-gray-500">Email:</span>
-              <p className="text-sm text-gray-700">{account.email}</p>
+              <span className="text-xs font-medium text-ink-secondary">Email:</span>
+              <p className="text-sm text-ink-secondary">{account.email}</p>
             </div>
           </div>
         </div>
@@ -93,7 +93,7 @@ export function DeleteAccountDialog({ account, open, onClose }: DeleteAccountDia
             type="button"
             onClick={onClose}
             disabled={deleteMutation.isPending}
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-lg border border-hairline bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>

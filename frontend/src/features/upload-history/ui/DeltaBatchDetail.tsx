@@ -64,10 +64,10 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
           <span
             className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
               completed
-                ? 'bg-green-100 text-green-800'
+                ? 'bg-transparent'
                 : inProgress
-                  ? 'bg-blue-100 text-blue-800'
-                  : 'bg-red-100 text-red-800'
+                  ? 'bg-transparent'
+                  : 'bg-transparent'
             }`}
           >
             {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : titleCase(batch.status)}
