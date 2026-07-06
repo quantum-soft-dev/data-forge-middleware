@@ -40,6 +40,7 @@ export default {
         surface: {
           subtle: '#F5F5F4',
           hover: '#FAFAFA',
+          active: '#F8F8F8',
           shell: '#EFEFEF',
         },
         danger: {
