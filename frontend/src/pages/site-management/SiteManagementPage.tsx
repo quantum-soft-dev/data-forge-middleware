@@ -16,35 +16,36 @@ import { CreateSiteForm } from '@/features/site-crud/ui/CreateSiteForm';
 import { SiteList } from '@/widgets/site-list/SiteList';
 import { Separator } from '@/shared/ui/ui/separator';
 import { Header } from '@/widgets/header/Header';
+import { PageHeader } from '@/shared/ui/page-header';
 
 export function SiteManagementPage() {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="container mx-auto py-6 space-y-6 max-w-4xl px-4">
-        {/* Page header */}
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Site Management</h1>
-          <p className="text-muted-foreground mt-2">
-            Manage your sites and monitor their activity
-          </p>
-        </div>
+        <PageHeader
+          title="Site Management"
+          subtitle="Manage your sites and monitor their activity"
+          className="mb-0"
+        />
 
-      <Separator />
+        <Separator />
 
-      {/* Create site form */}
-      <section>
-        <CreateSiteForm />
-      </section>
+        {/* Create site form */}
+        <section>
+          <CreateSiteForm />
+        </section>
 
-      <Separator />
+        <Separator />
 
         {/* Sites list */}
         <section>
           <div className="mb-4">
-            <h2 className="text-2xl font-semibold tracking-tight">Your Sites</h2>
-            <p className="text-sm text-muted-foreground mt-1">
+            <h2 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">
+              Your Sites
+            </h2>
+            <p className="mt-1 text-sm text-ink-secondary">
               All your active sites sorted by creation date
             </p>
           </div>
