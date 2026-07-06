@@ -49,7 +49,7 @@ export function SiteDetailPage({ admin = false }: SiteDetailPageProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
-      <main className="container mx-auto py-6 max-w-4xl px-4">
+      <main className="container mx-auto max-w-[1120px] px-6 py-6">
         {isLoading && (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

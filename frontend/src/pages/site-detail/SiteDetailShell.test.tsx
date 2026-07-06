@@ -41,10 +41,13 @@ describe('SiteDetailShell (F3)', () => {
     render(<SiteDetailShell site={v2Site} canManage={false} onBack={onBack} />)
 
     expect(screen.getByRole('heading', { name: 'store-berlin-01' })).toBeInTheDocument()
-    expect(screen.getByText('Postgres CDC')).toBeInTheDocument()
+    expect(screen.getByText('POSTGRES_CDC')).toBeInTheDocument()
     expect(screen.getByText('Delta v2')).toBeInTheDocument()
     expect(screen.getByText('Active')).toBeInTheDocument()
-    expect(screen.getByText(/Store Berlin · Created/)).toBeInTheDocument()
+    // Prototype subline copy for V2 sites (F14)
+    expect(
+      screen.getByText('Changelog stream over gRPC. Metrics refresh every 15 seconds.'),
+    ).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /all sites/i }))
     expect(onBack).toHaveBeenCalled()
@@ -67,5 +70,15 @@ describe('SiteDetailShell (F3)', () => {
     expect(screen.getByRole('tab', { name: 'Upload history' })).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Delta Sync' })).not.toBeInTheDocument()
     expect(screen.getByText('v1')).toBeInTheDocument()
+    expect(screen.getByText('Full snapshot uploads over HTTP (v1).')).toBeInTheDocument()
+  })
+
+  it('styles the active tab per the prototype (blue border pill)', () => {
+    render(<SiteDetailShell site={v2Site} canManage={false} onBack={() => {}} />)
+
+    const active = screen.getByRole('tab', { name: 'Upload history' })
+    expect(active).toHaveAttribute('aria-selected', 'true')
+    expect(active.className).toContain('data-[state=active]:border-[#3C82D8]')
+    expect(active.className).toContain('data-[state=active]:text-[#3C82D8]')
   })
 })
