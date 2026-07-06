@@ -94,7 +94,7 @@ export function PluginActivationDialog({
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label htmlFor="tenantId">
-                  Tenant ID <span className="text-red-500">*</span>
+                  Tenant ID <span className="text-danger-solid">*</span>
                 </Label>
                 <Input
                   id="tenantId"
@@ -109,7 +109,7 @@ export function PluginActivationDialog({
                   aria-describedby={error ? 'tenantId-error' : undefined}
                 />
                 {error && (
-                  <p id="tenantId-error" className="text-sm text-red-500">
+                  <p id="tenantId-error" className="text-sm text-danger-solid">
                     {error}
                   </p>
                 )}
