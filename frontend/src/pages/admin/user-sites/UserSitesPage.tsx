@@ -34,12 +34,12 @@ export default function UserSitesPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-surface-hover">
         <Header />
         <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
           <div className="flex items-center justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" />
-            <span className="ml-3 text-sm text-gray-600">Loading user sites...</span>
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
+            <span className="ml-3 text-sm text-ink-secondary">Loading user sites...</span>
           </div>
         </main>
       </div>
@@ -48,11 +48,11 @@ export default function UserSitesPage() {
 
   if (isError || !account) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-surface-hover">
         <Header />
         <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-medium text-red-800">
+          <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
+            <p className="text-sm font-medium text-danger-text">
               {error instanceof Error ? error.message : 'Failed to load user account'}
             </p>
           </div>
@@ -62,7 +62,7 @@ export default function UserSitesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -70,13 +70,13 @@ export default function UserSitesPage() {
         <div className="mb-8">
           <button
             onClick={handleBack}
-            className="mb-4 flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            className="mb-4 flex items-center gap-2 text-sm text-ink-secondary hover:text-ink"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to Account Details
           </button>
           <div>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-ink-secondary">
               Manage sites for {account.name} ({account.email})
             </p>
           </div>
@@ -86,7 +86,7 @@ export default function UserSitesPage() {
 
         {/* Create site form - admin context */}
         <section className="mb-8">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Create New Site</h2>
+          <h2 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title mb-4">Create New Site</h2>
           <CreateSiteForm accountId={accountId} />
         </section>
 
@@ -102,8 +102,8 @@ export default function UserSitesPage() {
         {/* Sites list - admin context */}
         <section>
           <div className="mb-4">
-            <h2 className="text-xl font-semibold text-gray-900">User's Sites</h2>
-            <p className="text-sm text-gray-600 mt-1">
+            <h2 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">User's Sites</h2>
+            <p className="text-sm text-ink-secondary mt-1">
               All sites for this user sorted by creation date
             </p>
           </div>

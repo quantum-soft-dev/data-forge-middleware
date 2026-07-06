@@ -65,13 +65,13 @@ export default function AdminSettingsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
         <div>
-          <h2 className="text-2xl font-semibold text-gray-900">Admin Settings</h2>
-          <p className="text-sm text-gray-600 mt-1">
+          <h2 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Admin Settings</h2>
+          <p className="text-sm text-ink-secondary mt-1">
             Runtime-configurable system settings (admin only).
           </p>
         </div>
@@ -79,12 +79,12 @@ export default function AdminSettingsPage() {
         <Card>
           <CardContent className="p-6 space-y-4">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">Retention Cleanup Schedule</h3>
+              <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">Retention Cleanup Schedule</h3>
               <p className="text-sm text-muted-foreground">
                 Controls when old batches/uploads are deleted automatically. Cron format: sec min hour day month day-of-week.
               </p>
               {metaText && (
-                <p className="mt-2 text-xs text-gray-500">{metaText}</p>
+                <p className="mt-2 text-xs text-ink-muted">{metaText}</p>
               )}
             </div>
 
@@ -98,7 +98,7 @@ export default function AdminSettingsPage() {
                   onChange={(e) => setCron(e.target.value)}
                   disabled={scheduleQuery.isLoading || updateMutation.isPending}
                 />
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-ink-muted">
                   Examples: daily 02:00 = <code className="font-mono">0 0 2 * * *</code>, every 6 hours =
                   <code className="ml-1 font-mono">0 0 */6 * * *</code>
                 </div>
@@ -122,7 +122,7 @@ export default function AdminSettingsPage() {
             </div>
 
             {scheduleQuery.isError && (
-              <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              <div className="rounded-lg border border-danger-border bg-danger-bg p-3 text-sm text-danger-text">
                 Failed to load schedule.
               </div>
             )}
