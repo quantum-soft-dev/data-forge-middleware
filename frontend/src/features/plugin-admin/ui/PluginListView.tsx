@@ -25,10 +25,10 @@ export function PluginListView({
 }: PluginListViewProps) {
   if (isLoading) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white p-8">
+      <div className="rounded-lg bg-white p-8 shadow-card">
         <div className="flex items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" />
-          <span className="ml-3 text-sm text-gray-600">Loading plugins...</span>
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
+          <span className="ml-3 text-sm text-ink-secondary">Loading plugins...</span>
         </div>
       </div>
     )
@@ -36,9 +36,9 @@ export function PluginListView({
 
   if (plugins.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white p-8 text-center">
-        <Plug className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-4 text-sm text-gray-500">No plugins registered</p>
+      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <Plug className="mx-auto h-12 w-12 text-ink-muted" />
+        <p className="mt-4 text-sm text-ink-secondary">No plugins registered</p>
       </div>
     )
   }
@@ -48,29 +48,29 @@ export function PluginListView({
       {plugins.map((plugin) => (
         <div
           key={plugin.pluginId}
-          className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+          className="rounded-lg bg-white p-4 shadow-card"
         >
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50">
-                <Plug className="h-5 w-5 text-blue-600" />
+                <Plug className="h-5 w-5 text-brand" />
               </div>
               <div>
-                <h3 className="text-sm font-medium text-gray-900">
+                <h3 className="text-sm font-medium text-ink">
                   {plugin.displayName}
                 </h3>
-                <p className="text-xs text-gray-500">{plugin.pluginId}</p>
+                <p className="text-xs text-ink-secondary">{plugin.pluginId}</p>
               </div>
             </div>
             <PluginStatusBadge isEnabled={plugin.isEnabled} />
           </div>
 
           <div className="mt-4 space-y-2">
-            <div className="flex items-center gap-2 text-xs text-gray-500">
+            <div className="flex items-center gap-2 text-xs text-ink-secondary">
               <Settings className="h-3.5 w-3.5" />
               <span>Version: {plugin.version}</span>
             </div>
-            <div className="flex items-center gap-2 text-xs text-gray-500">
+            <div className="flex items-center gap-2 text-xs text-ink-secondary">
               <Calendar className="h-3.5 w-3.5" />
               <span>
                 Created{' '}
@@ -81,12 +81,12 @@ export function PluginListView({
 
           {plugin.supportedEvents.length > 0 && (
             <div className="mt-3">
-              <p className="mb-1 text-xs font-medium text-gray-700">Supported Events:</p>
+              <p className="mb-1 text-xs font-medium text-ink-secondary">Supported Events:</p>
               <div className="flex flex-wrap gap-1">
                 {plugin.supportedEvents.map((event) => (
                   <span
                     key={event}
-                    className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600"
+                    className="rounded bg-gray-100 px-2 py-0.5 text-xs text-ink-secondary"
                   >
                     {event}
                   </span>

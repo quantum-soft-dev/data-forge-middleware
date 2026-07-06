@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '@/shared/ui/ui/table'
 import { Button } from '@/shared/ui/ui/button'
+import { severityTokens } from '@/shared/ui/tokens';
 import { Badge } from '@/shared/ui/ui/badge'
 import { Skeleton } from '@/shared/ui/ui/skeleton'
 import {
@@ -121,11 +122,11 @@ export function GenerationListTable({
                 {generation.statementCount.toLocaleString()}
               </TableCell>
               <TableCell className="text-right font-mono text-sm">
-                <span className="text-green-600">{generation.insertCount}</span>
+                <span className="tabular-nums" style={{ color: severityTokens.healthy.text }}>{generation.insertCount}</span>
                 {' / '}
-                <span className="text-blue-600">{generation.updateCount}</span>
+                <span className="tabular-nums text-brand">{generation.updateCount}</span>
                 {' / '}
-                <span className="text-red-600">{generation.deleteCount}</span>
+                <span className="tabular-nums text-danger-text">{generation.deleteCount}</span>
               </TableCell>
               <TableCell className="text-right">
                 {formatBytes(generation.fileSizeBytes)}
@@ -135,9 +136,9 @@ export function GenerationListTable({
               </TableCell>
               <TableCell>
                 {generation.superseded ? (
-                  <Badge variant="secondary">Superseded</Badge>
+                  <Badge variant="neutral">Superseded</Badge>
                 ) : (
-                  <Badge variant="default">Active</Badge>
+                  <Badge variant="success" dot>Active</Badge>
                 )}
               </TableCell>
               <TableCell className="text-right">

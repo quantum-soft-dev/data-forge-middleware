@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { severityTokens } from '@/shared/ui/tokens'
 import { AuditLogTable } from './AuditLogTable'
 import type { PluginAuditLogEntry } from '@/entities/plugin/model/types'
 
@@ -164,12 +165,12 @@ describe('AuditLogTable', () => {
       render(<AuditLogTable {...defaultProps} />)
 
       const successStatus = screen.getByText('200')
-      expect(successStatus).toHaveClass('bg-green-100')
-      expect(successStatus).toHaveClass('text-green-800')
+      expect(successStatus).toHaveStyle({ background: severityTokens.healthy.bg })
+      expect(successStatus).toHaveStyle({ color: severityTokens.healthy.text })
 
       const errorStatus = screen.getByText('500')
-      expect(errorStatus).toHaveClass('bg-red-100')
-      expect(errorStatus).toHaveClass('text-red-800')
+      expect(errorStatus).toHaveStyle({ background: severityTokens.critical.bg })
+      expect(errorStatus).toHaveStyle({ color: severityTokens.critical.text })
     })
 
     it('should display error message', () => {
@@ -200,14 +201,14 @@ describe('AuditLogTable', () => {
     it('should display CheckCircle icon for success', () => {
       const { container } = render(<AuditLogTable {...defaultProps} />)
 
-      const checkCircle = container.querySelector('.text-green-600')
+      const checkCircle = screen.getByText('Success').closest('span[style]')
       expect(checkCircle).toBeInTheDocument()
     })
 
     it('should display XCircle icon for failure', () => {
       const { container } = render(<AuditLogTable {...defaultProps} />)
 
-      const xCircle = container.querySelector('.text-red-600')
+      const xCircle = screen.getByText('Failed').closest('span[style]')
       expect(xCircle).toBeInTheDocument()
     })
 
@@ -300,7 +301,7 @@ describe('AuditLogTable', () => {
     it('should have hover effect on table rows', () => {
       const { container } = render(<AuditLogTable {...defaultProps} />)
 
-      const hoverRow = container.querySelector('.hover\\:bg-gray-50')
+      const hoverRow = container.querySelector('.hover\\:bg-surface-hover')
       expect(hoverRow).toBeInTheDocument()
     })
   })
@@ -310,7 +311,7 @@ describe('AuditLogTable', () => {
       render(<AuditLogTable {...defaultProps} />)
 
       const errorMessage = screen.getByText('Connection timeout')
-      expect(errorMessage).toHaveClass('text-red-600')
+      expect(errorMessage).toHaveClass('text-danger-text')
     })
 
     it('should have title attribute for full error message', () => {

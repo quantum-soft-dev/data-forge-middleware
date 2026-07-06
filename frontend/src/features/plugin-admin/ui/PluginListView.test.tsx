@@ -235,7 +235,7 @@ describe('PluginListView', () => {
         <PluginListView plugins={mockPlugins} isLoading={false} />
       )
 
-      const card = container.querySelector('.hover\\:shadow-md')
+      const card = container.querySelector('.shadow-card')
       expect(card).toBeInTheDocument()
     })
   })

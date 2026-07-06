@@ -38,12 +38,12 @@ export default function PluginHistoryPage() {
         {/* Page header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
-            <History className="h-8 w-8 text-gray-600" />
-            <h1 className="text-3xl font-bold text-gray-900">
+            <History className="h-8 w-8 text-ink-secondary" />
+            <h1 className="text-3xl font-bold text-ink">
               SQL Generation History
             </h1>
           </div>
-          <div className="flex items-center gap-4 text-sm text-gray-600">
+          <div className="flex items-center gap-4 text-sm text-ink-secondary">
             <div className="flex items-center gap-1">
               <Database className="h-4 w-4" />
               <span>Plugin: {pluginId}</span>
@@ -54,7 +54,7 @@ export default function PluginHistoryPage() {
         </div>
 
         {/* History widget */}
-        <section className="bg-white rounded-lg shadow-sm border p-6">
+        <section className="rounded-lg bg-white p-6 shadow-card">
           <PluginHistoryWidget pluginId={pluginId} accountId={accountId} />
         </section>
       </main>
