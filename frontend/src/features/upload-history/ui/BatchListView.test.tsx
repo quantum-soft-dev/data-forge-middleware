@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BatchListView } from './BatchListView';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import type { BatchSummary } from '@/entities/batch/model/types';
 
 // Helper to generate ISO date string relative to now
@@ -117,7 +118,7 @@ describe('BatchListView', () => {
       expect(screen.getByText(errorMessage)).toBeInTheDocument();
       // Error should be in a red-styled container
       const errorContainer = screen.getByText(errorMessage).closest('div');
-      expect(errorContainer).toHaveClass('border-red-200');
+      expect(errorContainer).toHaveClass('border-danger-border');
     });
 
     it('should not display batch list when error is present', () => {
@@ -274,9 +275,11 @@ describe('BatchListView', () => {
         />
       );
 
-      // CheckCircle icon should be present
-      const checkCircle = container.querySelector('.text-green-500');
-      expect(checkCircle).toBeInTheDocument();
+      // Success pill with dot should be present
+      void container;
+      const pill = screen.getByText('COMPLETED');
+      expect(pill).toHaveStyle({ background: severityTokens.healthy.bg });
+      expect(pill.querySelector('span')).not.toBeNull(); // dot
     });
 
     it('should display red X for FAILED status', () => {
@@ -293,9 +296,12 @@ describe('BatchListView', () => {
         />
       );
 
-      // XCircle icon should be present for FAILED status
-      const xCircle = container.querySelector('.text-red-500');
-      expect(xCircle).toBeInTheDocument();
+      // Critical pill should be present for FAILED status
+      void container;
+      expect(screen.getByText('FAILED')).toHaveStyle({
+        background: severityTokens.critical.bg,
+        color: severityTokens.critical.text,
+      });
     });
 
     it('should display green checkmark for COMPLETED_WITH_WARNINGS status', () => {
@@ -311,9 +317,12 @@ describe('BatchListView', () => {
         />
       );
 
-      // CheckCircle icon should be present for COMPLETED_WITH_WARNINGS status
-      const checkCircle = container.querySelector('.text-green-500');
-      expect(checkCircle).toBeInTheDocument();
+      // Warning pill should be present for COMPLETED_WITH_WARNINGS status
+      void container;
+      expect(screen.getByText('Completed (Warnings)')).toHaveStyle({
+        background: severityTokens.elevated.bg,
+        color: severityTokens.elevated.text,
+      });
     });
 
     it('should display blue spinner for IN_PROGRESS status', () => {
@@ -329,10 +338,13 @@ describe('BatchListView', () => {
         />
       );
 
-      // Loader2 icon should be present for IN_PROGRESS status
+      // Spinner should render inside the info pill for IN_PROGRESS status
       const loader = container.querySelector('[class*="lucide-loader"]');
       expect(loader).toBeInTheDocument();
-      expect(loader).toHaveClass('text-blue-500', 'animate-spin');
+      expect(loader).toHaveClass('animate-spin');
+      expect(screen.getByText('IN_PROGRESS')).toHaveStyle({
+        background: monitoringTokens.blue50,
+      });
     });
 
     it('should apply correct badge color based on status', () => {
@@ -346,25 +358,29 @@ describe('BatchListView', () => {
         />
       );
 
-      // COMPLETED status should have green badge
-      const completedBadge = screen.getByText('COMPLETED');
-      expect(completedBadge).toHaveClass('bg-green-100');
-      expect(completedBadge).toHaveClass('text-green-800');
+      // COMPLETED status should have the success pill treatment
+      expect(screen.getByText('COMPLETED')).toHaveStyle({
+        background: severityTokens.healthy.bg,
+        color: severityTokens.healthy.text,
+      });
 
-      // FAILED status should have red badge
-      const failedBadge = screen.getByText('FAILED');
-      expect(failedBadge).toHaveClass('bg-red-100');
-      expect(failedBadge).toHaveClass('text-red-800');
+      // FAILED status should have the critical pill treatment
+      expect(screen.getByText('FAILED')).toHaveStyle({
+        background: severityTokens.critical.bg,
+        color: severityTokens.critical.text,
+      });
 
-      // IN_PROGRESS status should have blue badge
-      const inProgressBadge = screen.getByText('IN_PROGRESS');
-      expect(inProgressBadge).toHaveClass('bg-blue-100');
-      expect(inProgressBadge).toHaveClass('text-blue-800');
+      // IN_PROGRESS status should have the info pill treatment
+      expect(screen.getByText('IN_PROGRESS')).toHaveStyle({
+        background: monitoringTokens.blue50,
+        color: monitoringTokens.primary,
+      });
 
-      // COMPLETED_WITH_WARNINGS status should have yellow badge
-      const warningsBadge = screen.getByText('Completed (Warnings)');
-      expect(warningsBadge).toHaveClass('bg-yellow-100');
-      expect(warningsBadge).toHaveClass('text-yellow-800');
+      // COMPLETED_WITH_WARNINGS status should have the warning pill treatment
+      expect(screen.getByText('Completed (Warnings)')).toHaveStyle({
+        background: severityTokens.elevated.bg,
+        color: severityTokens.elevated.text,
+      });
     });
   });
 
@@ -477,8 +493,8 @@ describe('BatchListView', () => {
         />
       );
 
-      // Batch items should have hover:bg-gray-50 class
-      const batchItem = container.querySelector('.hover\\:bg-gray-50');
+      // Batch items should have the monitoring hover class
+      const batchItem = container.querySelector('.hover\\:bg-surface-hover');
       expect(batchItem).toBeInTheDocument();
     });
   });
@@ -513,7 +529,7 @@ describe('BatchListView', () => {
       const button = screen.getByRole('button');
       expect(button).toBeDisabled();
       expect(button).toHaveClass('disabled:opacity-50');
-      expect(button).toHaveClass('disabled:cursor-not-allowed');
+      expect(button).toHaveClass('disabled:pointer-events-none');
     });
   });
 
