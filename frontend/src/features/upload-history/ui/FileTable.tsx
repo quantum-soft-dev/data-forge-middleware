@@ -138,8 +138,8 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
   // Empty state
   if (files.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-        <p className="text-gray-600">No files in this batch.</p>
+      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <p className="text-ink-secondary">No files in this batch.</p>
       </div>
     );
   }
@@ -148,21 +148,21 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
     <div className="space-y-3">
       {/* Search input */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-ink-muted" strokeWidth={1.5} />
         <input
           type="text"
           placeholder="Filter by filename..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="h-9 w-full rounded-lg border border-input bg-background pl-10 pr-4 text-sm placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-ring"
         />
       </div>
 
       {/* Table with scrolling */}
-      <div className="overflow-hidden rounded-lg border border-gray-200">
+      <div className="overflow-hidden rounded-lg bg-white shadow-card">
         <div className="max-h-[400px] overflow-y-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50 sticky top-0 z-10">
+          <table className="min-w-full divide-y divide-separator">
+            <thead className="sticky top-0 z-10 bg-white">
               <tr>
                 <th scope="col" className="w-10 px-3 py-2">
                   <Checkbox
@@ -174,7 +174,7 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                 </th>
                 <th
                   scope="col"
-                  className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 cursor-pointer hover:bg-gray-100"
+                  className="px-3 py-2 text-left text-xs font-medium text-ink-secondary cursor-pointer hover:bg-surface-subtle"
                   onClick={() => toggleSort('name')}
                 >
                   Filename
@@ -182,7 +182,7 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                 </th>
                 <th
                   scope="col"
-                  className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 cursor-pointer hover:bg-gray-100"
+                  className="px-3 py-2 text-left text-xs font-medium text-ink-secondary cursor-pointer hover:bg-surface-subtle"
                   onClick={() => toggleSort('size')}
                 >
                   Size
@@ -190,7 +190,7 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                 </th>
                 <th
                   scope="col"
-                  className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500 cursor-pointer hover:bg-gray-100"
+                  className="px-3 py-2 text-left text-xs font-medium text-ink-secondary cursor-pointer hover:bg-surface-subtle"
                   onClick={() => toggleSort('date')}
                 >
                   Uploaded
@@ -198,10 +198,10 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-separator bg-white">
               {filteredAndSortedFiles.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-3 py-8 text-center text-sm text-gray-500">
+                  <td colSpan={4} className="px-3 py-8 text-center text-sm text-ink-muted">
                     No files match your search
                   </td>
                 </tr>
@@ -209,8 +209,8 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                 filteredAndSortedFiles.map((file) => (
                   <tr
                     key={file.id}
-                    className={`hover:bg-gray-50 transition-colors ${
-                      selectedFileIds.has(file.id) ? 'bg-blue-50' : ''
+                    className={`hover:bg-surface-hover transition-colors ${
+                      selectedFileIds.has(file.id) ? 'bg-brand-50' : ''
                     }`}
                   >
                     <td className="w-10 px-3 py-2">
@@ -220,13 +220,13 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                         aria-label={`Select ${file.originalFileName}`}
                       />
                     </td>
-                    <td className="px-3 py-2 text-sm font-medium text-gray-900">
+                    <td className="px-3 py-2 text-sm font-medium text-ink">
                       {file.originalFileName}
                     </td>
-                    <td className="px-3 py-2 text-sm text-gray-500">
+                    <td className="px-3 py-2 text-sm text-ink-secondary tabular-nums">
                       {formatBytes(file.fileSize)}
                     </td>
-                    <td className="px-3 py-2 text-sm text-gray-500">
+                    <td className="px-3 py-2 text-sm text-ink-secondary tabular-nums">
                       {formatDateTime(file.uploadedAt)}
                     </td>
                   </tr>
@@ -239,7 +239,7 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
 
       {/* Selection summary */}
       {selectedFileIds.size > 0 && (
-        <div className="border-t border-gray-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+        <div className="rounded-lg bg-brand-50 px-4 py-2 text-sm font-medium text-brand tabular-nums">
           {selectedFileIds.size} file{selectedFileIds.size !== 1 ? 's' : ''} selected
         </div>
       )}
