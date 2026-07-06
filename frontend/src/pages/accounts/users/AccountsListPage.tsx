@@ -81,21 +81,21 @@ export default function AccountsListPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {/* Page header */}
         <div className="mb-8 flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
-            <p className="mt-2 text-sm text-gray-600">
+            <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">User Management</h1>
+            <p className="mt-2 text-sm text-ink-secondary">
               Manage users with Auth0 authentication integration
             </p>
           </div>
           <button
             onClick={() => navigate({ to: '/admin/users/create' })}
-            className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
           >
             <Plus className="h-4 w-4" />
             Create Account
@@ -110,12 +110,12 @@ export default function AccountsListPage() {
             </div>
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-secondary"
             >
               <Filter className="h-4 w-4" />
               Filters
               {(filterActive !== 'all' || filterAuth0 !== 'all') && (
-                <span className="ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white">
+                <span className="ml-1 rounded-full bg-brand px-2 py-0.5 text-xs text-white">
                   Active
                 </span>
               )}
@@ -124,12 +124,12 @@ export default function AccountsListPage() {
 
           {/* Filter Panel */}
           {showFilters && (
-            <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-              <h3 className="mb-3 text-sm font-medium text-gray-900">Filter Options</h3>
+            <div className="rounded-lg bg-white p-4 shadow-card">
+              <h3 className="mb-3 text-sm font-medium text-ink">Filter Options</h3>
               <div className="grid gap-4 sm:grid-cols-2">
                 {/* Active Status Filter */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                  <label className="block text-xs font-medium text-ink-secondary mb-1">
                     Account Status
                   </label>
                   <select
@@ -139,7 +139,7 @@ export default function AccountsListPage() {
                         e.target.value === 'all' ? 'all' : e.target.value === 'true'
                       )
                     }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="all">All</option>
                     <option value="true">Active</option>
@@ -149,7 +149,7 @@ export default function AccountsListPage() {
 
                 {/* Auth0 Integration Filter */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                  <label className="block text-xs font-medium text-ink-secondary mb-1">
                     Auth0 Integration
                   </label>
                   <select
@@ -159,7 +159,7 @@ export default function AccountsListPage() {
                         e.target.value === 'all' ? 'all' : e.target.value === 'true'
                       )
                     }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="all">All</option>
                     <option value="true">Has Auth0</option>
@@ -175,7 +175,7 @@ export default function AccountsListPage() {
                     setFilterActive('all')
                     setFilterAuth0('all')
                   }}
-                  className="mt-3 text-sm text-blue-600 hover:text-blue-700"
+                  className="mt-3 text-sm font-medium text-brand hover:text-brand-hover"
                 >
                   Clear all filters
                 </button>
@@ -186,8 +186,8 @@ export default function AccountsListPage() {
 
         {/* Error state */}
         {isError && (
-          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-medium text-red-800">
+          <div className="mb-6 rounded-lg border border-danger-border bg-danger-bg p-4">
+            <p className="text-sm font-medium text-danger-text">
               {error instanceof Error ? error.message : 'Failed to load users'}
             </p>
           </div>
