@@ -54,6 +54,10 @@ export default {
           border: 'rgba(239,68,68,0.35)',
           bg: '#FEF2F2',
         },
+        warn: {
+          solid: '#F59E0B',
+          'solid-hover': '#D97706',
+        },
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',

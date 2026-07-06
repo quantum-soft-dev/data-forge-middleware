@@ -24,7 +24,8 @@ import {
   AlertDialogTitle,
 } from '@/shared/ui/ui/alert-dialog';
 import { Card, CardContent } from '@/shared/ui/ui/card';
-import { CheckCircle2, XCircle, Trash2, Power, PowerOff } from 'lucide-react';
+import { Input } from '@/shared/ui/ui/input';
+import { Trash2, Power, PowerOff } from 'lucide-react';
 import type { Site } from '@/entities/site';
 import { format } from 'date-fns';
 
@@ -99,35 +100,18 @@ export function SiteListItem({
               aria-label={onOpen ? `Open ${site.siteName}` : undefined}
             >
               <div className="flex items-center gap-2 mb-1">
-                <h3 className="font-semibold text-lg truncate">{site.siteName}</h3>
-                <Badge variant={site.isActive ? 'default' : 'secondary'}>
-                  {site.isActive ? (
-                    <>
-                      <CheckCircle2 className="mr-1 h-3 w-3" />
-                      Active
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="mr-1 h-3 w-3" />
-                      Inactive
-                    </>
-                  )}
+                <h3 className="truncate text-[15px] font-medium tracking-[-0.24px] text-ink">
+                  {site.siteName}
+                </h3>
+                <Badge variant={site.isActive ? 'success' : 'neutral'} dot>
+                  {site.isActive ? 'Active' : 'Inactive'}
                 </Badge>
-                <Badge
-                  variant={site.siteType === 'POSTGRES_CDC' ? 'outline' : 'secondary'}
-                  className={site.siteType === 'POSTGRES_CDC' ? 'border-blue-400 text-blue-600' : ''}
-                >
+                <Badge variant="neutral">
                   {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' : 'DBF'}
                 </Badge>
-                {site.clientApiVersion === 'V2' ? (
-                  <Badge className="border-transparent bg-[#EBF2FB] text-[#3C82D8] hover:bg-[#E0ECFA]">
-                    Delta v2
-                  </Badge>
-                ) : (
-                  <Badge className="border-transparent bg-[#F5F5F4] text-[#736F6D] hover:bg-[#EFEFEF]">
-                    v1
-                  </Badge>
-                )}
+                <Badge variant={site.clientApiVersion === 'V2' ? 'info' : 'neutral'}>
+                  {site.clientApiVersion === 'V2' ? 'Delta v2' : 'v1'}
+                </Badge>
               </div>
               <p className="text-sm text-muted-foreground truncate">{site.name}</p>
               <p className="text-xs text-muted-foreground mt-1">
@@ -136,11 +120,11 @@ export function SiteListItem({
               {showRetentionControls && (
                 <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                   <span>Retention (days):</span>
-                  <input
+                  <Input
                     type="number"
                     min={1}
                     max={3650}
-                    className="h-7 w-20 rounded border border-gray-200 px-2 text-xs text-gray-900"
+                    className="h-7 w-20 px-2 text-xs"
                     value={retentionInput}
                     onChange={(event) => setRetentionInput(event.target.value)}
                     disabled={isLoading}
@@ -194,7 +178,7 @@ export function SiteListItem({
 
               {/* Delete button */}
               <Button
-                variant="destructive"
+                variant="destructive-outline"
                 size="sm"
                 onClick={() => setShowDeleteDialog(true)}
                 disabled={isLoading}
@@ -222,7 +206,7 @@ export function SiteListItem({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeactivateConfirm} className="bg-orange-500 hover:bg-orange-600">
+            <AlertDialogAction onClick={handleDeactivateConfirm} className="bg-warn-solid hover:bg-warn-solid-hover">
               Deactivate Site
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -235,7 +219,7 @@ export function SiteListItem({
           <AlertDialogHeader>
             <AlertDialogTitle>Permanently Delete Site</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
-              <p className="font-semibold text-destructive">
+              <p className="font-medium text-danger-text">
                 ⚠️ WARNING: This action cannot be undone!
               </p>
               <p>
@@ -258,7 +242,7 @@ export function SiteListItem({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+            <AlertDialogAction onClick={handleDelete} className="bg-danger-solid hover:bg-danger-solid-hover">
               Yes, Permanently Delete
             </AlertDialogAction>
           </AlertDialogFooter>
