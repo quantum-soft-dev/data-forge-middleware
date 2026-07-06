@@ -12,6 +12,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BatchDetailView } from './BatchDetailView';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import type { BatchDetail } from '@/entities/batch/model/types';
 
 describe('BatchDetailView', () => {
@@ -237,7 +238,7 @@ describe('BatchDetailView', () => {
       // Check for XCircle icon (error indicator) based on FAILED status
       const errorIcon = document.querySelector('.lucide-circle-x');
       expect(errorIcon).toBeInTheDocument();
-      expect(errorIcon).toHaveClass('text-red-500');
+      expect(errorIcon).toHaveStyle({ color: severityTokens.critical.dot });
     });
 
     it('should display success indicator for COMPLETED_WITH_WARNINGS status', () => {
@@ -255,7 +256,7 @@ describe('BatchDetailView', () => {
       // lucide-react uses class like 'lucide-circle-check-big' for CheckCircle
       const successIcon = document.querySelector('[class*="lucide-circle-check"]');
       expect(successIcon).toBeInTheDocument();
-      expect(successIcon).toHaveClass('text-green-500');
+      expect(successIcon).toHaveStyle({ color: severityTokens.healthy.dot });
     });
 
     it('should display loading indicator for IN_PROGRESS status', () => {
@@ -273,7 +274,7 @@ describe('BatchDetailView', () => {
       // lucide-react uses class like 'lucide-loader-2' or 'lucide-loader'
       const loadingIcon = document.querySelector('[class*="lucide-loader"]');
       expect(loadingIcon).toBeInTheDocument();
-      expect(loadingIcon).toHaveClass('text-blue-500', 'animate-spin');
+      expect(loadingIcon).toHaveClass('text-brand', 'animate-spin');
     });
   });
 
@@ -393,7 +394,7 @@ describe('BatchDetailView', () => {
       );
 
       const statusBadge = screen.getByText('COMPLETED');
-      expect(statusBadge).toHaveClass('bg-green-100', 'text-green-800');
+      expect(statusBadge).toHaveStyle({ background: severityTokens.healthy.bg, color: severityTokens.healthy.text });
     });
 
     it('should display blue badge for IN_PROGRESS status', () => {
@@ -408,7 +409,7 @@ describe('BatchDetailView', () => {
       );
 
       const statusBadge = screen.getByText('IN_PROGRESS');
-      expect(statusBadge).toHaveClass('bg-blue-100', 'text-blue-800');
+      expect(statusBadge).toHaveStyle({ background: monitoringTokens.blue50, color: monitoringTokens.primary });
     });
 
     it('should display red badge for FAILED status', () => {
@@ -423,7 +424,7 @@ describe('BatchDetailView', () => {
       );
 
       const statusBadge = screen.getByText('FAILED');
-      expect(statusBadge).toHaveClass('bg-red-100', 'text-red-800');
+      expect(statusBadge).toHaveStyle({ background: severityTokens.critical.bg, color: severityTokens.critical.text });
     });
   });
 

@@ -9,6 +9,8 @@
 
 import { useState, useCallback } from 'react';
 import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Badge } from '@/shared/ui/ui/badge';
+import { severityTokens } from '@/shared/ui/tokens';
 import type { BatchDetail } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
 import { FileTable } from './FileTable';
@@ -73,8 +75,8 @@ export function BatchDetailView({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-        <span className="ml-2 text-gray-600">Loading batch details...</span>
+        <Loader2 className="h-8 w-8 animate-spin text-ink-muted" />
+        <span className="ml-2 text-ink-secondary">Loading batch details...</span>
       </div>
     );
   }
@@ -86,14 +88,14 @@ export function BatchDetailView({
         {onBack && (
           <button
             onClick={onBack}
-            className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+            className="inline-flex items-center text-sm text-ink-secondary hover:text-ink"
           >
             <ArrowLeft className="mr-1 h-4 w-4" />
             Back to list
           </button>
         )}
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="text-sm text-red-800">{error}</p>
+        <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
+          <p className="text-sm text-danger-text">{error}</p>
         </div>
       </div>
     );
@@ -102,8 +104,8 @@ export function BatchDetailView({
   // No data state
   if (!batch) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-        <p className="text-gray-600">Batch not found.</p>
+      <div className="rounded-lg bg-white p-8 text-center shadow-card">
+        <p className="text-ink-secondary">Batch not found.</p>
       </div>
     );
   }
@@ -120,7 +122,7 @@ export function BatchDetailView({
         {onBack && (
           <button
             onClick={onBack}
-            className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors"
+            className="inline-flex items-center text-sm text-ink-secondary hover:text-ink transition-colors"
           >
             <ArrowLeft className="mr-1 h-4 w-4" />
             Back to list
@@ -130,14 +132,14 @@ export function BatchDetailView({
         {isDeltaBatch ? (
           <DeltaBatchDetail batch={batch} siteName={siteName} />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-            <p className="text-gray-600">No changes in this session</p>
+          <div className="rounded-lg bg-white p-8 text-center shadow-card">
+            <p className="text-ink-secondary">No changes in this session</p>
           </div>
         )}
 
         {batch.hasErrors && (
           <div>
-            <h3 className="mb-4 text-lg font-medium text-gray-900">Batch Errors</h3>
+            <h3 className="mb-4 text-[15px] font-medium tracking-[-0.24px] text-ink-title">Batch Errors</h3>
             <ErrorListView
               batchId={batch.id}
               errors={errors}
@@ -160,7 +162,7 @@ export function BatchDetailView({
       {onBack && (
         <button
           onClick={onBack}
-          className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          className="inline-flex items-center text-sm text-ink-secondary hover:text-ink transition-colors"
         >
           <ArrowLeft className="mr-1 h-4 w-4" />
           Back to list
@@ -168,80 +170,82 @@ export function BatchDetailView({
       )}
 
       {/* Batch metadata card */}
-      <div className="rounded-lg border border-gray-200 bg-white p-6">
+      <div className="rounded-lg bg-white p-6 shadow-card">
         <div className="flex items-start justify-between">
           {/* Status and basic info */}
           <div className="flex items-center space-x-4">
             {/* Icon based on batch status, not hasErrors */}
             {batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS' ? (
-              <CheckCircle className="h-8 w-8 text-green-500 flex-shrink-0" />
+              <CheckCircle className="h-8 w-8 flex-shrink-0" style={{ color: severityTokens.healthy.dot }} strokeWidth={1.5} />
             ) : batch.status === 'IN_PROGRESS' ? (
-              <Loader2 className="h-8 w-8 text-blue-500 animate-spin flex-shrink-0" />
+              <Loader2 className="h-8 w-8 animate-spin flex-shrink-0 text-brand" strokeWidth={1.5} />
             ) : (
-              <XCircle className="h-8 w-8 text-red-500 flex-shrink-0" />
+              <XCircle className="h-8 w-8 flex-shrink-0" style={{ color: severityTokens.critical.dot }} strokeWidth={1.5} />
             )}
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">
+              <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
                 Upload Session
               </h2>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-ink-muted">
                 Batch ID: {batch.id}
               </p>
             </div>
           </div>
 
           {/* Status badge */}
-          <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${
+          <Badge
+            variant={
               batch.status === 'COMPLETED'
-                ? 'bg-green-100 text-green-800'
+                ? 'success'
                 : batch.status === 'COMPLETED_WITH_WARNINGS'
-                ? 'bg-yellow-100 text-yellow-800'
+                ? 'warning'
                 : batch.status === 'IN_PROGRESS'
-                ? 'bg-blue-100 text-blue-800'
-                : 'bg-red-100 text-red-800'
-            }`}
+                ? 'info'
+                : 'critical'
+            }
+            dot
+            className="px-3 py-1 text-sm"
           >
             {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : batch.status}
-          </span>
+          </Badge>
         </div>
 
         {/* Metadata grid */}
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {/* Site name */}
           <div>
-            <dt className="text-sm font-medium text-gray-500">Site</dt>
-            <dd className="mt-1 text-sm text-gray-900">
+            <dt className="text-sm font-medium text-ink-secondary">Site</dt>
+            <dd className="mt-1 text-sm text-ink tabular-nums">
               {siteName || 'Unknown site'}
             </dd>
           </div>
 
           <div>
-            <dt className="text-sm font-medium text-gray-500">Started At</dt>
-            <dd className="mt-1 text-sm text-gray-900">
+            <dt className="text-sm font-medium text-ink-secondary">Started At</dt>
+            <dd className="mt-1 text-sm text-ink tabular-nums">
               {formatDateTime(batch.startedAt)}
             </dd>
           </div>
 
           {batch.completedAt && (
             <div>
-              <dt className="text-sm font-medium text-gray-500">Completed At</dt>
-              <dd className="mt-1 text-sm text-gray-900">
+              <dt className="text-sm font-medium text-ink-secondary">Completed At</dt>
+              <dd className="mt-1 text-sm text-ink tabular-nums">
                 {formatDateTime(batch.completedAt)}
               </dd>
             </div>
           )}
 
           <div>
-            <dt className="text-sm font-medium text-gray-500">Files</dt>
-            <dd className="mt-1 text-sm text-gray-900">
+            <dt className="text-sm font-medium text-ink-secondary">Files</dt>
+            <dd className="mt-1 text-sm text-ink tabular-nums">
               {batch.uploadedFilesCount} file{batch.uploadedFilesCount !== 1 ? 's' : ''}
             </dd>
           </div>
 
           <div>
-            <dt className="text-sm font-medium text-gray-500">Total Size</dt>
-            <dd className="mt-1 text-sm text-gray-900">
+            <dt className="text-sm font-medium text-ink-secondary">Total Size</dt>
+            <dd className="mt-1 text-sm text-ink tabular-nums">
               {formatBytes(batch.totalSize)}
             </dd>
           </div>
@@ -251,7 +255,7 @@ export function BatchDetailView({
       {/* Files section (v1 file-based batches) */}
       <div>
         <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-lg font-medium text-gray-900">
+            <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">
               Files ({batch.files.length})
             </h3>
 
@@ -292,7 +296,7 @@ export function BatchDetailView({
       {/* T107: Conditionally show Errors or Comparison History (Added 2025-11-10) */}
       {batch.hasErrors ? (
         <div>
-          <h3 className="mb-4 text-lg font-medium text-gray-900">
+          <h3 className="mb-4 text-[15px] font-medium tracking-[-0.24px] text-ink-title">
             Batch Errors
           </h3>
           <ErrorListView
