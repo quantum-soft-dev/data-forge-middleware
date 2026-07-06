@@ -80,8 +80,8 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
   if (syncStateQuery.isLoading) {
     return (
       <div className="space-y-4" data-testid="delta-sync-loading">
-        <div className="h-56 animate-pulse rounded-2xl bg-gray-100" />
-        <div className="h-40 animate-pulse rounded-[10px] bg-gray-100" />
+        <div className="h-56 animate-pulse rounded-2xl bg-surface-subtle" />
+        <div className="h-40 animate-pulse rounded-[10px] bg-surface-subtle" />
       </div>
     );
   }

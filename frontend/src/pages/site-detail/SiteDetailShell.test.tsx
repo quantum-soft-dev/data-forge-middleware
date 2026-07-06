@@ -78,7 +78,7 @@ describe('SiteDetailShell (F3)', () => {
 
     const active = screen.getByRole('tab', { name: 'Upload history' })
     expect(active).toHaveAttribute('aria-selected', 'true')
-    expect(active.className).toContain('data-[state=active]:border-[#3C82D8]')
-    expect(active.className).toContain('data-[state=active]:text-[#3C82D8]')
+    expect(active.className).toContain('data-[state=active]:border-brand')
+    expect(active.className).toContain('data-[state=active]:text-brand')
   })
 })

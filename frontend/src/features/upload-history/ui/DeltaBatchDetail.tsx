@@ -38,7 +38,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
   return (
     <div className="space-y-4" data-testid="delta-batch-detail">
       {/* Meta card */}
-      <div className="rounded-[10px] border border-gray-200 bg-white p-5">
+      <div className="rounded-[10px] bg-white p-5 shadow-card">
         <div className="flex flex-wrap items-center gap-3">
           <div
             className="flex h-10 w-10 items-center justify-center rounded-full"
@@ -58,7 +58,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
               <XCircle className="h-5 w-5 text-red-500" strokeWidth={1.5} />
             )}
           </div>
-          <h2 className="text-[17px] font-medium text-gray-900">
+          <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
             Batch #{batch.id.slice(0, 8)}
           </h2>
           <span
@@ -72,11 +72,11 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
           >
             {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : titleCase(batch.status)}
           </span>
-          <span className="rounded-full bg-[#EBF2FB] px-2.5 py-0.5 text-xs font-medium text-[#3C82D8]">
+          <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand">
             Delta session
           </span>
           {batch.mode && (
-            <span className="rounded-full bg-[#F5F5F4] px-2.5 py-0.5 text-xs font-medium text-[#736F6D]">
+            <span className="rounded-full bg-surface-subtle px-2.5 py-0.5 text-xs font-medium text-ink-secondary">
               {batch.mode}
             </span>
           )}
@@ -96,16 +96,16 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
       </div>
 
       {/* Table changes card */}
-      <div className="rounded-[10px] border border-gray-200 bg-white p-5">
-        <h3 className="text-[15px] font-medium text-gray-900">Table changes</h3>
-        <p className="mt-0.5 text-xs text-gray-500">
+      <div className="rounded-[10px] bg-white p-5 shadow-card">
+        <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">Table changes</h3>
+        <p className="mt-0.5 text-xs text-ink-secondary">
           Delta sessions carry no files — changes are applied directly to each table.
         </p>
 
         <div className="mt-3 overflow-x-auto">
           <div className="min-w-[560px]">
             <div
-              className="grid px-2 py-1.5 text-xs font-medium text-gray-500"
+              className="grid px-2 py-1.5 text-xs font-medium text-ink-secondary"
               style={{ gridTemplateColumns: GRID }}
             >
               <span>Table</span>
@@ -117,11 +117,11 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
             {stats.map((stat) => (
               <div
                 key={stat.table}
-                className="grid items-center border-t border-gray-100 px-2 py-2 text-sm hover:bg-[#FAFAFA]"
+                className="grid items-center border-t border-separator px-2 py-2 text-sm hover:bg-surface-hover"
                 style={{ gridTemplateColumns: GRID, fontVariantNumeric: 'tabular-nums' }}
                 data-testid={`delta-stats-row-${stat.table}`}
               >
-                <span className="font-medium text-gray-900">{stat.table}</span>
+                <span className="font-medium text-ink">{stat.table}</span>
                 <span className="text-right text-[#16A34A]">
                   {stat.inserts > 0 ? `+${formatNumber(stat.inserts)}` : formatNumber(stat.inserts)}
                 </span>
@@ -129,14 +129,14 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                 <span className="text-right text-[#EF4444]">
                   {stat.deletes > 0 ? `${MINUS}${formatNumber(stat.deletes)}` : formatNumber(stat.deletes)}
                 </span>
-                <span className="text-right font-medium text-gray-900">
+                <span className="text-right font-medium text-ink">
                   {formatNumber(stat.inserts + stat.updates + stat.deletes)}
                 </span>
               </div>
             ))}
             {/* Total row */}
             <div
-              className="grid items-center px-2 py-2 text-sm font-semibold text-gray-900"
+              className="grid items-center px-2 py-2 text-sm font-medium text-ink"
               style={{
                 gridTemplateColumns: GRID,
                 borderTop: '1px solid rgba(0,0,0,0.12)',
@@ -163,9 +163,9 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
 
 function MetaItem({ label, value }: { label: string; value: string }) {
   return (
-    <span className="text-gray-500">
+    <span className="text-ink-secondary">
       {label}{' '}
-      <span className="font-medium text-gray-900" style={{ fontVariantNumeric: 'tabular-nums' }}>
+      <span className="font-medium text-ink" style={{ fontVariantNumeric: 'tabular-nums' }}>
         {value}
       </span>
     </span>

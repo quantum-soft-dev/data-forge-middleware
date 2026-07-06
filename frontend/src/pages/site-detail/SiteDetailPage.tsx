@@ -47,7 +47,7 @@ export function SiteDetailPage({ admin = false }: SiteDetailPageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-surface-hover">
       <Header />
       <main className="container mx-auto max-w-[1120px] px-6 py-6">
         {isLoading && (

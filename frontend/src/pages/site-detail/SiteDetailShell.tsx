@@ -11,6 +11,7 @@
  */
 
 import { ArrowLeft } from 'lucide-react';
+import { severityTokens } from '@/shared/ui/tokens';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 import { BatchListWidget } from '@/widgets/upload-history/BatchListWidget';
 import { DeltaSyncWidget } from '@/widgets/delta-sync/DeltaSyncWidget';
@@ -26,12 +27,6 @@ interface SiteDetailShellProps {
   onBack: () => void;
 }
 
-const TAB_TRIGGER_CLASSES =
-  'rounded-lg border border-transparent px-4 py-[7px] text-sm font-medium text-[#736F6D] ' +
-  'shadow-none transition-colors hover:bg-[#F5F5F4] ' +
-  'data-[state=active]:bg-[#f8f8f8] data-[state=active]:border-[#3C82D8] ' +
-  'data-[state=active]:text-[#3C82D8] data-[state=active]:shadow-none';
-
 export function SiteDetailShell({ site, canManage, admin = false, onBack }: SiteDetailShellProps) {
   const isV2 = site.clientApiVersion === 'V2';
 
@@ -41,7 +36,7 @@ export function SiteDetailShell({ site, canManage, admin = false, onBack }: Site
       <button
         type="button"
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-[13px] text-[#736F6D] hover:text-[#2B2827] transition-colors"
+        className="inline-flex items-center gap-1.5 text-[13px] text-ink-secondary hover:text-ink transition-colors"
       >
         <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.5} />
         All sites
@@ -52,33 +47,36 @@ export function SiteDetailShell({ site, canManage, admin = false, onBack }: Site
         <h1 className="text-[22px] font-medium leading-[1.1]" style={{ letterSpacing: '-0.33px' }}>
           {site.siteName}
         </h1>
-        <span className="inline-flex items-center rounded-full bg-[#F5F5F4] px-[9px] py-0.5 text-xs font-medium text-[#736F6D]">
+        <span className="inline-flex items-center rounded-full bg-surface-subtle px-[9px] py-0.5 text-xs font-medium text-ink-secondary">
           {site.siteType}
         </span>
         {isV2 ? (
-          <span className="inline-flex items-center rounded-full bg-[#EBF2FB] px-[9px] py-0.5 text-xs font-medium text-[#3C82D8]">
+          <span className="inline-flex items-center rounded-full bg-brand-50 px-[9px] py-0.5 text-xs font-medium text-brand">
             Delta v2
           </span>
         ) : (
-          <span className="inline-flex items-center rounded-full bg-[#F5F5F4] px-[9px] py-0.5 text-xs font-medium text-[#736F6D]">
+          <span className="inline-flex items-center rounded-full bg-surface-subtle px-[9px] py-0.5 text-xs font-medium text-ink-secondary">
             v1
           </span>
         )}
         {site.isActive ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full px-[9px] py-0.5 text-xs font-medium bg-[rgba(22,163,74,0.10)] text-[#16A34A]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#16A34A]" />
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full px-[9px] py-0.5 text-xs font-medium"
+            style={{ background: severityTokens.healthy.bg, color: severityTokens.healthy.dot }}
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: severityTokens.healthy.dot }} />
             Active
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1.5 rounded-full px-[9px] py-0.5 text-xs font-medium bg-[rgba(0,0,0,0.06)] text-[#736F6D]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#A3A3A3]" />
+          <span className="inline-flex items-center gap-1.5 rounded-full px-[9px] py-0.5 text-xs font-medium bg-separator text-ink-secondary">
+            <span className="h-1.5 w-1.5 rounded-full bg-ink-muted" />
             Inactive
           </span>
         )}
       </div>
 
       {/* Subline (prototype copy per API version) */}
-      <p className="mt-1.5 text-sm text-[#736F6D]">
+      <p className="mt-1.5 text-sm text-ink-secondary">
         {isV2
           ? 'Changelog stream over gRPC. Metrics refresh every 15 seconds.'
           : 'Full snapshot uploads over HTTP (v1).'}
@@ -87,11 +85,11 @@ export function SiteDetailShell({ site, canManage, admin = false, onBack }: Site
       {/* Tabs: Upload history (default) + Delta Sync (V2 only) */}
       <Tabs defaultValue="upload-history" className="mt-[18px]">
         <TabsList className="h-auto gap-1.5 bg-transparent p-0">
-          <TabsTrigger value="upload-history" className={TAB_TRIGGER_CLASSES}>
+          <TabsTrigger value="upload-history">
             Upload history
           </TabsTrigger>
           {isV2 && (
-            <TabsTrigger value="delta-sync" className={TAB_TRIGGER_CLASSES}>
+            <TabsTrigger value="delta-sync">
               Delta Sync
             </TabsTrigger>
           )}
