@@ -22,6 +22,21 @@ export default {
         sans: ['"Geist Sans"', 'Geist', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
       },
       colors: {
+        // Monitoring semantic utilities (024, T003) — values mirror shared/ui/tokens.ts
+        ink: {
+          DEFAULT: '#2B2827',
+          secondary: '#736F6D',
+          muted: '#A3A3A3',
+          title: '#403C3B',
+        },
+        brand: {
+          DEFAULT: '#3C82D8',
+          hover: '#3676C4',
+          50: '#EBF2FB',
+          100: '#E0ECFA',
+        },
+        hairline: 'rgba(0,0,0,0.12)',
+        separator: 'rgba(0,0,0,0.06)',
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
@@ -60,6 +75,12 @@ export default {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+      },
+      boxShadow: {
+        // Monitoring layered shadows (024, T003) — values mirror shared/ui/tokens.ts
+        card: '0 20px 87.5px rgba(0,0,0,0.02), 0 0 1.75px rgba(0,0,0,0.16)',
+        'card-inner': '0 1px 1.75px rgba(0,0,0,0.25), 0 0 0.5px rgba(0,0,0,0.04)',
+        'icon-circle': '0 5px 4.375px rgba(0,0,0,0.01), 0 5px 6.125px rgba(0,0,0,0.05)',
       },
       keyframes: {
         'accordion-down': {
