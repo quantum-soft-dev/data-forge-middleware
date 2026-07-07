@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DeltaBatchDetail } from './DeltaBatchDetail';
-import { severityTokens } from '@/shared/ui/tokens';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import type { BatchDetail } from '@/entities/batch/model/types';
 
 const presignBatchTableParquet = vi.fn();
@@ -12,8 +12,12 @@ vi.mock('@/features/delta-sync/api/deltaSyncApi', () => ({
 }));
 
 const toastError = vi.fn();
+const toastSuccess = vi.fn();
 vi.mock('sonner', () => ({
-  toast: { error: (...args: unknown[]) => toastError(...args) },
+  toast: {
+    error: (...args: unknown[]) => toastError(...args),
+    success: (...args: unknown[]) => toastSuccess(...args),
+  },
 }));
 
 function makeBatch(overrides: Partial<BatchDetail> = {}): BatchDetail {
@@ -38,30 +42,32 @@ function makeBatch(overrides: Partial<BatchDetail> = {}): BatchDetail {
   } as BatchDetail;
 }
 
+const statusPill = (label: string) =>
+  screen.getAllByText(label).find((el) => el.className.includes('rounded-full'))!;
+
 describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
   beforeEach(() => {
     presignBatchTableParquet.mockReset();
     toastError.mockReset();
-    vi.spyOn(window, 'open').mockImplementation(() => null);
+    toastSuccess.mockReset();
   });
 
   it('renders a Parquet download pill per table row for a completed session', () => {
     render(<DeltaBatchDetail batch={makeBatch()} />);
-    const pills = screen.getAllByRole('button', { name: 'Parquet' });
-    expect(pills).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Parquet' })).toHaveLength(2);
   });
 
-  it('presigns and opens the file when a pill is clicked', async () => {
+  it('presigns (owner scope by default) and starts a same-tab anchor download', async () => {
     presignBatchTableParquet.mockResolvedValue({
       downloadUrl: 'https://s3/egress/orders.parquet',
       fileName: 'orders_seq879446-879482.parquet',
       expiresAt: '2026-07-05T18:00:00Z',
     });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     const user = userEvent.setup();
     render(<DeltaBatchDetail batch={makeBatch()} />);
 
-    const row = screen.getByTestId('delta-stats-row-orders');
-    await user.click(row.querySelector('button')!);
+    await user.click(screen.getByTestId('delta-stats-row-orders').querySelector('button')!);
 
     expect(presignBatchTableParquet).toHaveBeenCalledWith(
       '139dc0a0-7743-4d6c-9823-d6925a4c9f74',
@@ -69,20 +75,74 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
       'orders',
       { admin: false },
     );
-    await waitFor(() =>
-      expect(window.open).toHaveBeenCalledWith('https://s3/egress/orders.parquet', '_blank', 'noopener'),
-    );
+    await waitFor(() => expect(anchorClick).toHaveBeenCalled());
+    expect(toastSuccess).toHaveBeenCalled();
+    anchorClick.mockRestore();
   });
 
-  it('shows an error toast when the file was never egressed (404)', async () => {
-    presignBatchTableParquet.mockRejectedValue({ response: { status: 404 } });
+  it('uses the admin scope when the admin prop is set', async () => {
+    presignBatchTableParquet.mockResolvedValue({
+      downloadUrl: 'https://s3/x.parquet',
+      fileName: 'x.parquet',
+      expiresAt: '2026-07-05T18:00:00Z',
+    });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<DeltaBatchDetail batch={makeBatch()} admin />);
+
+    await user.click(screen.getByTestId('delta-stats-row-orders').querySelector('button')!);
+
+    expect(presignBatchTableParquet).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'orders',
+      { admin: true },
+    );
+    anchorClick.mockRestore();
+  });
+
+  it('shows the schema explanation only for a 404', async () => {
+    presignBatchTableParquet.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 404 },
+    });
     const user = userEvent.setup();
     render(<DeltaBatchDetail batch={makeBatch()} />);
 
     await user.click(screen.getByTestId('delta-stats-row-items').querySelector('button')!);
 
     await waitFor(() => expect(toastError).toHaveBeenCalled());
-    expect(window.open).not.toHaveBeenCalled();
+    expect(String(toastError.mock.calls[0][0])).toMatch(/schema|egress/i);
+  });
+
+  it('shows a generic retry toast for non-404 failures (e.g. S3 outage → 503)', async () => {
+    presignBatchTableParquet.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 503 },
+    });
+    const user = userEvent.setup();
+    render(<DeltaBatchDetail batch={makeBatch()} />);
+
+    await user.click(screen.getByTestId('delta-stats-row-items').querySelector('button')!);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(String(toastError.mock.calls[0][0])).not.toMatch(/schema/i);
+  });
+
+  it('disables the pill while a presign request is in flight', async () => {
+    let resolve!: (v: unknown) => void;
+    presignBatchTableParquet.mockReturnValue(new Promise((r) => (resolve = r)));
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<DeltaBatchDetail batch={makeBatch()} />);
+
+    const button = screen.getByTestId('delta-stats-row-orders').querySelector('button')!;
+    await user.click(button);
+    expect(button).toBeDisabled();
+
+    resolve({ downloadUrl: 'u', fileName: 'f', expiresAt: 'e' });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    anchorClick.mockRestore();
   });
 
   it('renders no download pills while the session is in progress', () => {
@@ -90,14 +150,27 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
     expect(screen.queryByRole('button', { name: 'Parquet' })).not.toBeInTheDocument();
   });
 
-  it('renders the status pill with severity colors (regression: transparent pill)', () => {
+  it('renders the status pill via the shared mapping (Completed = healthy)', () => {
     render(<DeltaBatchDetail batch={makeBatch()} />);
-    const pill = screen
-      .getAllByText('Completed')
-      .find((el) => el.className.includes('rounded-full'))!;
-    expect(pill).toHaveStyle({
+    expect(statusPill('Completed')).toHaveStyle({
       background: severityTokens.healthy.bg,
       color: severityTokens.healthy.text,
+    });
+  });
+
+  it('renders COMPLETED_WITH_WARNINGS amber, consistent with the batch list', () => {
+    render(<DeltaBatchDetail batch={makeBatch({ status: 'COMPLETED_WITH_WARNINGS' })} />);
+    expect(statusPill('Completed (Warnings)')).toHaveStyle({
+      background: severityTokens.elevated.bg,
+      color: severityTokens.elevated.text,
+    });
+  });
+
+  it('renders IN_PROGRESS as an info pill', () => {
+    render(<DeltaBatchDetail batch={makeBatch({ status: 'IN_PROGRESS', completedAt: null })} />);
+    expect(statusPill('In progress')).toHaveStyle({
+      background: monitoringTokens.blue50,
+      color: monitoringTokens.primary,
     });
   });
 });

@@ -16,6 +16,7 @@ import {
   useRequestRebaseline,
 } from '@/features/delta-sync/api/queries';
 import { presignCheckpointDownload } from '@/features/delta-sync/api/deltaSyncApi';
+import { openPresignedDownload } from '@/features/delta-sync/lib/downloadPresigned';
 import type { DeltaCheckpointFormat } from '@/features/delta-sync/model/types';
 import { CheckpointsCard } from '@/features/delta-sync/ui/CheckpointsCard';
 import { RecentSegmentsCard } from '@/features/delta-sync/ui/RecentSegmentsCard';
@@ -64,15 +65,8 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
   };
 
   // Every click mints a fresh presigned URL (15-min TTL) — never cached (§9).
-  const handleDownload = async (tableName: string, format: DeltaCheckpointFormat) => {
-    try {
-      const download = await presignCheckpointDownload(siteId, tableName, format, { admin });
-      window.open(download.downloadUrl, '_blank', 'noopener');
-      toast.success('Download link generated · valid 15 minutes');
-    } catch {
-      toast.error('Something went wrong. Please try again.');
-    }
-  };
+  const handleDownload = (tableName: string, format: DeltaCheckpointFormat) =>
+    openPresignedDownload(() => presignCheckpointDownload(siteId, tableName, format, { admin }));
 
   const lag = syncStateQuery.data ? computeLag(syncStateQuery.data) : null;
   const lagSamples = useLagHistory(lag, syncStateQuery.dataUpdatedAt ?? 0);

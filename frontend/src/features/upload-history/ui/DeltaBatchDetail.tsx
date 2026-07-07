@@ -8,11 +8,13 @@
  * sort by table name). Delta sessions carry no files — the file UI never renders.
  */
 
+import { useState } from 'react';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
-import { toast } from 'sonner';
 import type { BatchDetail } from '@/entities/batch/model/types';
 import { presignBatchTableParquet } from '@/features/delta-sync/api/deltaSyncApi';
-import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
+import { openPresignedDownload } from '@/features/delta-sync/lib/downloadPresigned';
+import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
+import { Badge } from '@/shared/ui/ui/badge';
 import { formatDateTime, formatNumber } from '@/shared/lib/formatters';
 
 const GRID = '1.6fr 1fr 1fr 1fr 1fr 0.9fr';
@@ -21,9 +23,11 @@ const MINUS = '−';
 interface DeltaBatchDetailProps {
   batch: BatchDetail;
   siteName?: string;
+  /** Presign через админский маршрут (/api/v1/sites/…) вместо owner-маршрута. */
+  admin?: boolean;
 }
 
-export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
+export function DeltaBatchDetail({ batch, siteName, admin = false }: DeltaBatchDetailProps) {
   const stats = [...(batch.deltaStats ?? [])].sort((a, b) => a.table.localeCompare(b.table));
   const totals = stats.reduce(
     (acc, stat) => ({
@@ -38,16 +42,19 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
   const completed = batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS';
   const inProgress = batch.status === 'IN_PROGRESS';
 
+  const [downloadingTable, setDownloadingTable] = useState<string | null>(null);
+
   const handleParquetDownload = async (tableName: string) => {
+    setDownloadingTable(tableName);
     try {
-      const download = await presignBatchTableParquet(batch.siteId, batch.id, tableName, {
-        admin: false,
-      });
-      window.open(download.downloadUrl, '_blank', 'noopener');
-    } catch {
-      toast.error(
-        `No delta Parquet for "${tableName}" — the table has no declared schema or the file is not egressed yet.`,
+      await openPresignedDownload(
+        () => presignBatchTableParquet(batch.siteId, batch.id, tableName, { admin }),
+        {
+          notFoundMessage: `No delta Parquet for "${tableName}" — the table has no declared schema or the file is not egressed yet.`,
+        },
       );
+    } finally {
+      setDownloadingTable(null);
     }
   };
 
@@ -77,18 +84,9 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
           <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
             Batch #{batch.id.slice(0, 8)}
           </h2>
-          <span
-            className="rounded-full px-2.5 py-0.5 text-xs font-medium"
-            style={
-              completed
-                ? { background: severityTokens.healthy.bg, color: severityTokens.healthy.text }
-                : inProgress
-                  ? { background: monitoringTokens.blue50, color: monitoringTokens.primary }
-                  : { background: severityTokens.critical.bg, color: severityTokens.critical.text }
-            }
-          >
-            {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : titleCase(batch.status)}
-          </span>
+          <Badge variant={STATUS_VARIANT[batch.status] ?? 'neutral'} className="px-2.5 py-0.5">
+            {STATUS_LABELS[batch.status] ?? batch.status}
+          </Badge>
           <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand">
             Delta session
           </span>
@@ -155,7 +153,8 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                     <button
                       type="button"
                       onClick={() => handleParquetDownload(stat.table)}
-                      className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand transition-colors hover:bg-brand-100"
+                      disabled={downloadingTable !== null}
+                      className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand transition-colors hover:bg-brand-100 disabled:pointer-events-none disabled:opacity-50"
                       title={`Download the session's delta Parquet for ${stat.table}`}
                     >
                       Parquet
@@ -203,8 +202,4 @@ function MetaItem({ label, value }: { label: string; value: string }) {
       </span>
     </span>
   );
-}
-
-function titleCase(status: string): string {
-  return status.charAt(0) + status.slice(1).toLowerCase().replace(/_/g, ' ');
 }

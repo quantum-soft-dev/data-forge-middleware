@@ -11,6 +11,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Loader2, AlertCircle, Filter, RefreshCw } from 'lucide-react';
 import { Badge } from '@/shared/ui/ui/badge';
+import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
 import { Button } from '@/shared/ui/ui/button';
 import type { BatchSummary } from '@/entities/batch/model/types';
 import type { Site } from '@/entities/site/model/types';
@@ -45,20 +46,6 @@ interface BatchListViewProps {
 
 const FILTER_SELECT_CLASSES =
   'h-8 rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring';
-
-const STATUS_LABELS: Record<string, string> = {
-  COMPLETED: 'Completed',
-  COMPLETED_WITH_WARNINGS: 'Completed (Warnings)',
-  IN_PROGRESS: 'In progress',
-  FAILED: 'Failed',
-};
-
-const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'info' | 'critical'> = {
-  COMPLETED: 'success',
-  COMPLETED_WITH_WARNINGS: 'warning',
-  IN_PROGRESS: 'info',
-  FAILED: 'critical',
-};
 
 /**
  * T037: Batch list view with infinite scroll and status indicators
