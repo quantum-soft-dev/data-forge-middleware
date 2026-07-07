@@ -7,7 +7,6 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -50,7 +49,9 @@ public class DeltaSegmentParquetQueryService {
      * @return presigned download, or empty when the batch has no segment or the file was never
      *         egressed (e.g. the table has no declared schema)
      */
-    @Transactional(readOnly = true)
+    // No @Transactional: the only DB read (findByBatchId) runs in the repository's own
+    // transaction and is materialized before the S3 HEAD/presign round-trips — holding a
+    // HikariCP connection across network calls would starve the pool under S3 latency.
     public Optional<PresignedDownload> presignBatchTableParquet(UUID siteId, UUID batchId, String tableName) {
         List<ChangelogSegment> segments = segmentRepository.findByBatchId(batchId).stream()
                 .filter(segment -> siteId.equals(segment.getSiteId()))

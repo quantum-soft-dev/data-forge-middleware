@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -308,6 +309,28 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle object-storage failures (503 Service Unavailable) — a presign/HEAD round-trip to S3
+     * failed; the request is retryable and must not surface as a generic 500 (feature 025).
+     */
+    @ExceptionHandler(CheckpointStorageException.class)
+    public ResponseEntity<ErrorResponseDto> handleCheckpointStorage(
+            CheckpointStorageException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Object storage failure: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Object storage is temporarily unavailable. Please try again.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
     }
 
     /**

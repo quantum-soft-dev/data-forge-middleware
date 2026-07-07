@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -219,7 +220,8 @@ public class S3CheckpointStorage {
             return true;
         } catch (NoSuchKeyException e) {
             return false;
-        } catch (S3Exception e) {
+        } catch (S3Exception | SdkClientException e) {
+            // network failures arrive as raw SdkClientException — wrap so callers see one type
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         }
     }
