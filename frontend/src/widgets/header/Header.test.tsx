@@ -25,7 +25,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 function asUser() {
   mockUseAuth.mockReturnValue({
-    user: { name: 'Boris' },
+    user: { name: 'Boris Pliss' },
     hasRole: () => false,
     isRolesLoading: false,
   });
@@ -33,38 +33,68 @@ function asUser() {
 
 function asAdmin() {
   mockUseAuth.mockReturnValue({
-    user: { name: 'Boris' },
+    user: { name: 'Boris Pliss' },
     hasRole: (r: string) => r === 'ROLE_ADMIN',
     isRolesLoading: false,
   });
 }
 
-describe('Header (monitoring shell, T013)', () => {
-  it('renders with a hairline bottom border and no legacy shadow', () => {
+describe('Header (floating monitoring shell per prototype, T013)', () => {
+  it('renders as a floating rounded card, not a full-width bar', () => {
     asUser();
     render(<Header />);
     const header = screen.getByRole('banner');
-    expect(header.className).toContain('border-separator');
-    expect(header.className).not.toContain('border-gray-200');
-    expect(header.className).not.toContain('shadow-sm');
+    // outer: centered 1120px container with top margin
+    expect(header.className).toContain('max-w-[1120px]');
+    expect(header.className).toContain('mx-auto');
+    expect(header.className).not.toContain('border-b');
+    // inner: white r10 card with the panel shadow (prototype: radius 10, shadow 0.02/0.16)
+    const card = header.firstElementChild as HTMLElement;
+    expect(card.className).toContain('rounded-[10px]');
+    expect(card.className).toContain('shadow-panel');
+    expect(card.className).toContain('bg-white');
   });
 
-  it('renders nav links in ink-secondary with brand active treatment', () => {
+  it('renders the logo title 17px/600 with tight tracking', () => {
+    asUser();
+    render(<Header />);
+    const title = screen.getByText('DataForge Middleware');
+    expect(title.className).toContain('text-[17px]');
+    expect(title.className).toContain('font-semibold');
+    expect(title.className).toContain('tracking-[-0.24px]');
+  });
+
+  it('renders nav links as hover pills (14px/400, ink-secondary)', () => {
     asUser();
     render(<Header />);
     const link = screen.getByRole('link', { name: 'Dashboard' });
+    expect(link.className).toContain('rounded-lg');
+    expect(link.className).toContain('px-3');
+    expect(link.className).toContain('text-sm');
     expect(link.className).toContain('text-ink-secondary');
+    expect(link.className).toContain('hover:bg-surface-subtle');
     expect(link.className).toContain('hover:text-ink');
-    expect(link.className).not.toContain('text-gray-700');
+    expect(link.className).not.toContain('font-medium');
   });
 
-  it('renders the Admin chip as an info alpha pill', () => {
+  it('renders the user avatar with initials on brand-50', () => {
+    asUser();
+    render(<Header />);
+    const avatar = screen.getByTitle('Boris Pliss');
+    expect(avatar.textContent).toBe('BP');
+    expect(avatar.className).toContain('rounded-full');
+    expect(avatar).toHaveStyle({
+      background: monitoringTokens.blue50,
+      color: monitoringTokens.primary,
+    });
+  });
+
+  it('renders the Admin chip as an info alpha pill for admins', () => {
     asAdmin();
     render(<Header />);
     const chip = screen.getByText('Admin');
     expect(chip.className).toContain('rounded-full');
     expect(chip).toHaveStyle({ background: monitoringTokens.blue50 });
-    expect(chip.className).not.toContain('bg-blue-100');
   });
 
   it('keeps role-based navigation behavior unchanged', () => {

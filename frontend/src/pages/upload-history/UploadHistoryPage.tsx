@@ -19,7 +19,7 @@ export default function UploadHistoryPage() {
     <div className="min-h-screen bg-white">
       <Header />
 
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto max-w-[1120px] px-6 py-6">
         <PageHeader
           title="Upload History"
           subtitle="View your upload sessions and their status"

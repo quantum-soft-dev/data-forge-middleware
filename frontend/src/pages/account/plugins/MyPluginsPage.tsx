@@ -21,7 +21,7 @@ export function MyPluginsPage() {
     <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="container mx-auto py-8 max-w-4xl px-4 sm:px-6 lg:px-8">
+      <main className="container mx-auto max-w-[1120px] px-6 py-6">
         <PageHeader
           title="My Plugins"
           subtitle="Manage your plugin integrations and activate new features"

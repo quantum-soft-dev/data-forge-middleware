@@ -22,7 +22,7 @@ export default function BatchDetailPage() {
     return (
       <div className="min-h-screen bg-white">
         <Header />
-        <div className="container mx-auto px-4 py-8">
+        <div className="container mx-auto max-w-[1120px] px-6 py-6">
           <div className="rounded-lg border border-red-200 bg-red-50 p-4">
             <p className="text-sm text-red-800">Batch ID is required.</p>
           </div>
@@ -35,7 +35,7 @@ export default function BatchDetailPage() {
     <div className="min-h-screen bg-white">
       <Header />
 
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto max-w-[1120px] px-6 py-6">
         <BatchDetailWidget
           batchId={batchId}
           onBack={() => navigate({ to: '/account/upload-history' })}

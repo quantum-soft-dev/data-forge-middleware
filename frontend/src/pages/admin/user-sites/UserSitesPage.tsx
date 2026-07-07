@@ -36,7 +36,7 @@ export default function UserSitesPage() {
     return (
       <div className="min-h-screen bg-white">
         <Header />
-        <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <main className="mx-auto max-w-[1120px] px-6 py-6">
           <div className="flex items-center justify-center py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
             <span className="ml-3 text-sm text-ink-secondary">Loading user sites...</span>
@@ -50,7 +50,7 @@ export default function UserSitesPage() {
     return (
       <div className="min-h-screen bg-white">
         <Header />
-        <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+        <main className="mx-auto max-w-[1120px] px-6 py-6">
           <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
             <p className="text-sm font-medium text-danger-text">
               {error instanceof Error ? error.message : 'Failed to load user account'}
@@ -65,7 +65,7 @@ export default function UserSitesPage() {
     <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-[1120px] px-6 py-6">
         {/* Page header with back button */}
         <div className="mb-8">
           <button

@@ -205,7 +205,7 @@ export function ComparisonDetailPage(): React.ReactElement {
   // Loading state
   if (isLoadingComparison) {
     return (
-      <div className="container mx-auto py-8">
+      <div className="container mx-auto max-w-[1120px] px-6 py-6">
         <div className="space-y-4">
           <Skeleton className="h-10 w-64" />
           <Skeleton className="h-32 w-full" />
@@ -218,7 +218,7 @@ export function ComparisonDetailPage(): React.ReactElement {
   // Error state
   if (comparisonError || !comparison) {
     return (
-      <div className="container mx-auto py-8">
+      <div className="container mx-auto max-w-[1120px] px-6 py-6">
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -240,7 +240,7 @@ export function ComparisonDetailPage(): React.ReactElement {
 
   return (
     <DiffViewerProvider>
-      <div className="container mx-auto py-8 space-y-6">
+      <div className="container mx-auto max-w-[1120px] space-y-6 px-6 py-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">

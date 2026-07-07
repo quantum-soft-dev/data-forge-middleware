@@ -68,7 +68,7 @@ export default function AdminSettingsPage() {
     <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
+      <main className="mx-auto max-w-[1120px] space-y-6 px-6 py-6">
         <div>
           <h2 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Admin Settings</h2>
           <p className="text-sm text-ink-secondary mt-1">

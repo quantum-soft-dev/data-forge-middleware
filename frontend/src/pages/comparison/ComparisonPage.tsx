@@ -105,7 +105,7 @@ export function ComparisonPage() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto max-w-[1120px] px-6 py-6">
       <div className="mb-6">
         <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px]">Create File Comparison</h1>
         <p className="mt-2 text-ink-secondary">

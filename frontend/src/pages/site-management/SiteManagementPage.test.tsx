@@ -232,7 +232,7 @@ describe('SiteManagementPage', () => {
       const { container } = renderPage();
 
       const main = container.querySelector('main');
-      expect(main).toHaveClass('max-w-4xl');
+      expect(main).toHaveClass('max-w-[1120px]');
     });
   });
 

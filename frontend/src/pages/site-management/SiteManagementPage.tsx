@@ -23,7 +23,7 @@ export function SiteManagementPage() {
     <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="container mx-auto py-6 space-y-6 max-w-4xl px-4">
+      <main className="container mx-auto max-w-[1120px] space-y-6 px-6 py-6">
         <PageHeader
           title="Site Management"
           subtitle="Manage your sites and monitor their activity"
