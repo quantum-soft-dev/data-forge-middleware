@@ -64,7 +64,7 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
     expect(title.className).toContain('tracking-[-0.24px]');
   });
 
-  it('renders nav links as hover pills (14px/400, ink-secondary)', () => {
+  it('renders nav links as hover pills (14px/400) with aria-current active state', () => {
     asUser();
     render(<Header />);
     const link = screen.getByRole('link', { name: 'Dashboard' });
@@ -73,7 +73,8 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
     expect(link.className).toContain('text-sm');
     expect(link.className).toContain('text-ink-secondary');
     expect(link.className).toContain('hover:bg-surface-subtle');
-    expect(link.className).toContain('hover:text-ink');
+    expect(link.className).toContain('aria-[current=page]:bg-brand-50');
+    expect(link.className).toContain('aria-[current=page]:text-brand');
     expect(link.className).not.toContain('font-medium');
   });
 

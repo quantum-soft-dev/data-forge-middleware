@@ -18,11 +18,12 @@ import { useAuth } from '@/entities/user-session/api/useAuth'
 import { Badge } from '@/shared/ui/ui/badge'
 import { monitoringTokens } from '@/shared/ui/tokens'
 
+// Active state via aria-current (set by TanStack Router) — the attribute
+// selector outranks the base color utilities regardless of CSS order.
 const NAV_LINK_CLASSES =
-  'rounded-lg px-3 py-1.5 text-sm text-ink-secondary transition-colors hover:bg-surface-subtle hover:text-ink'
-const NAV_LINK_ACTIVE = {
-  className: 'rounded-lg bg-brand-50 px-3 py-1.5 text-sm text-brand transition-colors',
-}
+  'rounded-lg px-3 py-1.5 text-sm text-ink-secondary transition-colors ' +
+  'hover:bg-surface-subtle hover:text-ink ' +
+  'aria-[current=page]:bg-brand-50 aria-[current=page]:text-brand'
 
 /** "Boris Pliss" → "BP"; falls back to the first two characters. */
 function initialsOf(name: string): string {
@@ -55,13 +56,13 @@ export function Header() {
 
         {/* Navigation Menu */}
         <nav className="flex items-center gap-0.5">
-          <Link to="/dashboard" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
+          <Link to="/dashboard" className={NAV_LINK_CLASSES}>
             Dashboard
           </Link>
 
           {/* Site Management - only visible for regular users (not admins) */}
           {!isAdmin && (
-            <Link to="/account/sites" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
+            <Link to="/account/sites" className={NAV_LINK_CLASSES}>
               Site Management
             </Link>
           )}
@@ -71,7 +72,7 @@ export function Header() {
             <Link
               to="/account/upload-history"
               className={NAV_LINK_CLASSES}
-              activeProps={NAV_LINK_ACTIVE}
+             
             >
               Upload History
             </Link>
@@ -79,28 +80,28 @@ export function Header() {
 
           {/* Plugins - only visible for regular users (not admins) */}
           {!isAdmin && (
-            <Link to="/account/plugins" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
+            <Link to="/account/plugins" className={NAV_LINK_CLASSES}>
               Plugins
             </Link>
           )}
 
           {/* User Management - only visible for ADMIN role */}
           {isAdmin && (
-            <Link to="/admin/users" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
+            <Link to="/admin/users" className={NAV_LINK_CLASSES}>
               User Management
             </Link>
           )}
 
           {/* Plugins - only visible for ADMIN role */}
           {isAdmin && (
-            <Link to="/admin/plugins" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
+            <Link to="/admin/plugins" className={NAV_LINK_CLASSES}>
               Plugins
             </Link>
           )}
 
           {/* Settings - only visible for ADMIN role */}
           {isAdmin && (
-            <Link to="/admin/settings" className={NAV_LINK_CLASSES} activeProps={NAV_LINK_ACTIVE}>
+            <Link to="/admin/settings" className={NAV_LINK_CLASSES}>
               Settings
             </Link>
           )}
