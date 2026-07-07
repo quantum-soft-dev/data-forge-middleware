@@ -9,10 +9,13 @@
  */
 
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import type { BatchDetail } from '@/entities/batch/model/types';
+import { presignBatchTableParquet } from '@/features/delta-sync/api/deltaSyncApi';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import { formatDateTime, formatNumber } from '@/shared/lib/formatters';
 
-const GRID = '1.6fr 1fr 1fr 1fr 1fr';
+const GRID = '1.6fr 1fr 1fr 1fr 1fr 0.9fr';
 const MINUS = '−';
 
 interface DeltaBatchDetailProps {
@@ -34,6 +37,19 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
 
   const completed = batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS';
   const inProgress = batch.status === 'IN_PROGRESS';
+
+  const handleParquetDownload = async (tableName: string) => {
+    try {
+      const download = await presignBatchTableParquet(batch.siteId, batch.id, tableName, {
+        admin: false,
+      });
+      window.open(download.downloadUrl, '_blank', 'noopener');
+    } catch {
+      toast.error(
+        `No delta Parquet for "${tableName}" — the table has no declared schema or the file is not egressed yet.`,
+      );
+    }
+  };
 
   return (
     <div className="space-y-4" data-testid="delta-batch-detail">
@@ -62,13 +78,14 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
             Batch #{batch.id.slice(0, 8)}
           </h2>
           <span
-            className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+            className="rounded-full px-2.5 py-0.5 text-xs font-medium"
+            style={
               completed
-                ? 'bg-transparent'
+                ? { background: severityTokens.healthy.bg, color: severityTokens.healthy.text }
                 : inProgress
-                  ? 'bg-transparent'
-                  : 'bg-transparent'
-            }`}
+                  ? { background: monitoringTokens.blue50, color: monitoringTokens.primary }
+                  : { background: severityTokens.critical.bg, color: severityTokens.critical.text }
+            }
           >
             {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : titleCase(batch.status)}
           </span>
@@ -99,7 +116,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
       <div className="rounded-[10px] bg-white p-5 shadow-panel">
         <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink-title">Table changes</h3>
         <p className="mt-0.5 text-xs text-ink-secondary">
-          Delta sessions carry no files — changes are applied directly to each table.
+          Changes are applied directly to each table; download the session's typed delta Parquet per table.
         </p>
 
         <div className="mt-3 overflow-x-auto">
@@ -113,6 +130,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
               <span className="text-right">Updated</span>
               <span className="text-right">Deleted</span>
               <span className="text-right">Total</span>
+              <span className="text-right">File</span>
             </div>
             {stats.map((stat) => (
               <div
@@ -131,6 +149,20 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                 </span>
                 <span className="text-right font-medium text-ink">
                   {formatNumber(stat.inserts + stat.updates + stat.deletes)}
+                </span>
+                <span className="flex justify-end">
+                  {completed ? (
+                    <button
+                      type="button"
+                      onClick={() => handleParquetDownload(stat.table)}
+                      className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand transition-colors hover:bg-brand-100"
+                      title={`Download the session's delta Parquet for ${stat.table}`}
+                    >
+                      Parquet
+                    </button>
+                  ) : (
+                    <span className="text-xs text-ink-muted">—</span>
+                  )}
                 </span>
               </div>
             ))}
@@ -153,6 +185,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                 {totals.deletes > 0 ? `${MINUS}${formatNumber(totals.deletes)}` : formatNumber(totals.deletes)}
               </span>
               <span className="text-right">{formatNumber(grandTotal)}</span>
+              <span />
             </div>
           </div>
         </div>

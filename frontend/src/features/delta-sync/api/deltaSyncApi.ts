@@ -67,6 +67,19 @@ export async function presignCheckpointDownload(
   return deltaCheckpointDownloadSchema.parse(response.data);
 }
 
+/** Fresh presigned URL for one table's delta Parquet file of a batch (feature 025) — per click. */
+export async function presignBatchTableParquet(
+  siteId: string,
+  batchId: string,
+  tableName: string,
+  scope: DeltaApiScope,
+): Promise<DeltaCheckpointDownload> {
+  const response = await apiClient.get(
+    `${deltaBasePath(siteId, scope)}/batches/${batchId}/tables/${encodeURIComponent(tableName)}/parquet`,
+  );
+  return deltaCheckpointDownloadSchema.parse(response.data);
+}
+
 /** Recent changelog segments, newest first. Admin surface only (P2 pending). */
 export async function getDeltaSegments(siteId: string, limit = 20): Promise<DeltaSegment[]> {
   const response = await apiClient.get(`${deltaBasePath(siteId, { admin: true })}/segments`, {
