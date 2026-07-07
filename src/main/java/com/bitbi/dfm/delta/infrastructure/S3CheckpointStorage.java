@@ -96,8 +96,7 @@ public class S3CheckpointStorage {
      * @return the S3 key written
      */
     public String uploadDelta(UUID siteId, String tableName, long firstSeq, long lastSeq, byte[] content) {
-        String s3Key = String.format("egress/%s/%s/delta/seq=%019d-%019d.parquet",
-                siteId, tableName, firstSeq, lastSeq);
+        String s3Key = deltaKey(siteId, tableName, firstSeq, lastSeq);
         try {
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(bucketName)
@@ -111,6 +110,16 @@ public class S3CheckpointStorage {
         } catch (S3Exception e) {
             throw new CheckpointStorageException("Failed to store delta Parquet: " + s3Key, e);
         }
+    }
+
+    /** @return the delta Parquet key for one table's slice of a segment (feature 025). */
+    public static String deltaKey(UUID siteId, String tableName, long firstSeq, long lastSeq) {
+        return String.format("egress/%s/%s/delta/seq=%019d-%019d.parquet", siteId, tableName, firstSeq, lastSeq);
+    }
+
+    /** @return whether the delta Parquet file of one table's segment slice exists (feature 025). */
+    public boolean deltaExists(UUID siteId, String tableName, long firstSeq, long lastSeq) {
+        return exists(deltaKey(siteId, tableName, firstSeq, lastSeq));
     }
 
     /** @return the keys of all objects under a prefix (single page is sufficient for test/egress sizes). */

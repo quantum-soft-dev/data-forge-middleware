@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
+import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointRebuildService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
@@ -54,17 +55,20 @@ public class DeltaSyncAdminController {
     private final DeltaSyncStateService syncStateService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final DeltaCheckpointRebuildService checkpointRebuildService;
+    private final DeltaSegmentParquetQueryService segmentParquetQueryService;
     private final ChangelogSegmentService changelogSegmentService;
     private final SiteService siteService;
 
     public DeltaSyncAdminController(DeltaSyncStateService syncStateService,
                                     DeltaCheckpointQueryService checkpointQueryService,
                                     DeltaCheckpointRebuildService checkpointRebuildService,
+                                    DeltaSegmentParquetQueryService segmentParquetQueryService,
                                     ChangelogSegmentService changelogSegmentService,
                                     SiteService siteService) {
         this.syncStateService = syncStateService;
         this.checkpointQueryService = checkpointQueryService;
         this.checkpointRebuildService = checkpointRebuildService;
+        this.segmentParquetQueryService = segmentParquetQueryService;
         this.changelogSegmentService = changelogSegmentService;
         this.siteService = siteService;
     }
@@ -162,6 +166,43 @@ public class DeltaSyncAdminController {
                                                                                  @RequestParam String format) {
         siteService.getSite(siteId); // 404 when the site does not exist
         return checkpointQueryService.presignDownload(siteId, tableName, format)
+                .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+
+    /**
+     * Issue a fresh presigned download URL for one table's delta Parquet file of a batch
+     * (feature 025, admin).
+     * <p>
+     * GET /api/v1/sites/{siteId}/delta/batches/{batchId}/tables/{tableName}/parquet
+     * </p>
+     *
+     * @param siteId    site identifier
+     * @param batchId   batch (= Delta session) identifier
+     * @param tableName table whose delta file to download
+     * @return presigned download URL (15-minute expiry)
+     */
+    @GetMapping("/batches/{batchId}/tables/{tableName}/parquet")
+    @Operation(
+            summary = "Presign a batch delta Parquet download (admin)",
+            description = "Issues a fresh presigned S3 URL (15-minute expiry) for the typed delta Parquet file that "
+                    + "the egress worker materialized for one table of the batch's changelog segment. 404 when the "
+                    + "batch has no segment or the table's file was never egressed (no declared schema)."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Presigned URL issued",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = DeltaCheckpointDownloadResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site, segment or delta Parquet file not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<DeltaCheckpointDownloadResponseDto> downloadBatchParquet(@PathVariable UUID siteId,
+                                                                                   @PathVariable UUID batchId,
+                                                                                   @PathVariable String tableName) {
+        siteService.getSite(siteId); // 404 when the site does not exist
+        return segmentParquetQueryService.presignBatchTableParquet(siteId, batchId, tableName)
                 .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }

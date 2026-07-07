@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
+import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
@@ -54,15 +55,18 @@ public class DeltaSyncUserController {
 
     private final DeltaSyncStateService syncStateService;
     private final DeltaCheckpointQueryService checkpointQueryService;
+    private final DeltaSegmentParquetQueryService segmentParquetQueryService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
 
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
                                    DeltaCheckpointQueryService checkpointQueryService,
+                                   DeltaSegmentParquetQueryService segmentParquetQueryService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
         this.checkpointQueryService = checkpointQueryService;
+        this.segmentParquetQueryService = segmentParquetQueryService;
         this.siteService = siteService;
         this.authorizationHelper = authorizationHelper;
     }
@@ -193,6 +197,43 @@ public class DeltaSyncUserController {
         syncStateService.requestRebaseline(siteId);
         logger.info("Full re-baseline requested by owner: siteId={}", siteId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "requested"));
+    }
+
+
+    /**
+     * Issue a fresh presigned download URL for one table's delta Parquet file of a batch
+     * (feature 025).
+     * <p>
+     * GET /api/v1/account/sites/{siteId}/delta/batches/{batchId}/tables/{tableName}/parquet
+     * </p>
+     *
+     * @param siteId    site identifier
+     * @param batchId   batch (= Delta session) identifier
+     * @param tableName table whose delta file to download
+     * @return presigned download URL (15-minute expiry)
+     */
+    @GetMapping("/batches/{batchId}/tables/{tableName}/parquet")
+    @Operation(
+            summary = "Presign a batch delta Parquet download",
+            description = "Issues a fresh presigned S3 URL (15-minute expiry) for the typed delta Parquet file that "
+                    + "the egress worker materialized for one table of the batch's changelog segment. 404 when the "
+                    + "batch has no segment or the table's file was never egressed (no declared schema)."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Presigned URL issued",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = DeltaCheckpointDownloadResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site, segment or delta Parquet file not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<DeltaCheckpointDownloadResponseDto> downloadBatchParquet(@PathVariable UUID siteId,
+                                                                                   @PathVariable UUID batchId,
+                                                                                   @PathVariable String tableName) {
+        requireOwnedSite(siteId);
+        return segmentParquetQueryService.presignBatchTableParquet(siteId, batchId, tableName)
+                .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
