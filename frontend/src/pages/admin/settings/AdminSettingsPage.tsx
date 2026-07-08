@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/widgets/header/Header';
+import { PageHeader } from '@/shared/ui/page-header';
 import { Button } from '@/shared/ui/ui/button';
 import { Card, CardContent } from '@/shared/ui/ui/card';
 import { Label } from '@/shared/ui/ui/label';
@@ -69,12 +70,11 @@ export default function AdminSettingsPage() {
       <Header />
 
       <main className="mx-auto max-w-[1120px] space-y-6 px-6 py-6">
-        <div>
-          <h2 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Admin Settings</h2>
-          <p className="text-sm text-ink-secondary mt-1">
-            Runtime-configurable system settings (admin only).
-          </p>
-        </div>
+        <PageHeader
+          className="mb-0"
+          title="Admin Settings"
+          subtitle="Runtime-configurable system settings (admin only)."
+        />
 
         <Card>
           <CardContent className="p-6 space-y-4">

@@ -17,6 +17,7 @@ import { comparisonFormSchema, type ComparisonFormData } from '@/features/file-c
 import { useBatchHistory } from '@/entities/batch/api/queries';
 import { useBatchDetails } from '@/entities/batch/api/queries';
 import { Button } from '@/shared/ui/ui/button';
+import { PageHeader } from '@/shared/ui/page-header';
 import { toast } from 'sonner';
 
 export function ComparisonPage() {
@@ -106,12 +107,10 @@ export function ComparisonPage() {
 
   return (
     <div className="container mx-auto max-w-[1120px] px-6 py-6">
-      <div className="mb-6">
-        <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px]">Create File Comparison</h1>
-        <p className="mt-2 text-ink-secondary">
-          Compare files between two upload sessions to track changes
-        </p>
-      </div>
+      <PageHeader
+        title="Create File Comparison"
+        subtitle="Compare files between two upload sessions to track changes"
+      />
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         {/* Batch Selection Section */}

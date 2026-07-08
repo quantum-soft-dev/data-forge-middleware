@@ -10,8 +10,9 @@
  */
 
 import { useParams, Link } from '@tanstack/react-router'
-import { ArrowLeft, Database, History } from 'lucide-react'
+import { ArrowLeft, Database } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
 import { Button } from '@/shared/ui/ui/button'
 import { PluginHistoryWidget } from '@/widgets/plugin-history/PluginHistoryWidget'
 
@@ -37,13 +38,8 @@ export default function PluginHistoryPage() {
 
         {/* Page header */}
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <History className="h-8 w-8 text-ink-secondary" />
-            <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">
-              SQL Generation History
-            </h1>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-ink-secondary">
+          <PageHeader className="mb-0" title="SQL Generation History" />
+          <div className="mt-1.5 flex items-center gap-4 text-sm text-ink-secondary">
             <div className="flex items-center gap-1">
               <Database className="h-4 w-4" />
               <span>Plugin: {pluginId}</span>

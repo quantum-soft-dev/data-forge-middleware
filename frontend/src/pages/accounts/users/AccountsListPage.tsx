@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Plus, Filter } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
 import { UserListTable } from '@/widgets/user-management/UserListTable'
 import { SearchInput } from '@/features/account-search/SearchInput'
 import { useAccountsQuery } from '@/features/user-management/api/userQueries'
@@ -85,22 +86,20 @@ export default function AccountsListPage() {
       <Header />
 
       <main className="mx-auto max-w-[1120px] px-6 py-6">
-        {/* Page header */}
-        <div className="mb-8 flex items-start justify-between">
-          <div>
-            <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">User Management</h1>
-            <p className="mt-2 text-sm text-ink-secondary">
-              Manage users with Auth0 authentication integration
-            </p>
-          </div>
-          <button
-            onClick={() => navigate({ to: '/admin/users/create' })}
-            className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-          >
-            <Plus className="h-4 w-4" />
-            Create Account
-          </button>
-        </div>
+        <PageHeader
+          className="mb-8"
+          title="User Management"
+          subtitle="Manage users with Auth0 authentication integration"
+          actions={
+            <button
+              onClick={() => navigate({ to: '/admin/users/create' })}
+              className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            >
+              <Plus className="h-4 w-4" />
+              Create Account
+            </button>
+          }
+        />
 
         {/* Search and filters */}
         <div className="mb-6 space-y-4">

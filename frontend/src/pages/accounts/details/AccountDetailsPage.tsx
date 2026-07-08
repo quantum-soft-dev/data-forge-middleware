@@ -13,6 +13,7 @@
 import { useParams, useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, Globe } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
 import { AccountCard } from '@/entities/account/ui/AccountCard'
 import { LockAccountButton } from '@/features/user-management/ui/LockAccountButton'
 import { UnlockAccountButton } from '@/features/user-management/ui/UnlockAccountButton'
@@ -105,35 +106,32 @@ export default function AccountDetailsPage() {
             <ArrowLeft className="h-4 w-4" />
             Back to User Management
           </button>
-          <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Account Details</h1>
-              <p className="mt-2 text-sm text-ink-secondary">
-                View and manage account information
-              </p>
-            </div>
-
-            {/* Action Buttons */}
-            {hasAuth0 && (
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowResetPasswordDialog(true)}
-                  className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-secondary"
-                  aria-label={`Reset password for ${account.email}`}
-                  title="Reset password to temporary value"
-                >
-                  <KeyRound className="h-4 w-4" />
-                  Reset Password
-                </button>
-                {isLocked ? (
-                  <UnlockAccountButton account={account} onSuccess={handleUnlockSuccess} />
-                ) : (
-                  <LockAccountButton account={account} onSuccess={handleLockSuccess} />
-                )}
-                <DeleteAccountButton account={account} onSuccess={handleDeleteSuccess} />
-              </div>
-            )}
-          </div>
+          <PageHeader
+            className="mb-0"
+            title="Account Details"
+            subtitle="View and manage account information"
+            actions={
+              hasAuth0 ? (
+                <>
+                  <button
+                    onClick={() => setShowResetPasswordDialog(true)}
+                    className="flex items-center gap-2 rounded-lg border border-hairline bg-white px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-secondary"
+                    aria-label={`Reset password for ${account.email}`}
+                    title="Reset password to temporary value"
+                  >
+                    <KeyRound className="h-4 w-4" />
+                    Reset Password
+                  </button>
+                  {isLocked ? (
+                    <UnlockAccountButton account={account} onSuccess={handleUnlockSuccess} />
+                  ) : (
+                    <LockAccountButton account={account} onSuccess={handleLockSuccess} />
+                  )}
+                  <DeleteAccountButton account={account} onSuccess={handleDeleteSuccess} />
+                </>
+              ) : undefined
+            }
+          />
         </div>
 
         {/* Account Details Card */}

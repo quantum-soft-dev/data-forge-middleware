@@ -14,6 +14,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
 import { CreateAccountForm } from '@/features/user-management/ui/CreateAccountForm'
 
 export default function CreateAccountPage() {
@@ -45,12 +46,11 @@ export default function CreateAccountPage() {
             <ArrowLeft className="h-4 w-4" />
             Back to User Management
           </button>
-          <div>
-            <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Create New Account</h1>
-            <p className="mt-2 text-sm text-ink-secondary">
-              Create a new user account with Auth0 authentication integration
-            </p>
-          </div>
+          <PageHeader
+            className="mb-0"
+            title="Create New Account"
+            subtitle="Create a new user account with Auth0 authentication integration"
+          />
         </div>
 
         {/* Form card */}

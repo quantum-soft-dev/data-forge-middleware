@@ -29,6 +29,7 @@ import DownloadButton from '@/features/file-comparison/ui/DownloadButton';
 import type { ChangeType } from '@/entities/comparison/model/types';
 
 import { Button } from '@/shared/ui/ui/button';
+import { PageHeader } from '@/shared/ui/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
 import { Badge } from '@/shared/ui/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
@@ -242,28 +243,27 @@ export function ComparisonDetailPage(): React.ReactElement {
     <DiffViewerProvider>
       <div className="container mx-auto max-w-[1120px] space-y-6 px-6 py-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <PageHeader
+        className="mb-0"
+        breadcrumb={
           <Button onClick={handleBack} variant="outline" size="sm">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
           </Button>
-          <div>
-            <h1 className="text-[22px] font-medium tracking-[-0.33px] text-ink tabular-nums">Comparison #{comparison.id}</h1>
-            <p className="text-muted-foreground">
-              Created {new Date(comparison.createdAt).toLocaleString()}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={statusColors[comparison.status]}>
-            {comparison.status}
-          </Badge>
-          {isInProgress && (
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-          )}
-        </div>
-      </div>
+        }
+        title={`Comparison #${comparison.id}`}
+        subtitle={`Created ${new Date(comparison.createdAt).toLocaleString()}`}
+        actions={
+          <>
+            <Badge variant={statusColors[comparison.status]}>
+              {comparison.status}
+            </Badge>
+            {isInProgress && (
+              <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </>
+        }
+      />
 
       {/* In Progress Alert */}
       {isInProgress && (
