@@ -141,7 +141,7 @@ public final class ParquetCheckpointWriter {
             case INT -> toNumber(java).intValue();
             case FLOAT -> toNumber(java).floatValue();
             case DOUBLE -> toNumber(java).doubleValue();
-            case BOOLEAN -> (java instanceof Boolean b) ? b : Boolean.parseBoolean(java.toString());
+            case BOOLEAN -> (java instanceof Boolean b) ? b : toBoolean(java.toString());
             case BYTES -> ByteBuffer.wrap(toBytes(java));
             default -> java.toString();
         };
@@ -154,6 +154,20 @@ public final class ParquetCheckpointWriter {
                     .findFirst().orElseThrow();
         }
         return schema;
+    }
+
+    /**
+     * Coerce a boolean sent as text. Accepts PostgreSQL's canonical forms and common variants;
+     * {@code Boolean.parseBoolean} returned {@code false} for everything except "true", silently
+     * turning a "t"/"f"/"1"/"0" column all-false (review r4). Unrecognized text throws (like the
+     * strict date/decimal coercions), so CheckpointService's per-table catch skips just that table.
+     */
+    private static boolean toBoolean(String text) {
+        return switch (text.trim().toLowerCase()) {
+            case "t", "true", "1", "y", "yes" -> true;
+            case "f", "false", "0", "n", "no" -> false;
+            default -> throw new IllegalArgumentException("Not a boolean: '" + text + "'");
+        };
     }
 
     private static BigDecimal toBigDecimal(Object java) {

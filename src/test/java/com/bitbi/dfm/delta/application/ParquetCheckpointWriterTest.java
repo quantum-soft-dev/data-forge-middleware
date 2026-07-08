@@ -119,6 +119,47 @@ class ParquetCheckpointWriterTest {
         }
     }
 
+    @Test
+    void coercesPostgresTextBooleansTrueAndFalse() throws Exception {
+        // A client that serializes a boolean column as its PG text form ("t"/"f") hit the string
+        // fallback, where Boolean.parseBoolean returned false for BOTH — a silently all-false column
+        // (review r4). "t"/"true"/"1" must be true; "f"/"false"/"0" must be false.
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("active", "boolean", false)),
+                List.of("id"), List.of());
+        Map<String, Value> t = new LinkedHashMap<>();
+        t.put("id", intVal(1));
+        t.put("active", strVal("t"));
+        Map<String, Value> f = new LinkedHashMap<>();
+        f.put("id", intVal(2));
+        f.put("active", strVal("f"));
+
+        Path file = tempDir.resolve("bools.parquet");
+        Files.write(file, ParquetCheckpointWriter.toParquet("t", schema, List.of(t, f)));
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            assertEquals(true, reader.read().get("active"), "PG 't' must coerce to true");
+            assertEquals(false, reader.read().get("active"), "PG 'f' must coerce to false");
+        }
+    }
+
+    @Test
+    void rejectsUnrecognizedBooleanTextInsteadOfSilentlyFalse() {
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("active", "boolean", false)),
+                List.of("id"), List.of());
+        Map<String, Value> bad = new LinkedHashMap<>();
+        bad.put("id", intVal(1));
+        bad.put("active", strVal("maybe"));
+
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
+                () -> ParquetCheckpointWriter.toParquet("t", schema, List.of(bad)),
+                "an unrecognized boolean text must throw (per-table skip), not silently write false");
+    }
+
     /** The value branch of a field's schema (unwrapping a nullable union). */
     private static Schema branch(Schema record, String field) {
         Schema s = record.getField(field).schema();
