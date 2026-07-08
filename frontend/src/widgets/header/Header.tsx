@@ -49,9 +49,11 @@ export function Header() {
             alt="DataForge Logo"
             className="h-7 w-7"
           />
-          <h1 className="text-[17px] font-semibold tracking-[-0.24px] text-ink">
+          {/* Not a heading: PageHeader owns the page's h1 — two h1s break the
+              document outline for screen readers (review r3). */}
+          <span className="text-[17px] font-semibold tracking-[-0.24px] text-ink">
             DataForge Middleware
-          </h1>
+          </span>
         </Link>
 
         {/* Navigation Menu */}
