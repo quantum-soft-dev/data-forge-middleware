@@ -24,6 +24,11 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # Disable JDBC auto-commit so Hibernate can defer acquiring the physical connection until the
+      # first DB statement (see provider_disables_autocommit below). This keeps an S3 round-trip at
+      # the start of a @Transactional method (e.g. the delta segment commit, which uploads before any
+      # DB write) from pinning a pool connection across the network call (review r4).
+      auto-commit: false
 
   jpa:
     hibernate:
@@ -35,6 +40,10 @@ spring:
         show_sql: false
         jdbc:
           time_zone: UTC
+        connection:
+          # Hikari has auto-commit disabled (above), so Hibernate need not touch it and can acquire
+          # the connection lazily on first use rather than at transaction begin.
+          provider_disables_autocommit: true
     open-in-view: false
 
   flyway:
