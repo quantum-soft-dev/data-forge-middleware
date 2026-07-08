@@ -36,6 +36,14 @@ export interface DeltaSyncWidgetProps {
   canManage: boolean;
 }
 
+function QueryErrorPanel({ resource }: { resource: string }) {
+  return (
+    <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+      Failed to load {resource}. Please try again.
+    </div>
+  );
+}
+
 export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetProps) {
   const syncStateQuery = useDeltaSyncState(siteId, { admin });
   const checkpointsQuery = useDeltaCheckpoints(siteId, { admin });
@@ -104,20 +112,28 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         lagSamples={lagSamples}
         severity={severity}
         segments={segmentsQuery.data}
-        showThroughput={canManage}
+        showThroughput={canManage && !segmentsQuery.isError}
       />
-      <CheckpointsCard
-        checkpoints={checkpointsQuery.data ?? []}
-        canManage={canManage}
-        onDownload={handleDownload}
-        onRebuild={() => setRebuildDialogOpen(true)}
-        rebuildQueued={state.rebuildRequested}
-      />
-      {canManage && (
-        <RecentSegmentsCard segments={segmentsQuery.data ?? []} isLoading={segmentsQuery.isLoading} />
+      {/* A failed query must read as a failure, not as a legitimate empty list. */}
+      {checkpointsQuery.isError ? (
+        <QueryErrorPanel resource="checkpoints" />
+      ) : (
+        <CheckpointsCard
+          checkpoints={checkpointsQuery.data ?? []}
+          canManage={canManage}
+          onDownload={handleDownload}
+          onRebuild={() => setRebuildDialogOpen(true)}
+          rebuildQueued={state.rebuildRequested || rebuildMutation.isPending}
+        />
       )}
+      {canManage &&
+        (segmentsQuery.isError ? (
+          <QueryErrorPanel resource="segments" />
+        ) : (
+          <RecentSegmentsCard segments={segmentsQuery.data ?? []} isLoading={segmentsQuery.isLoading} />
+        ))}
       <RebaselineCard
-        rebaselineRequested={state.rebaselineRequested}
+        rebaselineRequested={state.rebaselineRequested || rebaselineMutation.isPending}
         onRequest={() => setRebaselineDialogOpen(true)}
       />
       <RebuildCheckpointDialog

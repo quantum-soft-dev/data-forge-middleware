@@ -110,6 +110,56 @@ describe('DeltaSyncWidget (F5)', () => {
     render(<DeltaSyncWidget siteId="s1" admin={true} canManage={true} />)
     expect(mockedUseDeltaSyncState).toHaveBeenCalledWith('s1', { admin: true })
   })
+
+  it('surfaces a checkpoints query failure instead of a legitimate-looking empty list', () => {
+    // A 500 on /checkpoints must not read as "No checkpoints yet." during an incident.
+    mockQuery({ data: state })
+    mockedUseDeltaCheckpoints.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    } as unknown as ReturnType<typeof useDeltaCheckpoints>)
+
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    expect(screen.getByText(/failed to load checkpoints/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no checkpoints yet/i)).not.toBeInTheDocument()
+  })
+
+  it('surfaces a segments query failure instead of "No segments yet"', () => {
+    mockQuery({ data: state })
+    mockedUseDeltaSegments.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    } as unknown as ReturnType<typeof useDeltaSegments>)
+
+    render(<DeltaSyncWidget siteId="s1" admin={true} canManage={true} />)
+
+    expect(screen.getByText(/failed to load segments/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no segments yet/i)).not.toBeInTheDocument()
+  })
+
+  it('holds the rebuild and re-baseline triggers while their mutation is in flight', () => {
+    // The buttons were gated only by the server-side flags, leaving a double-submit
+    // window until the invalidated sync-state refetch lands.
+    mockQuery({ data: state })
+    mockedUseRebuildCheckpoint.mockReturnValue({
+      mutate: rebuildMutate,
+      isPending: true,
+    } as unknown as ReturnType<typeof useRebuildCheckpoint>)
+    mockedUseRequestRebaseline.mockReturnValue({
+      mutate: rebaselineMutate,
+      isPending: true,
+    } as unknown as ReturnType<typeof useRequestRebaseline>)
+
+    render(<DeltaSyncWidget siteId="s1" admin={true} canManage={true} />)
+
+    expect(screen.getByRole('button', { name: /rebuild checkpoint now/i })).toBeDisabled()
+    // The re-baseline button is replaced by the pending pill while the request is in flight.
+    expect(screen.queryByRole('button', { name: /request full re-baseline/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/full snapshot scheduled on next connect/i)).toBeInTheDocument()
+  })
 })
 
 describe('DeltaSyncWidget actions (F9)', () => {
