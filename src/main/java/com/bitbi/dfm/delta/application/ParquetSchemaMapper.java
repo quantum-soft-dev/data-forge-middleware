@@ -60,9 +60,15 @@ public final class ParquetSchemaMapper {
      * @return an Avro record schema for delta rows
      */
     public static Schema toDeltaAvroSchema(String tableName, TableSchema tableSchema) {
-        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size() + 2);
+        List<Schema.Field> fields = new ArrayList<>(tableSchema.columns().size() + 3);
         fields.add(new Schema.Field("_op", Schema.create(Schema.Type.STRING), null, null));
         fields.add(new Schema.Field("_seq", Schema.create(Schema.Type.LONG), null, null));
+        // _changed disambiguates a null cell in an UPDATE: a comma-separated list of the columns
+        // carried in the change. A column NOT listed is unchanged (keep prior value); a listed
+        // column with a null cell was explicitly set to SQL NULL. Null for INSERT (full row) and
+        // DELETE (key only). Without this, "unchanged" and "set NULL" are indistinguishable (r4).
+        Schema nullableString = Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.STRING));
+        fields.add(new Schema.Field("_changed", nullableString, null, Schema.Field.NULL_DEFAULT_VALUE));
         for (ColumnDefinition column : tableSchema.columns()) {
             Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), avroType(column.type()));
             fields.add(new Schema.Field(column.name(), union, null, Schema.Field.NULL_DEFAULT_VALUE));

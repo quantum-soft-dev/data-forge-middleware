@@ -18,10 +18,12 @@ import java.util.Map;
  * (Delta Client v2 — 022, Task 8).
  *
  * <p>The file carries the declared columns (typed via {@link ParquetSchemaMapper}, all nullable)
- * plus non-null service columns {@code _op} (INSERT/UPDATE/DELETE) and {@code _seq}. Each row
- * merges the record's key and data maps, so DELETE rows carry their key columns and keyed UPDATE
- * rows their key + after-image; cells for absent columns are null. Consumers apply the files
- * sequentially by seq — a FULL_SNAPSHOT segment (all INSERT) is a full table by construction.</p>
+ * plus service columns {@code _op} (INSERT/UPDATE/DELETE), {@code _seq}, and {@code _changed}. Each
+ * row merges the record's key and data maps, so DELETE rows carry their key columns and keyed UPDATE
+ * rows their key + changed columns. {@code _changed} lists the columns an UPDATE actually carried,
+ * so a consumer distinguishes a null cell that means "set to NULL" (column listed) from one that
+ * means "unchanged" (not listed); it is null for INSERT (full row) and DELETE (key only). Consumers
+ * apply the files sequentially by seq — a FULL_SNAPSHOT segment (all INSERT) is a full table.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -46,6 +48,12 @@ public final class DeltaParquetWriter {
             GenericRecord row = new GenericData.Record(avro);
             row.put("_op", change.getOp().name());
             row.put("_seq", change.getSeq());
+            // For an UPDATE, record which columns the change actually carried so a consumer can tell
+            // "set to NULL" (listed, null cell) from "unchanged" (not listed, also a null cell). Full
+            // rows (INSERT) and key-only rows (DELETE) leave _changed null.
+            row.put("_changed", change.getOp() == com.bitbi.dfm.delta.grpc.v2.Op.UPDATE
+                    ? String.join(",", change.getDataMap().keySet())
+                    : null);
             Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
             cells.putAll(change.getDataMap());
             for (ColumnDefinition column : tableSchema.columns()) {

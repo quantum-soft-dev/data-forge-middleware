@@ -105,6 +105,31 @@ class DeltaParquetWriterTest {
         assertNull(row.get("price"), "unchanged column absent -> null cell");
     }
 
+    @Test
+    void changedColumnListDistinguishesUnchangedFromSetNull() throws Exception {
+        // An UPDATE sets name -> NULL while leaving price unchanged. Both render as null cells, so a
+        // sequential consumer cannot tell "set NULL" from "unchanged" without help. The _changed
+        // service column lists the columns actually carried in the UPDATE (review r4).
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "name", strVal("Ann"), "price", decVal("5.00"))),
+                change(Op.UPDATE, 2L, Map.of("id", intVal(1)),
+                        Map.of("name", nullVal())));
+
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records));
+
+        // INSERT: full after-image, _changed is null (means "all columns present").
+        assertNull(rows.get(0).get("_changed"), "INSERT carries the full row; _changed is null");
+
+        // UPDATE: name was explicitly set (present, null) -> listed; price unchanged -> not listed.
+        GenericRecord update = rows.get(1);
+        assertEquals("UPDATE", update.get("_op").toString());
+        assertEquals("name", update.get("_changed").toString(),
+                "_changed lists only the columns carried in the UPDATE");
+        assertNull(update.get("name"), "name set to NULL");
+        assertNull(update.get("price"), "price unchanged (also a null cell, but not in _changed)");
+    }
+
     private List<GenericRecord> readBack(byte[] parquet) throws Exception {
         assertFalse(parquet.length == 0, "parquet bytes written");
         Path file = tempDir.resolve("delta.parquet");
@@ -146,5 +171,9 @@ class DeltaParquetWriterTest {
 
     private static Value decVal(String v) {
         return Value.newBuilder().setDecimalValue(v).build();
+    }
+
+    private static Value nullVal() {
+        return Value.newBuilder().setIsNull(true).build();
     }
 }
