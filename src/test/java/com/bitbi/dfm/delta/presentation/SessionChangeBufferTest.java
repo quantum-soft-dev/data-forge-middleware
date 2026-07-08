@@ -61,6 +61,19 @@ class SessionChangeBufferTest {
         assertEquals(1L, buffer.lastSeq(), "a gap does not advance the watermark");
     }
 
+    @Test
+    void flagsOverflowWhenSessionExceedsTheRecordCap() {
+        // A single session must not buffer unboundedly (OOM): once the cap is reached, further
+        // records overflow so the caller can reject rather than accumulate the whole dataset (r4).
+        SessionChangeBuffer buffer = new SessionChangeBuffer(0L, 2);
+        assertEquals(Result.ACCEPTED, buffer.accept(change(1L)));
+        assertEquals(Result.ACCEPTED, buffer.accept(change(2L)));
+
+        assertEquals(Result.OVERFLOW, buffer.accept(change(3L)), "past the cap must overflow");
+        assertEquals(2, buffer.acceptedCount(), "an overflow record is not retained");
+        assertEquals(2L, buffer.lastSeq(), "an overflow does not advance the watermark");
+    }
+
     private static ChangeRecord change(long seq) {
         return ChangeRecord.newBuilder().setSeq(seq).setTable("t").setOp(Op.INSERT).build();
     }

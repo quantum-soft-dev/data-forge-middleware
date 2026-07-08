@@ -51,7 +51,7 @@ class DeltaIngestionSubmitSchemaContractTest {
                 mock(BatchLifecycleService.class),
                 siteSchemaService,
                 mock(DeltaSessionCommitService.class),
-                new DeltaMetrics(new SimpleMeterRegistry()));
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()

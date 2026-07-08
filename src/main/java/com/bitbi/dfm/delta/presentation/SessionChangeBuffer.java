@@ -30,14 +30,26 @@ final class SessionChangeBuffer {
         /** {@code seq <= lastSeq}: a replay / already-applied record, safely ignored. */
         DUPLICATE,
         /** {@code seq > lastSeq + 1}: a sequence gap — the session must be rejected. */
-        GAP
+        GAP,
+        /** The record cap for one session was reached — the session must be rejected (OOM guard). */
+        OVERFLOW
     }
 
     private long lastSeq;
     private final List<ChangeRecord> accepted = new ArrayList<>();
+    private final int maxRecords;
 
     SessionChangeBuffer(long startSeq) {
+        this(startSeq, Integer.MAX_VALUE);
+    }
+
+    /**
+     * @param startSeq   the server watermark the session continues from
+     * @param maxRecords the maximum records one session may buffer before {@link Result#OVERFLOW}
+     */
+    SessionChangeBuffer(long startSeq, int maxRecords) {
         this.lastSeq = startSeq;
+        this.maxRecords = maxRecords;
     }
 
     /**
@@ -54,6 +66,9 @@ final class SessionChangeBuffer {
         }
         if (seq > lastSeq + 1) {
             return Result.GAP;
+        }
+        if (accepted.size() >= maxRecords) {
+            return Result.OVERFLOW; // do not advance or retain — the caller rejects the session
         }
         lastSeq = seq;
         accepted.add(record);

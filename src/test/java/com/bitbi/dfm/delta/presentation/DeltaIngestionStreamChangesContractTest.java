@@ -67,7 +67,7 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()));
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
@@ -640,6 +640,43 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(done.await(5, TimeUnit.SECONDS), "stream must terminate (not hang on an escaped throw)");
         verify(batchLifecycle).failBatch(batchId);
         verify(batchLifecycle, never()).completeBatch(batchId);
+    }
+
+    @Test
+    void sessionExceedingRecordCapRejectedInsteadOfBufferingUnbounded() throws Exception {
+        // A tiny cap makes the OOM guard observable: past the cap, the session is rejected rather
+        // than accumulating the whole dataset in heap (review r4).
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch batch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService capped = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, 3900000L); // cap = 2 records
+        String name = InProcessServerBuilder.generateName();
+        Server capServer = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel capChannel = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(capChannel);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
+            s.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            s.onNext(change("t", Op.INSERT, 1L));
+            s.onNext(change("t", Op.INSERT, 2L));
+            s.onNext(change("t", Op.INSERT, 3L)); // past the cap
+
+            ServerEvent last = received.get(received.size() - 1);
+            assertTrue(last.hasError());
+            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            verify(batchLifecycle).failBatch(any());
+        } finally {
+            capChannel.shutdownNow();
+            capServer.shutdownNow();
+        }
     }
 
     private static Batch mockBatch(UUID id) {

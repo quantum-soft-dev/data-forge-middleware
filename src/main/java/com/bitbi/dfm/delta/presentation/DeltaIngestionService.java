@@ -54,11 +54,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final SiteSchemaService siteSchemaService;
     private final DeltaSessionCommitService commitService;
     private final DeltaMetrics metrics;
+    /** Max records one session may buffer before the server rejects it (OOM guard). */
+    private final int maxSessionRecords;
+    /** Staged sessions older than this are evicted by the sweep (defends against a leak). */
+    private final long stagedTtlMillis;
 
     /**
      * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
      * can resume from the staged data (T5.1). In-memory only: lost on server restart, in which case
-     * the client falls back to gap detection / re-baseline. Cleared on commit or on re-baseline.
+     * the client falls back to gap detection / re-baseline. Cleared on commit or on re-baseline, and
+     * evicted by {@link #evictStaleStagedSessions()} so a client that drops and never resumes cannot
+     * leak its buffer for the life of the process.
      */
     private final Map<UUID, StagedSession> stagedSessions = new ConcurrentHashMap<>();
 
@@ -66,12 +72,38 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  BatchLifecycleService batchLifecycleService,
                                  SiteSchemaService siteSchemaService,
                                  DeltaSessionCommitService commitService,
-                                 DeltaMetrics metrics) {
+                                 DeltaMetrics metrics,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.max-session-records:2000000}") int maxSessionRecords,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
         this.commitService = commitService;
         this.metrics = metrics;
+        this.maxSessionRecords = maxSessionRecords;
+        this.stagedTtlMillis = stagedTtlMillis;
+    }
+
+    /**
+     * Evict staged sessions older than the TTL (default just over the 60-min batch timeout) and fail
+     * their orphaned batches, so a client that drops mid-session and never resumes cannot leak its
+     * buffer (and the still-active batch) indefinitely (review r4).
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString =
+            "${delta.ingestion.staged-sweep-millis:300000}")
+    public void evictStaleStagedSessions() {
+        long cutoff = System.currentTimeMillis() - stagedTtlMillis;
+        stagedSessions.forEach((site, staged) -> {
+            if (staged.stagedAtMillis() < cutoff && stagedSessions.remove(site, staged)) {
+                try {
+                    batchLifecycleService.failBatch(staged.batchId());
+                } catch (RuntimeException ignored) {
+                    // batch may already be terminal (timed out) — best-effort
+                }
+            }
+        });
     }
 
     @Override
@@ -224,6 +256,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 RecoveryAction.NEED_REBASELINE);
                         return;
                     }
+                    case OVERFLOW -> {
+                        // The session exceeded the per-session record cap: reject rather than buffer
+                        // the whole dataset in heap (OOM guard). A very large snapshot should stream in
+                        // CONTINUOUS mode, which seals bounded segments as it goes.
+                        emitError(ErrorCode.INTERNAL,
+                                "Session exceeded the " + maxSessionRecords + "-record limit; stream large "
+                                        + "datasets in CONTINUOUS mode",
+                                RecoveryAction.NEED_REBASELINE);
+                        return;
+                    }
                     case ACCEPTED -> { /* fall through to ack / seal */ }
                 }
                 if (++sinceAck >= ACK_INTERVAL) {
@@ -324,7 +366,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
                 }
-                buffer = new SessionChangeBuffer(serverLastSeq);
+                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords);
                 sessionMode = start.getMode().name();
                 // For a delta replay (first_seq below the watermark) the segment's first_seq is the
                 // first genuinely-new sequence, not the replayed start, so the persisted segment row
@@ -411,7 +453,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (continueStream) {
                     batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
                     firstSeq = committedSeq + 1;
-                    buffer = new SessionChangeBuffer(committedSeq);
+                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords);
                     sinceAck = 0;
                     metrics.sessionStarted();
                 }
@@ -424,7 +466,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void stageForResume() {
                 if (!closed && !committed && batchId != null && buffer != null) {
-                    stagedSessions.put(siteId, new StagedSession(batchId, sessionMode, firstSeq, buffer));
+                    stagedSessions.put(siteId, new StagedSession(
+                            batchId, sessionMode, firstSeq, buffer, System.currentTimeMillis()));
                     closed = true;
                 }
             }
@@ -527,8 +570,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
     /**
      * A session retained for resume after a mid-session drop (T5.1): the active batch it opened, its
-     * mode and first sequence, and the buffer of records staged so far.
+     * mode and first sequence, the buffer of records staged so far, and when it was staged (for TTL
+     * eviction).
      */
-    private record StagedSession(UUID batchId, String mode, long firstSeq, SessionChangeBuffer buffer) {
+    private record StagedSession(UUID batchId, String mode, long firstSeq, SessionChangeBuffer buffer,
+                                 long stagedAtMillis) {
     }
 }
