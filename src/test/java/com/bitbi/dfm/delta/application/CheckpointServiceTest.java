@@ -97,6 +97,38 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void parquetFailureForOneTableSkipsItButCompletesTheBuild() {
+        // "orders" declares a date column whose folded value cannot be coerced: the Parquet write
+        // throws. That must not roll back the whole build (checkpoint pointer frozen, retention
+        // skipped, segments accumulating) — the table keeps its CSV, the rest proceeds.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                orderRecord(2L, "not-a-date")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", ordersSchema()));
+        when(checkpointStorage.uploadCsv(eq(SITE), eq("orders"), anyLong(), any()))
+                .thenReturn("checkpoints/orders-csv");
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenReturn("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage, never()).uploadParquet(eq(SITE), eq("orders"), anyLong(), any());
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), anyLong(), any());
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository, times(2)).save(saved.capture());
+        Checkpoint orders = saved.getAllValues().stream()
+                .filter(c -> c.getTableName().equals("orders")).findFirst().orElseThrow();
+        assertNull(orders.getS3KeyParquet(), "failed parquet must not be attached");
+        assertEquals("checkpoints/orders-csv", orders.getS3KeyCsv(), "CSV must survive the parquet failure");
+
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
+    @Test
     void refusesLossyRefoldWhenFrameUnreadableAndHistoryPruned() {
         // Pointer advanced to 10, but the frame reads as absent (deleted, or an S3 HEAD denial
         // masquerading as absence) and segments below the checkpoint were pruned: a refold from
@@ -136,6 +168,27 @@ class CheckpointServiceTest {
                         new TableSchema.ColumnDefinition("name", "varchar(255)", true)),
                 List.of("id"),
                 List.of());
+    }
+
+    private static TableSchema ordersSchema() {
+        return new TableSchema(
+                List.of(new TableSchema.ColumnDefinition("id", "bigint", false),
+                        new TableSchema.ColumnDefinition("placed_on", "date", true)),
+                List.of("id"),
+                List.of());
+    }
+
+    private static ChangeRecord orderRecord(long seq, String placedOn) {
+        Value idVal = Value.newBuilder().setIntValue(1).build();
+        Value dateVal = Value.newBuilder().setStringValue(placedOn).build();
+        return ChangeRecord.newBuilder()
+                .setTable("orders")
+                .setOp(Op.INSERT)
+                .setSeq(seq)
+                .putKey("id", idVal)
+                .putData("id", idVal)
+                .putData("placed_on", dateVal)
+                .build();
     }
 
     private static ChangeRecord record(String table, long seq, long id, String name) {

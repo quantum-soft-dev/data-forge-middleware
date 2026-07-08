@@ -10,6 +10,8 @@ import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +35,8 @@ import java.util.UUID;
  */
 @Service
 public class CheckpointService {
+
+    private static final Logger log = LoggerFactory.getLogger(CheckpointService.class);
 
     private final ChangelogSegmentRepository segmentRepository;
     private final ChangelogSegmentService changelogSegmentService;
@@ -127,8 +131,18 @@ public class CheckpointService {
 
             TableSchema tableSchema = schemas.get(tableName);
             if (tableSchema != null) {
-                byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
-                checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
+                // One table's coercion failure (schema drift, bad value) must not abort the whole
+                // build: the pointer would freeze, retention would stop, and segments would grow
+                // unbounded. Skip its Parquet (CSV above still ships) and keep going — the same
+                // skip-and-continue contract as DeltaEgressService.
+                try {
+                    byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
+                    checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
+                } catch (RuntimeException e) {
+                    log.warn("Checkpoint Parquet failed for table {} of site {} — skipping Parquet, "
+                            + "CSV still written (check the declared schema against the data)",
+                            tableName, siteId, e);
+                }
             }
 
             checkpointRepository.save(checkpoint);
