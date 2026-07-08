@@ -125,6 +125,27 @@ class SiteTest {
     }
 
     @Nested
+    @DisplayName("clientApiVersion - derived from auth mechanism (review r4)")
+    class ClientApiVersionDerivation {
+
+        @Test
+        @DisplayName("A site with a client secret is V1 (v1 HTTP auth)")
+        void secretedSiteIsV1() {
+            Site site = Site.create(UUID.randomUUID(), "acc_store", "store", "Store", "bcrypt-hash", SiteType.DBF);
+            assertThat(site.getClientApiVersion()).isEqualTo(ClientApiVersion.V1);
+            assertThat(site.isDeltaV2()).isFalse();
+        }
+
+        @Test
+        @DisplayName("A secretless site is V2 (device flow / Delta gRPC)")
+        void secretlessSiteIsV2() {
+            Site site = Site.create(UUID.randomUUID(), "acc_store", "store", "Store", null, SiteType.DBF);
+            assertThat(site.getClientApiVersion()).isEqualTo(ClientApiVersion.V2);
+            assertThat(site.isDeltaV2()).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("updateRetentionDays() - Validation")
     class UpdateRetentionDays {
 

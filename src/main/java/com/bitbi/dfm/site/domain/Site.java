@@ -90,6 +90,11 @@ public class Site {
         this.retentionDays = retentionDays;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+        // Auth mechanism determines the ingestion API: a site provisioned with a client secret
+        // authenticates via the legacy v1 HTTP API (that secret is v1-only); a secretless site uses
+        // the Auth V2 device flow and the Delta v2 gRPC surface. Without this, a password-created
+        // (v1-secret) site was stamped V2 and could not use its own secret's API (review r4).
+        this.clientApiVersion = clientSecretHash != null ? ClientApiVersion.V1 : ClientApiVersion.V2;
     }
 
     /**
