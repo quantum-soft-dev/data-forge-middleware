@@ -169,6 +169,15 @@ delta:
     enabled: ${DELTA_GRPC_ENABLED:true}
     # Port for the Delta v2 gRPC server (separate from the HTTP server.port)
     port: ${DELTA_GRPC_PORT:9090}
+    # TLS for the gRPC ingestion transport (the site Bearer token travels in metadata). Off by
+    # default for local/in-cluster plaintext; enable here or terminate TLS at an ingress/sidecar.
+    tls:
+      enabled: ${DELTA_GRPC_TLS_ENABLED:false}
+      cert-path: ${DELTA_GRPC_TLS_CERT_PATH:}
+      key-path: ${DELTA_GRPC_TLS_KEY_PATH:}
+    # Keepalive + max connection age bound half-open/hung streams (server closes -> onError reaps).
+    keepalive-seconds: ${DELTA_GRPC_KEEPALIVE_SECONDS:300}
+    max-connection-age-seconds: ${DELTA_GRPC_MAX_CONN_AGE_SECONDS:3600}
   ingestion:
     # Max records a single (non-CONTINUOUS) session may buffer before it is rejected (OOM guard);
     # very large snapshots should stream in CONTINUOUS mode, which seals bounded segments.

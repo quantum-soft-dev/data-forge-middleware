@@ -11,6 +11,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.io.File;
+import java.util.concurrent.TimeUnit;
+
 /**
  * Wires the Delta Client v2 gRPC server into the application (feature 022).
  *
@@ -33,15 +36,37 @@ public class GrpcServerConfig {
             DeltaIngestionService deltaIngestionService,
             DeltaAuthInterceptor deltaAuthInterceptor,
             @Value("${delta.grpc.enabled:true}") boolean enabled,
-            @Value("${delta.grpc.port:9090}") int port) {
+            @Value("${delta.grpc.port:9090}") int port,
+            @Value("${delta.grpc.tls.enabled:false}") boolean tlsEnabled,
+            @Value("${delta.grpc.tls.cert-path:}") String certPath,
+            @Value("${delta.grpc.tls.key-path:}") String keyPath,
+            @Value("${delta.grpc.keepalive-seconds:300}") long keepAliveSeconds,
+            @Value("${delta.grpc.max-connection-age-seconds:3600}") long maxConnectionAgeSeconds) {
 
         if (!enabled) {
             log.info("Delta gRPC server disabled (delta.grpc.enabled=false)");
             return GrpcServerLifecycle.disabled();
         }
-        Server server = ServerBuilder.forPort(port)
+        ServerBuilder<?> builder = ServerBuilder.forPort(port)
                 .addService(ServerInterceptors.intercept(deltaIngestionService, deltaAuthInterceptor))
-                .build();
-        return new GrpcServerLifecycle(server);
+                // Keepalive + a max connection age bound a half-open/hung stream: the server closes it,
+                // which triggers onError (drop-seal / staged eviction) so a wedged session cannot pin a
+                // batch forever — the safety net that lets delta batches skip the upload timeout.
+                .keepAliveTime(keepAliveSeconds, TimeUnit.SECONDS)
+                .keepAliveTimeout(20, TimeUnit.SECONDS)
+                .permitKeepAliveWithoutCalls(true)
+                .maxConnectionAge(maxConnectionAgeSeconds, TimeUnit.SECONDS)
+                .maxConnectionAgeGrace(30, TimeUnit.SECONDS);
+
+        // The site Bearer token travels in gRPC metadata; enable TLS (or terminate it at an ingress/
+        // sidecar) so it is not sent in cleartext. Off by default for local/in-cluster plaintext.
+        if (tlsEnabled) {
+            builder.useTransportSecurity(new File(certPath), new File(keyPath));
+            log.info("Delta gRPC server: TLS enabled (cert={})", certPath);
+        } else {
+            log.warn("Delta gRPC server: TLS DISABLED (plaintext h2c) on port {} — terminate TLS "
+                    + "upstream (ingress/sidecar) or set delta.grpc.tls.enabled=true in production", port);
+        }
+        return new GrpcServerLifecycle(builder.build());
     }
 }
