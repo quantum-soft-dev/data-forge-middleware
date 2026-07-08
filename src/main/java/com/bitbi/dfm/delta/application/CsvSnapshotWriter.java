@@ -9,6 +9,7 @@ import java.io.OutputStreamWriter;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +44,7 @@ public final class CsvSnapshotWriter {
             for (Map<String, Object> row : rows.values()) {
                 List<Object> record = new ArrayList<>(columns.size());
                 for (String column : columns) {
-                    record.add(row.get(column));
+                    record.add(renderCell(row.get(column)));
                 }
                 printer.printRecord(record);
             }
@@ -51,6 +52,19 @@ public final class CsvSnapshotWriter {
             throw new UncheckedIOException("Failed to write CSV snapshot", e);
         }
         return baos.toByteArray();
+    }
+
+    /**
+     * Render one folded-row cell for CSV. A {@code byte[]} (bytea column) is Base64-encoded —
+     * commons-csv would otherwise stringify it via {@code Object.toString()} to a JVM object
+     * identity like {@code [B@1a2b3c} (garbage, non-deterministic; review r4). Other types keep
+     * their natural {@code toString()}; a {@code null} stays null (empty CSV field).
+     */
+    private static Object renderCell(Object value) {
+        if (value instanceof byte[] bytes) {
+            return Base64.getEncoder().encodeToString(bytes);
+        }
+        return value;
     }
 
     private static List<String> orderedColumns(Map<String, Map<String, Object>> rows) {
