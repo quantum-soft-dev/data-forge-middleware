@@ -14,7 +14,12 @@ export interface PresignedDownloadLike {
 }
 
 export interface OpenPresignedDownloadOptions {
-  /** Shown for a 404 (file genuinely absent); other failures get a generic retry toast. */
+  /**
+   * Shown for a 404 (file genuinely absent). Other failures surface the
+   * server's `message` when present (e.g. the 503 "storage unavailable"),
+   * falling back to a generic retry toast. The presign requests suppress the
+   * global error toast, so this taxonomy is the user's only signal.
+   */
   notFoundMessage?: string;
 }
 
@@ -44,9 +49,16 @@ export async function openPresignedDownload(
 
     toast.success('Download link generated · valid 15 minutes');
   } catch (error) {
-    if (notFoundMessage && isAxiosError(error) && error.response?.status === 404) {
-      toast.error(notFoundMessage);
-      return;
+    if (isAxiosError(error)) {
+      const serverMessage = (error.response?.data as { message?: string } | undefined)?.message;
+      if (notFoundMessage && error.response?.status === 404) {
+        toast.error(notFoundMessage);
+        return;
+      }
+      if (serverMessage) {
+        toast.error(serverMessage);
+        return;
+      }
     }
     toast.error('Something went wrong. Please try again.');
   }

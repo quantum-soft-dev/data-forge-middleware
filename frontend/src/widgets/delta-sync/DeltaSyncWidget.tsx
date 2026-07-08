@@ -66,7 +66,9 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
 
   // Every click mints a fresh presigned URL (15-min TTL) — never cached (§9).
   const handleDownload = (tableName: string, format: DeltaCheckpointFormat) =>
-    openPresignedDownload(() => presignCheckpointDownload(siteId, tableName, format, { admin }));
+    openPresignedDownload(() => presignCheckpointDownload(siteId, tableName, format, { admin }), {
+      notFoundMessage: `No ${format.toUpperCase()} checkpoint file for "${tableName}" — it may not have been built yet.`,
+    });
 
   const lag = syncStateQuery.data ? computeLag(syncStateQuery.data) : null;
   const lagSamples = useLagHistory(lag, syncStateQuery.dataUpdatedAt ?? 0);
