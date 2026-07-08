@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { ArrowLeft, AlertCircle, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { ErrorSummary, PageResponse } from '@/entities/batch/model/types';
 import { formatDateTime } from '@/shared/lib/formatters';
+import { cn } from '@/shared/lib/utils';
 
 interface ErrorListViewProps {
   /** Batch ID for display */
@@ -270,11 +271,12 @@ export function ErrorListView({
                   <button
                     key={pageNum}
                     onClick={() => onPageChange(pageNum)}
-                    className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-sm font-medium transition-colors tabular-nums ${
+                    className={cn(
+                      'inline-flex h-9 w-9 items-center justify-center rounded-lg text-sm font-medium transition-colors tabular-nums',
                       pageNum === currentPage
                         ? 'bg-brand text-white'
-                        : 'border border-hairline bg-white text-ink-secondary hover:bg-secondary'
-                    }`}
+                        : 'border border-hairline bg-white text-ink-secondary hover:bg-secondary',
+                    )}
                   >
                     {pageNum + 1}
                   </button>

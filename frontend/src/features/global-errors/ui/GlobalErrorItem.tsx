@@ -6,6 +6,7 @@
 
 import { Badge } from '@/shared/ui/ui/badge'
 import { Checkbox } from '@/shared/ui/ui/checkbox'
+import { cn } from '@/shared/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 import type { GlobalErrorSummary, ErrorSeverity } from '../model/global-error.types'
 
@@ -38,9 +39,10 @@ export function GlobalErrorItem({ error, selected, onSelect, onClick }: GlobalEr
 
   return (
     <div
-      className={`flex items-center gap-4 p-3 border-b border-separator cursor-pointer hover:bg-surface-hover transition-colors ${
-        !error.isRead ? 'bg-brand-50/50' : ''
-      }`}
+      className={cn(
+        'flex items-center gap-4 p-3 border-b border-separator cursor-pointer hover:bg-surface-hover transition-colors',
+        !error.isRead && 'bg-brand-50/50',
+      )}
       onClick={handleRowClick}
     >
       <Checkbox

@@ -6,6 +6,7 @@
 
 import { useState } from 'react'
 import { Filter, X } from 'lucide-react'
+import { ACTION_TYPE_LABELS } from '@/entities/plugin/model/actionTypes'
 import type { PluginActionType, AuditLogFilters } from '@/entities/plugin/model/types'
 
 interface AuditLogFiltersProps {
@@ -22,15 +23,6 @@ const ACTION_TYPES: PluginActionType[] = [
   'EVENT_FAILED',
   'EVENT_TIMEOUT',
 ]
-
-const ACTION_TYPE_LABELS: Record<PluginActionType, string> = {
-  ACTIVATE: 'Activate',
-  DEACTIVATE: 'Deactivate',
-  REACTIVATE: 'Reactivate',
-  EVENT_DISPATCHED: 'Event Dispatched',
-  EVENT_FAILED: 'Event Failed',
-  EVENT_TIMEOUT: 'Event Timeout',
-}
 
 export function AuditLogFiltersComponent({
   filters,

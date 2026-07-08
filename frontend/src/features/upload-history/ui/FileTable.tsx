@@ -11,6 +11,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { Checkbox } from '@/shared/ui/ui/checkbox';
 import type { FileMetadata } from '@/entities/batch/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
+import { cn } from '@/shared/lib/utils';
 import { ArrowUpDown, ArrowUp, ArrowDown, Search } from 'lucide-react';
 
 interface FileTableProps {
@@ -209,9 +210,10 @@ export function FileTable({ files, onSelectionChange }: FileTableProps) {
                 filteredAndSortedFiles.map((file) => (
                   <tr
                     key={file.id}
-                    className={`hover:bg-surface-hover transition-colors ${
-                      selectedFileIds.has(file.id) ? 'bg-brand-50' : ''
-                    }`}
+                    className={cn(
+                      'hover:bg-surface-hover transition-colors',
+                      selectedFileIds.has(file.id) && 'bg-brand-50',
+                    )}
                   >
                     <td className="w-10 px-3 py-2">
                       <Checkbox

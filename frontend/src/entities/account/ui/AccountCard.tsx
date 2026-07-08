@@ -13,6 +13,7 @@
  */
 
 import { Mail, User, Phone, Building, Calendar, Key } from 'lucide-react'
+import { cn } from '@/shared/lib/utils'
 import type { AccountWithKeycloakStatus } from '../model/types'
 
 interface AccountCardProps {
@@ -20,7 +21,7 @@ interface AccountCardProps {
   className?: string
 }
 
-export function AccountCard({ account, className = '' }: AccountCardProps) {
+export function AccountCard({ account, className }: AccountCardProps) {
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never'
     return new Date(dateString).toLocaleString('en-US', {
@@ -33,7 +34,7 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
   }
 
   return (
-    <div className={`rounded-lg bg-white p-6 shadow-panel ${className}`}>
+    <div className={cn('rounded-lg bg-white p-6 shadow-panel', className)}>
       {/* Header with status badges */}
       <div className="mb-4 flex items-start justify-between">
         <div className="flex-1">

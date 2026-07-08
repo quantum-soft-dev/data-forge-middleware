@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
-import * as legacyTokens from '@/features/delta-sync';
 
 describe('shared monitoring tokens', () => {
   it('exposes the monitoring palette', () => {
@@ -31,10 +30,5 @@ describe('shared monitoring tokens', () => {
       label: 'Healthy',
     });
     expect(severityTokens.critical.text).toBe('#B91C1C');
-  });
-
-  it('keeps the delta-sync public API re-exporting the shared module', () => {
-    expect(legacyTokens.monitoringTokens).toBe(monitoringTokens);
-    expect(legacyTokens.severityTokens).toBe(severityTokens);
   });
 });

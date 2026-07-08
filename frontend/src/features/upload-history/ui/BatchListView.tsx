@@ -16,6 +16,7 @@ import { Button } from '@/shared/ui/ui/button';
 import type { BatchSummary } from '@/entities/batch/model/types';
 import type { Site } from '@/entities/site/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
+import { cn } from '@/shared/lib/utils';
 
 interface BatchListViewProps {
   /** Batches from all loaded pages (flattened) */
@@ -250,9 +251,10 @@ export function BatchListView({
           {filteredBatches.map((batch) => (
             <div
               key={batch.id}
-              className={`flex items-center justify-between p-3 hover:bg-surface-hover transition-colors ${
-                onBatchClick ? 'cursor-pointer' : ''
-              }`}
+              className={cn(
+                'flex items-center justify-between p-3 hover:bg-surface-hover transition-colors',
+                onBatchClick && 'cursor-pointer',
+              )}
               onClick={() => onBatchClick?.(batch.id)}
               role={onBatchClick ? 'button' : undefined}
               tabIndex={onBatchClick ? 0 : undefined}
