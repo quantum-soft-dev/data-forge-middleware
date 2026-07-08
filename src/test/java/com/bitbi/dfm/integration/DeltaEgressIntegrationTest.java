@@ -19,8 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,19 +61,11 @@ class DeltaEgressIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
-    @Autowired
-    private S3Client s3Client;
-
-    @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}")
-    private String bucketName;
-
     @BeforeEach
-    void purgeEgressPrefix() {
+    void purgeEgress() {
         // The bucket is shared across the suite; the "schema-less table skipped" assertion
         // must not depend on what other tests uploaded under this site's egress prefix.
-        for (String key : storage.listKeys("egress/" + SITE + "/")) {
-            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(key).build());
-        }
+        purgeEgressPrefix(SITE);
     }
 
     @BeforeEach

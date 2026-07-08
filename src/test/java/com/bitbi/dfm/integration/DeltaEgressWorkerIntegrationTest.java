@@ -53,6 +53,13 @@ class DeltaEgressWorkerIntegrationTest extends BaseIntegrationTest {
     private JdbcTemplate jdbc;
 
     @BeforeEach
+    void purgeEgress() {
+        // The exists() assertions below must be satisfied by THIS test's egress run,
+        // not by a file another test class left under the same site prefix (review r3).
+        purgeEgressPrefix(SITE);
+    }
+
+    @BeforeEach
     void seedCustomersSchema() {
         String schemaJson = """
                 {
