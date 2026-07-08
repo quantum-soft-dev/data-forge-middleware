@@ -236,13 +236,24 @@ message SessionStart {
 with `RECONCILIATION_FAILED`. The hash is **lowercase hex SHA-256** over a canonical, wire-order-independent
 serialization (protobuf map order is not stable across languages):
 
-- records in `seq` order; each contributes `op ␟ table ␟ seq ␟ key-cols ␟ data-cols ␞`
+- records in `seq` order; each contributes `op ␟ <len:table> ␟ seq ␟ key-cols ␟ data-cols ␞`
   (`␟` = `0x1F`, `␞` = `0x1E`);
-- columns **sorted by name**, each `name=<tagged-value>`, joined by `␝` (`0x1D`);
-- value tags: `I`nt, `D`ouble, `S`tring, boo`L`ean, deci`M`al (string form), `B`ytes (hex), `N`ull —
-  so `1`, `"1"`, and `true` never collide.
+- columns **sorted by name**, each `<len:name>=<len:tagged-value>` followed by `␝` (`0x1D`);
+- **every variable-length token is length-prefixed** as `<len>:<token>` (byte length of the UTF-8
+  token) so a value that itself contains a separator byte cannot forge a different record set;
+- value tags: `I`nt, `D`ouble (**the IEEE-754 bit pattern as a decimal `long`, i.e.
+  `Double.doubleToLongBits` — not a formatted decimal, which is not reproducible across languages**),
+  `S`tring, boo`L`ean, deci`M`al (string form), `B`ytes (hex), `N`ull — so `1`, `"1"`, and `true`
+  never collide.
 
 See `ChangelogContentHash` for the reference implementation.
+
+**`SessionEnd.last_seq`** must equal the highest `seq` you sent (the last `ChangeRecord`'s). The
+server rejects a non-zero mismatch with `RECONCILIATION_FAILED`; send `0` to opt out of the check.
+
+**Session size limit.** A single non-CONTINUOUS session is capped (server config
+`delta.ingestion.max-session-records`, default 2,000,000). A larger dataset is rejected with
+`INTERNAL` — stream it in [continuous mode](#continuous-mode), which seals bounded segments as it goes.
 
 ---
 
@@ -338,10 +349,13 @@ enum RecoveryAction { PROCEED = 0; RESUME_FROM = 1; NEED_REBASELINE = 2; }
 ```
 
 ### Sequence gap → re-baseline
-At `SessionStart`, a DELTA/CONTINUOUS session must have `first_seq == server_last_seq + 1`. Otherwise the
-server returns `ServerError{code = SEQUENCE_GAP, action = NEED_REBASELINE}`. Recover by opening a
-`FULL_SNAPSHOT` session that re-sends the full current state (all `INSERT`s) — this re-establishes a clean
-checkpoint floor and realigns `seq`.
+At `SessionStart`, a DELTA/CONTINUOUS session may not skip ahead: `first_seq` must be **≤
+`server_last_seq + 1`**. A forward gap (`first_seq > server_last_seq + 1`) returns
+`ServerError{code = SEQUENCE_GAP, action = NEED_REBASELINE}`; recover with a `FULL_SNAPSHOT` session.
+
+A `first_seq` **at or below** the watermark is treated as a **replay** (e.g. you retried after a lost
+`SessionCommitted` ack): the server proceeds and de-duplicates the already-committed seqs, so a lost
+ack costs a cheap replay rather than a full re-baseline.
 
 ### Resume after a mid-session drop
 If a DELTA session's stream drops **before** `SessionEnd` (transport error or a half-close without an end),
@@ -356,8 +370,15 @@ Replay your records starting at `resume_from_seq` (records ≤ the staged waterm
 re-send them), then `SessionEnd` with **cumulative** per-table counts. The session commits one segment
 spanning the staged + replayed records.
 
-> Resume staging is **in-memory** on the server: if the server restarts before you reconnect, the staged data
-> is gone and you'll get a `SEQUENCE_GAP` / `NEED_REBASELINE` instead — fall back to a `FULL_SNAPSHOT`.
+> Resume staging is **in-memory** on the server and is evicted after a TTL (server config
+> `delta.ingestion.staged-ttl-millis`, default just over the 60-minute batch timeout). If the server
+> restarts, or you do not reconnect within the TTL, the staged data is gone and you'll get a
+> `SEQUENCE_GAP` / `NEED_REBASELINE` — fall back to a `FULL_SNAPSHOT`.
+>
+> **Acks are progress, not durability.** `Ack(acked_seq)` means the server has *received and buffered*
+> up to that seq, not that it is durably committed — durability is `SessionCommitted`/the watermark.
+> Do not discard records you have only seen acked; keep them until the session commits, so you can
+> replay after a drop or restart.
 
 ### Open a `FULL_SNAPSHOT` to self-heal
 Any `FULL_SNAPSHOT` session erases accumulated drift and resets the floor — use it for bootstrap, after a gap,
@@ -372,12 +393,14 @@ change records as they occur and keep the stream open.
 
 - The server **seals** a segment automatically once it reaches a size threshold, emitting a
   `SessionCommitted{committed_seq, segment_s3_key}` for each sealed segment, and continues accumulating the next.
-- When you close the stream gracefully, the server flushes the final partial segment as one last
-  `SessionCommitted`.
-- Gap detection applies as for DELTA (`first_seq == server_last_seq + 1`).
-- **No reconciliation** (there is no `SessionEnd`). If the stream drops mid-segment, the unsealed tail is lost
-  and the batch is left active until it times out — reconnect and continue from the last `committed_seq` you
-  received (note that an immediate reconnect may hit `ACTIVE_SESSION_EXISTS` until the prior batch times out).
+- When you close the stream gracefully, the server flushes the final segment (even an empty one) and
+  completes its batch, so a clean close never leaves the site blocked.
+- Gap detection applies as for DELTA.
+- **No reconciliation** (there is no `SessionEnd`). If the stream **drops** mid-segment, the server
+  **durably seals the unsealed tail** and advances the watermark, then closes the batch — the tail is
+  **not** lost. Reconnect and continue from the last `committed_seq` the server advanced to (query
+  `GetSyncState` if unsure); because the drop-seal advanced the watermark past your last received ack,
+  open the next session at `server_last_seq + 1`.
 
 Periodic (`DELTA` / `FULL_SNAPSHOT`) mode is unchanged by this — pick continuous only when you want a
 long-lived stream.
@@ -452,10 +475,14 @@ You don't write these — they're how downstream tools read your data:
 - **Analytics consumers** read a **sequential delta Parquet stream** per table:
   `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (zero-padded sequences — listing order is
   apply order). Each file is one committed session segment: typed columns from your submitted schema
-  (all nullable) plus service columns `_op` (`INSERT`/`UPDATE`/`DELETE`) and `_seq`. `DELETE` rows
-  carry the key columns. Apply the files sequentially by seq; a `FULL_SNAPSHOT` session produces an
-  all-`INSERT` file — a full table — so bootstrap and re-baseline need no special handling. Only
-  tables with a submitted schema are materialized.
+  (all nullable) plus service columns `_op` (`INSERT`/`UPDATE`/`DELETE`), `_seq`, and `_changed`.
+  `DELETE` rows carry the key columns. **`_changed`** disambiguates a null cell in an `UPDATE`: it is
+  a comma-separated list of the columns the `UPDATE` actually carried, so for an `UPDATE` a null cell
+  in a **listed** column means *set to SQL NULL* and a null cell in an **unlisted** column means
+  *unchanged* (keep the prior value); it is null for `INSERT` (full row) and `DELETE` (key only).
+  Apply the files sequentially by seq; a `FULL_SNAPSHOT` session produces an all-`INSERT` file — a
+  full table — so bootstrap and re-baseline need no special handling. Only tables with a submitted
+  schema are materialized.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
@@ -586,8 +613,9 @@ for ev in stub.StreamChanges(client_events(), metadata=md):
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Call closed with `UNAUTHENTICATED` | missing/expired `authorization` Bearer token | refresh the access token; attach `authorization: Bearer …` metadata |
-| `SEQUENCE_GAP` at `SessionStart` | `first_seq` ≠ `last_applied_seq + 1` | `GetSyncState` then open at `+1`, or `FULL_SNAPSHOT` to re-baseline |
-| `RECONCILIATION_FAILED` | `SessionEnd` per-table counts ≠ records sent | count exactly per table; for resume use **cumulative** counts |
+| `SEQUENCE_GAP` at `SessionStart` | `first_seq` > `last_applied_seq + 1` (forward gap) | `GetSyncState` then open at `+1`, or `FULL_SNAPSHOT` to re-baseline (a replay at ≤ watermark is accepted, not a gap) |
+| `RECONCILIATION_FAILED` | `SessionEnd` per-table counts, `content_hash`, or `last_seq` ≠ records sent | count exactly per table; set `last_seq` to your highest seq; for resume use **cumulative** counts |
+| `INTERNAL` "exceeded … record limit" | one non-continuous session buffered too many records | stream large datasets in `CONTINUOUS` mode |
 | `ACTIVE_SESSION_EXISTS` | another session live for this site (or a prior dropped batch not yet timed out) | serialize sessions; for a resumable DELTA drop, reconnect to get `RESUME_FROM` |
 | `UPDATE` rejected | the table is keyless (empty `primary_key`) | emit `DELETE` + `INSERT` instead |
 | Wrong Parquet types / parse errors in egress | wire value doesn't match declared type | send decimals/dates/timestamps as **strings**; keep `SubmitSchema` in sync with the data |
