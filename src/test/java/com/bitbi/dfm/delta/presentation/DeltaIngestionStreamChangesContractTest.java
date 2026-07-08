@@ -574,6 +574,30 @@ class DeltaIngestionStreamChangesContractTest {
         verify(batchLifecycle, never()).failBatch(batchId);
     }
 
+    @Test
+    void continuousCloseCommitFailureFailsBatchInsteadOfEscaping() throws Exception {
+        // onCompleted was the only commit path without a try/catch: a commit failure escaped the
+        // gRPC callback, left the batch IN_PROGRESS, and never notified the client. It must now
+        // fail the batch and surface an error, like onNext/onError already do.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any()))
+                .thenThrow(new RuntimeException("s3 down"));
+
+        List<ServerEvent> received = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s = asyncStub.streamChanges(collect(received, done));
+        s.onNext(start(SessionMode.CONTINUOUS, 1L));
+        s.onNext(change("t", Op.INSERT, 1L));
+        s.onCompleted(); // clean close flushes the tail -> commit throws
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "stream must terminate (not hang on an escaped throw)");
+        verify(batchLifecycle).failBatch(batchId);
+        verify(batchLifecycle, never()).completeBatch(batchId);
+    }
+
     private static Batch mockBatch(UUID id) {
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(id);

@@ -491,17 +491,26 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (closed) {
                     return;
                 }
-                if (continuous) {
-                    // Flush the final segment and complete its batch, then close (T5.4). Even an
-                    // empty buffer must be sealed: after a threshold seal opened a fresh batch, a
-                    // clean close with no further records would otherwise leave that batch
-                    // IN_PROGRESS, blocking the site with ACTIVE_SESSION_EXISTS until the sweeper (P1).
-                    if (buffer != null) {
-                        sealContinuous(false);
+                try {
+                    if (continuous) {
+                        // Flush the final segment and complete its batch, then close (T5.4). Even an
+                        // empty buffer must be sealed: after a threshold seal opened a fresh batch, a
+                        // clean close with no further records would otherwise leave that batch
+                        // IN_PROGRESS, blocking the site with ACTIVE_SESSION_EXISTS until the sweeper (P1).
+                        if (buffer != null) {
+                            sealContinuous(false);
+                        }
+                    } else {
+                        // Half-close without SessionEnd = abandoned periodic session — stage for resume (T5.1).
+                        stageForResume();
                     }
-                } else {
-                    // Half-close without SessionEnd = abandoned periodic session — stage for resume (T5.1).
-                    stageForResume();
+                } catch (RuntimeException e) {
+                    // A commit failure on the final seal must not escape the gRPC callback and strand
+                    // the batch IN_PROGRESS — fail the batch and surface the error, like onNext/onError.
+                    abortBatch();
+                    closed = true;
+                    responseObserver.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
+                    return;
                 }
                 closed = true;
                 responseObserver.onCompleted();
