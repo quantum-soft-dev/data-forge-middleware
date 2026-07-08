@@ -193,8 +193,9 @@ public class DeltaSyncAdminController {
     })
     public ResponseEntity<Map<String, String>> rebuildCheckpoint(@PathVariable UUID siteId) {
         siteService.getSite(siteId); // 404 when the site does not exist
-        checkpointRebuildService.requestRebuild(siteId);
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "scheduled"));
+        boolean queued = checkpointRebuildService.requestRebuild(siteId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(Map.of("status", queued ? "scheduled" : "already-queued"));
     }
 
     /**

@@ -334,6 +334,28 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle a full async work queue (503 Service Unavailable) — e.g. the forced checkpoint
+     * rebuild executor rejecting a task (review r3). Retryable, not a generic 500.
+     */
+    @ExceptionHandler(java.util.concurrent.RejectedExecutionException.class)
+    public ResponseEntity<ErrorResponseDto> handleRejectedExecution(
+            java.util.concurrent.RejectedExecutionException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Async work queue full: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "The work queue is full. Please try again shortly.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
      * Handle NoHandlerFoundException (404 Not Found).
      */
     @ExceptionHandler(NoHandlerFoundException.class)

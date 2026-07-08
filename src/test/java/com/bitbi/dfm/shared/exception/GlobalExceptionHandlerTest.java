@@ -142,6 +142,20 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("Should map RejectedExecutionException to 503 Service Unavailable")
+    void shouldHandleRejectedExecutionException() {
+        java.util.concurrent.RejectedExecutionException ex =
+                new java.util.concurrent.RejectedExecutionException("rebuild queue full");
+
+        ResponseEntity<ErrorResponseDto> response = handler.handleRejectedExecution(ex, request);
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(503, response.getBody().status());
+        assertEquals("Service Unavailable", response.getBody().error());
+    }
+
+    @Test
     @DisplayName("Should handle generic Exception with 500 Internal Server Error")
     void shouldHandleGenericException() {
         // Given

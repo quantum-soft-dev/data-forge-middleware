@@ -5,6 +5,7 @@ import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -71,15 +72,31 @@ public class DeltaSyncStateService {
     /**
      * Flag a site for a forced out-of-schedule checkpoint rebuild (creating the sync state row
      * if absent); cleared via {@link #clearRebuildRequested} once the rebuild completes.
+     * Idempotent: an already-flagged site is left untouched.
      *
      * @param siteId site identifier
+     * @return {@code true} when newly flagged, {@code false} when a rebuild was already requested
      */
     @Transactional
-    public void requestRebuild(UUID siteId) {
+    public boolean requestRebuild(UUID siteId) {
         SiteSyncState state = repository.findBySiteId(siteId)
                 .orElseGet(() -> SiteSyncState.initial(siteId));
+        if (state.isRebuildRequested()) {
+            return false;
+        }
         state.requestRebuild();
         repository.save(state);
+        return true;
+    }
+
+    /**
+     * Sites whose forced-rebuild flag is set — startup recovery input (review r3).
+     *
+     * @return site identifiers with a pending rebuild request
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> findSitesWithPendingRebuild() {
+        return repository.findSiteIdsWithRebuildRequested();
     }
 
     /**

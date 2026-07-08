@@ -28,4 +28,8 @@ public interface JpaSiteSyncStateRepository
     @Override
     @Query("SELECT s FROM SiteSyncState s WHERE s.siteId IN :siteIds")
     List<SiteSyncState> findBySiteIdIn(Collection<UUID> siteIds);
+
+    @Override
+    @Query("SELECT s.siteId FROM SiteSyncState s WHERE s.rebuildRequested = true")
+    List<UUID> findSiteIdsWithRebuildRequested();
 }

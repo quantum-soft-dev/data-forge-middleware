@@ -55,6 +55,31 @@ class DeltaRebuildRestContractTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("returns 202 already-queued and skips the duplicate build while one is pending")
+    void shouldShortCircuitDuplicateRebuild() throws Exception {
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        when(checkpointService.buildCheckpoint(SITE)).thenAnswer(inv -> {
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            return Map.of();
+        });
+        jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", SITE);
+
+        mockMvc.perform(post(ADMIN_URL.formatted(SITE))
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("scheduled"));
+
+        // First rebuild still running (blocked on the latch) — the duplicate must not queue.
+        mockMvc.perform(post(ADMIN_URL.formatted(SITE))
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("already-queued"));
+
+        release.countDown();
+        verify(checkpointService, timeout(5000)).buildCheckpoint(SITE);
+    }
+
+    @Test
     @DisplayName("returns 404 for an unknown site")
     void shouldReturn404ForUnknownSite() throws Exception {
         mockMvc.perform(post(ADMIN_URL.formatted(UUID.randomUUID()))

@@ -109,10 +109,26 @@ class DeltaSyncStateServiceTest {
         SiteSyncState state = SiteSyncState.initial(SITE);
         when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
 
-        service.requestRebuild(SITE);
+        assertTrue(service.requestRebuild(SITE), "newly flagged request must report true");
 
         assertTrue(state.isRebuildRequested());
         verify(repository).save(state);
+    }
+
+    @Test
+    void requestRebuildIsIdempotentWhenAlreadyFlagged() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebuild();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        assertFalse(service.requestRebuild(SITE), "already-flagged request must report false");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void findSitesWithPendingRebuildDelegatesToRepository() {
+        when(repository.findSiteIdsWithRebuildRequested()).thenReturn(java.util.List.of(SITE));
+        assertEquals(java.util.List.of(SITE), service.findSitesWithPendingRebuild());
     }
 
     @Test

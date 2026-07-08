@@ -37,4 +37,12 @@ public interface SiteSyncStateRepository {
      * @return saved entity
      */
     SiteSyncState save(SiteSyncState state);
+
+    /**
+     * Sites whose forced-rebuild flag is set (review r3): consumed by the startup recovery that
+     * re-drives rebuilds orphaned by a restart between flag-commit and task execution.
+     *
+     * @return site identifiers with {@code rebuild_requested = true}
+     */
+    List<UUID> findSiteIdsWithRebuildRequested();
 }
