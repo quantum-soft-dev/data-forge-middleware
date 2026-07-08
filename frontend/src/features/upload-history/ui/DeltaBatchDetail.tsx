@@ -13,9 +13,9 @@ import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import type { BatchDetail } from '@/entities/batch/model/types';
 import { presignBatchTableParquet } from '@/features/delta-sync/api/deltaSyncApi';
 import { openPresignedDownload } from '@/features/delta-sync/lib/downloadPresigned';
-import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
+import { STATUS_LABELS, STATUS_VARIANT, failureTone } from '@/features/upload-history/model/batchStatus';
 import { Badge } from '@/shared/ui/ui/badge';
-import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
+import { changeKindTokens, monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import { formatDateTime, formatNumber } from '@/shared/lib/formatters';
 
 const GRID = '1.6fr 1fr 1fr 1fr 1fr 0.9fr';
@@ -40,8 +40,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
 
   const completed = batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS';
   const inProgress = batch.status === 'IN_PROGRESS';
-  const failureTone =
-    STATUS_VARIANT[batch.status] === 'stalled' ? severityTokens.stalled : severityTokens.critical;
+  const failure = failureTone(batch.status);
 
   const [downloadingTable, setDownloadingTable] = useState<string | null>(null);
 
@@ -71,7 +70,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                 ? severityTokens.healthy.bg
                 : inProgress
                   ? monitoringTokens.blue50
-                  : failureTone.bg,
+                  : failure.bg,
             }}
           >
             {completed ? (
@@ -79,7 +78,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
             ) : inProgress ? (
               <Loader2 className="h-5 w-5 animate-spin text-brand" strokeWidth={1.5} />
             ) : (
-              <XCircle className="h-5 w-5" style={{ color: failureTone.dot }} strokeWidth={1.5} />
+              <XCircle className="h-5 w-5" style={{ color: failure.dot }} strokeWidth={1.5} />
             )}
           </div>
           <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
@@ -88,13 +87,13 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
           <Badge variant={STATUS_VARIANT[batch.status] ?? 'neutral'} className="px-2.5 py-0.5">
             {STATUS_LABELS[batch.status] ?? batch.status}
           </Badge>
-          <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand">
+          <Badge variant="info" className="px-2.5 py-0.5">
             Delta session
-          </span>
+          </Badge>
           {batch.mode && (
-            <span className="rounded-full bg-surface-subtle px-2.5 py-0.5 text-xs font-medium text-ink-secondary">
+            <Badge variant="neutral" className="px-2.5 py-0.5">
               {batch.mode}
-            </span>
+            </Badge>
           )}
         </div>
 
@@ -139,11 +138,11 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
                 data-testid={`delta-stats-row-${stat.table}`}
               >
                 <span className="font-medium text-ink">{stat.table}</span>
-                <span className="text-right text-[#16A34A]">
+                <span className="text-right" style={{ color: changeKindTokens.insert }}>
                   {stat.inserts > 0 ? `+${formatNumber(stat.inserts)}` : formatNumber(stat.inserts)}
                 </span>
-                <span className="text-right text-[#3B82F6]">{formatNumber(stat.updates)}</span>
-                <span className="text-right text-[#EF4444]">
+                <span className="text-right" style={{ color: changeKindTokens.update }}>{formatNumber(stat.updates)}</span>
+                <span className="text-right" style={{ color: changeKindTokens.delete }}>
                   {stat.deletes > 0 ? `${MINUS}${formatNumber(stat.deletes)}` : formatNumber(stat.deletes)}
                 </span>
                 <span className="text-right font-medium text-ink">
@@ -171,17 +170,17 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
               className="grid items-center px-2 py-2 text-sm font-medium text-ink"
               style={{
                 gridTemplateColumns: GRID,
-                borderTop: '1px solid rgba(0,0,0,0.12)',
+                borderTop: `1px solid ${monitoringTokens.border}`,
                 fontVariantNumeric: 'tabular-nums',
               }}
               data-testid="delta-stats-total-row"
             >
               <span>Total</span>
-              <span className="text-right text-[#16A34A]">
+              <span className="text-right" style={{ color: changeKindTokens.insert }}>
                 {totals.inserts > 0 ? `+${formatNumber(totals.inserts)}` : formatNumber(totals.inserts)}
               </span>
-              <span className="text-right text-[#3B82F6]">{formatNumber(totals.updates)}</span>
-              <span className="text-right text-[#EF4444]">
+              <span className="text-right" style={{ color: changeKindTokens.update }}>{formatNumber(totals.updates)}</span>
+              <span className="text-right" style={{ color: changeKindTokens.delete }}>
                 {totals.deletes > 0 ? `${MINUS}${formatNumber(totals.deletes)}` : formatNumber(totals.deletes)}
               </span>
               <span className="text-right">{formatNumber(grandTotal)}</span>

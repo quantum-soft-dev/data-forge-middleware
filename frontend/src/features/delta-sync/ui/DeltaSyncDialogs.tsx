@@ -53,11 +53,10 @@ export function RebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialo
           <AlertDialogTitle>Request full re-baseline?</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div
-              className="flex items-start gap-2 rounded-lg border p-3 text-sm"
+              className="flex items-start gap-2 rounded-lg border p-3 text-sm text-danger-text"
               style={{
                 background: 'rgba(239,68,68,0.08)',
                 borderColor: 'rgba(239,68,68,0.25)',
-                color: '#B91C1C',
               }}
             >
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.5} />
@@ -70,7 +69,7 @@ export function RebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialo
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm} className="bg-[#EF4444] hover:bg-[#DC2626]">
+          <AlertDialogAction onClick={onConfirm} className="bg-danger-solid hover:bg-danger-solid-hover">
             Request re-baseline
           </AlertDialogAction>
         </AlertDialogFooter>

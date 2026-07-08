@@ -6,7 +6,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { STATUS_LABELS, STATUS_VARIANT } from './batchStatus';
+import { severityTokens } from '@/shared/ui/tokens';
+import { STATUS_LABELS, STATUS_VARIANT, failureTone } from './batchStatus';
 
 const ALL_BACKEND_STATUSES = [
   'COMPLETED',
@@ -33,5 +34,14 @@ describe('batchStatus shared mapping', () => {
   it('marks abandoned and cancelled sessions as stalled, not neutral', () => {
     expect(STATUS_VARIANT.NOT_COMPLETED).toBe('stalled');
     expect(STATUS_VARIANT.CANCELLED).toBe('stalled');
+  });
+
+  it('derives the failure icon tone from the variant on every surface', () => {
+    // Was duplicated inline in BatchDetailView and DeltaBatchDetail (review r3): a future
+    // variant remap would recolor pills but leave the status icons on stale ternaries.
+    expect(failureTone('NOT_COMPLETED')).toBe(severityTokens.stalled);
+    expect(failureTone('CANCELLED')).toBe(severityTokens.stalled);
+    expect(failureTone('FAILED')).toBe(severityTokens.critical);
+    expect(failureTone('SOMETHING_NEW')).toBe(severityTokens.critical);
   });
 });

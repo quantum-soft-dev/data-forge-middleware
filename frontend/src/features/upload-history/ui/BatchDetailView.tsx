@@ -21,7 +21,7 @@ import { ComparisonHistorySection } from './ComparisonHistorySection';
 import { ErrorListView } from './ErrorListView';
 import { DeltaBatchDetail } from './DeltaBatchDetail';
 import { useBatchErrors } from '@/entities/batch/api/queries';
-import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
+import { STATUS_LABELS, STATUS_VARIANT, failureTone } from '@/features/upload-history/model/batchStatus';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -183,12 +183,7 @@ export function BatchDetailView({
             ) : (
               <XCircle
                 className="h-8 w-8 flex-shrink-0"
-                style={{
-                  color:
-                    STATUS_VARIANT[batch.status] === 'stalled'
-                      ? severityTokens.stalled.dot
-                      : severityTokens.critical.dot,
-                }}
+                style={{ color: failureTone(batch.status).dot }}
                 strokeWidth={1.5}
               />
             )}

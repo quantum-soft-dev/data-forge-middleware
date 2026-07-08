@@ -33,6 +33,13 @@ export const severityTokens: Record<MonitoringSeverity, SeverityToken> = {
   stalled: { dot: '#F97316', text: '#C2410C', bg: 'rgba(249,115,22,0.12)', label: 'Stalled' },
 };
 
+/** Semantic colors for change kinds in delta tables (inserts/updates/deletes counters). */
+export const changeKindTokens = {
+  insert: '#16A34A',
+  update: '#3B82F6',
+  delete: '#EF4444',
+} as const;
+
 export const monitoringTokens = {
   primary: '#3C82D8',
   primaryHover: '#3676C4',

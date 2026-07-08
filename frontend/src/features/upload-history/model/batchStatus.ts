@@ -7,6 +7,7 @@
  */
 
 import type { BadgeProps } from '@/shared/ui/ui/badge';
+import { severityTokens, type SeverityToken } from '@/shared/ui/tokens';
 
 export const STATUS_LABELS: Record<string, string> = {
   COMPLETED: 'Completed',
@@ -25,3 +26,12 @@ export const STATUS_VARIANT: Record<string, NonNullable<BadgeProps['variant']>> 
   NOT_COMPLETED: 'stalled',
   CANCELLED: 'stalled',
 };
+
+/**
+ * Icon/circle tone for a failure-family status: stalled statuses (timeout, cancel) render
+ * amber, everything else red. Lives here so the status icons follow the variant map — an
+ * inline ternary per surface would go stale on the next variant remap (review r3).
+ */
+export function failureTone(status: string): SeverityToken {
+  return STATUS_VARIANT[status] === 'stalled' ? severityTokens.stalled : severityTokens.critical;
+}
