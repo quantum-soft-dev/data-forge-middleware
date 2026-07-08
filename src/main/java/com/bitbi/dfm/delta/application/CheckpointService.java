@@ -13,7 +13,6 @@ import com.bitbi.dfm.site.domain.TableSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -66,10 +65,15 @@ public class CheckpointService {
      * Build (or refresh) the checkpoint for a site by folding the latest checkpoint frame plus the
      * segments recorded since the checkpoint pointer.
      *
+     * <p>No {@code @Transactional}: the build spans frame + per-segment S3 downloads and per-table
+     * S3 uploads — holding a HikariCP connection across those network calls would pin it for the
+     * whole build (the pattern removed from the read path in 025-T3). Repository calls run in their
+     * own short transactions; a failure mid-loop leaves idempotent per-table rows that the next
+     * build overwrites, and the pointer only advances at the very end ({@code recordCheckpoint}).</p>
+     *
      * @param siteId site identifier
      * @return folded state: table → row-identity → folded row (empty if no segments)
      */
-    @Transactional
     public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId) {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
         if (segments.isEmpty()) {

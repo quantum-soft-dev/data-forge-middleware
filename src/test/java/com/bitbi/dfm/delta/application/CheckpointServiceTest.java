@@ -160,6 +160,18 @@ class CheckpointServiceTest {
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
+    @Test
+    void buildCheckpointDoesNotHoldATransactionAcrossS3RoundTrips() throws NoSuchMethodException {
+        // Same contract as DeltaSegmentParquetQueryService (025-T3): the build downloads the frame,
+        // every segment, and uploads CSV/Parquet/frame to S3 — holding a HikariCP connection across
+        // those network calls pins it for the whole multi-minute build. Repository calls run in
+        // their own short transactions; recordCheckpoint is transactional on its own.
+        assertNull(CheckpointService.class
+                        .getMethod("buildCheckpoint", UUID.class)
+                        .getAnnotation(org.springframework.transaction.annotation.Transactional.class),
+                "buildCheckpoint must not open a transaction spanning S3 round-trips");
+    }
+
     // --- helpers ---
 
     private static TableSchema customersSchema() {
