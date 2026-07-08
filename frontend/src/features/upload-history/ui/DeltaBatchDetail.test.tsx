@@ -57,6 +57,28 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
     expect(screen.getAllByRole('button', { name: 'Parquet' })).toHaveLength(2);
   });
 
+  it('colors the status circle from shared tokens per severity (stalled vs critical)', () => {
+    // CSSOM normalizes color strings — run tokens through the same normalization
+    const css = (color: string) => {
+      const el = document.createElement('div');
+      el.style.background = color;
+      return el.style.background;
+    };
+    const circle = (batch: BatchDetail) => {
+      const { container, unmount } = render(<DeltaBatchDetail batch={batch} />);
+      const el = container.querySelector('.h-10.w-10') as HTMLElement;
+      const bg = el.style.background;
+      unmount();
+      return bg;
+    };
+
+    expect(circle(makeBatch())).toBe(css(severityTokens.healthy.bg));
+    expect(circle(makeBatch({ status: 'IN_PROGRESS', completedAt: null }))).toBe(css(monitoringTokens.blue50));
+    expect(circle(makeBatch({ status: 'FAILED' }))).toBe(css(severityTokens.critical.bg));
+    expect(circle(makeBatch({ status: 'NOT_COMPLETED' }))).toBe(css(severityTokens.stalled.bg));
+    expect(circle(makeBatch({ status: 'CANCELLED' }))).toBe(css(severityTokens.stalled.bg));
+  });
+
   it('presigns through the owner route and starts a same-tab anchor download', async () => {
     presignBatchTableParquet.mockResolvedValue({
       downloadUrl: 'https://s3/egress/orders.parquet',
