@@ -6,6 +6,7 @@ import {
   getDeltaSyncState,
   getDeltaSegments,
   presignCheckpointDownload,
+  presignBatchTableParquet,
   requestCheckpointRebuild,
   requestRebaseline,
   getDeltaSyncHealth,
@@ -86,6 +87,19 @@ describe('admin-only and action endpoints', () => {
 
     expect(mockedGet).toHaveBeenCalledWith('/v1/account/sites/s1/delta/checkpoints/orders/download', {
       params: { format: 'parquet' },
+      suppressErrorToast: true,
+    });
+    expect(download.fileName).toContain('.parquet');
+  });
+
+  it('presigns a batch table Parquet on the owner route with the global toast suppressed (025)', async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: { downloadUrl: 'https://s3/x', fileName: 'orders_seq1-2.parquet', expiresAt: '2026-07-05T12:45:00Z' },
+    });
+
+    const download = await presignBatchTableParquet('s1', 'b1', 'orders/x');
+
+    expect(mockedGet).toHaveBeenCalledWith('/v1/account/sites/s1/delta/batches/b1/tables/orders%2Fx/parquet', {
       suppressErrorToast: true,
     });
     expect(download.fileName).toContain('.parquet');
