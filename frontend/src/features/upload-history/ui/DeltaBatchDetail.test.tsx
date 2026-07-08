@@ -57,7 +57,7 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
     expect(screen.getAllByRole('button', { name: 'Parquet' })).toHaveLength(2);
   });
 
-  it('presigns (owner scope by default) and starts a same-tab anchor download', async () => {
+  it('presigns through the owner route and starts a same-tab anchor download', async () => {
     presignBatchTableParquet.mockResolvedValue({
       downloadUrl: 'https://s3/egress/orders.parquet',
       fileName: 'orders_seq879446-879482.parquet',
@@ -73,31 +73,9 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
       '139dc0a0-7743-4d6c-9823-d6925a4c9f74',
       'c4bdde2b-7105-42d7-944d-06fd13b0c66d',
       'orders',
-      { admin: false },
     );
     await waitFor(() => expect(anchorClick).toHaveBeenCalled());
     expect(toastSuccess).toHaveBeenCalled();
-    anchorClick.mockRestore();
-  });
-
-  it('uses the admin scope when the admin prop is set', async () => {
-    presignBatchTableParquet.mockResolvedValue({
-      downloadUrl: 'https://s3/x.parquet',
-      fileName: 'x.parquet',
-      expiresAt: '2026-07-05T18:00:00Z',
-    });
-    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    const user = userEvent.setup();
-    render(<DeltaBatchDetail batch={makeBatch()} admin />);
-
-    await user.click(screen.getByTestId('delta-stats-row-orders').querySelector('button')!);
-
-    expect(presignBatchTableParquet).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(String),
-      'orders',
-      { admin: true },
-    );
     anchorClick.mockRestore();
   });
 

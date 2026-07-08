@@ -30,9 +30,17 @@ Commit per task, per-task gates green (backend + frontend).
   `features/upload-history/model/batchStatus.ts`.
   Commit: `fix(upload-history): shared presigned-download flow and status mapping (025-T4)`
 
+- [x] **T5** Descope the admin presign twin (post-review, 2026-07-08)
+  Review found the admin endpoint + `admin` prop unreachable: batch detail has no admin
+  surface (clicks from /admin/sites land on a UserOnlyGuard route). Removed the admin
+  endpoint from `DeltaSyncAdminController`, the `admin` prop from `DeltaBatchDetail`, the
+  scope param from `presignBatchTableParquet`; contract tests now 4 owner-only cases.
+  Re-add together with an admin batch-detail page (see spec FR-1 note).
+  Commit: `refactor(delta): drop unreachable admin batch-parquet presign (025-T5)`
+
 ## Verification
 
-- Contract: 6/6 green; frontend suite 949 green; backend fast gate green.
+- Contract: 4/4 green after T5 descope (was 6/6); frontend suite green; backend fast gate green.
 - Live e2e (2026-07-07): click on `nsfbook` → presigned `egress/.../seq=879446-879482.parquet`,
   file bytes valid (`PAR1` head+tail).
 - Before-PR: `./gradlew integrationTest` required after stacking on 022/023/024 merges.

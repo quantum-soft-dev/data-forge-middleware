@@ -68,15 +68,17 @@ export async function presignCheckpointDownload(
   return deltaCheckpointDownloadSchema.parse(response.data);
 }
 
-/** Fresh presigned URL for one table's delta Parquet file of a batch (feature 025) — per click. */
+/**
+ * Fresh presigned URL for one table's delta Parquet file of a batch (feature 025) — per click.
+ * Owner route only: batch detail has no admin surface (the admin twin was descoped).
+ */
 export async function presignBatchTableParquet(
   siteId: string,
   batchId: string,
   tableName: string,
-  scope: DeltaApiScope,
 ): Promise<DeltaCheckpointDownload> {
   const response = await apiClient.get(
-    `${deltaBasePath(siteId, scope)}/batches/${batchId}/tables/${encodeURIComponent(tableName)}/parquet`,
+    `${deltaBasePath(siteId, { admin: false })}/batches/${batchId}/tables/${encodeURIComponent(tableName)}/parquet`,
     // openPresignedDownload shows its own error taxonomy — no global toast.
     { suppressErrorToast: true },
   );

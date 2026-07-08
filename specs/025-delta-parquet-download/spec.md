@@ -28,15 +28,16 @@ delta Parquet file for any table in the session — one click per table, no S3 c
 3. **Given** any other failure (S3 outage → 503, auth, network), **Then** a generic retry toast
    is shown — never the schema explanation.
 4. **Given** a session still IN_PROGRESS, **Then** no pills render (files may not exist yet).
-5. **Given** an admin context (`admin` prop), **Then** the presign goes through the admin route.
 
 ## Requirements
 
-- **FR-1**: REST endpoints (owner + admin) presign one table's delta Parquet of a batch:
-  `GET /api/v1/account/sites/{siteId}/delta/batches/{batchId}/tables/{tableName}/parquet` and
-  `GET /api/v1/sites/{siteId}/delta/batches/{batchId}/tables/{tableName}/parquet`.
+- **FR-1**: REST endpoint (owner) presigns one table's delta Parquet of a batch:
+  `GET /api/v1/account/sites/{siteId}/delta/batches/{batchId}/tables/{tableName}/parquet`.
   404 when the batch has no changelog segment (filtered by siteId) or the file does not exist;
-  403 for a foreign site (owner) / non-admin (admin route). URLs minted per click, never cached.
+  403 for a foreign site. URLs minted per click, never cached.
+  _(The admin twin was descoped 2026-07-08: batch detail has no admin surface — clicks from
+  /admin/sites land on a UserOnlyGuard route — so the endpoint and the `admin` prop were
+  unreachable dead code. Re-add together with an admin batch-detail page.)_
 - **FR-2**: UI — per-table Parquet pill in the delta Batch Detail "Table changes" card
   (completed sessions only), with an in-flight guard.
 - **FR-3**: Storage failures during exists/presign MUST NOT surface as 500 — they map to
@@ -50,12 +51,12 @@ delta Parquet file for any table in the session — one click per table, no S3 c
 - Combining tables into a single Parquet file (impossible in-format; a ZIP-of-files "download
   all" endpoint discussed as a possible follow-up).
 - Owner-facing segments listing (P2 — untouched).
-- Admin batch-detail navigation (admin site-detail still links to the owner route; the admin
-  endpoint + `admin` prop are ready for when that lands).
+- Admin batch-detail navigation and the admin presign twin (descoped 2026-07-08, see FR-1;
+  admin site-detail still links to the owner route).
 
 ## Success Criteria
 
-- **SC-1**: Contract tests cover 200 (owner/admin), both 404 modes, both 403 modes — green.
+- **SC-1**: Contract tests cover owner 200, both 404 modes, foreign-site 403 — green.
 - **SC-2**: End-to-end verified on a live backend: click → presigned URL → valid Parquet bytes.
 - **SC-3**: Per-task gates green (backend `./gradlew test -PexcludeIntegration`, frontend
   `npm --prefix frontend test`).

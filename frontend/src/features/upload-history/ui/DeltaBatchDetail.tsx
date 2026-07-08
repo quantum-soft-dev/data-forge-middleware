@@ -24,11 +24,9 @@ const MINUS = '−';
 interface DeltaBatchDetailProps {
   batch: BatchDetail;
   siteName?: string;
-  /** Presign через админский маршрут (/api/v1/sites/…) вместо owner-маршрута. */
-  admin?: boolean;
 }
 
-export function DeltaBatchDetail({ batch, siteName, admin = false }: DeltaBatchDetailProps) {
+export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
   const stats = [...(batch.deltaStats ?? [])].sort((a, b) => a.table.localeCompare(b.table));
   const totals = stats.reduce(
     (acc, stat) => ({
@@ -51,7 +49,7 @@ export function DeltaBatchDetail({ batch, siteName, admin = false }: DeltaBatchD
     setDownloadingTable(tableName);
     try {
       await openPresignedDownload(
-        () => presignBatchTableParquet(batch.siteId, batch.id, tableName, { admin }),
+        () => presignBatchTableParquet(batch.siteId, batch.id, tableName),
         {
           notFoundMessage: `No delta Parquet for "${tableName}" — the table has no declared schema or the file is not egressed yet.`,
         },
