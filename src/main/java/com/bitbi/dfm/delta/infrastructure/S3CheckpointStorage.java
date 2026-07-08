@@ -220,7 +220,14 @@ public class S3CheckpointStorage {
             return true;
         } catch (NoSuchKeyException e) {
             return false;
-        } catch (S3Exception | SdkClientException e) {
+        } catch (S3Exception e) {
+            // HEAD on a missing key answers 404 only with s3:ListBucket; least-privilege
+            // IAM (Get/PutObject only) answers 403 — both mean "absent", not "unavailable"
+            if (e.statusCode() == 404 || e.statusCode() == 403) {
+                return false;
+            }
+            throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
+        } catch (SdkClientException e) {
             // network failures arrive as raw SdkClientException — wrap so callers see one type
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         }
