@@ -167,10 +167,11 @@ export function BatchListView({
           className={FILTER_SELECT_CLASSES}
         >
           <option value="all">All Status</option>
-          <option value="COMPLETED">Completed</option>
-          <option value="COMPLETED_WITH_WARNINGS">Completed with Warnings</option>
-          <option value="IN_PROGRESS">In Progress</option>
-          <option value="FAILED">Failed</option>
+          {Object.entries(STATUS_LABELS).map(([status, label]) => (
+            <option key={status} value={status}>
+              {label}
+            </option>
+          ))}
         </select>
         <select
           value={dateFilter}

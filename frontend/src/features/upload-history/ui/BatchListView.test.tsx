@@ -12,6 +12,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BatchListView } from './BatchListView';
 import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
+import { STATUS_LABELS } from '@/features/upload-history/model/batchStatus';
 import type { BatchSummary } from '@/entities/batch/model/types';
 
 /** The status <select> options share labels with pills — pick the pill (rounded-full). */
@@ -71,6 +72,26 @@ describe('BatchListView', () => {
       completedAt: daysAgo(3, -1), // 3 days ago + 1 hour
     },
   ];
+
+  describe('Status Filter', () => {
+    it('offers every status of the shared mapping, so no visible pill is unfilterable', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      const select = screen.getByDisplayValue('All Status');
+      const values = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+      for (const status of Object.keys(STATUS_LABELS)) {
+        expect(values).toContain(status);
+      }
+    });
+  });
 
   describe('Loading State', () => {
     it('should display loading spinner when isLoading is true', () => {
@@ -209,7 +230,7 @@ describe('BatchListView', () => {
       expect(getPill('Completed')).toBeInTheDocument();
       expect(getPill('Failed')).toBeInTheDocument();
       expect(getPill('In progress')).toBeInTheDocument();
-      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+      expect(getPill('Completed (Warnings)')).toBeInTheDocument();
     });
 
     it('should display file size in human-readable format', () => {
@@ -324,7 +345,7 @@ describe('BatchListView', () => {
 
       // Warning pill should be present for COMPLETED_WITH_WARNINGS status
       void container;
-      expect(screen.getByText('Completed (Warnings)')).toHaveStyle({
+      expect(getPill('Completed (Warnings)')).toHaveStyle({
         background: severityTokens.elevated.bg,
         color: severityTokens.elevated.text,
       });
@@ -382,7 +403,7 @@ describe('BatchListView', () => {
       });
 
       // COMPLETED_WITH_WARNINGS status should have the warning pill treatment
-      expect(screen.getByText('Completed (Warnings)')).toHaveStyle({
+      expect(getPill('Completed (Warnings)')).toHaveStyle({
         background: severityTokens.elevated.bg,
         color: severityTokens.elevated.text,
       });
@@ -705,14 +726,14 @@ describe('BatchListView', () => {
       expect(getPill('Completed')).toBeInTheDocument();
       expect(getPill('Failed')).toBeInTheDocument();
       expect(getPill('In progress')).toBeInTheDocument();
-      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+      expect(getPill('Completed (Warnings)')).toBeInTheDocument();
 
       // Select Site 2 (has only mockBatches[3])
       const siteSelect = screen.getByDisplayValue('All Sites');
       await user.selectOptions(siteSelect, '123e4567-e89b-12d3-a456-426614174002');
 
       // Should only show the batch from Site 2 (COMPLETED_WITH_WARNINGS)
-      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+      expect(getPill('Completed (Warnings)')).toBeInTheDocument();
       // Other batches should not be visible (pill lookup — select options share labels)
       expect(screen.queryAllByText('Completed').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
       expect(screen.queryAllByText('Failed').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
