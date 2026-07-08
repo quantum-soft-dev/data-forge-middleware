@@ -75,6 +75,17 @@ public class CheckpointService {
         long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
         boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
 
+        // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
+        // recordCheckpoint). If it reads as absent — deleted, or an S3 HEAD denial masquerading
+        // as absence — a refold is lossless only while the full history survives; after retention
+        // pruning it would silently publish a truncated checkpoint and advance the pointer, making
+        // the loss durable. Refuse and let the build fail loudly instead.
+        if (checkpointSeq > 0 && !haveFrame && segments.get(0).getFirstSeq() > 1) {
+            throw new S3CheckpointStorage.CheckpointStorageException(
+                    "Checkpoint frame@" + checkpointSeq + " for site " + siteId
+                            + " is unreadable and earlier segments are pruned — refusing lossy refold", null);
+        }
+
         // Seed from the durable checkpoint frame when present; otherwise fold the full history.
         Map<String, Map<String, FoldedRow>> seed = haveFrame
                 ? ChangelogFold.fold(Map.of(), ChangelogCodec.parse(checkpointStorage.downloadFrame(siteId, checkpointSeq)))

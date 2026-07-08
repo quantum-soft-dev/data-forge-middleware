@@ -96,6 +96,38 @@ class CheckpointServiceTest {
         assertEquals("checkpoints/csv-key", saved.getValue().getS3KeyCsv());
     }
 
+    @Test
+    void refusesLossyRefoldWhenFrameUnreadableAndHistoryPruned() {
+        // Pointer advanced to 10, but the frame reads as absent (deleted, or an S3 HEAD denial
+        // masquerading as absence) and segments below the checkpoint were pruned: a refold from
+        // the surviving tail would silently publish a truncated checkpoint.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false));
+        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        ChangelogSegment survivor = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void refoldsFromZeroWhenFrameAbsentButFullHistorySurvives() {
+        // Frame gone but nothing was pruned (history still starts at seq 1): refold is lossless.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false));
+        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
     // --- helpers ---
 
     private static TableSchema customersSchema() {

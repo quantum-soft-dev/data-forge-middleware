@@ -222,8 +222,14 @@ public class S3CheckpointStorage {
             return false;
         } catch (S3Exception e) {
             // HEAD on a missing key answers 404 only with s3:ListBucket; least-privilege
-            // IAM (Get/PutObject only) answers 403 — both mean "absent", not "unavailable"
+            // IAM (Get/PutObject only) answers 403 — both mean "absent", not "unavailable".
+            // A blanket deny on EXISTING keys also lands here, so log the 403 branch: it is
+            // the only trace distinguishing an IAM outage from genuinely missing files.
             if (e.statusCode() == 404 || e.statusCode() == 403) {
+                if (e.statusCode() == 403) {
+                    log.warn("S3 HEAD denied (403) for {} — treating as absent; if this repeats "
+                            + "for existing keys, check IAM/bucket-policy read permissions", s3Key);
+                }
                 return false;
             }
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
