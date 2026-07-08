@@ -44,9 +44,10 @@ describe('SiteDetailShell (F3)', () => {
     expect(screen.getByText('POSTGRES_CDC')).toBeInTheDocument()
     expect(screen.getByText('Delta v2')).toBeInTheDocument()
     expect(screen.getByText('Active')).toBeInTheDocument()
-    // Prototype subline copy for V2 sites (F14)
+    // Prototype subline copy for V2 sites (F14); the cadence is derived from
+    // SYNC_STATE_POLL_MS so the copy cannot drift from the actual poll interval (review r3).
     expect(
-      screen.getByText('Changelog stream over gRPC. Metrics refresh every 15 seconds.'),
+      screen.getByText('Changelog stream over gRPC. Metrics refresh every 20 seconds.'),
     ).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /all sites/i }))

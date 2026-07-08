@@ -49,7 +49,10 @@ export const deltaSegmentSchema = z.object({
   firstSeq: z.number(),
   lastSeq: z.number(),
   recordCount: z.number(),
-  mode: deltaSessionModeSchema,
+  // Free-form String on the backend (proto SessionMode.name() pass-through): a strict enum
+  // would reject the WHOLE segments array over one unknown value (review r3). Unknown modes
+  // render on a neutral chip.
+  mode: z.string(),
   createdAt: z.string(),
 });
 export type DeltaSegment = z.infer<typeof deltaSegmentSchema>;

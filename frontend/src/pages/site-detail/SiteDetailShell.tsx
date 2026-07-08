@@ -11,6 +11,7 @@
  */
 
 import { ArrowLeft } from 'lucide-react';
+import { SYNC_STATE_POLL_MS } from '@/features/delta-sync/api/queries';
 import { severityTokens } from '@/shared/ui/tokens';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 import { BatchListWidget } from '@/widgets/upload-history/BatchListWidget';
@@ -78,7 +79,7 @@ export function SiteDetailShell({ site, canManage, admin = false, onBack }: Site
       {/* Subline (prototype copy per API version) */}
       <p className="mt-1.5 text-sm text-ink-secondary">
         {isV2
-          ? 'Changelog stream over gRPC. Metrics refresh every 15 seconds.'
+          ? `Changelog stream over gRPC. Metrics refresh every ${SYNC_STATE_POLL_MS / 1000} seconds.`
           : 'Full snapshot uploads over HTTP (v1).'}
       </p>
 

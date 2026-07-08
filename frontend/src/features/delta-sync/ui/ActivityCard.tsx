@@ -96,9 +96,10 @@ export function ActivityCard({ lagSamples, severity, segments, showThroughput }:
               </div>
             ) : (
               <div className="mt-3 flex h-14 items-end gap-1.5" data-testid="throughput-bars">
-                {bars.map((segment) => (
+                {bars.map((segment, index) => (
                   <div
-                    key={`${segment.firstSeq}-${segment.lastSeq}`}
+                    // Index suffix: empty seals share firstSeq/lastSeq (lastSeq = firstSeq - 1).
+                    key={`${segment.firstSeq}-${segment.lastSeq}-${index}`}
                     className="flex-1 rounded-[3px]"
                     style={{
                       height: `${Math.max((segment.recordCount / maxRecords) * 100, 4)}%`,

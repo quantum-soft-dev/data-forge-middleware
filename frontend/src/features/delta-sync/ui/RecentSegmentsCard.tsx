@@ -11,14 +11,17 @@
 import { useState } from 'react';
 import { ChevronDown, Layers } from 'lucide-react';
 import { formatNumber, formatShortDate } from '@/shared/lib/formatters';
-import type { DeltaSegment, DeltaSessionMode } from '../model/types';
+import type { DeltaSegment } from '../model/types';
 import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
-const MODE_CHIP_STYLES: Record<DeltaSessionMode, { background: string; color: string }> = {
+const MODE_CHIP_STYLES: Record<string, { background: string; color: string }> = {
   DELTA: { background: t.blue50, color: t.primary },
   CONTINUOUS: { background: severityTokens.healthy.bg, color: severityTokens.healthy.text },
   FULL_SNAPSHOT: { background: severityTokens.elevated.bg, color: severityTokens.elevated.text },
 };
+
+/** Unknown modes (e.g. a newer client enum value) render on a neutral chip instead of crashing. */
+const NEUTRAL_CHIP = { background: t.subtleBg, color: t.textSecondary };
 
 interface RecentSegmentsCardProps {
   segments: DeltaSegment[];
@@ -79,9 +82,10 @@ export function RecentSegmentsCard({ segments, isLoading = false }: RecentSegmen
                   <span>Mode</span>
                   <span>Created</span>
                 </div>
-                {segments.map((segment) => (
+                {segments.map((segment, index) => (
                   <div
-                    key={`${segment.firstSeq}-${segment.lastSeq}`}
+                    // Index suffix: empty seals share firstSeq/lastSeq (lastSeq = firstSeq - 1).
+                    key={`${segment.firstSeq}-${segment.lastSeq}-${index}`}
                     className="grid items-center border-t px-2 py-2 text-sm hover:bg-[#FAFAFA]"
                     style={{ gridTemplateColumns: '1.2fr .8fr .9fr 1fr', borderColor: t.separator, color: t.text }}
                   >
@@ -94,7 +98,7 @@ export function RecentSegmentsCard({ segments, isLoading = false }: RecentSegmen
                     <span>
                       <span
                         className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                        style={MODE_CHIP_STYLES[segment.mode]}
+                        style={MODE_CHIP_STYLES[segment.mode] ?? NEUTRAL_CHIP}
                       >
                         {segment.mode}
                       </span>

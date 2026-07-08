@@ -35,6 +35,31 @@ describe('RecentSegmentsCard (F8)', () => {
     expect(screen.getAllByText(/^[A-Z][a-z]{2} \d{2}, \d{2}:\d{2}$/).length).toBe(3)
   })
 
+  it('renders a segment with an unknown mode on a neutral chip without crashing', async () => {
+    const unknownMode = [
+      { firstSeq: 1, lastSeq: 100, recordCount: 100, mode: 'UNRECOGNIZED', createdAt: '2026-07-05T10:00:00Z' },
+    ] as DeltaSegment[]
+    render(<RecentSegmentsCard segments={unknownMode} />)
+    await userEvent.click(screen.getByRole('button', { name: /recent segments/i }))
+
+    expect(screen.getByText('UNRECOGNIZED')).toBeInTheDocument()
+  })
+
+  it('keeps row keys unique for empty segments sharing a watermark', async () => {
+    // An empty seal persists with lastSeq = firstSeq - 1; two of them at the same watermark
+    // collided on the `${firstSeq}-${lastSeq}` key (React duplicate-key warning, merged rows).
+    const emptySeals = [
+      { firstSeq: 4821, lastSeq: 4820, recordCount: 0, mode: 'CONTINUOUS', createdAt: '2026-07-05T10:00:00Z' },
+      { firstSeq: 4821, lastSeq: 4820, recordCount: 0, mode: 'CONTINUOUS', createdAt: '2026-07-05T10:05:00Z' },
+    ] as DeltaSegment[]
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<RecentSegmentsCard segments={emptySeals} />)
+    await userEvent.click(screen.getByRole('button', { name: /recent segments/i }))
+
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('same key')
+    warn.mockRestore()
+  })
+
   it('shows an empty note when the site has no segments', async () => {
     render(<RecentSegmentsCard segments={[]} />)
     await userEvent.click(screen.getByRole('button', { name: /recent segments/i }))

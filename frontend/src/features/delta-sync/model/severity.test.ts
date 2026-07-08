@@ -86,15 +86,16 @@ describe('DTO schemas', () => {
     expect(parsed.hasSyncState).toBe(false);
   });
 
-  it('rejects unknown segment modes', () => {
-    expect(() =>
-      deltaSegmentSchema.parse({
-        firstSeq: 1,
-        lastSeq: 2,
-        recordCount: 2,
-        mode: 'WAT',
-        createdAt: '2026-07-05T12:00:00Z',
-      }),
-    ).toThrow();
+  it('tolerates unknown segment modes (decision changed in review r3)', () => {
+    // The backend field is a free-form String: a strict enum rejected the WHOLE segments
+    // array over one unknown value. Unknown modes now pass through and render neutrally.
+    const parsed = deltaSegmentSchema.parse({
+      firstSeq: 1,
+      lastSeq: 2,
+      recordCount: 2,
+      mode: 'WAT',
+      createdAt: '2026-07-05T12:00:00Z',
+    });
+    expect(parsed.mode).toBe('WAT');
   });
 });
