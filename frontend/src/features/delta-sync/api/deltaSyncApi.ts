@@ -62,7 +62,8 @@ export async function presignCheckpointDownload(
 ): Promise<DeltaCheckpointDownload> {
   const response = await apiClient.get(
     `${deltaBasePath(siteId, scope)}/checkpoints/${encodeURIComponent(tableName)}/download`,
-    { params: { format } },
+    // openPresignedDownload shows its own error taxonomy — no global toast.
+    { params: { format }, suppressErrorToast: true },
   );
   return deltaCheckpointDownloadSchema.parse(response.data);
 }
@@ -76,6 +77,8 @@ export async function presignBatchTableParquet(
 ): Promise<DeltaCheckpointDownload> {
   const response = await apiClient.get(
     `${deltaBasePath(siteId, scope)}/batches/${batchId}/tables/${encodeURIComponent(tableName)}/parquet`,
+    // openPresignedDownload shows its own error taxonomy — no global toast.
+    { suppressErrorToast: true },
   );
   return deltaCheckpointDownloadSchema.parse(response.data);
 }

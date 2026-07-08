@@ -2,6 +2,17 @@ import { apiClient } from './client'
 import { toast } from 'sonner'
 import type { AxiosError } from 'axios'
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    /**
+     * Skip the global error toast for this request — for callers that render
+     * their own error taxonomy (e.g. openPresignedDownload), so one failure
+     * never produces two toasts.
+     */
+    suppressErrorToast?: boolean
+  }
+}
+
 /**
  * Global error handler for API requests
  *
@@ -23,6 +34,10 @@ export function setupErrorHandler() {
   apiClient.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
+      if (error.config?.suppressErrorToast) {
+        return Promise.reject(error)
+      }
+
       // Network error (no response from server)
       if (!error.response) {
         toast.error('Network error. Please check your connection and try again.')

@@ -86,6 +86,7 @@ describe('admin-only and action endpoints', () => {
 
     expect(mockedGet).toHaveBeenCalledWith('/v1/account/sites/s1/delta/checkpoints/orders/download', {
       params: { format: 'parquet' },
+      suppressErrorToast: true,
     });
     expect(download.fileName).toContain('.parquet');
   });
