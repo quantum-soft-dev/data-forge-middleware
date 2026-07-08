@@ -19,8 +19,10 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 # D/R included: deleting or renaming a still-imported module is exactly the
-# breakage class the typecheck gate exists for
-staged="$(git diff --cached --name-only --diff-filter=ACMDR)"
+# breakage class the typecheck gate exists for. --name-status (not --name-only)
+# because a rename entry lists BOTH paths — a move out of frontend/ or away
+# from *.java must still trigger the gate of the side that lost the file.
+staged="$(git diff --cached --name-status --diff-filter=ACMDR | awk '{ for (i = 2; i <= NF; i++) print $i }')"
 [ -z "$staged" ] && exit 0
 
 backend_changed=false
