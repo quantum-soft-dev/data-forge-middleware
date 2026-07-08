@@ -501,7 +501,20 @@ the `NEED_REBASELINE` recovery path described above — previously the flag had 
 **Delta Parquet in the UI (feature 025)**: the delta Batch Detail's "Table changes" card carries a
 per-table **Parquet** pill for completed sessions — one click presigns and opens the segment's
 egressed delta file (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`). Tables without a
-declared schema have no file (the egress worker skips them) — the pill answers with an error toast.
+declared schema have no file (the egress worker skips them).
+
+**Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
+server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily
+unavailable. Please try again." on an S3 outage, or a specific 404 reason); a bodyless 404 (file
+genuinely absent) falls back to the pill's own hint ("no declared schema / not egressed yet" for
+delta Parquet, "may not have been built yet" for checkpoints); anything else gets a generic retry
+toast. The global interceptor toast is suppressed on presign requests and on the 20-second
+sync-state poll (404 is the normal state for a never-connected site).
+
+**Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
+request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full
+rebuild queue answers 503 (flag cleared); rebuild flags orphaned by a restart are re-driven on
+startup, so the "Rebuild queued" chip can no longer stick forever.
 
 ---
 

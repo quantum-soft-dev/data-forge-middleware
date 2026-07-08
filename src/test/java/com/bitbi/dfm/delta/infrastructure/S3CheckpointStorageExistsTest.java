@@ -41,6 +41,7 @@ class S3CheckpointStorageExistsTest {
     }
 
     private static S3Exception s3Exception(int statusCode) {
+        // Cast required: S3Exception.builder() is typed as AwsServiceException.Builder.
         return (S3Exception) S3Exception.builder().statusCode(statusCode).message("boom").build();
     }
 
