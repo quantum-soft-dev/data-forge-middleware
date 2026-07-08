@@ -23,8 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @DisplayName("Batch timeout excludes Delta v2 sessions")
 class BatchTimeoutExclusionIntegrationTest extends BaseIntegrationTest {
 
-    /** store-01.example.com — a V1 site from test-data.sql. */
-    private static final UUID V1_SITE = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
     private static final UUID ACCOUNT = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
     @Autowired
@@ -36,14 +34,12 @@ class BatchTimeoutExclusionIntegrationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("findExpiredBatches returns the V1 batch but not the V2 batch")
     void excludesV2Batches() {
-        UUID v2Site = UUID.randomUUID();
-        jdbc.update("INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, "
-                        + "is_active, created_at, updated_at, site_name, client_api_version) "
-                        + "VALUES (?, ?, ?, '', 'V2 site', true, now(), now(), ?, 'V2')",
-                v2Site, ACCOUNT, "expiry-v2.example.com", "expiry-v2.example.com");
+        // Fresh sites (one V1, one V2) so neither collides with an existing active batch.
+        UUID v1Site = seedSite("V1", "expiry-v1.example.com");
+        UUID v2Site = seedSite("V2", "expiry-v2.example.com");
 
         LocalDateTime old = LocalDateTime.now().minusHours(3);
-        UUID v1Batch = seedInProgressBatch(V1_SITE, old);
+        UUID v1Batch = seedInProgressBatch(v1Site, old);
         UUID v2Batch = seedInProgressBatch(v2Site, old);
 
         List<UUID> expired = batchRepository.findExpiredBatches(LocalDateTime.now())
@@ -51,6 +47,15 @@ class BatchTimeoutExclusionIntegrationTest extends BaseIntegrationTest {
 
         assertTrue(expired.contains(v1Batch), "V1 upload batch is swept by the timeout");
         assertFalse(expired.contains(v2Batch), "V2 delta batch must be excluded from the timeout");
+    }
+
+    private UUID seedSite(String apiVersion, String domain) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, "
+                        + "is_active, created_at, updated_at, site_name, client_api_version) "
+                        + "VALUES (?, ?, ?, '', ?, true, now(), now(), ?, ?)",
+                id, ACCOUNT, domain, apiVersion + " site", domain, apiVersion);
+        return id;
     }
 
     private UUID seedInProgressBatch(UUID siteId, LocalDateTime startedAt) {
