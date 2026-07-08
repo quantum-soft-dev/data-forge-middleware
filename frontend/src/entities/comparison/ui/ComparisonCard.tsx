@@ -20,6 +20,7 @@ import { severityTokens } from '@/shared/ui/tokens';
 import { Button } from '@/shared/ui/ui/button';
 import { FileText, Calendar, Trash2 } from 'lucide-react';
 import { Comparison } from '@/features/file-comparison/hooks/useComparisons';
+import { COMPARISON_STATUS_LABELS, COMPARISON_STATUS_VARIANT } from '@/entities/comparison/model/comparisonStatus';
 import { useState } from 'react';
 import { DeleteConfirmationDialog } from '@/features/file-comparison/ui/DeleteConfirmationDialog';
 import { useDeleteComparison } from '@/features/file-comparison/hooks/useDeleteComparison';
@@ -53,13 +54,6 @@ export interface ComparisonCardProps {
 export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const { mutate: deleteComparison, isPending: isDeleting } = useDeleteComparison();
-
-  const statusVariants = {
-    PENDING: 'neutral',
-    COMPLETED: 'success',
-    FAILED: 'critical',
-    IN_PROGRESS: 'warning',
-  } as const;
 
   const handleDelete = () => {
     deleteComparison(comparison.id.toString(), {
@@ -95,8 +89,8 @@ export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProp
                 </div>
               </CardDescription>
             </div>
-            <Badge variant={statusVariants[comparison.status]} dot>
-              {comparison.status}
+            <Badge variant={COMPARISON_STATUS_VARIANT[comparison.status]} dot>
+              {COMPARISON_STATUS_LABELS[comparison.status]}
             </Badge>
           </div>
         </CardHeader>
