@@ -19,6 +19,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ChangelogContentHashTest {
 
+    /** Group separator used inside the canonical form (0x1D). */
+    private static final String GS = String.valueOf((char) 0x1D);
+
     @Test
     void blankDeclaredHashAlwaysMatches() {
         List<ChangeRecord> records = List.of(rec("t", Op.INSERT, 1, intKey(1), strData("city", "NY")));
@@ -64,6 +67,34 @@ class ChangelogContentHashTest {
         ChangeRecord asStr = rec("t", Op.INSERT, 1, Map.of("v", Value.newBuilder().setStringValue("1").build()), Map.of());
         assertNotEquals(ChangelogContentHash.compute(List.of(asInt)),
                 ChangelogContentHash.compute(List.of(asStr)));
+    }
+
+    @Test
+    void doubleEncodingIsLanguageNeutralBitPattern() {
+        // The canonical form must not depend on JVM Double.toString (E-notation "1.0E7"), which no
+        // other language reproduces. Encoding the IEEE-754 bit pattern is reproducible anywhere; pin
+        // it so a cross-language client hashing 1e7 agrees (review r4). A double that is bitwise
+        // identical hashes the same; the encoding does not embed the JVM decimal string.
+        ChangeRecord r = rec("t", Op.INSERT, 1,
+                Map.of("v", Value.newBuilder().setDoubleValue(1e7).build()), Map.of());
+        long bits = Double.doubleToLongBits(1e7);
+        ChangeRecord viaBits = rec("t", Op.INSERT, 1,
+                Map.of("v", Value.newBuilder().setDoubleValue(Double.longBitsToDouble(bits)).build()), Map.of());
+        assertTrue(ChangelogContentHash.matches(List.of(viaBits), ChangelogContentHash.compute(List.of(r))));
+    }
+
+    @Test
+    void separatorBytesInValueCannotForgeAnotherRecordSet() {
+        // A value carrying the group separator (0x1D) is crafted to reproduce the UNPREFIXED byte
+        // stream of two columns a="x" (GS) b="y". Length-prefixed encoding must defeat the forgery.
+        ChangeRecord oneCol = rec("t", Op.INSERT, 1,
+                Map.of("a", Value.newBuilder().setStringValue("x" + GS + "b=Sy").build()), Map.of());
+        ChangeRecord twoCol = rec("t", Op.INSERT, 1,
+                Map.of("a", Value.newBuilder().setStringValue("x").build(),
+                       "b", Value.newBuilder().setStringValue("y").build()), Map.of());
+        assertNotEquals(ChangelogContentHash.compute(List.of(oneCol)),
+                ChangelogContentHash.compute(List.of(twoCol)),
+                "separator bytes in a value must not collide with a structurally different record");
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {

@@ -20,12 +20,14 @@ import java.util.TreeMap;
  *
  * <ul>
  *   <li>records are hashed in sequence order;</li>
- *   <li>each record contributes {@code op US table US seq US key-cols US data-cols RS}
+ *   <li>each record contributes {@code op US <len:table> US seq US key-cols US data-cols RS}
  *       (US = 0x1F, RS = 0x1E);</li>
- *   <li>columns are sorted by name; each is {@code name=<tagged-value>} joined by GS (0x1D);</li>
- *   <li>a value is type-tagged: {@code I}nt, {@code D}ouble, {@code S}tring, boo{@code L}ean,
- *       deci{@code M}al, {@code B}ytes (hex), {@code N}ull — so {@code 1}/{@code "1"}/{@code true}
- *       never collide.</li>
+ *   <li>columns are sorted by name; each is {@code <len:name>=<len:tagged-value>} followed by GS
+ *       (0x1D) — variable-length tokens are length-prefixed ({@code <len>:<token>}) so a value
+ *       containing a separator byte cannot forge a different record set;</li>
+ *   <li>a value is type-tagged: {@code I}nt, {@code D}ouble (IEEE-754 bit pattern), {@code S}tring,
+ *       boo{@code L}ean, deci{@code M}al, {@code B}ytes (hex), {@code N}ull — so {@code 1}/{@code "1"}/
+ *       {@code true} never collide.</li>
  * </ul>
  *
  * <p>Result is lowercase hex SHA-256. Clients implementing this algorithm get end-to-end integrity;
@@ -63,9 +65,9 @@ public final class ChangelogContentHash {
         StringBuilder sb = new StringBuilder();
         for (ChangeRecord record : records) {
             sb.setLength(0);
-            sb.append(record.getOp().name()).append(UNIT_SEPARATOR)
-                    .append(record.getTable()).append(UNIT_SEPARATOR)
-                    .append(record.getSeq()).append(UNIT_SEPARATOR);
+            sb.append(record.getOp().name()).append(UNIT_SEPARATOR);
+            appendPrefixed(sb, record.getTable());
+            sb.append(record.getSeq()).append(UNIT_SEPARATOR);
             appendColumns(sb, record.getKeyMap());
             sb.append(UNIT_SEPARATOR);
             appendColumns(sb, record.getDataMap());
@@ -75,21 +77,34 @@ public final class ChangelogContentHash {
         return HexFormat.of().formatHex(digest.digest());
     }
 
+    /**
+     * Append a length-prefixed token ({@code <len>:<token>}). Length-prefixing (not raw separators)
+     * makes the canonical form unambiguous: a value that itself contains a separator byte can never
+     * reproduce the byte stream of a structurally different record (review r4).
+     */
+    private static void appendPrefixed(StringBuilder sb, String token) {
+        sb.append(token.length()).append(':').append(token).append(UNIT_SEPARATOR);
+    }
+
     private static void appendColumns(StringBuilder sb, Map<String, Value> columns) {
-        boolean first = true;
         for (Map.Entry<String, Value> entry : new TreeMap<>(columns).entrySet()) {
-            if (!first) {
-                sb.append(GROUP_SEPARATOR);
-            }
-            first = false;
-            sb.append(entry.getKey()).append('=').append(encode(entry.getValue()));
+            String name = entry.getKey();
+            String encoded = encode(entry.getValue());
+            sb.append(name.length()).append(':').append(name)
+                    .append('=').append(encoded.length()).append(':').append(encoded)
+                    .append(GROUP_SEPARATOR);
         }
     }
 
+    /**
+     * Type-tagged, language-neutral value encoding. Doubles are encoded as their IEEE-754 bit
+     * pattern (not JVM {@code Double.toString}, whose E-notation "1.0E7" no other language
+     * reproduces) so a cross-language client computes the same hash (review r4).
+     */
     private static String encode(Value value) {
         return switch (value.getVCase()) {
             case INT_VALUE -> "I" + value.getIntValue();
-            case DOUBLE_VALUE -> "D" + value.getDoubleValue();
+            case DOUBLE_VALUE -> "D" + Double.doubleToLongBits(value.getDoubleValue());
             case STRING_VALUE -> "S" + value.getStringValue();
             case BOOL_VALUE -> "L" + value.getBoolValue();
             case DECIMAL_VALUE -> "M" + value.getDecimalValue();
