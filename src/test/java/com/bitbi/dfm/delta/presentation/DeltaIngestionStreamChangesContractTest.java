@@ -67,7 +67,7 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L);
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L, 300000L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
@@ -655,7 +655,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, 3900000L); // cap = 2 records
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, 3900000L, 300000L); // cap = 2 records
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -676,6 +676,45 @@ class DeltaIngestionStreamChangesContractTest {
         } finally {
             capChannel.shutdownNow();
             capServer.shutdownNow();
+        }
+    }
+
+    @Test
+    void continuousTimeTriggerSealsBelowTheRecordThreshold() throws Exception {
+        // With a 0 ms time trigger, a low-throughput continuous stream seals each record instead of
+        // waiting for the 100-record count — bounding staleness for trickle clients (review r4).
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID id1 = UUID.randomUUID();
+        UUID id2 = UUID.randomUUID();
+        UUID id3 = UUID.randomUUID();
+        Batch b1 = mockBatch(id1);
+        Batch b2 = mockBatch(id2);
+        Batch b3 = mockBatch(id3);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService timed = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L, 0L); // seal on every record
+        String name = InProcessServerBuilder.generateName();
+        Server srv = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(timed, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel ch = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(ch);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
+            s.onNext(start(SessionMode.CONTINUOUS, 1L));
+            s.onNext(change("t", Op.INSERT, 1L));
+            s.onNext(change("t", Op.INSERT, 2L));
+
+            long seals = received.stream().filter(ServerEvent::hasCommitted).count();
+            assertTrue(seals >= 2, "each record seals via the time trigger (got " + seals + ")");
+        } finally {
+            ch.shutdownNow();
+            srv.shutdownNow();
         }
     }
 

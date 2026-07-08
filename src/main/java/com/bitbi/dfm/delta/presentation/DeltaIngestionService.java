@@ -58,6 +58,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final int maxSessionRecords;
     /** Staged sessions older than this are evicted by the sweep (defends against a leak). */
     private final long stagedTtlMillis;
+    /** In CONTINUOUS mode, also seal a non-empty segment this long after the last seal (time trigger). */
+    private final long continuousSealMillis;
 
     /**
      * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
@@ -76,7 +78,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.max-session-records:2000000}") int maxSessionRecords,
                                  @org.springframework.beans.factory.annotation.Value(
-                                         "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis) {
+                                         "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
@@ -84,6 +88,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         this.metrics = metrics;
         this.maxSessionRecords = maxSessionRecords;
         this.stagedTtlMillis = stagedTtlMillis;
+        this.continuousSealMillis = continuousSealMillis;
     }
 
     /**
@@ -207,6 +212,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private boolean continuous;
             private boolean rebaseline;
             private int sinceAck;
+            /** Wall-clock of the last continuous seal, for the time-based seal trigger. */
+            private long lastSealMillis = System.currentTimeMillis();
             /** Per-table key model for this site, lazily loaded on the first change record. */
             private Map<String, TableSchema> schemas;
 
@@ -274,9 +281,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                             .setAck(Ack.newBuilder().setAckedSeq(buffer.lastSeq()).build())
                             .build());
                 }
-                // Continuous mode: seal a segment once it reaches the size threshold and keep the
-                // stream open for the next one (T5.4).
-                if (continuous && buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS) {
+                // Continuous mode: seal a segment on the size threshold OR after the time threshold
+                // since the last seal (T5.4). The time trigger bounds staleness for low-throughput
+                // streams that would never reach the record count — otherwise a trickle client's
+                // watermark/egress/UI could sit stale for hours (review r4).
+                boolean sizeReached = buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS;
+                boolean timeReached = buffer.acceptedCount() > 0
+                        && System.currentTimeMillis() - lastSealMillis >= continuousSealMillis;
+                if (continuous && (sizeReached || timeReached)) {
                     sealContinuous(true);
                 }
             }
@@ -450,6 +462,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private void sealContinuous(boolean continueStream) {
                 long committedSeq = buffer.lastSeq();
                 emitSealed(committedSeq, buffer.accepted(), false); // CONTINUOUS is never a rebaseline
+                lastSealMillis = System.currentTimeMillis();
                 if (continueStream) {
                     batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
                     firstSeq = committedSeq + 1;

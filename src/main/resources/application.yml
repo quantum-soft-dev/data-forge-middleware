@@ -187,6 +187,9 @@ delta:
     staged-ttl-millis: ${DELTA_STAGED_TTL_MILLIS:3900000}
     # How often the staged-session eviction sweep runs.
     staged-sweep-millis: ${DELTA_STAGED_SWEEP_MILLIS:300000}
+    # CONTINUOUS mode also seals a non-empty segment this long after the last seal (time trigger),
+    # so a low-throughput stream that never reaches the record count still bounds staleness.
+    continuous-seal-millis: ${DELTA_CONTINUOUS_SEAL_MILLIS:300000}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
