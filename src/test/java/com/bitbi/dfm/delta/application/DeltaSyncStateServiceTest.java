@@ -151,6 +151,18 @@ class DeltaSyncStateServiceTest {
     }
 
     @Test
+    void siteSyncStateUpdatesOnlyDirtyColumns() {
+        // All mutators are load-modify-save on one row with no @Version: without @DynamicUpdate,
+        // Hibernate flushes the FULL row, so an ingestion tx that loaded the row before a
+        // concurrent requestRebaseline commit would write back the stale flag=false and silently
+        // drop the acknowledged rebaseline (review r3). Dynamic updates confine each tx to the
+        // columns it actually changed.
+        assertTrue(SiteSyncState.class.isAnnotationPresent(org.hibernate.annotations.DynamicUpdate.class),
+                "SiteSyncState must use @DynamicUpdate so concurrent single-field writers cannot "
+                        + "clobber each other's columns (lost rebaseline/rebuild flags)");
+    }
+
+    @Test
     void resetForRebaselineClearsRebaselineFlag() {
         // The flag is consumed when the FULL_SNAPSHOT session actually starts
         // (DeltaRebaselineService.reset -> resetForRebaseline).

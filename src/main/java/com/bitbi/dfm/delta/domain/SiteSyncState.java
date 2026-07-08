@@ -15,11 +15,19 @@ import java.util.UUID;
  * ({@code lastCheckpointSeq} / {@code lastCheckpointAt}). The client aligns its local
  * watermark to {@code lastAppliedSeq} via {@code GetSyncState}.</p>
  *
+ * <p>{@code @DynamicUpdate}: the row is mutated concurrently by independent single-field writers
+ * (ingestion watermark, checkpoint pointer, rebaseline/rebuild request flags) with no
+ * {@code @Version}. A full-row flush would let a transaction that loaded the row earlier write
+ * back stale values of the fields it never touched — e.g. an ingestion commit silently dropping
+ * a just-acknowledged rebaseline flag (review r3). Dynamic updates confine each flush to the
+ * dirty columns.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
 @Entity
 @Table(name = "site_sync_state")
+@org.hibernate.annotations.DynamicUpdate
 @Getter
 @NoArgsConstructor
 public class SiteSyncState {
