@@ -188,6 +188,27 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void deltaReplayBelowWatermarkProceedsInsteadOfForcingRebaseline() throws Exception {
+        // Lost SessionCommitted ack: the client retries a session whose records the server already
+        // committed (first_seq <= watermark+1). A strict != check answered SEQUENCE_GAP/
+        // NEED_REBASELINE — an expensive full snapshot for a lost ack. A replay must PROCEED; the
+        // buffer swallows the duplicate seqs (review r4/D).
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req -> req.onNext(start(SessionMode.DELTA, 100L)));
+
+        assertTrue(received.get(0).hasOpened(), "a replay below the watermark must open, not reject");
+        assertEquals(RecoveryAction.PROCEED, received.get(0).getOpened().getAction());
+        assertEquals(120L, received.get(0).getOpened().getServerLastSeq());
+        assertTrue(received.stream().noneMatch(ServerEvent::hasError));
+    }
+
+    @Test
     void deltaSessionContiguousProceeds() throws Exception {
         SiteSyncState state = SiteSyncState.initial(SITE);
         state.advanceWatermark(120L);

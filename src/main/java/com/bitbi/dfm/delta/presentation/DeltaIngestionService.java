@@ -296,9 +296,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
 
                 // Gap detection: a DELTA / CONTINUOUS session must continue contiguously from the
-                // server watermark. FULL_SNAPSHOT (bootstrap / re-baseline) resets and is exempt.
+                // server watermark. Only a FORWARD gap (first_seq beyond watermark+1) is a real hole
+                // that needs re-baseline. A first_seq at-or-below the watermark is a replay of an
+                // already-committed session (e.g. a lost SessionCommitted ack) — accept it and let the
+                // buffer swallow the duplicate seqs, rather than forcing an expensive full snapshot (D).
+                // FULL_SNAPSHOT (bootstrap / re-baseline) resets and is exempt.
                 boolean delta = start.getMode() == SessionMode.DELTA || start.getMode() == SessionMode.CONTINUOUS;
-                if (delta && start.getFirstSeq() != serverLastSeq + 1) {
+                if (delta && start.getFirstSeq() > serverLastSeq + 1) {
                     emitError(ErrorCode.SEQUENCE_GAP,
                             "Expected first_seq=" + (serverLastSeq + 1) + " but got " + start.getFirstSeq(),
                             RecoveryAction.NEED_REBASELINE);
@@ -323,7 +327,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
                 buffer = new SessionChangeBuffer(serverLastSeq);
                 sessionMode = start.getMode().name();
-                firstSeq = start.getFirstSeq();
+                // For a delta replay (first_seq below the watermark) the segment's first_seq is the
+                // first genuinely-new sequence, not the replayed start, so the persisted segment row
+                // never claims a range it did not accept.
+                firstSeq = delta ? Math.max(start.getFirstSeq(), serverLastSeq + 1) : start.getFirstSeq();
                 continuous = start.getMode() == SessionMode.CONTINUOUS;
                 metrics.sessionStarted();
                 responseObserver.onNext(ServerEvent.newBuilder()
