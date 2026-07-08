@@ -93,6 +93,35 @@ class ChangelogFoldTest {
         assertEquals(2, state.get("t").size(), "SQL NULL key must not collide with the string \"null\"");
     }
 
+    @Test
+    void intKeyIsDistinctFromEqualStringKey() {
+        // int 1 and string "1" are different rows; a type-blind identity ("V1" for both) would
+        // fold them together and silently overwrite data (review r4).
+        Map<String, Value> intKey = Map.of("k", Value.newBuilder().setIntValue(1L).build());
+        Map<String, Value> strKey = Map.of("k", Value.newBuilder().setStringValue("1").build());
+
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("t", Op.INSERT, intKey, data("v", "fromInt")),
+                rec("t", Op.INSERT, strKey, data("v", "fromString"))));
+
+        assertEquals(2, state.get("t").size(), "int 1 must not collide with string \"1\"");
+    }
+
+    @Test
+    void decimalKeyIdentityIsScaleInsensitive() {
+        // The same numeric key sent as "1.5" then "1.50" (trailing-zero variance across code paths)
+        // must address ONE row, so a later DELETE/UPDATE lands (review r4).
+        Map<String, Value> d15 = Map.of("k", Value.newBuilder().setDecimalValue("1.5").build());
+        Map<String, Value> d150 = Map.of("k", Value.newBuilder().setDecimalValue("1.50").build());
+
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("t", Op.INSERT, d15, data("v", "x")),
+                rec("t", Op.DELETE, d150, Map.of())));
+
+        assertTrue(state.get("t") == null || state.get("t").isEmpty(),
+                "decimal 1.5 and 1.50 must address the same row so the DELETE removes it");
+    }
+
     private static Map<String, Value> bytesKey(String col, byte[] v) {
         return Map.of(col, Value.newBuilder().setBytesValue(ByteString.copyFrom(v)).build());
     }

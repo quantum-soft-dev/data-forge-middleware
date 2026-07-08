@@ -95,15 +95,22 @@ public final class ChangelogFold {
         return sb.toString();
     }
 
+    /**
+     * Type-tagged encoding of a key value so distinct wire types never share an identity: int
+     * {@code 1}, string {@code "1"}, and bool {@code true} must address different rows (review r4).
+     * Decimals are scale-normalized ({@code 1.5} == {@code 1.50}) so trailing-zero variance across
+     * client code paths still addresses one row.
+     */
     private static String encode(Value value) {
-        Object java = ValueMapper.toJava(value);
-        if (java == null) {
-            return "N";
-        }
-        if (java instanceof byte[] bytes) {
-            return "B" + HexFormat.of().formatHex(bytes);
-        }
-        return "V" + java;
+        return switch (value.getVCase()) {
+            case INT_VALUE -> "I" + value.getIntValue();
+            case DOUBLE_VALUE -> "D" + Double.doubleToLongBits(value.getDoubleValue());
+            case STRING_VALUE -> "S" + value.getStringValue();
+            case BOOL_VALUE -> "L" + value.getBoolValue();
+            case DECIMAL_VALUE -> "M" + new java.math.BigDecimal(value.getDecimalValue()).stripTrailingZeros().toPlainString();
+            case BYTES_VALUE -> "B" + HexFormat.of().formatHex(value.getBytesValue().toByteArray());
+            case IS_NULL, V_NOT_SET -> "N";
+        };
     }
 
     private static Map<String, Map<String, FoldedRow>> deepCopy(Map<String, Map<String, FoldedRow>> source) {
