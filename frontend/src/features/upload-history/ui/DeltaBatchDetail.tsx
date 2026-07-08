@@ -15,6 +15,7 @@ import { presignBatchTableParquet } from '@/features/delta-sync/api/deltaSyncApi
 import { openPresignedDownload } from '@/features/delta-sync/lib/downloadPresigned';
 import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
 import { Badge } from '@/shared/ui/ui/badge';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import { formatDateTime, formatNumber } from '@/shared/lib/formatters';
 
 const GRID = '1.6fr 1fr 1fr 1fr 1fr 0.9fr';
@@ -41,6 +42,8 @@ export function DeltaBatchDetail({ batch, siteName, admin = false }: DeltaBatchD
 
   const completed = batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS';
   const inProgress = batch.status === 'IN_PROGRESS';
+  const failureTone =
+    STATUS_VARIANT[batch.status] === 'stalled' ? severityTokens.stalled : severityTokens.critical;
 
   const [downloadingTable, setDownloadingTable] = useState<string | null>(null);
 
@@ -67,18 +70,18 @@ export function DeltaBatchDetail({ batch, siteName, admin = false }: DeltaBatchD
             className="flex h-10 w-10 items-center justify-center rounded-full"
             style={{
               background: completed
-                ? 'rgba(22,163,74,0.10)'
+                ? severityTokens.healthy.bg
                 : inProgress
-                  ? 'rgba(60,130,216,0.10)'
-                  : 'rgba(239,68,68,0.10)',
+                  ? monitoringTokens.blue50
+                  : failureTone.bg,
             }}
           >
             {completed ? (
-              <CheckCircle2 className="h-5 w-5 text-green-600" strokeWidth={1.5} />
+              <CheckCircle2 className="h-5 w-5" style={{ color: severityTokens.healthy.dot }} strokeWidth={1.5} />
             ) : inProgress ? (
-              <Loader2 className="h-5 w-5 animate-spin text-blue-500" strokeWidth={1.5} />
+              <Loader2 className="h-5 w-5 animate-spin text-brand" strokeWidth={1.5} />
             ) : (
-              <XCircle className="h-5 w-5 text-red-500" strokeWidth={1.5} />
+              <XCircle className="h-5 w-5" style={{ color: failureTone.dot }} strokeWidth={1.5} />
             )}
           </div>
           <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
