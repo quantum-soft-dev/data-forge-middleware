@@ -129,13 +129,13 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
   6. Commit **one atomic commit per task** (Conventional Commit referencing the task), e.g. `feat(batch): add retention scheduler (T03)`.
 - **Gate — per-task tests must be 100% green** before committing (enforced by the pre-commit hook):
   - backend → `./gradlew test -PexcludeIntegration` (unit + contract; fast, no Docker)
-  - frontend → `npm --prefix frontend test`
+  - frontend → `npx tsc --noEmit` (from `frontend/`) + `npm --prefix frontend test`
 - "100% green" = **all tests pass**, not 100% code coverage.
 
 ### Gates summary
 | Gate | When | Must be green |
 |---|---|---|
-| **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `vitest` if touched) |
+| **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit` and `vitest` if touched) |
 | **Before PR** | before opening the PR | `./gradlew integrationTest` (Testcontainers) |
 | **Merge** (PR → develop) | before merge | full CI (`backend-test`) green + automated review |
 

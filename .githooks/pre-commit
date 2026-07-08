@@ -18,7 +18,9 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-staged="$(git diff --cached --name-only --diff-filter=ACM)"
+# D/R included: deleting or renaming a still-imported module is exactly the
+# breakage class the typecheck gate exists for
+staged="$(git diff --cached --name-only --diff-filter=ACMDR)"
 [ -z "$staged" ] && exit 0
 
 backend_changed=false
