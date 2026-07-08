@@ -353,6 +353,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 RecoveryAction.NEED_REBASELINE);
                         return; // do not complete the batch
                     }
+                    // The declared last_seq must equal the highest accepted seq (proto: seq of the
+                    // last ChangeRecord). A non-zero mismatch betrays a client watermark bug that
+                    // counts/hash would not catch (P2). last_seq=0 means the client opted out.
+                    if (end.getLastSeq() != 0 && end.getLastSeq() != buffer.lastSeq()) {
+                        metrics.reconciliationFailed();
+                        emitError(ErrorCode.RECONCILIATION_FAILED,
+                                "Declared last_seq=" + end.getLastSeq() + " does not match highest accepted seq="
+                                        + buffer.lastSeq(),
+                                RecoveryAction.NEED_REBASELINE);
+                        return; // do not complete the batch
+                    }
                 }
                 long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
                 emitSealed(committed, buffer != null ? buffer.accepted() : List.of());

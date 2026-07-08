@@ -371,6 +371,29 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void sessionEndWithMismatchedLastSeqRejected() throws Exception {
+        // SessionEnd.last_seq must equal the highest accepted seq. Counts and hash can match while a
+        // wrong last_seq betrays a client watermark bug — reject rather than silently commit (P2, r4).
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(
+                    SessionEnd.newBuilder().setLastSeq(999L) // declared, but highest accepted is 1
+                            .putPerTable("t", TableStats.newBuilder().setInserts(1).build())
+                            .build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasError());
+        assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
     void resumesAfterMidSessionDropWithResumeFrom() throws Exception {
         SiteSyncState state = SiteSyncState.initial(SITE);
         state.advanceWatermark(120L);
