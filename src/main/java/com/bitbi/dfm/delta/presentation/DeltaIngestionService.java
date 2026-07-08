@@ -5,7 +5,6 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangeRecordValidator;
 import com.bitbi.dfm.delta.application.ChangelogContentHash;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
-import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
@@ -54,7 +53,6 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
     private final DeltaSessionCommitService commitService;
-    private final DeltaRebaselineService rebaselineService;
     private final DeltaMetrics metrics;
 
     /**
@@ -68,13 +66,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  BatchLifecycleService batchLifecycleService,
                                  SiteSchemaService siteSchemaService,
                                  DeltaSessionCommitService commitService,
-                                 DeltaRebaselineService rebaselineService,
                                  DeltaMetrics metrics) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
         this.commitService = commitService;
-        this.rebaselineService = rebaselineService;
         this.metrics = metrics;
     }
 
@@ -177,6 +173,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private boolean closed;
             private boolean committed;
             private boolean continuous;
+            private boolean rebaseline;
             private int sinceAck;
             /** Per-table key model for this site, lazily loaded on the first change record. */
             private Map<String, TableSchema> schemas;
@@ -319,10 +316,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
                 batchId = batch.getId();
                 if (start.getMode() == SessionMode.FULL_SNAPSHOT) {
-                    // Re-baseline: discard the prior changelog and checkpoints so the snapshot becomes
-                    // the new baseline (rows that disappeared since the old baseline do not survive the
-                    // fold). The watermark resets to just before the snapshot's first record.
-                    rebaselineService.reset(siteId, start.getFirstSeq());
+                    // Re-baseline: the prior changelog and checkpoints are discarded so the snapshot
+                    // becomes the new baseline. The destruction is DEFERRED to commit (done in the
+                    // same transaction as the new snapshot segment), so a snapshot that drops before
+                    // it commits leaves the old baseline intact (review r4). Buffer records from just
+                    // before the snapshot's first record.
+                    rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
                 }
                 buffer = new SessionChangeBuffer(serverLastSeq);
@@ -373,7 +372,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     }
                 }
                 long committed = buffer != null ? buffer.lastSeq() : end.getLastSeq();
-                emitSealed(committed, buffer != null ? buffer.accepted() : List.of());
+                emitSealed(committed, buffer != null ? buffer.accepted() : List.of(), rebaseline);
                 this.committed = true;
                 closed = true;
                 responseObserver.onCompleted();
@@ -384,12 +383,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              * batch, record metrics, and emit {@code SessionCommitted}. Shared by {@code SessionEnd}
              * and continuous sealing.
              */
-            private void emitSealed(long committedSeq, List<ChangeRecord> records) {
+            private void emitSealed(long committedSeq, List<ChangeRecord> records, boolean rebaselineCommit) {
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
                 // Persist the segment, advance the watermark, and complete the batch atomically so a
-                // failure can never leave the watermark ahead of a still-active batch.
+                // failure can never leave the watermark ahead of a still-active batch. A rebaseline
+                // commit additionally wipes the old baseline in the same transaction.
                 String segmentKey = commitService.commit(
-                        siteId, batchId, sessionMode, firstSeq, committedSeq, records);
+                        siteId, batchId, sessionMode, firstSeq, committedSeq, records, rebaselineCommit);
                 metrics.sessionCommitted();
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
@@ -407,7 +407,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void sealContinuous(boolean continueStream) {
                 long committedSeq = buffer.lastSeq();
-                emitSealed(committedSeq, buffer.accepted());
+                emitSealed(committedSeq, buffer.accepted(), false); // CONTINUOUS is never a rebaseline
                 if (continueStream) {
                     batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
                     firstSeq = committedSeq + 1;

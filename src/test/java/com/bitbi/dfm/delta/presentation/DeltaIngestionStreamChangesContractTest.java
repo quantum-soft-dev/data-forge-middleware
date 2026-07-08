@@ -63,10 +63,10 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
                 changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class));
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
-                siteSchemaService, commitService, rebaselineService,
+                siteSchemaService, commitService,
                 new DeltaMetrics(new SimpleMeterRegistry()));
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
@@ -226,7 +226,7 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
-    void fullSnapshotResetsPriorStateAndStartsFromFirstSeqMinusOne() throws Exception {
+    void fullSnapshotStartsFromFirstSeqMinusOneButDefersResetUntilCommit() throws Exception {
         SiteSyncState state = SiteSyncState.initial(SITE);
         state.advanceWatermark(120L); // stale watermark from a previous baseline
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
@@ -237,11 +237,34 @@ class DeltaIngestionStreamChangesContractTest {
         List<ServerEvent> received = runSession(req ->
                 req.onNext(start(SessionMode.FULL_SNAPSHOT, 200L)));
 
-        // The prior changelog/checkpoints are wiped and the watermark resets to firstSeq-1.
-        verify(rebaselineService).reset(SITE, 200L);
+        // The snapshot session reports firstSeq-1, but the destructive reset must NOT run at
+        // SessionStart — it is deferred to commit so a mid-stream drop keeps the old baseline (r4).
+        verify(rebaselineService, never()).reset(any(), anyLong());
         assertTrue(received.get(0).hasOpened());
         assertEquals(199L, received.get(0).getOpened().getServerLastSeq(),
                 "snapshot session reports the reset watermark (firstSeq-1)");
+    }
+
+    @Test
+    void fullSnapshotResetsOldBaselineOnlyWhenItCommits() throws Exception {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 200L));
+            req.onNext(change("t", Op.INSERT, 200L));
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(200L)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(1).build()).build()).build());
+        });
+
+        // Reset runs as part of the commit (DeltaSessionCommitService wipes the old baseline in the
+        // same transaction as the new snapshot segment persist).
+        verify(rebaselineService).reset(SITE, 200L);
+        verify(batchLifecycle).completeBatch(any());
     }
 
     @Test

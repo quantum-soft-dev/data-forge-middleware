@@ -29,15 +29,18 @@ public class DeltaSessionCommitService {
     private final DeltaSyncStateService syncStateService;
     private final BatchLifecycleService batchLifecycleService;
     private final DeltaEgressWorker egressWorker;
+    private final DeltaRebaselineService rebaselineService;
 
     public DeltaSessionCommitService(ChangelogSegmentService changelogSegmentService,
                                      DeltaSyncStateService syncStateService,
                                      BatchLifecycleService batchLifecycleService,
-                                     DeltaEgressWorker egressWorker) {
+                                     DeltaEgressWorker egressWorker,
+                                     DeltaRebaselineService rebaselineService) {
         this.changelogSegmentService = changelogSegmentService;
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.egressWorker = egressWorker;
+        this.rebaselineService = rebaselineService;
     }
 
     /**
@@ -52,9 +55,28 @@ public class DeltaSessionCommitService {
      * @param records      accepted change records (may be empty)
      * @return the persisted segment's S3 key, or {@code ""} for an empty session (no segment written)
      */
-    @Transactional
     public String commit(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
                          List<ChangeRecord> records) {
+        return commit(siteId, batchId, mode, firstSeq, committedSeq, records, false);
+    }
+
+    /**
+     * As {@link #commit(UUID, UUID, String, long, long, List)}, but when {@code rebaseline} is true
+     * the prior baseline (old segments + checkpoints) is wiped <em>in the same transaction</em>,
+     * before the new snapshot segment is persisted. This is what makes a FULL_SNAPSHOT atomic: the
+     * old baseline survives until the new one durably commits, so a snapshot that drops mid-stream
+     * leaves the old baseline intact (review r4).
+     *
+     * @param rebaseline whether to reset the prior baseline before persisting (FULL_SNAPSHOT)
+     */
+    @Transactional
+    public String commit(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
+                         List<ChangeRecord> records, boolean rebaseline) {
+        if (rebaseline) {
+            // Wipe the old baseline first (in this transaction) — it deletes all prior segments, so
+            // it must run before the new snapshot segment is persisted below.
+            rebaselineService.reset(siteId, firstSeq);
+        }
         String segmentKey = "";
         // An empty session persists no segment: a degenerate segment at first_seq=watermark+1 would
         // not advance the watermark and would then collide on UNIQUE(site_id, first_seq).

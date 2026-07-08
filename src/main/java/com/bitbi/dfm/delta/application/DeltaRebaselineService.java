@@ -11,7 +11,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -58,9 +62,14 @@ public class DeltaRebaselineService {
      */
     @Transactional
     public void reset(UUID siteId, long firstSeq) {
+        // Delete the metadata rows in-transaction, but defer the S3 object deletes to afterCommit:
+        // if the enclosing commit (the new snapshot segment persist + watermark advance) rolls back,
+        // the old rows are restored and their S3 objects must still exist. Deferring keeps the old
+        // baseline fully intact until the new one is durably committed (review r4).
+        List<String> s3Keys = new ArrayList<>();
         int segments = 0;
         for (ChangelogSegment segment : segmentRepository.findBySiteIdOrderByFirstSeq(siteId)) {
-            segmentStorage.delete(segment.getS3Key());
+            s3Keys.add(segment.getS3Key());
             segmentRepository.deleteById(segment.getId());
             segments++;
         }
@@ -76,7 +85,31 @@ public class DeltaRebaselineService {
         state.resetForRebaseline(firstSeq - 1);
         syncStateRepository.save(state);
 
+        deleteOldObjectsAfterCommit(s3Keys);
+
         log.info("Re-baselined site {}: cleared {} segment(s), {} checkpoint(s); watermark reset to {}",
                 siteId, segments, checkpoints, firstSeq - 1);
+    }
+
+    /**
+     * Delete the old segments' S3 objects only once the surrounding transaction commits (so a
+     * rollback leaves them intact); outside a transaction (unit tests) the delete is immediate. Old
+     * objects that outlive a crash between commit and delete are harmless orphans (serving is driven
+     * by the rows, already gone).
+     */
+    private void deleteOldObjectsAfterCommit(List<String> s3Keys) {
+        if (s3Keys.isEmpty()) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    s3Keys.forEach(segmentStorage::delete);
+                }
+            });
+        } else {
+            s3Keys.forEach(segmentStorage::delete);
+        }
     }
 }
