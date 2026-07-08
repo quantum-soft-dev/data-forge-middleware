@@ -30,6 +30,21 @@ declare module 'axios' {
  * Usage: Call setupErrorHandler() in App.tsx
  */
 
+/**
+ * The backend error body's message field (ErrorResponseDto.message), if any.
+ * Single home for the error-body contract — the interceptor below and callers
+ * that render their own error taxonomy (openPresignedDownload) both use it,
+ * so a DTO shape change cannot silently degrade one of them.
+ */
+export function getServerErrorMessage(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return undefined
+  }
+  const data = (error as AxiosError).response?.data
+  const message = (data as { message?: string } | undefined)?.message
+  return typeof message === 'string' && message.length > 0 ? message : undefined
+}
+
 export function setupErrorHandler() {
   apiClient.interceptors.response.use(
     (response) => response,
@@ -44,7 +59,7 @@ export function setupErrorHandler() {
         return Promise.reject(error)
       }
 
-      const { status, data } = error.response
+      const { status } = error.response
 
       switch (status) {
         // Note: 401 is handled by setupResponseInterceptor() in interceptors.ts
@@ -58,14 +73,14 @@ export function setupErrorHandler() {
         case 404:
           // Not found
           toast.error(
-            (data as { message?: string })?.message || 'Resource not found.'
+            getServerErrorMessage(error) ?? 'Resource not found.'
           )
           break
 
         case 409:
           // Conflict (e.g., duplicate email)
           toast.error(
-            (data as { message?: string })?.message ||
+            getServerErrorMessage(error) ??
               'A conflict occurred. Please check your input.'
           )
           break
@@ -79,7 +94,7 @@ export function setupErrorHandler() {
         default:
           // Server error or unknown error
           toast.error(
-            (data as { message?: string })?.message ||
+            getServerErrorMessage(error) ??
               'An unexpected error occurred. Please try again later.'
           )
           break

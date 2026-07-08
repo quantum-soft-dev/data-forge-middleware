@@ -50,9 +50,22 @@ describe('openPresignedDownload', () => {
     anchorClick.mockRestore();
   });
 
-  it('prefers the caller notFoundMessage for a 404', async () => {
+  it('prefers the server message for a 404 — the status is overloaded (review r3)', async () => {
+    // A presign 404 can also mean site-not-found / wrong scope: the accurate server
+    // message must win over the caller's file-not-built hint.
     await openPresignedDownload(
-      async () => { throw axios404('Parquet file not found'); },
+      async () => { throw axios404('Site not found'); },
+      { notFoundMessage: 'No delta Parquet — no declared schema.' },
+    );
+
+    expect(toast.error).toHaveBeenCalledWith('Site not found');
+  });
+
+  it('falls back to the caller notFoundMessage for a bodyless 404', async () => {
+    // The presign endpoints answer a missing file with an empty 404 body — the
+    // caller's hint is the only useful diagnosis there.
+    await openPresignedDownload(
+      async () => { throw axios404(); },
       { notFoundMessage: 'No delta Parquet — no declared schema.' },
     );
 

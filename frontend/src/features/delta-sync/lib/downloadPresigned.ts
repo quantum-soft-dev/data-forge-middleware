@@ -7,6 +7,7 @@
 
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 
 export interface PresignedDownloadLike {
   downloadUrl: string;
@@ -50,13 +51,17 @@ export async function openPresignedDownload(
     toast.success('Download link generated · valid 15 minutes');
   } catch (error) {
     if (isAxiosError(error)) {
-      const serverMessage = (error.response?.data as { message?: string } | undefined)?.message;
-      if (notFoundMessage && error.response?.status === 404) {
-        toast.error(notFoundMessage);
-        return;
-      }
+      // The server message wins even on 404 — the status is overloaded (missing file,
+      // but also site-not-found / wrong scope), and the backend is more precise than
+      // the caller's file-not-built hint. notFoundMessage covers the bodyless 404 the
+      // presign endpoints answer for a genuinely absent file.
+      const serverMessage = getServerErrorMessage(error);
       if (serverMessage) {
         toast.error(serverMessage);
+        return;
+      }
+      if (notFoundMessage && error.response?.status === 404) {
+        toast.error(notFoundMessage);
         return;
       }
     }
