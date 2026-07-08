@@ -2,11 +2,15 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 
 import java.util.UUID;
 
@@ -46,9 +50,25 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
     @Autowired
     private S3CheckpointStorage checkpointStorage;
 
+    @Autowired
+    private S3Client s3Client;
+
+    @Value("${s3.bucket.name}")
+    private String bucketName;
+
     @BeforeEach
     void cleanSegments() {
         jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE);
+    }
+
+    @AfterEach
+    void cleanUploadedDeltaFiles() {
+        // The LocalStack bucket is shared across the suite — leaving the uploaded delta
+        // file behind breaks DeltaEgressIntegrationTest's "schema-less table skipped"
+        // assertion on the same site/prefix.
+        for (String key : checkpointStorage.listKeys("egress/" + SITE + "/")) {
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(key).build());
+        }
     }
 
     private void seedSegment(long firstSeq, long lastSeq) {
