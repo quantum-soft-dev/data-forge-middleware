@@ -121,7 +121,11 @@ public class BatchHistoryService {
                 : changelogSegmentRepository
                         .findByBatchIdIn(pageItems.stream().map(BatchWithFileCountProjection::getId).toList())
                         .stream()
-                        .collect(Collectors.toMap(ChangelogSegment::getBatchId, s -> s));
+                        // Merge on duplicate batch_id (no UNIQUE constraint enforces one segment per
+                        // batch): keep the lowest first_seq so the list never 500s if a batch ever
+                        // has two segment rows (review r4). The list DTO only needs a delta signal.
+                        .collect(Collectors.toMap(ChangelogSegment::getBatchId, s -> s,
+                                (a, b) -> a.getFirstSeq() <= b.getFirstSeq() ? a : b));
 
         // Convert projections to DTOs
         List<BatchSummaryDto> dtos = pageItems.stream()

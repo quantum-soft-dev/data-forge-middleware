@@ -135,6 +135,38 @@ class BatchHistoryServiceTest {
     }
 
     @Test
+    void listBatchHistoryDoesNotThrowWhenABatchHasTwoSegmentRows() {
+        // No UNIQUE(batch_id) enforces one segment per batch; the toMap must merge duplicates so
+        // the whole list endpoint cannot 500 if a batch ever acquires two segment rows (review r4).
+        UUID accountId = UUID.randomUUID();
+        Site site = Site.createForTesting(accountId, "delta.dup", "Delta Dup");
+        when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
+
+        UUID batchId = UUID.randomUUID();
+        BatchWithFileCountProjection projection = mock(BatchWithFileCountProjection.class);
+        when(projection.getId()).thenReturn(batchId);
+        when(projection.getSiteId()).thenReturn(site.getId());
+        when(projection.getStatus()).thenReturn("COMPLETED");
+        when(projection.getHasErrors()).thenReturn(false);
+        when(projection.getStartedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getCompletedAt()).thenReturn(LocalDateTime.now());
+        when(projection.getFileCount()).thenReturn(0);
+        when(projection.getTotalSize()).thenReturn(0L);
+        when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
+
+        ChangelogSegment first = mock(ChangelogSegment.class);
+        when(first.getBatchId()).thenReturn(batchId);
+        when(first.getFirstSeq()).thenReturn(1L);
+        ChangelogSegment second = mock(ChangelogSegment.class);
+        when(second.getBatchId()).thenReturn(batchId);
+        when(second.getFirstSeq()).thenReturn(101L);
+        when(changelogSegmentRepository.findByBatchIdIn(anyList())).thenReturn(List.of(first, second));
+
+        CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
+        assertEquals(1, page.items().size(), "one row per batch despite two segments");
+    }
+
+    @Test
     void listBatchHistoryHasNullDeltaTotalsForV1Batches() {
         UUID accountId = UUID.randomUUID();
         Site site = Site.createForTesting(accountId, "v1.test", "V1 Test");
