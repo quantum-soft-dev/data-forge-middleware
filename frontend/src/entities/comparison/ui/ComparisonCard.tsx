@@ -20,7 +20,7 @@ import { severityTokens } from '@/shared/ui/tokens';
 import { Button } from '@/shared/ui/ui/button';
 import { FileText, Calendar, Trash2 } from 'lucide-react';
 import { Comparison } from '@/features/file-comparison/hooks/useComparisons';
-import { COMPARISON_STATUS_LABELS, COMPARISON_STATUS_VARIANT } from '@/entities/comparison/model/comparisonStatus';
+import { comparisonStatusLabel, comparisonStatusVariant } from '@/entities/comparison/model/comparisonStatus';
 import { useState } from 'react';
 import { DeleteConfirmationDialog } from '@/features/file-comparison/ui/DeleteConfirmationDialog';
 import { useDeleteComparison } from '@/features/file-comparison/hooks/useDeleteComparison';
@@ -89,8 +89,8 @@ export function ComparisonCard({ comparison, onViewDetails }: ComparisonCardProp
                 </div>
               </CardDescription>
             </div>
-            <Badge variant={COMPARISON_STATUS_VARIANT[comparison.status]} dot>
-              {COMPARISON_STATUS_LABELS[comparison.status]}
+            <Badge variant={comparisonStatusVariant(comparison.status)} dot>
+              {comparisonStatusLabel(comparison.status)}
             </Badge>
           </div>
         </CardHeader>

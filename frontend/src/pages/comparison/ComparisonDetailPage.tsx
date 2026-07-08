@@ -30,7 +30,7 @@ import type { ChangeType } from '@/entities/comparison/model/types';
 
 import { Button } from '@/shared/ui/ui/button';
 import { PageHeader } from '@/shared/ui/page-header';
-import { COMPARISON_STATUS_LABELS, COMPARISON_STATUS_VARIANT } from '@/entities/comparison/model/comparisonStatus';
+import { comparisonStatusLabel, comparisonStatusVariant } from '@/entities/comparison/model/comparisonStatus';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
 import { Badge } from '@/shared/ui/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
@@ -246,8 +246,8 @@ export function ComparisonDetailPage(): React.ReactElement {
         subtitle={`Created ${new Date(comparison.createdAt).toLocaleString()}`}
         actions={
           <>
-            <Badge variant={COMPARISON_STATUS_VARIANT[comparison.status]}>
-              {COMPARISON_STATUS_LABELS[comparison.status]}
+            <Badge variant={comparisonStatusVariant(comparison.status)}>
+              {comparisonStatusLabel(comparison.status)}
             </Badge>
             {isInProgress && (
               <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />

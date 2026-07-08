@@ -18,6 +18,7 @@ import { useBatchHistory } from '@/entities/batch/api/queries';
 import { useBatchDetails } from '@/entities/batch/api/queries';
 import { Button } from '@/shared/ui/ui/button';
 import { PageHeader } from '@/shared/ui/page-header';
+import { comparisonStatusLabel } from '@/entities/comparison/model/comparisonStatus';
 import { toast } from 'sonner';
 
 export function ComparisonPage() {
@@ -73,7 +74,7 @@ export function ComparisonPage() {
   const createComparison = useCreateComparison({
     onSuccess: (data) => {
       toast.success('Comparison created successfully!', {
-        description: `Comparison ID: ${data.id} - Status: ${data.status}`,
+        description: `Comparison ID: ${data.id} - Status: ${comparisonStatusLabel(data.status)}`,
       });
       // Navigate to comparison details page
       navigate({ to: `/account/comparisons/${data.id}` });

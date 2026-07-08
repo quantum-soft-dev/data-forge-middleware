@@ -14,7 +14,7 @@ import { Badge } from '@/shared/ui/ui/badge';
 import { Button } from '@/shared/ui/ui/button';
 import { GitCompare, Calendar, Eye, Loader2 } from 'lucide-react';
 import { formatDateTime } from '@/shared/lib/formatters';
-import { COMPARISON_STATUS_LABELS, COMPARISON_STATUS_VARIANT } from '@/entities/comparison/model/comparisonStatus';
+import { comparisonStatusLabel, comparisonStatusVariant } from '@/entities/comparison/model/comparisonStatus';
 
 interface ComparisonHistorySectionProps {
   /** Current batch ID */
@@ -108,8 +108,8 @@ export function ComparisonHistorySection({ batchId }: ComparisonHistorySectionPr
                   <span className="text-sm font-medium">
                     Comparison #{comparison.id}
                   </span>
-                  <Badge variant={COMPARISON_STATUS_VARIANT[comparison.status]}>
-                    {COMPARISON_STATUS_LABELS[comparison.status]}
+                  <Badge variant={comparisonStatusVariant(comparison.status)}>
+                    {comparisonStatusLabel(comparison.status)}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">

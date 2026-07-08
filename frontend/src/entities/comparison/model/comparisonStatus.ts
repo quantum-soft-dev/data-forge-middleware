@@ -22,3 +22,16 @@ export const COMPARISON_STATUS_VARIANT: Record<ComparisonStatus, NonNullable<Bad
   COMPLETED: 'success',
   FAILED: 'critical',
 };
+
+/**
+ * Fallback-safe accessors (review r3): comparison responses are not Zod-validated, so a
+ * backend status the maps lag behind reaches the pills at runtime — a direct Record lookup
+ * rendered a blank badge. Surfaces use these instead of indexing the maps.
+ */
+export function comparisonStatusLabel(status: string): string {
+  return COMPARISON_STATUS_LABELS[status as ComparisonStatus] ?? status;
+}
+
+export function comparisonStatusVariant(status: string): NonNullable<BadgeProps['variant']> {
+  return COMPARISON_STATUS_VARIANT[status as ComparisonStatus] ?? 'neutral';
+}
