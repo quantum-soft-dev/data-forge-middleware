@@ -107,7 +107,6 @@ export default function AccountDetailsPage() {
             Back to User Management
           </button>
           <PageHeader
-            className="mb-0"
             title="Account Details"
             subtitle="View and manage account information"
             actions={

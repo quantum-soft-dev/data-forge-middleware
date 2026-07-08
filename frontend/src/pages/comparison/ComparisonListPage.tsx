@@ -41,6 +41,7 @@ export function ComparisonListPage() {
     <div className="container mx-auto max-w-[1120px] px-6 py-6">
       {/* Page Header */}
       <PageHeader
+          className="mb-6"
         title="File Comparisons"
         subtitle="View and manage all your file comparison results"
       />

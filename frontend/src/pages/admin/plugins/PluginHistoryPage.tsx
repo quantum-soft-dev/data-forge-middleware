@@ -38,7 +38,7 @@ export default function PluginHistoryPage() {
 
         {/* Page header */}
         <div className="mb-8">
-          <PageHeader className="mb-0" title="SQL Generation History" />
+          <PageHeader title="SQL Generation History" />
           <div className="mt-1.5 flex items-center gap-4 text-sm text-ink-secondary">
             <div className="flex items-center gap-1">
               <Database className="h-4 w-4" />

@@ -196,3 +196,15 @@ Every C-task depends on the full Phase A; T034 additionally on T024 (C3d). No pa
 All checkboxes above committed serially; SC-001…SC-006 verified (quickstart.md); PR into
 `develop` (squash) after `./gradlew integrationTest` green; product visual sign-off recorded per
 migration-table row.
+
+## Post-review addendum (2026-07-08, review round 2)
+
+**PageHeader adoption decisions (176257a + follow-up), recorded as intentional:**
+- The monolithic header language has **no decorative icon slot**: PluginHistoryPage lost the
+  `History` icon next to its title by design (the SiteDetailShell reference has no icon).
+- ComparisonDetailPage moved the Back button into the breadcrumb slot **above** the title
+  (matching other detail pages) and dropped `tabular-nums` on "Comparison #N" — PageHeader
+  renders one canonical title style; per-title font tweaks are out of the language.
+- PageHeader **owns no external spacing** anymore (default `mb-6` removed): layouts space it
+  via `space-y-*`, standalone pages pass `mb-6`/`mb-8` explicitly. Forgetting an override in a
+  `space-y-*` layout previously produced silent double spacing.

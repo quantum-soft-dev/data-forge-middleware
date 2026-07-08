@@ -108,6 +108,7 @@ export function ComparisonPage() {
   return (
     <div className="container mx-auto max-w-[1120px] px-6 py-6">
       <PageHeader
+        className="mb-6"
         title="Create File Comparison"
         subtitle="Compare files between two upload sessions to track changes"
       />

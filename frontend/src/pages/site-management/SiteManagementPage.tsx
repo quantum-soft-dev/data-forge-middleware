@@ -27,7 +27,6 @@ export function SiteManagementPage() {
         <PageHeader
           title="Site Management"
           subtitle="Manage your sites and monitor their activity"
-          className="mb-0"
         />
 
         <Separator />

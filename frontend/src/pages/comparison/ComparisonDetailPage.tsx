@@ -236,7 +236,6 @@ export function ComparisonDetailPage(): React.ReactElement {
       <div className="container mx-auto max-w-[1120px] space-y-6 px-6 py-6">
       {/* Header */}
       <PageHeader
-        className="mb-0"
         breadcrumb={
           <Button onClick={handleBack} variant="outline" size="sm">
             <ArrowLeft className="mr-2 h-4 w-4" />

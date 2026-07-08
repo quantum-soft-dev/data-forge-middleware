@@ -47,7 +47,6 @@ export default function CreateAccountPage() {
             Back to User Management
           </button>
           <PageHeader
-            className="mb-0"
             title="Create New Account"
             subtitle="Create a new user account with Auth0 authentication integration"
           />

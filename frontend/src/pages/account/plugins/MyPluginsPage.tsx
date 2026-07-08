@@ -23,6 +23,7 @@ export function MyPluginsPage() {
 
       <main className="container mx-auto max-w-[1120px] px-6 py-6">
         <PageHeader
+          className="mb-6"
           title="My Plugins"
           subtitle="Manage your plugin integrations and activate new features"
         />

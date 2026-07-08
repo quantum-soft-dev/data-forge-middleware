@@ -16,10 +16,13 @@ export interface PageHeaderProps {
 /**
  * Monitoring page header (024, T012) — 22px/500 title with −0.33px tracking +
  * secondary subline, per pages/site-detail/SiteDetailShell.tsx.
+ *
+ * Owns no external spacing: most layouts space it via `space-y-*`; pages that
+ * need a margin pass it through `className` (e.g. `mb-6`).
  */
 export function PageHeader({ title, subtitle, actions, breadcrumb, className }: PageHeaderProps) {
   return (
-    <div className={cn('mb-6', className)}>
+    <div className={cn(className)}>
       {breadcrumb ? (
         <div className="mb-2.5 text-[13px] text-ink-secondary">{breadcrumb}</div>
       ) : null}

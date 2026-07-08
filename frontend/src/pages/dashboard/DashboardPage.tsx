@@ -29,6 +29,7 @@ export default function DashboardPage() {
       <Header />
       <main className="mx-auto max-w-[1120px] px-6 py-6">
         <PageHeader
+          className="mb-6"
           title="Dashboard"
           subtitle="Overview of subscriber metrics and growth trends"
         />

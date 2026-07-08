@@ -36,4 +36,9 @@ describe('PageHeader (T012)', () => {
     const { container } = render(<PageHeader title="Plain" />);
     expect(container.querySelectorAll('p')).toHaveLength(0);
   });
+
+  it('owns no external spacing by default — margins come from the page layout', () => {
+    const { container } = render(<PageHeader title="Plain" />);
+    expect(container.firstElementChild!.className).not.toMatch(/\bmb-/);
+  });
 });

@@ -71,7 +71,6 @@ export default function AdminSettingsPage() {
 
       <main className="mx-auto max-w-[1120px] space-y-6 px-6 py-6">
         <PageHeader
-          className="mb-0"
           title="Admin Settings"
           subtitle="Runtime-configurable system settings (admin only)."
         />

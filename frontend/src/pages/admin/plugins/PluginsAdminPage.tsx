@@ -40,6 +40,7 @@ export default function PluginsAdminPage() {
 
       <main className="mx-auto max-w-[1120px] px-6 py-6">
         <PageHeader
+          className="mb-6"
           title="Plugin Administration"
           subtitle="View registered plugins and their audit logs"
         />
