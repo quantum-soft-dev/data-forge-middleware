@@ -37,7 +37,11 @@ export function deltaBasePath(siteId: string, { admin }: DeltaApiScope): string 
  */
 export async function getDeltaSyncState(siteId: string, scope: DeltaApiScope): Promise<DeltaSyncState | null> {
   try {
-    const response = await apiClient.get(`${deltaBasePath(siteId, scope)}/sync-state`);
+    // 404 is the normal state for a never-connected site and this query polls every 20s —
+    // the global toast must stay silent (the widget renders empty/error states inline).
+    const response = await apiClient.get(`${deltaBasePath(siteId, scope)}/sync-state`, {
+      suppressErrorToast: true,
+    });
     return deltaSyncStateSchema.parse(response.data);
   } catch (error) {
     if (isAxiosError(error) && error.response?.status === 404) {

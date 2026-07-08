@@ -41,12 +41,16 @@ describe('deltaBasePath', () => {
 });
 
 describe('getDeltaSyncState', () => {
-  it('parses the payload from the owner endpoint', async () => {
+  it('parses the payload from the owner endpoint with the global toast suppressed', async () => {
     mockedGet.mockResolvedValueOnce({ data: syncStatePayload });
 
     const state = await getDeltaSyncState('s1', { admin: false });
 
-    expect(mockedGet).toHaveBeenCalledWith('/v1/account/sites/s1/delta/sync-state');
+    // 404 is the NORMAL state for a never-connected site and this query polls every 20s:
+    // without the opt-out the interceptor toasts "Resource not found." on every poll.
+    expect(mockedGet).toHaveBeenCalledWith('/v1/account/sites/s1/delta/sync-state', {
+      suppressErrorToast: true,
+    });
     expect(state?.lastAppliedSeq).toBe(4821);
   });
 
