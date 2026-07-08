@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 
@@ -92,7 +93,7 @@ public class ChangelogSegment {
         segment.s3Key = s3Key;
         segment.mode = mode;
         segment.stats = stats;
-        segment.createdAt = LocalDateTime.now();
+        segment.createdAt = LocalDateTime.now(ZoneOffset.UTC);
         return segment;
     }
 
@@ -100,11 +101,11 @@ public class ChangelogSegment {
      * Mark the segment's delta Parquet egress as done (removes it from the pending queue).
      */
     public void markEgressed() {
-        this.egressAt = LocalDateTime.now();
+        this.egressAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PrePersist
     protected void onCreate() {
-        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 }

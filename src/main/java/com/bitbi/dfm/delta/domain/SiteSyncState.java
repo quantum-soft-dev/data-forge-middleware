@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -69,7 +70,7 @@ public class SiteSyncState {
         state.lastAppliedSeq = 0L;
         state.lastCheckpointSeq = 0L;
         state.schemaVersion = 0;
-        state.updatedAt = LocalDateTime.now();
+        state.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         return state;
     }
 
@@ -80,7 +81,7 @@ public class SiteSyncState {
      */
     public void advanceWatermark(long seq) {
         this.lastAppliedSeq = seq;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -90,7 +91,7 @@ public class SiteSyncState {
      */
     public void recordSchemaVersion(int version) {
         this.schemaVersion = version;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -105,7 +106,7 @@ public class SiteSyncState {
         this.lastCheckpointSeq = 0L;
         this.lastCheckpointAt = null;
         this.rebaselineRequested = false;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /**
@@ -136,8 +137,8 @@ public class SiteSyncState {
      */
     public void recordCheckpoint(long seq) {
         this.lastCheckpointSeq = seq;
-        this.lastCheckpointAt = LocalDateTime.now();
-        this.updatedAt = LocalDateTime.now();
+        this.lastCheckpointAt = LocalDateTime.now(ZoneOffset.UTC);
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PrePersist
@@ -146,6 +147,6 @@ public class SiteSyncState {
         if (lastAppliedSeq == null) lastAppliedSeq = 0L;
         if (lastCheckpointSeq == null) lastCheckpointSeq = 0L;
         if (schemaVersion == null) schemaVersion = 0;
-        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (updatedAt == null) updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 }

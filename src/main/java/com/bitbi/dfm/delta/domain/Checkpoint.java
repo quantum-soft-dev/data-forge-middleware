@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -58,7 +59,7 @@ public class Checkpoint {
         checkpoint.tableName = tableName;
         checkpoint.seq = seq;
         checkpoint.rowCount = rowCount;
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         checkpoint.createdAt = now;
         checkpoint.updatedAt = now;
         return checkpoint;
@@ -68,22 +69,22 @@ public class Checkpoint {
     public void update(long seq, long rowCount) {
         this.seq = seq;
         this.rowCount = rowCount;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void attachCsv(String s3KeyCsv) {
         this.s3KeyCsv = s3KeyCsv;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public void attachParquet(String s3KeyParquet) {
         this.s3KeyParquet = s3KeyParquet;
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PrePersist
     protected void onCreate() {
-        if (createdAt == null) createdAt = LocalDateTime.now();
-        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (createdAt == null) createdAt = LocalDateTime.now(ZoneOffset.UTC);
+        if (updatedAt == null) updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 }
