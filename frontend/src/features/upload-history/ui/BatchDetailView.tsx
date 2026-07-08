@@ -21,13 +21,7 @@ import { ComparisonHistorySection } from './ComparisonHistorySection';
 import { ErrorListView } from './ErrorListView';
 import { DeltaBatchDetail } from './DeltaBatchDetail';
 import { useBatchErrors } from '@/entities/batch/api/queries';
-
-const STATUS_LABELS: Record<string, string> = {
-  COMPLETED: 'Completed',
-  COMPLETED_WITH_WARNINGS: 'Completed (Warnings)',
-  IN_PROGRESS: 'In progress',
-  FAILED: 'Failed',
-};
+import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
 
 interface BatchDetailViewProps {
   /** Batch details with file list */
@@ -187,7 +181,16 @@ export function BatchDetailView({
             ) : batch.status === 'IN_PROGRESS' ? (
               <Loader2 className="h-8 w-8 animate-spin flex-shrink-0 text-brand" strokeWidth={1.5} />
             ) : (
-              <XCircle className="h-8 w-8 flex-shrink-0" style={{ color: severityTokens.critical.dot }} strokeWidth={1.5} />
+              <XCircle
+                className="h-8 w-8 flex-shrink-0"
+                style={{
+                  color:
+                    STATUS_VARIANT[batch.status] === 'stalled'
+                      ? severityTokens.stalled.dot
+                      : severityTokens.critical.dot,
+                }}
+                strokeWidth={1.5}
+              />
             )}
             <div>
               <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
@@ -201,15 +204,7 @@ export function BatchDetailView({
 
           {/* Status badge */}
           <Badge
-            variant={
-              batch.status === 'COMPLETED'
-                ? 'success'
-                : batch.status === 'COMPLETED_WITH_WARNINGS'
-                ? 'warning'
-                : batch.status === 'IN_PROGRESS'
-                ? 'info'
-                : 'critical'
-            }
+            variant={STATUS_VARIANT[batch.status] ?? 'neutral'}
             dot
             className="px-3 py-1 text-sm"
           >
