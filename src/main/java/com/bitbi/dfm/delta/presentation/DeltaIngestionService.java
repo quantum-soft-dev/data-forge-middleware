@@ -492,8 +492,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return;
                 }
                 if (continuous) {
-                    // Flush the final partial segment, then close (T5.4).
-                    if (buffer != null && buffer.acceptedCount() > 0) {
+                    // Flush the final segment and complete its batch, then close (T5.4). Even an
+                    // empty buffer must be sealed: after a threshold seal opened a fresh batch, a
+                    // clean close with no further records would otherwise leave that batch
+                    // IN_PROGRESS, blocking the site with ACTIVE_SESSION_EXISTS until the sweeper (P1).
+                    if (buffer != null) {
                         sealContinuous(false);
                     }
                 } else {

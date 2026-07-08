@@ -527,6 +527,32 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void continuousExactThresholdCloseDoesNotStrandTheFreshBatch() throws Exception {
+        // Exactly 100 records: the threshold seal commits batch 1 and opens a fresh batch 2 with an
+        // empty buffer. A clean half-close must complete batch 2 too, or it stays IN_PROGRESS and
+        // blocks the site with ACTIVE_SESSION_EXISTS until the 60-min sweeper (P1).
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
+        UUID id1 = UUID.randomUUID();
+        UUID id2 = UUID.randomUUID();
+        Batch b1 = mockBatch(id1);
+        Batch b2 = mockBatch(id2);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2);
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.CONTINUOUS, 1L));
+            for (long seq = 1; seq <= 100L; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+            // No more records; runSession half-closes the stream.
+        });
+
+        verify(batchLifecycle, times(2)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).completeBatch(id1);
+        verify(batchLifecycle).completeBatch(id2); // the fresh empty batch must not be stranded
+        verify(batchLifecycle, never()).failBatch(any());
+    }
+
+    @Test
     void continuousDropSealsTailAndCompletesBatchInsteadOfOrphaning() throws Exception {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
         UUID batchId = UUID.randomUUID();
