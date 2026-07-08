@@ -114,7 +114,7 @@ export function DiffViewerWidget({
       case 'UNCHANGED':
         return 'neutral';
       default:
-        return 'default';
+        return 'neutral';
     }
   };
 

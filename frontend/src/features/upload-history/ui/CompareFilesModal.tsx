@@ -37,6 +37,7 @@ import { Button } from '@/shared/ui/ui/button';
 import { Badge } from '@/shared/ui/ui/badge';
 import { Loader2, ChevronsUpDown, Check, Calendar, Files, HardDrive } from 'lucide-react';
 import { formatDateTime } from '@/shared/lib/formatters';
+import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
 
 interface CompareFilesModalProps {
   /** Is modal open */
@@ -207,16 +208,10 @@ export function CompareFilesModal({
                                     {Math.round(batch.totalSize / 1024)} KB
                                   </span>
                                   <Badge
-                                    variant={
-                                      batch.status === 'COMPLETED'
-                                        ? 'default'
-                                        : batch.status === 'IN_PROGRESS'
-                                        ? 'default'
-                                        : 'secondary'
-                                    }
+                                    variant={STATUS_VARIANT[batch.status] ?? 'neutral'}
                                     className="text-xs"
                                   >
-                                    {batch.status}
+                                    {STATUS_LABELS[batch.status] ?? batch.status}
                                   </Badge>
                                 </div>
                               </div>
@@ -245,16 +240,10 @@ export function CompareFilesModal({
                     <div>
                       <div className="text-xs text-muted-foreground">Status</div>
                       <Badge
-                        variant={
-                          selectedBatch.status === 'COMPLETED'
-                            ? 'default'
-                            : selectedBatch.status === 'IN_PROGRESS'
-                            ? 'default'
-                            : 'secondary'
-                        }
+                        variant={STATUS_VARIANT[selectedBatch.status] ?? 'neutral'}
                         className="text-xs"
                       >
-                        {selectedBatch.status}
+                        {STATUS_LABELS[selectedBatch.status] ?? selectedBatch.status}
                       </Badge>
                     </div>
                   </div>

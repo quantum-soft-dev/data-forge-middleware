@@ -6,7 +6,7 @@
  */
 
 import { formatDistanceToNow } from 'date-fns'
-import { Plug, Clock, Calendar, Check, X } from 'lucide-react'
+import { Plug, Clock, Calendar } from 'lucide-react'
 import { Button } from '@/shared/ui/ui/button'
 import { Badge } from '@/shared/ui/ui/badge'
 import { monitoringTokens, severityTokens } from '@/shared/ui/tokens'
