@@ -70,6 +70,9 @@ public class SqlGenerationService {
     private final DbfSqlGenerationStrategy dbfStrategy;
     private final CdcSqlGenerationStrategy cdcStrategy;
     private final SiteSchemaService siteSchemaService;
+    private final DeltaSqlGenerationStrategy deltaStrategy;
+    private final com.bitbi.dfm.delta.domain.ChangelogSegmentRepository changelogSegmentRepository;
+    private final PluginDeltaBaselineRepository pluginDeltaBaselineRepository;
     private final int maxConcurrent;
     private final int semaphoreTimeoutSeconds;
     private final int heapThresholdPercent;
@@ -87,6 +90,9 @@ public class SqlGenerationService {
             DbfSqlGenerationStrategy dbfStrategy,
             CdcSqlGenerationStrategy cdcStrategy,
             SiteSchemaService siteSchemaService,
+            DeltaSqlGenerationStrategy deltaStrategy,
+            com.bitbi.dfm.delta.domain.ChangelogSegmentRepository changelogSegmentRepository,
+            PluginDeltaBaselineRepository pluginDeltaBaselineRepository,
             @Value("${plugin.sql-generation.max-concurrent:2}") int maxConcurrent,
             @Value("${plugin.sql-generation.semaphore-timeout-seconds:120}") int semaphoreTimeoutSeconds,
             @Value("${plugin.sql-generation.heap-threshold-percent:80}") int heapThresholdPercent) {
@@ -100,6 +106,9 @@ public class SqlGenerationService {
         this.dbfStrategy = dbfStrategy;
         this.cdcStrategy = cdcStrategy;
         this.siteSchemaService = siteSchemaService;
+        this.deltaStrategy = deltaStrategy;
+        this.changelogSegmentRepository = changelogSegmentRepository;
+        this.pluginDeltaBaselineRepository = pluginDeltaBaselineRepository;
         this.maxConcurrent = maxConcurrent;
         this.semaphoreTimeoutSeconds = semaphoreTimeoutSeconds;
         this.heapThresholdPercent = heapThresholdPercent;
@@ -184,8 +193,12 @@ public class SqlGenerationService {
             AccountPlugin accountPlugin = accountPluginRepository.findById(accountPluginId)
                     .orElseThrow(() -> new IllegalArgumentException("AccountPlugin not found: " + accountPluginId));
 
+            // Delta v2 sites use per-table seq baselines (plugin_delta_baselines, 026) captured
+            // at activation/reinit — the batch-level baseline cases below do not apply to them.
+            boolean deltaV2 = isDeltaV2Batch(batchId);
+
             // Case 1: This batch is the baseline - skip SQL generation
-            if (accountPlugin.isBaselineBatch(batchId)) {
+            if (!deltaV2 && accountPlugin.isBaselineBatch(batchId)) {
                 log.info("Skipping SQL generation for baseline batch {}. " +
                         "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
                         batchId);
@@ -193,7 +206,7 @@ public class SqlGenerationService {
             }
 
             // Case 2: No baseline set - this is the first batch, make it baseline
-            if (!accountPlugin.hasBaselineBatch()) {
+            if (!deltaV2 && !accountPlugin.hasBaselineBatch()) {
                 log.info("No baseline batch set. Setting batch {} as baseline. " +
                         "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
                         batchId);
@@ -381,6 +394,17 @@ public class SqlGenerationService {
         Site site = siteRepository.findById(batch.getSiteId())
                 .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
 
+        // Delta v2 sites: the batch's data lives in changelog segments, not uploaded files (026)
+        if (site.isDeltaV2()) {
+            List<com.bitbi.dfm.delta.domain.ChangelogSegment> segments =
+                    changelogSegmentRepository.findByBatchId(batchId);
+            if (segments.isEmpty()) {
+                log.warn("No changelog segment for delta batch, skipping SQL generation: batchId={}", batchId);
+                return null;
+            }
+            return new BatchData(batch, site, List.of(), Optional.empty(), Map.of(), segments);
+        }
+
         List<UploadedFile> currentFiles = batch.getUploadedFiles();
         if (currentFiles.isEmpty()) {
             log.warn("No files in batch, skipping SQL generation: batchId={}", batchId);
@@ -426,7 +450,17 @@ public class SqlGenerationService {
         log.debug("Previous batch for comparison: {}",
                 previousBatchOpt.map(b -> b.getId().toString()).orElse("none (first batch, force full, or CDC)"));
 
-        return new BatchData(batch, site, relevantFiles, previousBatchOpt, previousFilesMap);
+        return new BatchData(batch, site, relevantFiles, previousBatchOpt, previousFilesMap, List.of());
+    }
+
+    /**
+     * Whether the batch belongs to a Delta v2 site (segment-sourced SQL, per-table baselines).
+     */
+    private boolean isDeltaV2Batch(UUID batchId) {
+        return batchRepository.findById(batchId)
+                .flatMap(batch -> siteRepository.findById(batch.getSiteId()))
+                .map(Site::isDeltaV2)
+                .orElse(false);
     }
 
     /**
@@ -441,6 +475,17 @@ public class SqlGenerationService {
                     getHeapUsagePercent(), data.batch().getId());
             meterRegistry.counter("sql.generation.aborted.memory_pressure").increment();
             return null;
+        }
+
+        // Delta v2: segment-sourced generation with per-table baseline filtering (026)
+        if (data.site().isDeltaV2()) {
+            return deltaStrategy.generate(
+                    data.batch().getId(),
+                    data.site().getId(),
+                    data.segments(),
+                    siteSchemaService.getTableSchemas(data.site().getId()),
+                    pluginDeltaBaselineRepository.baselineSeqsBySiteId(data.site().getId())
+            );
         }
 
         Map<String, TableSchema> tableSchemas = Map.of();
@@ -485,6 +530,14 @@ public class SqlGenerationService {
                 stats,
                 durationNanos / 1_000_000 // Convert nanos to ms
         );
+
+        if (!data.segments().isEmpty()) {
+            long firstSeq = data.segments().stream()
+                    .mapToLong(com.bitbi.dfm.delta.domain.ChangelogSegment::getFirstSeq).min().orElseThrow();
+            long lastSeq = data.segments().stream()
+                    .mapToLong(com.bitbi.dfm.delta.domain.ChangelogSegment::getLastSeq).max().orElseThrow();
+            generation.recordSegmentRange(firstSeq, lastSeq);
+        }
 
         return sqlGenerationRepository.save(generation);
     }
@@ -539,7 +592,8 @@ public class SqlGenerationService {
             Site site,
             List<UploadedFile> relevantFiles,
             Optional<Batch> previousBatchOpt,
-            Map<String, UploadedFile> previousFilesMap
+            Map<String, UploadedFile> previousFilesMap,
+            List<com.bitbi.dfm.delta.domain.ChangelogSegment> segments
     ) {}
 
     /**
@@ -726,6 +780,11 @@ public class SqlGenerationService {
         Site site = siteRepository.findById(batch.getSiteId())
                 .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
 
+        if (site.isDeltaV2()) {
+            throw new IllegalArgumentException(
+                    "SQL regeneration is not supported for Delta v2 sites: siteId=" + site.getId());
+        }
+
         List<UploadedFile> currentFiles = batch.getUploadedFiles();
         if (currentFiles.isEmpty()) {
             return null;
@@ -755,7 +814,7 @@ public class SqlGenerationService {
             }
         }
 
-        return new BatchData(batch, site, csvFiles, previousBatchOpt, previousFilesMap);
+        return new BatchData(batch, site, csvFiles, previousBatchOpt, previousFilesMap, List.of());
     }
 
     /**
