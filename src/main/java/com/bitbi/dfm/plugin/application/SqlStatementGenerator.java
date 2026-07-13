@@ -312,12 +312,15 @@ public class SqlStatementGenerator {
     }
 
     /**
-     * Formats a JSON-typed value for use in a SQL statement.
-     * Handles null, numbers, booleans and strings.
+     * Formats a typed value for use in a SQL statement.
+     * Handles null, numbers (BigDecimal without scientific notation), booleans, bytea and strings.
      */
     private String formatJsonValue(Object value) {
         if (value == null) {
             return "NULL";
+        }
+        if (value instanceof java.math.BigDecimal decimal) {
+            return decimal.toPlainString();
         }
         if (value instanceof Number) {
             return value.toString();
@@ -325,6 +328,22 @@ public class SqlStatementGenerator {
         if (value instanceof Boolean) {
             return value.toString();
         }
+        if (value instanceof byte[] bytes) {
+            return formatBytea(bytes);
+        }
         return "'" + escapeString(value.toString()) + "'";
+    }
+
+    /**
+     * Renders binary data as a PostgreSQL bytea hex literal ({@code '\xdeadbeef'}) — hex chars
+     * only, so no escaping hazards.
+     */
+    private String formatBytea(byte[] bytes) {
+        StringBuilder hex = new StringBuilder(bytes.length * 2 + 4);
+        hex.append("'\\x");
+        for (byte b : bytes) {
+            hex.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return hex.append("'").toString();
     }
 }
