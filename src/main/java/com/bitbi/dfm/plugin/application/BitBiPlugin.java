@@ -58,6 +58,7 @@ public class BitBiPlugin implements Plugin {
     private AccountPluginRepository accountPluginRepository;
     private com.bitbi.dfm.site.domain.SiteRepository siteRepository;
     private DeltaSqlSweepWorker deltaSqlSweepWorker;
+    private PluginDeltaBaselineService pluginDeltaBaselineService;
 
     /**
      * Inject SqlGenerationService lazily to avoid circular dependency.
@@ -111,6 +112,15 @@ public class BitBiPlugin implements Plugin {
     @Lazy
     public void setDeltaSqlSweepWorker(DeltaSqlSweepWorker deltaSqlSweepWorker) {
         this.deltaSqlSweepWorker = deltaSqlSweepWorker;
+    }
+
+    /**
+     * Inject PluginDeltaBaselineService lazily to avoid circular dependency (026: baselines).
+     */
+    @Autowired
+    @Lazy
+    public void setPluginDeltaBaselineService(PluginDeltaBaselineService pluginDeltaBaselineService) {
+        this.pluginDeltaBaselineService = pluginDeltaBaselineService;
     }
 
     /**
@@ -266,6 +276,15 @@ public class BitBiPlugin implements Plugin {
             log.error("Failed to set baseline batch for account {}: {}",
                 accountPlugin.getAccountId(), e.getMessage(), e);
             // Don't fail activation if baseline setting fails
+        }
+
+        // Capture per-table delta SQL baselines for V2 sites from current checkpoints (026)
+        try {
+            pluginDeltaBaselineService.captureBaselines(accountPlugin);
+        } catch (Exception e) {
+            log.error("Failed to capture delta SQL baselines for account {}: {}",
+                accountPlugin.getAccountId(), e.getMessage(), e);
+            // Don't fail activation if baseline capture fails
         }
 
         // Generate API Key for Plugin API authentication
