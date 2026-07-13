@@ -95,7 +95,7 @@ public record Auth0Properties(
      *
      * @param audience        API identifier registered in Auth0 (e.g., https://api.dataforge.com)
      * @param issuer          Auth0 tenant issuer URL (e.g., https://dev-abc123.us.auth0.com/)
-     * @param claimsNamespace Namespace prefix for custom claims in JWT (e.g., https://dev.dfm.bitbi.io)
+     * @param claimsNamespace Namespace prefix for custom claims in JWT (e.g., https://test.dfm.bitbi.io)
      */
     public record Api(
             @NotBlank(message = "Auth0 API audience is required")
@@ -109,7 +109,7 @@ public record Auth0Properties(
     ) {
         /**
          * Get the full claim name for roles.
-         * @return roles claim name (e.g., https://dev.dfm.bitbi.io/roles)
+         * @return roles claim name (e.g., https://test.dfm.bitbi.io/roles)
          */
         public String rolesClaim() {
             return claimsNamespace + "/roles";
@@ -117,7 +117,7 @@ public record Auth0Properties(
 
         /**
          * Get the full claim name for accountId.
-         * @return accountId claim name (e.g., https://dev.dfm.bitbi.io/accountId)
+         * @return accountId claim name (e.g., https://test.dfm.bitbi.io/accountId)
          */
         public String accountIdClaim() {
             return claimsNamespace + "/accountId";
@@ -125,7 +125,7 @@ public record Auth0Properties(
 
         /**
          * Get the full claim name for email.
-         * @return email claim name (e.g., https://dev.dfm.bitbi.io/email)
+         * @return email claim name (e.g., https://test.dfm.bitbi.io/email)
          */
         public String emailClaim() {
             return claimsNamespace + "/email";

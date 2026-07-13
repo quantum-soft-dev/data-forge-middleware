@@ -437,7 +437,7 @@ public class SecurityConfiguration {
     /**
      * Custom converter to extract roles from Auth0's custom roles claim.
      * <p>
-     * Extracts roles from configurable custom claim (e.g., 'https://dev.dfm.bitbi.io/roles').
+     * Extracts roles from configurable custom claim (e.g., 'https://test.dfm.bitbi.io/roles').
      * Automatically adds ROLE_ prefix if not present to ensure compatibility with
      * Spring Security's hasRole() method. Handles both formats:
      * - "ADMIN" → "ROLE_ADMIN"

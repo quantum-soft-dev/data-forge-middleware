@@ -4,11 +4,11 @@
 # global external L7 Ingress bitbi uses (dev.bitbi.io). TLS is a Google-managed
 # certificate provisioned via Certificate Manager (map `forge-dev-certmap`,
 # referenced by the certmap annotation) — it stays PROVISIONING until DNS for
-# dev.dfm.bitbi.io points at the reserved static IP `forge-dev-ip`.
+# test.dfm.bitbi.io points at the reserved static IP `forge-dev-ip`.
 #
 # Out-of-band prerequisites (created via gcloud; see deploy/gke/README.md):
 #   - global static IP `forge-dev-ip`            (136.68.136.183)
-#   - managed cert `forge-dev-cert` + map `forge-dev-certmap` for dev.dfm.bitbi.io
+#   - managed cert `forge-dev-cert` + map `forge-dev-certmap` for test.dfm.bitbi.io
 #
 # The frontend nginx reverse-proxies /api/* to forge-backend, so a single route
 # to forge-frontend covers both the admin UI and the client/admin API.
@@ -61,7 +61,7 @@ spec:
     - name: forge-gateway
       sectionName: https
   hostnames:
-    - dev.dfm.bitbi.io
+    - test.dfm.bitbi.io
   rules:
     - backendRefs:
         - name: forge-frontend
@@ -78,7 +78,7 @@ spec:
     - name: forge-gateway
       sectionName: http
   hostnames:
-    - dev.dfm.bitbi.io
+    - test.dfm.bitbi.io
   rules:
     - filters:
         - type: RequestRedirect

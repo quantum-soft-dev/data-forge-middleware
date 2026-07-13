@@ -8,4 +8,4 @@ data:
   VITE_AUTH0_DOMAIN: "dev-dfm.us.auth0.com"
   VITE_AUTH0_CLIENT_ID: "2sTGyEnKDASQFT2qVbYHQeUpROOTvCJ9"
   VITE_AUTH0_AUDIENCE: "https://dev-dfm.bitbi.io"
-  VITE_AUTH0_CLAIMS_NAMESPACE: "https://dev.dfm.bitbi.io"
+  VITE_AUTH0_CLAIMS_NAMESPACE: "https://test.dfm.bitbi.io"

@@ -10,6 +10,6 @@ data:
   AUTH0_ISSUER: "https://dev-dfm.us.auth0.com/"
   AUTH0_MGMT_AUDIENCE: "https://dev-dfm.us.auth0.com/api/v2/"
   AUTH0_AUDIENCE: "https://dev-dfm.bitbi.io"
-  AUTH0_CLAIMS_NAMESPACE: "https://dev.dfm.bitbi.io"
+  AUTH0_CLAIMS_NAMESPACE: "https://test.dfm.bitbi.io"
   # Device Authorization Flow verification page (internal-only dev: port-forward / cluster URL)
   DEVICE_AUTH_VERIFICATION_URI: "http://forge-frontend.forge.svc.cluster.local/device-verify"

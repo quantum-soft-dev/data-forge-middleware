@@ -223,7 +223,7 @@ public class PluginAuditFilter extends OncePerRequestFilter {
         try {
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();
             if (auth != null && auth.getPrincipal() instanceof Jwt jwt) {
-                // Try namespaced claim first (e.g., https://dev.dfm.bitbi.io/accountId)
+                // Try namespaced claim first (e.g., https://test.dfm.bitbi.io/accountId)
                 String accountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
                 if (accountIdStr != null && !accountIdStr.isBlank()) {
                     return UUID.fromString(accountIdStr);

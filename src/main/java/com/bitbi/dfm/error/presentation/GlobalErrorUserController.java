@@ -257,7 +257,7 @@ public class GlobalErrorUserController {
      *         (indicates admin user trying to access user endpoint)
      */
     private UUID extractAccountId(Jwt jwt) {
-        // Try namespaced claim first (e.g., https://dev.dfm.bitbi.io/accountId)
+        // Try namespaced claim first (e.g., https://test.dfm.bitbi.io/accountId)
         String accountIdStr = jwt.getClaimAsString(auth0Properties.api().accountIdClaim());
 
         // Fall back to legacy claim
