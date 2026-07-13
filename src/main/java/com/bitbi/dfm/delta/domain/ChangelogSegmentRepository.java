@@ -49,4 +49,24 @@ public interface ChangelogSegmentRepository {
      * @return per-site head pending segments, oldest first
      */
     List<ChangelogSegment> findNextPendingEgress(int limit);
+
+    /**
+     * Pick pending Bit BI plugin SQL work (026-bitbi-delta-sql): for every site with segments
+     * awaiting SQL generation, the earliest one (lowest {@code first_seq}) — so generations are
+     * created in seq order per site — locked with {@code FOR UPDATE SKIP LOCKED} so concurrent
+     * workers never double-process. Must run inside a transaction.
+     *
+     * @param limit maximum segments to claim
+     * @return per-site head pending segments, oldest first
+     */
+    List<ChangelogSegment> findNextPendingPluginSql(int limit);
+
+    /**
+     * Re-enqueue all of a site's segments for plugin SQL generation (plugin reinit: the
+     * checkpoint-lag gap is regenerated under freshly captured baselines).
+     *
+     * @param siteId site identifier
+     * @return number of segments re-enqueued
+     */
+    int clearPluginSqlBySiteId(UUID siteId);
 }

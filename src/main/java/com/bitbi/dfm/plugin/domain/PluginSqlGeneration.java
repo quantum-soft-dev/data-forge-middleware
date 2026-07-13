@@ -68,6 +68,24 @@ public class PluginSqlGeneration {
     private UUID supersededBy;
 
     /**
+     * Segment seq range for delta-sourced generations (026-bitbi-delta-sql); {@code null} for
+     * V1 file-based generations.
+     */
+    @Column(name = "first_seq")
+    private Long firstSeq;
+
+    @Column(name = "last_seq")
+    private Long lastSeq;
+
+    /**
+     * Record the changelog segment seq range this generation was rendered from (delta path).
+     */
+    public void recordSegmentRange(long firstSeq, long lastSeq) {
+        this.firstSeq = firstSeq;
+        this.lastSeq = lastSeq;
+    }
+
+    /**
      * Factory method for creating a new SQL generation record.
      *
      * @param accountPluginId The ID of the active account plugin

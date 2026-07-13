@@ -61,4 +61,24 @@ public interface JpaChangelogSegmentRepository
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
     java.util.List<ChangelogSegment> findNextPendingEgress(int limit);
+
+    @Override
+    @Query(value = """
+            SELECT * FROM changelog_segments s
+            WHERE s.plugin_sql_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM changelog_segments p
+                              WHERE p.site_id = s.site_id
+                                AND p.plugin_sql_at IS NULL
+                                AND p.first_seq < s.first_seq)
+            ORDER BY s.created_at
+            LIMIT :limit
+            FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL WHERE s.siteId = :siteId")
+    int clearPluginSqlBySiteId(UUID siteId);
 }

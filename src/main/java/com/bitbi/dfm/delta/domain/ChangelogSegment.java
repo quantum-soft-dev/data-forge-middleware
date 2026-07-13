@@ -98,10 +98,26 @@ public class ChangelogSegment {
     }
 
     /**
+     * When the segment's records were rendered into Bit BI plugin SQL (or deliberately skipped);
+     * {@code null} = pending — the segment is the durable delta-SQL work queue entry
+     * (026-bitbi-delta-sql), same pattern as {@link #egressAt}.
+     */
+    @Column(name = "plugin_sql_at")
+    private LocalDateTime pluginSqlAt;
+
+    /**
      * Mark the segment's delta Parquet egress as done (removes it from the pending queue).
      */
     public void markEgressed() {
         this.egressAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Mark the segment's plugin SQL generation as done or deliberately skipped (removes it from
+     * the pending delta-SQL queue).
+     */
+    public void markPluginSqlProcessed() {
+        this.pluginSqlAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     @PrePersist
