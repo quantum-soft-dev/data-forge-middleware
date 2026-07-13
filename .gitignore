@@ -67,3 +67,7 @@ jacoco/
 deploy-script/parameters-*.json
 deploy-script/config/*.json
 !deploy-script/config/*.template
+
+# GKE filled secret dotenv files (never commit)
+deploy/gke/forge-secrets.*.env
+!deploy/gke/forge-secrets.example.env

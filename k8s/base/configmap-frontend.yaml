@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forge-frontend-config
+  namespace: forge
+data:
+  # nginx reverse-proxies /api/* to the backend Service (same namespace)
+  BACKEND_URL: "http://forge-backend:8080"
+  # Injected at container start into /usr/share/nginx/html/env-config.js (envsubst)
+  VITE_API_BASE_URL: "/api"
+  # Auth0 SPA config — environment-specific, overridden in overlays
+  VITE_AUTH0_AUDIENCE: "https://api.dataforge.com"
+  VITE_AUTH0_CLAIMS_NAMESPACE: "https://api.dataforge.com"

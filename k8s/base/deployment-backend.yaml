@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-backend
+  namespace: forge
+  labels:
+    app: forge-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: forge-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # zero-downtime: keep all current pods up during rollout
+  template:
+    metadata:
+      labels:
+        app: forge-backend
+    spec:
+      serviceAccountName: forge-app
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: backend
+          # Image is set per-environment via Kustomize overlay
+          image: us-central1-docker.pkg.dev/bitbi-production/forge-app/backend:latest
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: forge-config
+            - secretRef:
+                name: forge-secrets
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1500m"
+              memory: "2Gi"
+          # Slow boot: Flyway migrations + JVM warmup can take minutes.
+          # startupProbe gates liveness/readiness until the app is actually up.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 60   # up to ~10 min to become ready
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 30
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: forge-backend

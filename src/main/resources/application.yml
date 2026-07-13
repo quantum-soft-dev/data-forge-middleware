@@ -57,7 +57,11 @@ s3:
     name: ${AWS_S3_BUCKET_NAME:data-forge-bucket}
   access-key: ${AWS_ACCESS_KEY_ID:}
   secret-key: ${AWS_SECRET_ACCESS_KEY:}
-  path-style-access-enabled: false
+  path-style-access-enabled: ${S3_PATH_STYLE_ACCESS:false}
+  # Set checksum.enabled=false for GCS S3-compatibility
+  # (GCS rejects AWS chunked-encoding / flexible checksums that the SDK sends by default).
+  checksum:
+    enabled: ${S3_CHECKSUM_ENABLED:true}
 
 # Batch Configuration
 batch:

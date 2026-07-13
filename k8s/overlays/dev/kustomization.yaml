@@ -1,0 +1,43 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - redis.yaml            # in-cluster Redis (dev only; stage/prod use Memorystore)
+  - gateway.yaml          # external GKE Gateway (dev.dfm.bitbi.io) + HTTPRoutes + health check
+
+# Override images to the bitbi-dev Artifact Registry.
+# Tags are overridden to the commit SHA at deploy time via `kustomize edit set image`.
+images:
+  - name: us-central1-docker.pkg.dev/bitbi-production/forge-app/backend
+    newName: us-central1-docker.pkg.dev/bitbi-dev/forge-app/backend
+    newTag: "2917718"
+  - name: us-central1-docker.pkg.dev/bitbi-production/forge-app/frontend
+    newName: us-central1-docker.pkg.dev/bitbi-dev/forge-app/frontend
+    newTag: "2917718"
+
+patches:
+  - path: deployment-backend-patch.yaml
+    target:
+      kind: Deployment
+      name: forge-backend
+  - path: configmap-patch.yaml
+    target:
+      kind: ConfigMap
+      name: forge-config
+  - path: configmap-frontend-patch.yaml
+    target:
+      kind: ConfigMap
+      name: forge-frontend-config
+  - path: serviceaccount-patch.yaml
+    target:
+      kind: ServiceAccount
+      name: forge-app
+  - path: hpa-patch.yaml
+    target:
+      kind: HorizontalPodAutoscaler
+      name: forge-backend-hpa
+  - path: service-frontend-neg-patch.yaml
+    target:
+      kind: Service
+      name: forge-frontend

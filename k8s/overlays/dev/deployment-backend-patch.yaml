@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-backend
+  namespace: forge
+spec:
+  replicas: 1            # dev: single replica
+  template:
+    spec:
+      containers:
+        - name: backend
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "768Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"
+      topologySpreadConstraints: []   # dev: no zone spreading (single replica)
