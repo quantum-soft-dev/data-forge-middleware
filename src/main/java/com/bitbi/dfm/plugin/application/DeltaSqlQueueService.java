@@ -1,0 +1,139 @@
+package com.bitbi.dfm.plugin.application;
+
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.plugin.domain.AccountPlugin;
+import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
+import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
+import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Transactional consumer of the delta-SQL work queue (026-bitbi-delta-sql).
+ *
+ * <p>Claims the per-site head pending segment ({@code FOR UPDATE SKIP LOCKED}), renders it into
+ * plugin SQL via {@link SqlGenerationService} (semaphore, idempotency, audit and persistence all
+ * reused), and marks it processed — all in one transaction, so a failure rolls back and the
+ * sweep retries. Segments of accounts without an active bit-bi activation are marked processed
+ * without generating (they must not accumulate).</p>
+ *
+ * <p>{@code FULL_SNAPSHOT} segments (source-side rebaseline) emit no SQL: the site's per-table
+ * baselines are suspended ({@code Long.MAX_VALUE}) until the user reinitializes the plugin, and
+ * an audit warning signals that reinit is required. Tables created after the snapshot have no
+ * baseline row (default 0) and keep streaming.</p>
+ *
+ * @author Data Forge Team
+ * @version 1.0.0
+ */
+@Service
+public class DeltaSqlQueueService {
+
+    private static final Logger log = LoggerFactory.getLogger(DeltaSqlQueueService.class);
+
+    private static final String PLUGIN_ID = "bit-bi";
+
+    private final ChangelogSegmentRepository segmentRepository;
+    private final SiteRepository siteRepository;
+    private final AccountPluginRepository accountPluginRepository;
+    private final SqlGenerationService sqlGenerationService;
+    private final PluginDeltaBaselineRepository baselineRepository;
+    private final PluginAuditService pluginAuditService;
+    private final MeterRegistry meterRegistry;
+
+    public DeltaSqlQueueService(ChangelogSegmentRepository segmentRepository,
+                                SiteRepository siteRepository,
+                                AccountPluginRepository accountPluginRepository,
+                                SqlGenerationService sqlGenerationService,
+                                PluginDeltaBaselineRepository baselineRepository,
+                                PluginAuditService pluginAuditService,
+                                MeterRegistry meterRegistry) {
+        this.segmentRepository = segmentRepository;
+        this.siteRepository = siteRepository;
+        this.accountPluginRepository = accountPluginRepository;
+        this.sqlGenerationService = sqlGenerationService;
+        this.baselineRepository = baselineRepository;
+        this.pluginAuditService = pluginAuditService;
+        this.meterRegistry = meterRegistry;
+    }
+
+    /**
+     * Claim and process the next pending segment.
+     *
+     * @return {@code true} if a segment was processed (keep draining), {@code false} if the
+     *         queue is empty
+     */
+    @Transactional
+    public boolean processNextPending() {
+        List<ChangelogSegment> claimed = segmentRepository.findNextPendingPluginSql(1);
+        if (claimed.isEmpty()) {
+            return false;
+        }
+        ChangelogSegment segment = claimed.get(0);
+
+        Site site = siteRepository.findById(segment.getSiteId())
+                .orElseThrow(() -> new IllegalStateException("Site not found: " + segment.getSiteId()));
+
+        Optional<AccountPlugin> activation = accountPluginRepository
+                .findByAccountIdAndPluginId(site.getAccountId(), PLUGIN_ID)
+                .filter(AccountPlugin::isActive);
+
+        if (activation.isEmpty()) {
+            log.debug("No active bit-bi activation for account {} — marking segment {} processed",
+                    site.getAccountId(), segment.getId());
+            meterRegistry.counter("sql.generation.delta.segments.skipped.inactive").increment();
+        } else if (DeltaSqlGenerationStrategy.MODE_FULL_SNAPSHOT.equals(segment.getMode())) {
+            suspendBaselines(segment, site, activation.get());
+        } else {
+            // throws on failure → transaction rolls back → segment stays pending for the sweep
+            sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
+        }
+
+        segment.markPluginSqlProcessed();
+        segmentRepository.save(segment);
+        return true;
+    }
+
+    /**
+     * FULL_SNAPSHOT handling: suspend every known table of the site (existing baseline rows and
+     * tables present in the snapshot) until the user reinitializes the plugin.
+     */
+    private void suspendBaselines(ChangelogSegment segment, Site site, AccountPlugin activation) {
+        Set<String> covered = new HashSet<>();
+        for (PluginDeltaBaseline baseline : baselineRepository
+                .findByAccountPluginIdAndSiteId(activation.getId(), site.getId())) {
+            baseline.suspend();
+            baselineRepository.save(baseline);
+            covered.add(baseline.getTableName());
+        }
+
+        Map<String, com.bitbi.dfm.delta.domain.TableChangeStats> stats = segment.getStats();
+        if (stats != null) {
+            for (String tableName : stats.keySet()) {
+                if (covered.add(tableName)) {
+                    PluginDeltaBaseline suspended =
+                            PluginDeltaBaseline.create(activation.getId(), site.getId(), tableName, Long.MAX_VALUE);
+                    baselineRepository.save(suspended);
+                }
+            }
+        }
+
+        String message = "Site was rebaselined (FULL_SNAPSHOT) — SQL generation is suspended for its tables; "
+                + "reinitialize the bit-bi plugin to resume";
+        log.warn("{}: siteId={}, batchId={}, tables={}", message, site.getId(), segment.getBatchId(), covered);
+        pluginAuditService.logSqlGenerationFailed(
+                PLUGIN_ID, site.getAccountId(), segment.getBatchId(), site.getId(), message, 0L);
+        meterRegistry.counter("sql.generation.delta.rebaseline.detected").increment();
+    }
+}

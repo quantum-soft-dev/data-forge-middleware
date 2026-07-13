@@ -399,4 +399,75 @@ class BitBiPluginTest {
                     .doesNotThrowAnyException();
         }
     }
+
+    // ==================== 026-bitbi-delta-sql: V2 routing ====================
+
+    @Nested
+    @DisplayName("execute() delta v2 routing (026)")
+    class DeltaV2Routing {
+
+        private BitBiPlugin pluginUnderTest;
+        private com.bitbi.dfm.plugin.application.SqlGenerationService sqlGenerationService;
+        private com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker sweepWorker;
+        private com.bitbi.dfm.batch.domain.BatchRepository batchRepository;
+        private com.bitbi.dfm.site.domain.SiteRepository siteRepository;
+
+        private final UUID batchId = UUID.randomUUID();
+        private final UUID siteId = UUID.randomUUID();
+
+        @BeforeEach
+        void setUpMocks() {
+            pluginUnderTest = new BitBiPlugin();
+            sqlGenerationService = mock(com.bitbi.dfm.plugin.application.SqlGenerationService.class);
+            sweepWorker = mock(com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker.class);
+            batchRepository = mock(com.bitbi.dfm.batch.domain.BatchRepository.class);
+            siteRepository = mock(com.bitbi.dfm.site.domain.SiteRepository.class);
+            pluginUnderTest.setSqlGenerationService(sqlGenerationService);
+            pluginUnderTest.setDeltaSqlSweepWorker(sweepWorker);
+            pluginUnderTest.setBatchRepository(batchRepository);
+            pluginUnderTest.setSiteRepository(siteRepository);
+
+            com.bitbi.dfm.batch.domain.Batch batch = mock(com.bitbi.dfm.batch.domain.Batch.class);
+            when(batch.getSiteId()).thenReturn(siteId);
+            when(batchRepository.findById(batchId)).thenReturn(java.util.Optional.of(batch));
+        }
+
+        private PluginEvent batchCompletedEvent() {
+            return PluginEvent.batchCompleted(UUID.randomUUID(), batchId, 0, 0L);
+        }
+
+        private AccountPlugin activation() {
+            AccountPlugin accountPlugin = mock(AccountPlugin.class);
+            when(accountPlugin.getId()).thenReturn(9L);
+            when(accountPlugin.getPluginData()).thenReturn(java.util.Map.of("tenantId", "t1"));
+            return accountPlugin;
+        }
+
+        @Test
+        @DisplayName("should wake the sweep worker (not inline-generate) for V2 batches")
+        void shouldWakeWorkerForDeltaV2Batch() {
+            com.bitbi.dfm.site.domain.Site site = mock(com.bitbi.dfm.site.domain.Site.class);
+            when(site.isDeltaV2()).thenReturn(true);
+            when(siteRepository.findById(siteId)).thenReturn(java.util.Optional.of(site));
+
+            pluginUnderTest.execute(batchCompletedEvent(), activation());
+
+            verify(sweepWorker).wake();
+            verify(sqlGenerationService, never()).generateSqlForBatch(any(), any());
+        }
+
+        @Test
+        @DisplayName("should keep inline generation for V1 batches")
+        void shouldInlineGenerateForV1Batch() {
+            com.bitbi.dfm.site.domain.Site site = mock(com.bitbi.dfm.site.domain.Site.class);
+            when(site.isDeltaV2()).thenReturn(false);
+            when(siteRepository.findById(siteId)).thenReturn(java.util.Optional.of(site));
+
+            AccountPlugin accountPlugin = activation();
+            pluginUnderTest.execute(batchCompletedEvent(), accountPlugin);
+
+            verify(sqlGenerationService).generateSqlForBatch(batchId, 9L);
+            verify(sweepWorker, never()).wake();
+        }
+    }
 }

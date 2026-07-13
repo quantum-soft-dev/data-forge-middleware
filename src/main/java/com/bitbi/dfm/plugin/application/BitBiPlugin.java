@@ -56,6 +56,8 @@ public class BitBiPlugin implements Plugin {
     private PluginApiKeyService pluginApiKeyService;
     private BatchRepository batchRepository;
     private AccountPluginRepository accountPluginRepository;
+    private com.bitbi.dfm.site.domain.SiteRepository siteRepository;
+    private DeltaSqlSweepWorker deltaSqlSweepWorker;
 
     /**
      * Inject SqlGenerationService lazily to avoid circular dependency.
@@ -91,6 +93,24 @@ public class BitBiPlugin implements Plugin {
     @Lazy
     public void setAccountPluginRepository(AccountPluginRepository accountPluginRepository) {
         this.accountPluginRepository = accountPluginRepository;
+    }
+
+    /**
+     * Inject SiteRepository lazily to avoid circular dependency (026: V2 routing).
+     */
+    @Autowired
+    @Lazy
+    public void setSiteRepository(com.bitbi.dfm.site.domain.SiteRepository siteRepository) {
+        this.siteRepository = siteRepository;
+    }
+
+    /**
+     * Inject DeltaSqlSweepWorker lazily to avoid circular dependency (026: V2 routing).
+     */
+    @Autowired
+    @Lazy
+    public void setDeltaSqlSweepWorker(DeltaSqlSweepWorker deltaSqlSweepWorker) {
+        this.deltaSqlSweepWorker = deltaSqlSweepWorker;
     }
 
     /**
@@ -169,6 +189,16 @@ public class BitBiPlugin implements Plugin {
         if (event.type() == PluginEventType.BATCH_COMPLETED) {
             UUID batchId = event.resourceId();
 
+            // Delta v2 batches route through the durable queue (segment.plugin_sql_at, 026):
+            // per-site head-of-line claiming keeps generations in seq order, and the sweep
+            // retries anything a crash or failure leaves pending. Inline generation here
+            // would let the async pool process batches out of order.
+            if (isDeltaV2Batch(batchId)) {
+                log.info("Delta v2 batch {} — waking delta SQL worker (tenant: {})", batchId, tenantId);
+                deltaSqlSweepWorker.wake();
+                return;
+            }
+
             log.info("Triggering SQL generation for batch {} (tenant: {})",
                 batchId, tenantId);
 
@@ -179,6 +209,18 @@ public class BitBiPlugin implements Plugin {
                     batchId, tenantId, e.getMessage(), e);
                 // Don't rethrow - SQL generation failure shouldn't fail the event processing
             }
+        }
+    }
+
+    private boolean isDeltaV2Batch(UUID batchId) {
+        try {
+            return batchRepository.findById(batchId)
+                    .flatMap(batch -> siteRepository.findById(batch.getSiteId()))
+                    .map(com.bitbi.dfm.site.domain.Site::isDeltaV2)
+                    .orElse(false);
+        } catch (Exception e) {
+            log.warn("Failed to resolve site for batch {} — treating as V1: {}", batchId, e.getMessage());
+            return false;
         }
     }
 

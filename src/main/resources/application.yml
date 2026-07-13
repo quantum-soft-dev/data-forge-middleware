@@ -143,6 +143,9 @@ plugin:
     semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
     # JVM heap usage percentage threshold; generation aborts if exceeded
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
+    # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size and fallback sweep interval
+    delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}
+    delta-sweep-ms: ${PLUGIN_SQL_GENERATION_DELTA_SWEEP_MS:60000}
 
 plugins:
   bitbi:
