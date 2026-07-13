@@ -223,12 +223,17 @@ public class S3SqlFileStorageService {
 
     /**
      * Generates S3 key for SQL file (Auth V2).
-     * Format: plugins/bit-bi/{accountId}/{siteId}/{datetime}.sql
+     * Format: plugins/bit-bi/{accountId}/{siteId}/{datetime}_{suffix}.sql
+     *
+     * <p>The random suffix keeps keys unique when several generations land within the same
+     * second — routine for Delta v2 sites whose time-sealed sessions complete seconds apart
+     * (026); without it the later file silently overwrites the earlier one.</p>
      */
     private String generateS3Key(UUID accountId, UUID siteId) {
         String datetime = LocalDateTime.now().format(PATH_DATETIME_FORMATTER);
-        return String.format("plugins/bit-bi/%s/%s/%s.sql",
-                accountId, siteId, datetime);
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        return String.format("plugins/bit-bi/%s/%s/%s_%s.sql",
+                accountId, siteId, datetime, suffix);
     }
 
     /**
