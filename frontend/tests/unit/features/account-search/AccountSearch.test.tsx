@@ -1,65 +1,98 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { AccountSearch } from '@/features/account-search/AccountSearch'
 
-describe('AccountSearch', () => {
-  it('should render search input', () => {
-    render(<AccountSearch onSearch={vi.fn()} />)
+const DEBOUNCE_MS = 400
 
-    const input = screen.getByPlaceholderText(/search/i)
-    expect(input).toBeInTheDocument()
+/**
+ * Debounce behaviour is asserted with fake timers so the result never depends on
+ * how much wall-clock time elapses under test-suite load. Keystrokes go through
+ * `fireEvent` rather than `user-event`, whose async internals deadlock against
+ * faked timers.
+ */
+describe('AccountSearch', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
   })
 
-  it('should call onSearch with debounced value', async () => {
-    const onSearch = vi.fn()
-    const user = userEvent.setup()
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
+  function setup(onSearch: (query: string) => void) {
     render(<AccountSearch onSearch={onSearch} />)
+    return screen.getByPlaceholderText(/search/i)
+  }
 
-    const input = screen.getByPlaceholderText(/search/i)
-    await user.type(input, 'john')
+  /** Types `text` the way a user would — one cumulative change event per character. */
+  function type(input: HTMLElement, text: string) {
+    for (let i = 1; i <= text.length; i++) {
+      fireEvent.change(input, { target: { value: text.slice(0, i) } })
+    }
+  }
 
-    // Should debounce (400ms per spec)
-    expect(onSearch).not.toHaveBeenCalled()
+  function elapseDebounce() {
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_MS)
+    })
+  }
 
-    // Wait for debounce
-    await waitFor(
-      () => {
-        expect(onSearch).toHaveBeenCalledWith('john')
-      },
-      { timeout: 500 }
-    )
+  it('should render search input', () => {
+    setup(vi.fn())
+
+    expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument()
   })
 
   it('should display search icon', () => {
-    render(<AccountSearch onSearch={vi.fn()} />)
+    setup(vi.fn())
 
-    // Search icon should be visible
-    const icon = screen.getByTestId('search-icon')
-    expect(icon).toBeInTheDocument()
+    expect(screen.getByTestId('search-icon')).toBeInTheDocument()
   })
 
-  it('should clear search when clicking clear button', async () => {
+  it('should not call onSearch on mount', () => {
     const onSearch = vi.fn()
-    const user = userEvent.setup()
+    setup(onSearch)
 
-    render(<AccountSearch onSearch={onSearch} />)
+    elapseDebounce()
 
-    const input = screen.getByPlaceholderText(/search/i)
-    await user.type(input, 'test')
+    expect(onSearch).not.toHaveBeenCalled()
+  })
 
-    await waitFor(() => {
-      expect(onSearch).toHaveBeenCalledWith('test')
-    })
+  it('should call onSearch with debounced value', () => {
+    const onSearch = vi.fn()
+    const input = setup(onSearch)
 
-    // Click clear button (X icon)
-    const clearButton = screen.getByRole('button', { name: /clear/i })
-    await user.click(clearButton)
+    type(input, 'john')
+    expect(onSearch).not.toHaveBeenCalled()
 
+    elapseDebounce()
+
+    expect(onSearch).toHaveBeenCalledWith('john')
+  })
+
+  it('should only call onSearch once for a burst of keystrokes', () => {
+    const onSearch = vi.fn()
+    const input = setup(onSearch)
+
+    type(input, 'john')
+    elapseDebounce()
+
+    expect(onSearch).toHaveBeenCalledTimes(1)
+  })
+
+  it('should clear search when clicking clear button', () => {
+    const onSearch = vi.fn()
+    const input = setup(onSearch)
+
+    type(input, 'test')
+    elapseDebounce()
+    expect(onSearch).toHaveBeenCalledWith('test')
+
+    fireEvent.click(screen.getByRole('button', { name: /clear/i }))
     expect(input).toHaveValue('')
-    await waitFor(() => {
-      expect(onSearch).toHaveBeenCalledWith('')
-    })
+
+    elapseDebounce()
+
+    expect(onSearch).toHaveBeenCalledWith('')
   })
 })
