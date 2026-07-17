@@ -68,13 +68,13 @@ gcloud compute addresses create forge-dev-ip --global --project bitbi-dev --ip-v
 
 # Google-managed TLS cert via Certificate Manager + a cert map referenced by the
 # `networking.gke.io/certmap` annotation on the Gateway
-gcloud certificate-manager certificates create forge-dev-cert --domains=dev.dfm.bitbi.io --project bitbi-dev
+gcloud certificate-manager certificates create forge-dev-cert --domains=test.dfm.bitbi.io --project bitbi-dev
 gcloud certificate-manager maps create forge-dev-certmap --project bitbi-dev
 gcloud certificate-manager maps entries create forge-dev-entry \
-  --map=forge-dev-certmap --certificates=forge-dev-cert --hostname=dev.dfm.bitbi.io --project bitbi-dev
+  --map=forge-dev-certmap --certificates=forge-dev-cert --hostname=test.dfm.bitbi.io --project bitbi-dev
 ```
 
-**DNS (required to finish):** create an `A` record `dev.dfm.bitbi.io -> 136.68.136.183`.
+**DNS (required to finish):** create an `A` record `test.dfm.bitbi.io -> 136.68.136.183`.
 The managed cert stays `PROVISIONING` and HTTPS returns the self-signed placeholder until
 DNS resolves to the Gateway IP; once Google validates the domain the cert flips to `ACTIVE`.
 

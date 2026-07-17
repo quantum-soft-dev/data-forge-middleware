@@ -4,7 +4,7 @@ kind: Kustomization
 resources:
   - ../../base
   - redis.yaml            # in-cluster Redis (dev only; stage/prod use Memorystore)
-  - gateway.yaml          # external GKE Gateway (dev.dfm.bitbi.io) + HTTPRoutes + health check
+  - gateway.yaml          # external GKE Gateway (test.dfm.bitbi.io) + HTTPRoutes + health check
 
 # Override images to the bitbi-dev Artifact Registry.
 # Tags are overridden to the commit SHA at deploy time via `kustomize edit set image`.
