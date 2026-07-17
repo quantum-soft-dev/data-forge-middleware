@@ -15,5 +15,7 @@ data:
   # dev-dfm tenant is shared with the AWS dev deployment, so changing this would
   # require an Action edit that breaks whichever deployment is not updated.
   AUTH0_CLAIMS_NAMESPACE: "https://dev.dfm.bitbi.io"
-  # Device Authorization Flow verification page (internal-only dev: port-forward / cluster URL)
-  DEVICE_AUTH_VERIFICATION_URI: "http://forge-frontend.forge.svc.cluster.local/device-verify"
+  # Device Authorization Flow verification page. Returned to the client as
+  # `verificationUri` for a human to open in a browser, so it must be the external
+  # hostname — a cluster-internal address is unreachable from outside the cluster.
+  DEVICE_AUTH_VERIFICATION_URI: "https://test.dfm.bitbi.io/device-verify"
