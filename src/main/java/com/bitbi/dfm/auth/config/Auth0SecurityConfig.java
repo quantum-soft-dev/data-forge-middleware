@@ -94,7 +94,7 @@ public class Auth0SecurityConfig {
     /**
      * Create JwtAuthenticationConverter for Auth0 custom claims.
      * <p>
-     * Extracts roles from the custom claims namespace (e.g., https://test.dfm.bitbi.io/roles)
+     * Extracts roles from the custom claims namespace (e.g., https://dev.dfm.bitbi.io/roles)
      * and converts them to Spring Security authorities (ROLE_ADMIN, ROLE_USER, etc.).
      * </p>
      *
@@ -150,7 +150,7 @@ public class Auth0SecurityConfig {
      *
      * <h4>Example:</h4>
      * <pre>
-     * JWT claim: "https://test.dfm.bitbi.io/roles": ["admin", "user"]
+     * JWT claim: "https://dev.dfm.bitbi.io/roles": ["admin", "user"]
      * Authorities: [ROLE_ADMIN, ROLE_USER]
      * </pre>
      */

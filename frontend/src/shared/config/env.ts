@@ -30,7 +30,7 @@ export const env = {
     clientId: getEnv('VITE_AUTH0_CLIENT_ID', ''),
     audience: getEnv('VITE_AUTH0_AUDIENCE', ''),
     // Custom claims namespace - must match Auth0 Post-Login Action
-    claimsNamespace: getEnv('VITE_AUTH0_CLAIMS_NAMESPACE', 'https://test.dfm.bitbi.io'),
+    claimsNamespace: getEnv('VITE_AUTH0_CLAIMS_NAMESPACE', 'https://dev.dfm.bitbi.io'),
   },
 
   // API Configuration
