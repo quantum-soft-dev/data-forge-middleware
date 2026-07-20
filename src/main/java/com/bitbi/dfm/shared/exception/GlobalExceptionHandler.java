@@ -8,12 +8,14 @@ import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
+import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -182,6 +184,59 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle AuthorizationHelper.UnauthorizedException (401 Unauthorized).
+     * <p>
+     * Thrown when the security context holds no usable authentication for the endpoint
+     * (e.g. missing/invalid token type, or no resolvable accountId on Auth0-protected
+     * endpoints such as /api/v1/device/verify). Without this handler such failures
+     * fall through to the generic 500 handler.
+     * </p>
+     */
+    @ExceptionHandler(AuthorizationHelper.UnauthorizedException.class)
+    public ResponseEntity<ErrorResponseDto> handleUnauthorized(
+            AuthorizationHelper.UnauthorizedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Unauthorized: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.UNAUTHORIZED.value(),
+                "Unauthorized",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+    }
+
+    /**
+     * Handle DataIntegrityViolationException (409 Conflict).
+     * <p>
+     * Thrown when a database constraint (unique key, foreign key, not-null) rejects the
+     * request. The raw message can leak schema details, so the response uses a generic
+     * conflict message while the full cause is logged server-side.
+     * </p>
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponseDto> handleDataIntegrityViolation(
+            DataIntegrityViolationException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Data integrity violation: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                "The request conflicts with existing data (duplicate or referenced records).",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**
