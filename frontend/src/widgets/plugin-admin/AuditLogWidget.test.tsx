@@ -165,9 +165,9 @@ describe('AuditLogWidget', () => {
 
       const { container } = render(<AuditLogWidget />, { wrapper: createWrapper() })
 
-      const errorContainer = container.querySelector('.border-red-200')
+      const errorContainer = container.querySelector('.border-danger-border')
       expect(errorContainer).toBeInTheDocument()
-      expect(errorContainer).toHaveClass('bg-red-50')
+      expect(errorContainer).toHaveClass('bg-danger-bg')
     })
   })
 

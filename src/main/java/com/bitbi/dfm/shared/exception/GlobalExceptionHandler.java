@@ -7,12 +7,15 @@ import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
+import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -184,6 +187,59 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle AuthorizationHelper.UnauthorizedException (401 Unauthorized).
+     * <p>
+     * Thrown when the security context holds no usable authentication for the endpoint
+     * (e.g. missing/invalid token type, or no resolvable accountId on Auth0-protected
+     * endpoints such as /api/v1/device/verify). Without this handler such failures
+     * fall through to the generic 500 handler.
+     * </p>
+     */
+    @ExceptionHandler(AuthorizationHelper.UnauthorizedException.class)
+    public ResponseEntity<ErrorResponseDto> handleUnauthorized(
+            AuthorizationHelper.UnauthorizedException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Unauthorized: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.UNAUTHORIZED.value(),
+                "Unauthorized",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+    }
+
+    /**
+     * Handle DataIntegrityViolationException (409 Conflict).
+     * <p>
+     * Thrown when a database constraint (unique key, foreign key, not-null) rejects the
+     * request. The raw message can leak schema details, so the response uses a generic
+     * conflict message while the full cause is logged server-side.
+     * </p>
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponseDto> handleDataIntegrityViolation(
+            DataIntegrityViolationException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Data integrity violation: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.CONFLICT.value(),
+                "Conflict",
+                "The request conflicts with existing data (duplicate or referenced records).",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
      * Handle AccessDeniedException (403 Forbidden).
      */
     @ExceptionHandler(AccessDeniedException.class)
@@ -308,6 +364,50 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * Handle object-storage failures (503 Service Unavailable) — a presign/HEAD round-trip to S3
+     * failed; the request is retryable and must not surface as a generic 500 (feature 025).
+     */
+    @ExceptionHandler(CheckpointStorageException.class)
+    public ResponseEntity<ErrorResponseDto> handleCheckpointStorage(
+            CheckpointStorageException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Object storage failure: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "Object storage is temporarily unavailable. Please try again.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
+     * Handle a full async work queue (503 Service Unavailable) — e.g. the forced checkpoint
+     * rebuild executor rejecting a task (review r3). Retryable, not a generic 500.
+     */
+    @ExceptionHandler(java.util.concurrent.RejectedExecutionException.class)
+    public ResponseEntity<ErrorResponseDto> handleRejectedExecution(
+            java.util.concurrent.RejectedExecutionException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Async work queue full: {}", ex.getMessage());
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Service Unavailable",
+                "The work queue is full. Please try again shortly.",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
     }
 
     /**

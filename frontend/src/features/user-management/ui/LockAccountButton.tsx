@@ -53,8 +53,8 @@ export function LockAccountButton({ account, onSuccess, className = '' }: LockAc
         disabled={isDisabled}
         className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
           isDisabled
-            ? 'cursor-not-allowed bg-gray-100 text-gray-400'
-            : 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+            ? 'cursor-not-allowed bg-surface-subtle text-ink-muted'
+            : 'bg-warn-solid/10 text-warn-solid hover:bg-warn-solid/20'
         } ${className}`}
         aria-label={`Lock account for ${account.email}`}
         title={
@@ -85,17 +85,17 @@ export function LockAccountButton({ account, onSuccess, className = '' }: LockAc
             <div className="mb-4">
               <h2
                 id="lock-dialog-title"
-                className="text-lg font-semibold text-gray-900"
+                className="text-[15px] font-medium tracking-[-0.24px] text-ink"
               >
                 Lock Account
               </h2>
-              <p className="mt-2 text-sm text-gray-600">
+              <p className="mt-2 text-sm text-ink-secondary">
                 Are you sure you want to lock the account for <strong>{account.email}</strong>?
               </p>
             </div>
 
-            <div className="mb-4 rounded-md bg-orange-50 border border-orange-200 p-3">
-              <p className="text-sm text-orange-800">
+            <div className="mb-4 rounded-lg bg-warn-solid/10 p-3">
+              <p className="text-sm text-warn-solid">
                 ⚠️ The user will not be able to login until the account is unlocked.
                 Existing sessions will continue until natural expiration.
               </p>
@@ -105,7 +105,7 @@ export function LockAccountButton({ account, onSuccess, className = '' }: LockAc
               <button
                 onClick={handleCancel}
                 disabled={lockMutation.isPending}
-                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-hairline px-4 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>

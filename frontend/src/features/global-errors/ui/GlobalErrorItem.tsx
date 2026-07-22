@@ -6,6 +6,7 @@
 
 import { Badge } from '@/shared/ui/ui/badge'
 import { Checkbox } from '@/shared/ui/ui/checkbox'
+import { cn } from '@/shared/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 import type { GlobalErrorSummary, ErrorSeverity } from '../model/global-error.types'
 
@@ -16,11 +17,11 @@ interface GlobalErrorItemProps {
   onClick: (id: string) => void
 }
 
-const SEVERITY_VARIANTS: Record<ErrorSeverity, 'destructive' | 'default' | 'secondary' | 'outline'> = {
-  CRITICAL: 'destructive',
-  ERROR: 'destructive',
-  WARNING: 'secondary',
-  INFO: 'outline',
+const SEVERITY_VARIANTS: Record<ErrorSeverity, 'critical' | 'warning' | 'info' | 'neutral'> = {
+  CRITICAL: 'critical',
+  ERROR: 'critical',
+  WARNING: 'warning',
+  INFO: 'neutral',
 }
 
 export function GlobalErrorItem({ error, selected, onSelect, onClick }: GlobalErrorItemProps) {
@@ -38,9 +39,10 @@ export function GlobalErrorItem({ error, selected, onSelect, onClick }: GlobalEr
 
   return (
     <div
-      className={`flex items-center gap-4 p-3 border-b cursor-pointer hover:bg-gray-50 transition-colors ${
-        !error.isRead ? 'bg-blue-50/50' : ''
-      }`}
+      className={cn(
+        'flex items-center gap-4 p-3 border-b border-separator cursor-pointer hover:bg-surface-hover transition-colors',
+        !error.isRead && 'bg-brand-50/50',
+      )}
       onClick={handleRowClick}
     >
       <Checkbox
@@ -55,11 +57,11 @@ export function GlobalErrorItem({ error, selected, onSelect, onClick }: GlobalEr
             {error.severity}
           </Badge>
           {!error.isRead && (
-            <span className="w-2 h-2 rounded-full bg-blue-500" aria-label="Unread" />
+            <span className="w-2 h-2 rounded-full bg-brand" aria-label="Unread" />
           )}
           <span className="text-sm font-medium truncate">{error.title}</span>
         </div>
-        <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+        <div className="flex items-center gap-2 mt-1 text-xs text-ink-secondary">
           <span>{error.siteName}</span>
           <span>•</span>
           <span>{error.type}</span>

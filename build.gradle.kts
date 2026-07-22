@@ -1,18 +1,20 @@
 import org.springframework.boot.gradle.tasks.bundling.BootJar
+import org.springframework.boot.gradle.tasks.run.BootRun
 
 plugins {
     java
     id("org.springframework.boot") version "3.5.6"
     id("io.spring.dependency-management") version "1.1.7"
     jacoco
+    id("com.google.protobuf") version "0.9.4"
 }
 
 group = "com.bitbi"
-version = "0.0.1-SNAPSHOT"
+version = "2.0.0"
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
@@ -27,6 +29,10 @@ repositories {
 }
 
 extra["awsSdkVersion"] = "2.28.11"
+extra["grpcVersion"] = "1.68.1"
+extra["protobufVersion"] = "3.25.5"
+extra["parquetVersion"] = "1.15.2"
+extra["hadoopVersion"] = "3.4.1"
 
 dependencies {
     // Spring Boot Starters (versions managed by Spring Boot BOM)
@@ -97,6 +103,23 @@ dependencies {
     // Caffeine cache for rate limiter (prevents memory leak)
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
+    // gRPC + Protobuf (Delta Client v2 ingestion — 022)
+    implementation("io.grpc:grpc-stub:${property("grpcVersion")}")
+    implementation("io.grpc:grpc-protobuf:${property("grpcVersion")}")
+    runtimeOnly("io.grpc:grpc-netty-shaded:${property("grpcVersion")}")
+    implementation("com.google.protobuf:protobuf-java:${property("protobufVersion")}")
+    // javax.annotation.Generated, referenced by generated gRPC stubs on JDK 9+
+    compileOnly("org.apache.tomcat:annotations-api:6.0.53")
+
+    // Parquet egress for Power BI (Delta Client v2 — 022, Task 4).
+    // We write/read via Parquet's OutputFile/InputFile + PlainParquetConfiguration (no Hadoop FS), but
+    // parquet-hadoop references org.apache.hadoop.{fs.Path,conf.Configuration} in its API signatures, so
+    // the Hadoop client classes must be on the classpath. Use the shaded thin-client artifacts: they
+    // relocate their own guava/protobuf/jackson and so do NOT conflict with Spring Boot or our protobuf.
+    implementation("org.apache.parquet:parquet-avro:${property("parquetVersion")}")
+    implementation("org.apache.hadoop:hadoop-client-api:${property("hadoopVersion")}")
+    runtimeOnly("org.apache.hadoop:hadoop-client-runtime:${property("hadoopVersion")}")
+
     // Lombok
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
@@ -104,6 +127,8 @@ dependencies {
     // Test Dependencies
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
+    // In-process gRPC transport for Delta v2 contract tests (022)
+    testImplementation("io.grpc:grpc-inprocess:${property("grpcVersion")}")
     // Testcontainers 2.0.3 for Docker Desktop 29.x compatibility
     testImplementation("org.testcontainers:testcontainers:2.0.3")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.3")
@@ -147,7 +172,7 @@ tasks.jacocoTestReport {
 }
 
 jacoco {
-    toolVersion = "0.8.12"
+    toolVersion = "0.8.13"
 }
 
 tasks.jacocoTestCoverageVerification {
@@ -160,6 +185,31 @@ tasks.jacocoTestCoverageVerification {
     }
 }
 
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${property("protobufVersion")}"
+    }
+    plugins {
+        create("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:${property("grpcVersion")}"
+        }
+    }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.plugins {
+                create("grpc")
+            }
+        }
+    }
+}
+
 tasks.named<BootJar>("bootJar") {
     archiveFileName = "${project.name}.jar"
+}
+
+tasks.named<BootRun>("bootRun") {
+    if(project.hasProperty("dev")) {
+        systemProperty("spring.profiles.active", "dev")
+        environment("AWS_S3_BUCKET_NAME", "dfm-uploads")
+    }
 }

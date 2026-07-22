@@ -60,6 +60,7 @@ public class PluginHistoryService {
     private final S3SqlFileStorageService s3StorageService;
     private final PluginAuditService auditService;
     private final SqlGenerationService sqlGenerationService;
+    private final PluginDeltaBaselineService pluginDeltaBaselineService;
 
     public PluginHistoryService(
             PluginSqlGenerationRepository sqlGenerationRepository,
@@ -68,7 +69,8 @@ public class PluginHistoryService {
             BatchRepository batchRepository,
             S3SqlFileStorageService s3StorageService,
             PluginAuditService auditService,
-            SqlGenerationService sqlGenerationService
+            SqlGenerationService sqlGenerationService,
+            PluginDeltaBaselineService pluginDeltaBaselineService
     ) {
         this.sqlGenerationRepository = sqlGenerationRepository;
         this.accountPluginRepository = accountPluginRepository;
@@ -77,6 +79,7 @@ public class PluginHistoryService {
         this.s3StorageService = s3StorageService;
         this.auditService = auditService;
         this.sqlGenerationService = sqlGenerationService;
+        this.pluginDeltaBaselineService = pluginDeltaBaselineService;
     }
 
     // ==================== User Story 1: View History ====================
@@ -346,6 +349,10 @@ public class PluginHistoryService {
             log.info("Reinit: no completed batches found for account {}. " +
                     "First future batch will become baseline.", accountId);
         }
+
+        // 026: recapture per-table delta SQL baselines from current checkpoints and re-enqueue
+        // the V2 sites' segments — the checkpoint-lag gap regenerates under the new baselines
+        pluginDeltaBaselineService.recaptureForReinit(accountPlugin);
 
         // Audit log
         auditService.logReinit(

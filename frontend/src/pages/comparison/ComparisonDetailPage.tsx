@@ -29,6 +29,8 @@ import DownloadButton from '@/features/file-comparison/ui/DownloadButton';
 import type { ChangeType } from '@/entities/comparison/model/types';
 
 import { Button } from '@/shared/ui/ui/button';
+import { PageHeader } from '@/shared/ui/page-header';
+import { comparisonStatusLabel, comparisonStatusVariant } from '@/entities/comparison/model/comparisonStatus';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
 import { Badge } from '@/shared/ui/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
@@ -43,24 +45,15 @@ import {
 } from '@/shared/ui/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 
-/**
- * Status badge colors mapping.
- */
-const statusColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
-  PENDING: 'secondary',
-  IN_PROGRESS: 'default',
-  COMPLETED: 'default', // Badge doesn't have 'success', use 'default' with green styling
-  FAILED: 'destructive',
-};
 
 /**
  * Change type badge colors mapping.
  */
-const changeTypeColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
-  ADDED: 'default', // No 'success' variant, use 'default' with green styling via CSS
-  MODIFIED: 'default',
-  UNCHANGED: 'secondary',
-  REMOVED: 'destructive',
+const changeTypeColors: Record<string, 'success' | 'info' | 'neutral' | 'critical'> = {
+  ADDED: 'success',
+  MODIFIED: 'info',
+  UNCHANGED: 'neutral',
+  REMOVED: 'critical',
 };
 
 /**
@@ -205,7 +198,7 @@ export function ComparisonDetailPage(): React.ReactElement {
   // Loading state
   if (isLoadingComparison) {
     return (
-      <div className="container mx-auto py-8">
+      <div className="container mx-auto max-w-[1120px] px-6 py-6">
         <div className="space-y-4">
           <Skeleton className="h-10 w-64" />
           <Skeleton className="h-32 w-full" />
@@ -218,7 +211,7 @@ export function ComparisonDetailPage(): React.ReactElement {
   // Error state
   if (comparisonError || !comparison) {
     return (
-      <div className="container mx-auto py-8">
+      <div className="container mx-auto max-w-[1120px] px-6 py-6">
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
@@ -240,30 +233,28 @@ export function ComparisonDetailPage(): React.ReactElement {
 
   return (
     <DiffViewerProvider>
-      <div className="container mx-auto py-8 space-y-6">
+      <div className="container mx-auto max-w-[1120px] space-y-6 px-6 py-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <PageHeader
+        breadcrumb={
           <Button onClick={handleBack} variant="outline" size="sm">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
           </Button>
-          <div>
-            <h1 className="text-3xl font-bold">Comparison #{comparison.id}</h1>
-            <p className="text-muted-foreground">
-              Created {new Date(comparison.createdAt).toLocaleString()}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={statusColors[comparison.status]}>
-            {comparison.status}
-          </Badge>
-          {isInProgress && (
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-          )}
-        </div>
-      </div>
+        }
+        title={`Comparison #${comparison.id}`}
+        subtitle={`Created ${new Date(comparison.createdAt).toLocaleString()}`}
+        actions={
+          <>
+            <Badge variant={comparisonStatusVariant(comparison.status)}>
+              {comparisonStatusLabel(comparison.status)}
+            </Badge>
+            {isInProgress && (
+              <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </>
+        }
+      />
 
       {/* In Progress Alert */}
       {isInProgress && (

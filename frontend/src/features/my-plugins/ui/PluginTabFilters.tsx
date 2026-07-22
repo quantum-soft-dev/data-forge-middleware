@@ -137,7 +137,7 @@ export function PluginTabFilters({
           <Filter className="h-4 w-4" />
           Filters
           {hasActiveFilters && (
-            <span className="ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white">
+            <span className="ml-1 rounded-full bg-brand px-2 py-0.5 text-xs text-white">
               Active
             </span>
           )}
@@ -145,7 +145,7 @@ export function PluginTabFilters({
 
         {/* Page size selector - always visible */}
         <div className="ml-auto flex items-center gap-2">
-          <Label htmlFor="page-size" className="text-xs text-gray-500">
+          <Label htmlFor="page-size" className="text-xs text-ink-secondary">
             Show:
           </Label>
           <Select value={String(filters.size)} onValueChange={handleSizeChange}>
@@ -164,12 +164,12 @@ export function PluginTabFilters({
       </div>
 
       {showFilters && (
-        <div className="mt-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-          <h3 className="mb-3 text-sm font-medium text-gray-900">Filter Options</h3>
+        <div className="mt-3 rounded-lg bg-white p-4 shadow-panel">
+          <h3 className="mb-3 text-sm font-medium text-ink">Filter Options</h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {/* Site Filter */}
             <div>
-              <Label htmlFor="filter-site" className="mb-1 block text-xs font-medium text-gray-700">
+              <Label htmlFor="filter-site" className="mb-1 block text-xs font-medium text-ink-secondary">
                 Site
               </Label>
               <Select
@@ -194,7 +194,7 @@ export function PluginTabFilters({
             {/* Date Range - From (only for logs) */}
             {showDateRange && (
               <div>
-                <Label htmlFor="filter-from" className="mb-1 block text-xs font-medium text-gray-700">
+                <Label htmlFor="filter-from" className="mb-1 block text-xs font-medium text-ink-secondary">
                   From Date
                 </Label>
                 <input
@@ -205,7 +205,7 @@ export function PluginTabFilters({
                     const value = e.target.value
                     handleFromChange(value ? new Date(value).toISOString() : '')
                   }}
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
             )}
@@ -213,7 +213,7 @@ export function PluginTabFilters({
             {/* Date Range - To (only for logs) */}
             {showDateRange && (
               <div>
-                <Label htmlFor="filter-to" className="mb-1 block text-xs font-medium text-gray-700">
+                <Label htmlFor="filter-to" className="mb-1 block text-xs font-medium text-ink-secondary">
                   To Date
                 </Label>
                 <input
@@ -224,7 +224,7 @@ export function PluginTabFilters({
                     const value = e.target.value
                     handleToChange(value ? new Date(value).toISOString() : '')
                   }}
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
             )}

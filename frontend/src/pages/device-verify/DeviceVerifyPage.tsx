@@ -24,6 +24,7 @@ import { Input } from '@/shared/ui/ui/input';
 import { Label } from '@/shared/ui/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/shared/ui/ui/alert';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/ui/ui/card';
+import { severityTokens } from '@/shared/ui/tokens';
 import {
   useVerifyInfo,
   useApproveAuthorization,
@@ -163,15 +164,15 @@ export default function DeviceVerifyPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-white">
       <Header />
 
       <main className="container mx-auto py-8 max-w-lg px-4 sm:px-6 lg:px-8">
         {/* Page header */}
         <div className="mb-8 text-center">
-          <Smartphone className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-          <h1 className="text-3xl font-bold text-gray-900">Device Authorization</h1>
-          <p className="mt-2 text-gray-600">
+          <Smartphone className="mx-auto h-12 w-12 text-ink-muted mb-4" />
+          <h1 className="text-[22px] font-medium leading-[1.1] tracking-[-0.33px] text-ink">Device Authorization</h1>
+          <p className="mt-2 text-ink-secondary">
             Authorize a device to connect to Data Forge
           </p>
         </div>
@@ -200,7 +201,7 @@ export default function DeviceVerifyPage() {
                   />
                 </div>
                 {errorMessage && (
-                  <p className="text-sm text-red-500">{errorMessage}</p>
+                  <p className="text-sm text-danger-text">{errorMessage}</p>
                 )}
                 <Button
                   type="submit"
@@ -232,25 +233,25 @@ export default function DeviceVerifyPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               {/* Site info to be created */}
-              <div className="rounded-lg bg-blue-50 border border-blue-200 p-4 space-y-3">
+              <div className="rounded-lg bg-brand-50 p-4 space-y-3">
                 <div className="flex items-center gap-2">
-                  <Server className="h-5 w-5 text-blue-600" />
-                  <h4 className="font-medium text-blue-900">New Site Details</h4>
+                  <Server className="h-5 w-5 text-brand" />
+                  <h4 className="font-medium text-ink">New Site Details</h4>
                 </div>
                 <div className="space-y-2">
                   <div>
-                    <span className="text-sm text-blue-700">Site Name:</span>
-                    <p className="font-medium text-blue-900">{verifyInfo.siteName}</p>
+                    <span className="text-sm text-ink-secondary">Site Name:</span>
+                    <p className="font-medium text-ink">{verifyInfo.siteName}</p>
                   </div>
                   {verifyInfo.siteDescription && (
                     <div>
-                      <span className="text-sm text-blue-700">Description:</span>
-                      <p className="text-blue-900">{verifyInfo.siteDescription}</p>
+                      <span className="text-sm text-ink-secondary">Description:</span>
+                      <p className="text-ink">{verifyInfo.siteDescription}</p>
                     </div>
                   )}
                   <div>
-                    <span className="text-sm text-blue-700">Authorization:</span>
-                    <p className="text-blue-900">{formatExpiresAt(verifyInfo.expiresAt)}</p>
+                    <span className="text-sm text-ink-secondary">Authorization:</span>
+                    <p className="text-ink">{formatExpiresAt(verifyInfo.expiresAt)}</p>
                   </div>
                 </div>
               </div>
@@ -269,7 +270,7 @@ export default function DeviceVerifyPage() {
               </Alert>
 
               {errorMessage && (
-                <p className="text-sm text-red-500">{errorMessage}</p>
+                <p className="text-sm text-danger-text">{errorMessage}</p>
               )}
 
               {/* Actions */}
@@ -313,8 +314,8 @@ export default function DeviceVerifyPage() {
           <Card>
             <CardContent className="pt-6">
               <div className="text-center space-y-4">
-                <Loader2 className="mx-auto h-12 w-12 text-gray-400 animate-spin" />
-                <p className="text-gray-600">Loading authorization details...</p>
+                <Loader2 className="mx-auto h-12 w-12 text-ink-muted animate-spin" />
+                <p className="text-ink-secondary">Loading authorization details...</p>
               </div>
             </CardContent>
           </Card>
@@ -322,22 +323,22 @@ export default function DeviceVerifyPage() {
 
         {/* Success state */}
         {pageState === 'success' && (
-          <Card className="border-green-200">
+          <Card>
             <CardContent className="pt-6">
               <div className="text-center space-y-4">
-                <CheckCircle2 className="mx-auto h-16 w-16 text-green-500" />
+                <CheckCircle2 className="mx-auto h-16 w-16" style={{ color: severityTokens.healthy.dot }} strokeWidth={1.5} />
                 <div>
-                  <h2 className="text-xl font-semibold text-gray-900">
+                  <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">
                     {createdSiteName ? 'Site Created Successfully' : 'Authorization Complete'}
                   </h2>
-                  <p className="mt-2 text-gray-600">
+                  <p className="mt-2 text-ink-secondary">
                     {createdSiteName ? (
                       <>Site &quot;{createdSiteName}&quot; has been created and the device is now authorized.</>
                     ) : (
                       <>This authorization has been completed. The device should now be connected.</>
                     )}
                   </p>
-                  <p className="mt-1 text-sm text-gray-500">
+                  <p className="mt-1 text-sm text-ink-muted">
                     {createdSiteName
                       ? 'The device will automatically receive its credentials.'
                       : 'You can close this page.'}
@@ -356,13 +357,13 @@ export default function DeviceVerifyPage() {
 
         {/* Denied state */}
         {pageState === 'denied' && (
-          <Card className="border-red-200">
+          <Card>
             <CardContent className="pt-6">
               <div className="text-center space-y-4">
-                <XCircle className="mx-auto h-16 w-16 text-red-500" />
+                <XCircle className="mx-auto h-16 w-16 text-danger-solid" />
                 <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Authorization Denied</h2>
-                  <p className="mt-2 text-gray-600">
+                  <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">Authorization Denied</h2>
+                  <p className="mt-2 text-ink-secondary">
                     The device authorization request has been denied.
                     No site was created.
                   </p>
@@ -385,8 +386,8 @@ export default function DeviceVerifyPage() {
               <div className="text-center space-y-4">
                 <AlertTriangle className="mx-auto h-16 w-16 text-amber-500" />
                 <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Code Expired</h2>
-                  <p className="mt-2 text-gray-600">
+                  <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">Code Expired</h2>
+                  <p className="mt-2 text-ink-secondary">
                     This device code has expired. Please start a new authorization request on your device.
                   </p>
                 </div>
@@ -403,13 +404,13 @@ export default function DeviceVerifyPage() {
 
         {/* Error state */}
         {pageState === 'error' && (
-          <Card className="border-red-200">
+          <Card>
             <CardContent className="pt-6">
               <div className="text-center space-y-4">
-                <XCircle className="mx-auto h-16 w-16 text-red-500" />
+                <XCircle className="mx-auto h-16 w-16 text-danger-solid" />
                 <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Error</h2>
-                  <p className="mt-2 text-gray-600">{errorMessage}</p>
+                  <h2 className="text-[17px] font-medium tracking-[-0.24px] text-ink">Error</h2>
+                  <p className="mt-2 text-ink-secondary">{errorMessage}</p>
                 </div>
                 <Button
                   variant="outline"

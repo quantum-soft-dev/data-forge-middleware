@@ -1,6 +1,7 @@
 package com.bitbi.dfm.upload.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
+import com.bitbi.dfm.site.application.ClientApiVersionGuard;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.SiteSchema;
 import com.bitbi.dfm.upload.presentation.dto.SchemaResponseDto;
@@ -38,10 +39,13 @@ public class SchemaUploadController {
 
     private final SiteSchemaService siteSchemaService;
     private final TokenService tokenService;
+    private final ClientApiVersionGuard clientApiVersionGuard;
 
-    public SchemaUploadController(SiteSchemaService siteSchemaService, TokenService tokenService) {
+    public SchemaUploadController(SiteSchemaService siteSchemaService, TokenService tokenService,
+                                  ClientApiVersionGuard clientApiVersionGuard) {
         this.siteSchemaService = siteSchemaService;
         this.tokenService = tokenService;
+        this.clientApiVersionGuard = clientApiVersionGuard;
     }
 
     /**
@@ -72,6 +76,8 @@ public class SchemaUploadController {
         }
 
         try {
+            clientApiVersionGuard.assertHttpFileApiAllowed(siteId);
+
             logger.info("Schema upload request: siteId={}, tables={}", siteId, request.tables().keySet());
 
             SiteSchema saved = siteSchemaService.upsertSchema(siteId, request);
@@ -79,6 +85,12 @@ public class SchemaUploadController {
 
             logger.info("Schema saved: siteId={}, version={}", siteId, saved.getSchemaVersion());
             return ResponseEntity.ok(response);
+
+        } catch (ClientApiVersionGuard.HttpFileApiDisabledException e) {
+            logger.warn("HTTP file API disabled for V2 site: {}", e.getMessage());
+            Map<String, Object> error = createErrorResponse(HttpStatus.CONFLICT, e.getMessage());
+            error.put("code", ClientApiVersionGuard.ERROR_CODE);
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
 
         } catch (SiteSchemaService.InvalidSchemaException e) {
             logger.warn("Invalid schema upload: siteId={}, error={}", siteId, e.getMessage());

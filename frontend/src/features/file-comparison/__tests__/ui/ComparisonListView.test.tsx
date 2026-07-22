@@ -84,9 +84,9 @@ describe('ComparisonListView', () => {
     // When: Render component with comparisons
     renderWithQueryClient(<ComparisonListView {...defaultProps} />);
 
-    // Then: Should show status badges
-    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-    expect(screen.getByText('FAILED')).toBeInTheDocument();
+    // Then: Should show status badges with human labels (shared comparisonStatus mapping)
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 
   it('should display file statistics', () => {

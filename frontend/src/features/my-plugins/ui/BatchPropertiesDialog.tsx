@@ -44,8 +44,8 @@ function formatFileSize(bytes: number): string {
  */
 function PropertyRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex justify-between py-1.5 border-b border-gray-100 last:border-0">
-      <span className="text-sm text-gray-500">{label}</span>
+    <div className="flex justify-between py-1.5 border-b border-separator last:border-0">
+      <span className="text-sm text-ink-secondary">{label}</span>
       <span className={`text-sm ${mono ? 'font-mono text-xs' : ''}`}>{value}</span>
     </div>
   )
@@ -87,10 +87,10 @@ export function BatchPropertiesDialog({
         <div className="space-y-4">
           {/* Batch Information Section */}
           <div>
-            <h4 className="text-sm font-semibold text-gray-700 mb-2 uppercase tracking-wide">
+            <h4 className="text-sm font-semibold text-ink-secondary mb-2 uppercase tracking-wide">
               Batch Information
             </h4>
-            <div className="bg-gray-50 rounded-lg p-3">
+            <div className="bg-surface-subtle rounded-lg p-3">
               <PropertyRow label="Batch ID" value={batch.batchId} mono />
               <PropertyRow label="Site" value={batch.siteDomain} />
               <PropertyRow label="Site ID" value={batch.siteId} mono />
@@ -103,10 +103,10 @@ export function BatchPropertiesDialog({
 
           {/* SQL Generation Section */}
           <div>
-            <h4 className="text-sm font-semibold text-gray-700 mb-2 uppercase tracking-wide">
+            <h4 className="text-sm font-semibold text-ink-secondary mb-2 uppercase tracking-wide">
               SQL Generation
             </h4>
-            <div className="bg-gray-50 rounded-lg p-3">
+            <div className="bg-surface-subtle rounded-lg p-3">
               <PropertyRow label="Status" value={sqlStatus} />
 
               {batch.generationId && (
@@ -130,19 +130,19 @@ export function BatchPropertiesDialog({
               )}
 
               {batch.isBaseline && (
-                <div className="mt-2 text-xs text-gray-500 italic">
+                <div className="mt-2 text-xs text-ink-secondary italic">
                   This is the baseline batch. SQL is not generated for baseline batches as they serve as the reference point for detecting changes.
                 </div>
               )}
 
               {batch.noChangesDetected && (
-                <div className="mt-2 text-xs text-gray-500 italic">
+                <div className="mt-2 text-xs text-ink-secondary italic">
                   SQL generation was attempted but no changes were detected between this batch and the previous one.
                 </div>
               )}
 
               {!batch.hasSql && !batch.isBaseline && !batch.noChangesDetected && (
-                <div className="mt-2 text-xs text-gray-500 italic">
+                <div className="mt-2 text-xs text-ink-secondary italic">
                   SQL has not been generated for this batch yet. Use the Generate button to create SQL statements.
                 </div>
               )}

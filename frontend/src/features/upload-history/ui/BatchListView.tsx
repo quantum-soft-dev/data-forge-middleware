@@ -9,10 +9,14 @@
  */
 
 import { useState, useMemo, useEffect } from 'react';
-import { CheckCircle, XCircle, Loader2, AlertCircle, Filter, RefreshCw } from 'lucide-react';
+import { Loader2, AlertCircle, Filter, RefreshCw } from 'lucide-react';
+import { Badge } from '@/shared/ui/ui/badge';
+import { STATUS_LABELS, STATUS_VARIANT } from '@/features/upload-history/model/batchStatus';
+import { Button } from '@/shared/ui/ui/button';
 import type { BatchSummary } from '@/entities/batch/model/types';
 import type { Site } from '@/entities/site/model/types';
 import { formatBytes, formatDateTime } from '@/shared/lib/formatters';
+import { cn } from '@/shared/lib/utils';
 
 interface BatchListViewProps {
   /** Batches from all loaded pages (flattened) */
@@ -40,6 +44,9 @@ interface BatchListViewProps {
   /** Is data being refreshed */
   isRefreshing?: boolean;
 }
+
+const FILTER_SELECT_CLASSES =
+  'h-8 rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring';
 
 /**
  * T037: Batch list view with infinite scroll and status indicators
@@ -118,8 +125,8 @@ export function BatchListView({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-        <span className="ml-2 text-gray-600">Loading upload history...</span>
+        <Loader2 className="h-8 w-8 animate-spin text-ink-muted" />
+        <span className="ml-2 text-ink-secondary">Loading upload history...</span>
       </div>
     );
   }
@@ -127,8 +134,8 @@ export function BatchListView({
   // Error state
   if (error) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-        <p className="text-sm text-red-800">{error}</p>
+      <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
+        <p className="text-sm text-danger-text">{error}</p>
       </div>
     );
   }
@@ -136,15 +143,15 @@ export function BatchListView({
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <div className="flex gap-3 items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
-        <Filter className="h-4 w-4 text-gray-500" />
+      <div className="flex items-center gap-3 rounded-lg bg-white p-3 shadow-panel">
+        <Filter className="h-4 w-4 text-ink-muted" strokeWidth={1.5} />
 
         {/* Site filter */}
         {sites && sites.length > 0 && (
           <select
             value={siteFilter}
             onChange={(e) => setSiteFilter(e.target.value)}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className={FILTER_SELECT_CLASSES}
           >
             <option value="all">All Sites</option>
             {sites.map((site) => (
@@ -158,18 +165,19 @@ export function BatchListView({
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className={FILTER_SELECT_CLASSES}
         >
           <option value="all">All Status</option>
-          <option value="COMPLETED">Completed</option>
-          <option value="COMPLETED_WITH_WARNINGS">Completed with Warnings</option>
-          <option value="IN_PROGRESS">In Progress</option>
-          <option value="FAILED">Failed</option>
+          {Object.entries(STATUS_LABELS).map(([status, label]) => (
+            <option key={status} value={status}>
+              {label}
+            </option>
+          ))}
         </select>
         <select
           value={dateFilter}
           onChange={(e) => setDateFilter(e.target.value)}
-          className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className={FILTER_SELECT_CLASSES}
         >
           <option value="all">All Time</option>
           <option value="7days">Last 7 days</option>
@@ -183,7 +191,7 @@ export function BatchListView({
               setDateFilter('7days'); // Reset to default (7 days)
               setSiteFilter('all');
             }}
-            className="text-sm text-blue-600 hover:text-blue-800"
+            className="text-sm font-medium text-brand hover:text-brand-hover"
           >
             Clear filters
           </button>
@@ -194,37 +202,38 @@ export function BatchListView({
 
         {/* Refresh button */}
         {onRefresh && (
-          <button
+          <Button
+            variant="outline"
+            size="compact"
             onClick={onRefresh}
             disabled={isRefreshing}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Refresh batch list"
           >
             <RefreshCw className={`h-4 w-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
             Refresh
-          </button>
+          </Button>
         )}
       </div>
 
       {/* Empty/filtered state */}
       {filteredBatches.length === 0 && (
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
+        <div className="rounded-lg bg-white p-8 text-center shadow-panel">
           {isFetchingNextPage && isFilterActive ? (
             <>
-              <Loader2 className="h-6 w-6 animate-spin text-gray-400 mx-auto mb-2" />
-              <p className="text-gray-600">Loading more batches...</p>
-              <p className="mt-2 text-sm text-gray-500">
+              <Loader2 className="h-6 w-6 animate-spin text-ink-muted mx-auto mb-2" />
+              <p className="text-ink-secondary">Loading more batches...</p>
+              <p className="mt-2 text-sm text-ink-muted">
                 Searching for batches matching your filters.
               </p>
             </>
           ) : (
             <>
-              <p className="text-gray-600">
+              <p className="text-ink-secondary">
                 {batches.length === 0
                   ? 'No upload history found.'
                   : 'No batches match your filters.'}
               </p>
-              <p className="mt-2 text-sm text-gray-500">
+              <p className="mt-2 text-sm text-ink-muted">
                 {batches.length === 0
                   ? 'Upload sessions will appear here after you start uploading files.'
                   : hasNextPage
@@ -238,13 +247,14 @@ export function BatchListView({
 
       {/* Batch list with scrolling */}
       {filteredBatches.length > 0 && (
-        <div className="max-h-[600px] overflow-y-auto divide-y divide-gray-200 rounded-lg border border-gray-200">
+        <div className="max-h-[600px] overflow-y-auto divide-y divide-separator rounded-lg bg-white shadow-panel">
           {filteredBatches.map((batch) => (
             <div
               key={batch.id}
-              className={`flex items-center justify-between p-3 hover:bg-gray-50 transition-colors ${
-                onBatchClick ? 'cursor-pointer' : ''
-              }`}
+              className={cn(
+                'flex items-center justify-between p-3 hover:bg-surface-hover transition-colors',
+                onBatchClick && 'cursor-pointer',
+              )}
               onClick={() => onBatchClick?.(batch.id)}
               role={onBatchClick ? 'button' : undefined}
               tabIndex={onBatchClick ? 0 : undefined}
@@ -257,39 +267,36 @@ export function BatchListView({
             >
               {/* Status indicator - based on batch status, not hasErrors */}
               <div className="flex items-center space-x-3 flex-1">
-                {batch.status === 'COMPLETED' || batch.status === 'COMPLETED_WITH_WARNINGS' ? (
-                  <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
-                ) : batch.status === 'IN_PROGRESS' ? (
-                  <Loader2 className="h-5 w-5 text-blue-500 animate-spin flex-shrink-0" />
-                ) : (
-                  <XCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
-                )}
-
                 {/* Batch info */}
                 <div>
                   <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-gray-900">
+                    <span className="text-sm font-medium text-ink tabular-nums">
                       {formatDateTime(batch.startedAt)}
                     </span>
-                    <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                        batch.status === 'COMPLETED'
-                          ? 'bg-green-100 text-green-800'
-                          : batch.status === 'COMPLETED_WITH_WARNINGS'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : batch.status === 'IN_PROGRESS'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}
+                    <Badge
+                      variant={STATUS_VARIANT[batch.status] ?? 'neutral'}
+                      dot={batch.status !== 'IN_PROGRESS'}
+                      className="px-2 py-0.5"
                     >
-                      {batch.status === 'COMPLETED_WITH_WARNINGS' ? 'Completed (Warnings)' : batch.status}
-                    </span>
+                      {batch.status === 'IN_PROGRESS' && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
+                      {STATUS_LABELS[batch.status] ?? batch.status}
+                    </Badge>
                   </div>
-                  <div className="mt-0.5 text-xs text-gray-500">
+                  <div className="mt-0.5 text-xs text-ink-secondary tabular-nums">
                     {siteLookup?.get(batch.siteId) && (
                       <span className="font-medium">{siteLookup.get(batch.siteId)} • </span>
                     )}
-                    {batch.uploadedFilesCount} files • {formatBytes(batch.totalSize)}
+                    {batch.deltaTableCount != null ? (
+                      <>
+                        {batch.deltaRecordCount ?? 0} changes • {batch.deltaTableCount} tables
+                      </>
+                    ) : (
+                      <>
+                        {batch.uploadedFilesCount} files • {formatBytes(batch.totalSize)}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -298,7 +305,7 @@ export function BatchListView({
               <div className="flex items-center space-x-3">
                 {/* Completed timestamp */}
                 {batch.completedAt && (
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-ink-muted tabular-nums">
                     Completed: {formatDateTime(batch.completedAt)}
                   </div>
                 )}
@@ -310,9 +317,9 @@ export function BatchListView({
                       e.stopPropagation(); // Prevent triggering batch click
                       onViewErrors(batch.id);
                     }}
-                    className="inline-flex items-center space-x-1 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 transition-colors"
+                    className="inline-flex items-center space-x-1 rounded-lg border border-danger-border bg-white px-2 py-1 text-xs font-medium text-danger-text hover:bg-danger-bg transition-colors"
                   >
-                    <AlertCircle className="h-3 w-3" />
+                    <AlertCircle className="h-3 w-3" strokeWidth={1.5} />
                     <span>Errors</span>
                   </button>
                 )}
@@ -325,11 +332,7 @@ export function BatchListView({
       {/* Load more button */}
       {hasNextPage && (
         <div className="flex justify-center py-4">
-          <button
-            onClick={onLoadMore}
-            disabled={isFetchingNextPage}
-            className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <Button onClick={onLoadMore} disabled={isFetchingNextPage}>
             {isFetchingNextPage ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -338,7 +341,7 @@ export function BatchListView({
             ) : (
               'Load More'
             )}
-          </button>
+          </Button>
         </div>
       )}
     </div>

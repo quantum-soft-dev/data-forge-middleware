@@ -27,17 +27,17 @@ export function Pagination({
   const endIndex = Math.min(page * pageSize, totalElements)
 
   return (
-    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+    <div className="flex items-center justify-between border-t border-separator bg-white px-4 py-3 sm:px-6">
       {/* Results info */}
       <div className="flex flex-1 justify-between sm:hidden">
-        <span className="text-sm text-gray-700">
+        <span className="text-sm text-ink-secondary">
           Page {page} of {totalPages}
         </span>
       </div>
 
       <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
-          <p className="text-sm text-gray-700">
+          <p className="text-sm text-ink-secondary">
             Showing <span className="font-medium">{startIndex}</span> to{' '}
             <span className="font-medium">{endIndex}</span> of{' '}
             <span className="font-medium">{totalElements}</span> results
@@ -45,14 +45,14 @@ export function Pagination({
 
           {/* Page size selector */}
           <div className="flex items-center gap-2">
-            <label htmlFor="page-size" className="text-sm text-gray-700">
+            <label htmlFor="page-size" className="text-sm text-ink-secondary">
               Per page:
             </label>
             <select
               id="page-size"
               value={pageSize}
               onChange={(e) => onPageSizeChange(Number(e.target.value))}
-              className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              className="h-8 rounded-lg border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <option value={10}>10</option>
               <option value={20}>20</option>
@@ -68,13 +68,13 @@ export function Pagination({
             onClick={() => onPageChange(page - 1)}
             disabled={page <= 1}
             aria-label="Previous page"
-            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="relative inline-flex items-center rounded-lg border border-hairline bg-white px-3 py-2 text-sm font-medium text-ink hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ChevronLeft className="h-4 w-4" />
             <span className="ml-1">Previous</span>
           </button>
 
-          <span className="text-sm text-gray-700">
+          <span className="text-sm text-ink-secondary">
             Page {page} of {totalPages}
           </span>
 
@@ -82,7 +82,7 @@ export function Pagination({
             onClick={() => onPageChange(page + 1)}
             disabled={page >= totalPages}
             aria-label="Next page"
-            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="relative inline-flex items-center rounded-lg border border-hairline bg-white px-3 py-2 text-sm font-medium text-ink hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className="mr-1">Next</span>
             <ChevronRight className="h-4 w-4" />

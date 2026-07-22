@@ -101,7 +101,7 @@ export function RegenerateDialog({
             </div>
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Type:</span>
-              <Badge variant={generation.isInitialLoad ? 'default' : 'secondary'}>
+              <Badge variant={generation.isInitialLoad ? 'info' : 'neutral'}>
                 {generation.isInitialLoad ? 'Initial Load' : 'Comparison'}
               </Badge>
             </div>

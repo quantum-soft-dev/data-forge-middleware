@@ -44,10 +44,17 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      * Used by BatchTimeoutScheduler to mark batches as NOT_COMPLETED.
      * </p>
      *
+     * <p>Delta v2 (gRPC) sessions are excluded: a CONTINUOUS or resumed delta session can legitimately
+     * run past the upload timeout, and completing its batch mid-commit would throw and roll back the
+     * segment + watermark. Delta sessions are reaped by their own lifecycle (continuous seal, staged
+     * eviction, gRPC keepalive), not this upload-oriented sweeper (review r4).</p>
+     *
      * @param cutoffTime batches started before this time are considered expired
-     * @return list of expired batches
+     * @return list of expired batches (V1/upload sites only)
      */
-    @Query("SELECT b FROM Batch b WHERE b.status = 'IN_PROGRESS' AND b.startedAt < :cutoffTime")
+    @Query("SELECT b FROM Batch b WHERE b.status = 'IN_PROGRESS' AND b.startedAt < :cutoffTime "
+            + "AND b.siteId NOT IN "
+            + "(SELECT s.id FROM Site s WHERE s.clientApiVersion = com.bitbi.dfm.site.domain.ClientApiVersion.V2)")
     List<Batch> findExpiredBatches(LocalDateTime cutoffTime);
 
     /**

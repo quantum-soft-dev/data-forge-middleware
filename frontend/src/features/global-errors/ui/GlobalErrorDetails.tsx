@@ -24,11 +24,11 @@ interface GlobalErrorDetailsProps {
   onOpenChange: (open: boolean) => void
 }
 
-const SEVERITY_VARIANTS: Record<ErrorSeverity, 'destructive' | 'default' | 'secondary' | 'outline'> = {
-  CRITICAL: 'destructive',
-  ERROR: 'destructive',
-  WARNING: 'secondary',
-  INFO: 'outline',
+const SEVERITY_VARIANTS: Record<ErrorSeverity, 'critical' | 'warning' | 'info' | 'neutral'> = {
+  CRITICAL: 'critical',
+  ERROR: 'critical',
+  WARNING: 'warning',
+  INFO: 'neutral',
 }
 
 export function GlobalErrorDetails({ error, open, onOpenChange }: GlobalErrorDetailsProps) {
@@ -51,7 +51,7 @@ export function GlobalErrorDetails({ error, open, onOpenChange }: GlobalErrorDet
               {error.severity}
             </Badge>
             {!error.isRead && (
-              <Badge variant="outline" className="text-blue-600 border-blue-600">
+              <Badge variant="info">
                 Unread
               </Badge>
             )}
@@ -66,14 +66,14 @@ export function GlobalErrorDetails({ error, open, onOpenChange }: GlobalErrorDet
 
         <div className="space-y-4">
           <div>
-            <h4 className="text-sm font-medium text-gray-500 mb-1">Message</h4>
+            <h4 className="text-sm font-medium text-ink-secondary mb-1">Message</h4>
             <p className="text-sm whitespace-pre-wrap">{error.message}</p>
           </div>
 
           {error.stackTrace && (
             <div>
-              <h4 className="text-sm font-medium text-gray-500 mb-1">Stack Trace</h4>
-              <pre className="text-xs bg-gray-100 p-3 rounded overflow-x-auto whitespace-pre-wrap">
+              <h4 className="text-sm font-medium text-ink-secondary mb-1">Stack Trace</h4>
+              <pre className="text-xs bg-surface-subtle p-3 rounded-lg overflow-x-auto whitespace-pre-wrap">
                 {error.stackTrace}
               </pre>
             </div>
@@ -81,8 +81,8 @@ export function GlobalErrorDetails({ error, open, onOpenChange }: GlobalErrorDet
 
           {error.metadata && Object.keys(error.metadata).length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-gray-500 mb-1">Metadata</h4>
-              <pre className="text-xs bg-gray-100 p-3 rounded overflow-x-auto">
+              <h4 className="text-sm font-medium text-ink-secondary mb-1">Metadata</h4>
+              <pre className="text-xs bg-surface-subtle p-3 rounded-lg overflow-x-auto">
                 {JSON.stringify(error.metadata, null, 2)}
               </pre>
             </div>
@@ -90,7 +90,7 @@ export function GlobalErrorDetails({ error, open, onOpenChange }: GlobalErrorDet
 
           {error.clientVersion && (
             <div>
-              <h4 className="text-sm font-medium text-gray-500 mb-1">Client Version</h4>
+              <h4 className="text-sm font-medium text-ink-secondary mb-1">Client Version</h4>
               <p className="text-sm">{error.clientVersion}</p>
             </div>
           )}

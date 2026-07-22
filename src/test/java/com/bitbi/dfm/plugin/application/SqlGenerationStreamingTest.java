@@ -101,6 +101,9 @@ class SqlGenerationStreamingTest {
                 dbfStrategy,
                 cdcStrategy,
                 siteSchemaService,
+                org.mockito.Mockito.mock(DeltaSqlGenerationStrategy.class),
+                org.mockito.Mockito.mock(com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.class),
+                org.mockito.Mockito.mock(com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository.class),
                 2,
                 120,
                 heapThreshold

@@ -232,7 +232,34 @@ describe('SiteManagementPage', () => {
       const { container } = renderPage();
 
       const main = container.querySelector('main');
-      expect(main).toHaveClass('max-w-4xl');
+      expect(main).toHaveClass('max-w-[1120px]');
+    });
+  });
+
+  describe('Monitoring scaffold (T017)', () => {
+    it('renders the monitoring page background and PageHeader title', () => {
+      vi.mocked(siteApi.listUserSites).mockResolvedValue([]);
+
+      const { container } = renderPage();
+
+      const scaffold = container.firstElementChild as HTMLElement;
+      expect(scaffold.className).toContain('bg-white');
+      expect(scaffold.className).not.toContain('bg-gray-50');
+
+      const title = screen.getByRole('heading', { name: 'Site Management' });
+      expect(title.className).toContain('text-[22px]');
+      expect(title.className).not.toContain('text-3xl');
+    });
+
+    it('renders the section heading in monitoring typography', () => {
+      vi.mocked(siteApi.listUserSites).mockResolvedValue([]);
+
+      renderPage();
+
+      const section = screen.getByRole('heading', { name: 'Your Sites' });
+      expect(section.className).toContain('text-[15px]');
+      expect(section.className).not.toContain('text-2xl');
+      expect(section.className).not.toContain('font-semibold');
     });
   });
 

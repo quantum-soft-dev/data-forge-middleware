@@ -13,6 +13,7 @@ import {
   SITES_USER_ID,
   SITES_USER_ACTIVATE,
   SITES_USER_DEACTIVATE,
+  SITES,
   SITES_BY_ACCOUNT,
   SITES_CREATE,
   SITES_ACTIVATE,
@@ -102,6 +103,16 @@ export async function deleteUserSite(siteId: string): Promise<void> {
  */
 export async function listAdminSites(accountId: string): Promise<Site[]> {
   const response = await apiClient.get<Site[]>(SITES_BY_ACCOUNT(accountId));
+  return response.data;
+}
+
+/**
+ * Get a single site by id (admin view).
+ *
+ * GET /api/v1/sites/{siteId} (023, F3 — admin site-detail page)
+ */
+export async function getAdminSite(siteId: string): Promise<Site> {
+  const response = await apiClient.get<Site>(`${SITES}/${siteId}`);
   return response.data;
 }
 

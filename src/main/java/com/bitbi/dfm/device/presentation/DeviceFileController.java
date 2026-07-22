@@ -50,6 +50,7 @@ public class DeviceFileController {
     private final FileUploadService fileUploadService;
     private final BatchLifecycleService batchLifecycleService;
     private final AuthorizationHelper authorizationHelper;
+    private final com.bitbi.dfm.site.application.ClientApiVersionGuard clientApiVersionGuard;
 
     /**
      * Constructor injection for dependencies.
@@ -57,14 +58,17 @@ public class DeviceFileController {
      * @param fileUploadService     Service for file upload operations
      * @param batchLifecycleService Service for batch operations
      * @param authorizationHelper   Helper for JWT-based authorization
+     * @param clientApiVersionGuard Per-site strangler guard for the HTTP file API
      */
     public DeviceFileController(
             FileUploadService fileUploadService,
             BatchLifecycleService batchLifecycleService,
-            AuthorizationHelper authorizationHelper) {
+            AuthorizationHelper authorizationHelper,
+            com.bitbi.dfm.site.application.ClientApiVersionGuard clientApiVersionGuard) {
         this.fileUploadService = fileUploadService;
         this.batchLifecycleService = batchLifecycleService;
         this.authorizationHelper = authorizationHelper;
+        this.clientApiVersionGuard = clientApiVersionGuard;
     }
 
     /**
@@ -133,6 +137,8 @@ public class DeviceFileController {
             // Verify site ownership via JWT claims
             authorizationHelper.verifySiteOwnership(batch.getSiteId());
 
+            clientApiVersionGuard.assertHttpFileApiAllowed(batch.getSiteId());
+
             // Verify batch is IN_PROGRESS
             if (!batch.getStatus().equals(com.bitbi.dfm.batch.domain.BatchStatus.IN_PROGRESS)) {
                 logger.warn("Device API: Cannot upload to non-IN_PROGRESS batch - batchId={}, status={}",
@@ -151,6 +157,10 @@ public class DeviceFileController {
         } catch (AuthorizationHelper.UnauthorizedException e) {
             logger.warn("Device API: Unauthorized file upload - batchId={}, {}", batchId, e.getMessage());
             return DeviceControllerHelper.handleUnauthorizedException(e);
+
+        } catch (com.bitbi.dfm.site.application.ClientApiVersionGuard.HttpFileApiDisabledException e) {
+            logger.warn("Device API: HTTP file API disabled for V2 site - {}", e.getMessage());
+            return DeviceControllerHelper.handleHttpFileApiDisabledException(e);
 
         } catch (BatchLifecycleService.BatchNotFoundException e) {
             logger.warn("Device API: Batch not found - batchId={}", batchId);

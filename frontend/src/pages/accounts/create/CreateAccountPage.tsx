@@ -14,6 +14,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
 import { CreateAccountForm } from '@/features/user-management/ui/CreateAccountForm'
 
 export default function CreateAccountPage() {
@@ -32,29 +33,27 @@ export default function CreateAccountPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-[1120px] px-6 py-6">
         {/* Page header with back button */}
         <div className="mb-8">
           <button
             onClick={handleCancel}
-            className="mb-4 flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            className="mb-4 flex items-center gap-2 text-sm text-ink-secondary hover:text-ink"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to User Management
           </button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Create New Account</h1>
-            <p className="mt-2 text-sm text-gray-600">
-              Create a new user account with Auth0 authentication integration
-            </p>
-          </div>
+          <PageHeader
+            title="Create New Account"
+            subtitle="Create a new user account with Auth0 authentication integration"
+          />
         </div>
 
         {/* Form card */}
-        <div className="rounded-lg bg-white p-6 shadow-sm border border-gray-200">
+        <div className="rounded-lg bg-white p-6 shadow-sm border border-separator">
           <CreateAccountForm
             onSuccess={handleSuccess}
             onCancel={handleCancel}

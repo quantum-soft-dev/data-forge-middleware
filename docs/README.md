@@ -47,7 +47,24 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
   - Client API vs Admin API separation
   - OpenAPI/Swagger documentation
 
-- **[API Device Migration](./api-device-migration.md)** - Device management API migration guide
+### Delta Client v2 & Site Types
+
+- **[Delta Client v2 — Change Request](./cr-delta-client-v2.md)** - gRPC ingestion design (022)
+- **[Delta Client v2 — Client & Sync UI Guide](./delta-client-v2-guide.md)** - protocol, egress, Delta Sync UI, Parquet download (022/023/025)
+- **[Site Types & POSTGRES_CDC — Change Request](./cr-site-types-postgres-cdc.md)** - DBF vs POSTGRES_CDC, site_schemas (019)
+- **[POSTGRES_CDC Client Guide](./postgres-cdc-client-guide.md)** - CDC client integration
+- **[Plugin Reinitialization](./reinit.md)** - re-baseline flow (015)
+
+### Visual Language
+
+- **[Visual Language Migration — Change Request](./cr-visual-language-migration.md)** - monitoring visual language (024)
+
+### Product & Data Platform Concept
+
+- **[Data Platform Concept (RU)](./data-platform-concept.ru.md)** - Product-level explanation of the data collection platform idea
+  - Source adapters, gRPC/Protobuf ingestion, changelog and checkpoints
+  - CSV, SQL, and Parquet egress for BI/plugin consumers
+  - Infographics for the end-to-end architecture and lifecycle
 
 ---
 
@@ -74,10 +91,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 
 ### Code Quality
 
-- **[Code Security & DTO Refactoring](./code-security-dto-refactoring.md)** - Security improvements and DTO standardization
-  - Request/Response DTO patterns
-  - Input validation with Jakarta Bean Validation
-  - Type safety improvements
+- Request/Response DTO patterns, input validation with Jakarta Bean Validation, and type-safety
+  conventions are documented in the repo-root `CLAUDE.md` (Code Style).
 
 ---
 
@@ -109,10 +124,15 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 | [environment-variables.md](./deployment/environment-variables.md) | Environment variables reference | DevOps, Developers |
 | [ui-base.md](./ui-base.md) | Frontend architecture | Frontend Developers |
 | [api-unification.md](./api-unification.md) | API design patterns | Backend Developers |
-| [api-device-migration.md](./api-device-migration.md) | Device API migration | Backend Developers |
+| [data-platform-concept.ru.md](./data-platform-concept.ru.md) | Data platform product concept with diagrams | Product, Architects, Developers |
+| [cr-delta-client-v2.md](./cr-delta-client-v2.md) | Delta Client v2 gRPC ingestion — change request (022) | Backend Developers |
+| [delta-client-v2-guide.md](./delta-client-v2-guide.md) | Delta v2 protocol, egress, Sync UI, Parquet download (022/023/025) | Backend, Client integrators |
+| [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) | Site types (DBF/POSTGRES_CDC) — change request (019) | Backend Developers |
+| [postgres-cdc-client-guide.md](./postgres-cdc-client-guide.md) | POSTGRES_CDC client integration | Client integrators |
+| [reinit.md](./reinit.md) | Plugin reinitialization / re-baseline (015) | Backend Developers |
+| [cr-visual-language-migration.md](./cr-visual-language-migration.md) | Monitoring visual language — change request (024) | Frontend Developers |
 | [auth0-config.md](./auth0-config.md) | Auth0 configuration | Administrators, DevOps |
 | [auth0-migration-report.md](./auth0-migration-report.md) | Auth0 migration details | All |
-| [code-security-dto-refactoring.md](./code-security-dto-refactoring.md) | Code quality improvements | Backend Developers |
 
 ---
 
@@ -160,5 +180,5 @@ When adding new documentation:
 
 ---
 
-**Last Updated:** 2025-11-23
+**Last Updated:** 2026-06-22
 **Version:** 1.0.0

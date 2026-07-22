@@ -53,6 +53,14 @@ public class Site {
     @Column(name = "site_type", nullable = false, length = 20)
     private SiteType siteType;
 
+    /**
+     * Which client ingestion API this site uses. New sites default to {@link ClientApiVersion#V2}
+     * (overwritten by the persisted value on load); pre-V29 sites were backfilled to {@code V1}.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "client_api_version", nullable = false, length = 2)
+    private ClientApiVersion clientApiVersion = ClientApiVersion.V2;
+
     @Column(name = "display_name", nullable = false, length = 255)
     private String displayName;
 
@@ -82,6 +90,11 @@ public class Site {
         this.retentionDays = retentionDays;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+        // Auth mechanism determines the ingestion API: a site provisioned with a client secret
+        // authenticates via the legacy v1 HTTP API (that secret is v1-only); a secretless site uses
+        // the Auth V2 device flow and the Delta v2 gRPC surface. Without this, a password-created
+        // (v1-secret) site was stamped V2 and could not use its own secret's API (review r4).
+        this.clientApiVersion = clientSecretHash != null ? ClientApiVersion.V1 : ClientApiVersion.V2;
     }
 
     /**
@@ -271,6 +284,14 @@ public class Site {
 
     public boolean canAuthenticate() {
         return this.isActive;
+    }
+
+    /**
+     * @return {@code true} if this site ingests via the Delta gRPC client API (V2); {@code false}
+     *         for legacy V1 sites (and null-safe for partially-built/mocked entities).
+     */
+    public boolean isDeltaV2() {
+        return this.clientApiVersion == ClientApiVersion.V2;
     }
 
     public boolean verifySecret(String providedSecret) {

@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.unit;
 import com.bitbi.dfm.plugin.application.SqlStatementGenerator;
 import com.bitbi.dfm.plugin.domain.CsvRowDiff;
 import com.bitbi.dfm.plugin.domain.DbfColumnType;
+import com.bitbi.dfm.plugin.domain.JsonlChangeRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -650,6 +651,60 @@ class SqlStatementGeneratorTest {
             assertThatThrownBy(() -> generator.generate(diff, "", Map.of()))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("cannot be null or empty");
+        }
+    }
+
+    @Nested
+    @DisplayName("Typed literal rendering (delta v2 values)")
+    class TypedLiteralRendering {
+
+        private String insertSql(Object value) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("id", 1L);
+            data.put("payload", value);
+            JsonlChangeRecord record = new JsonlChangeRecord(JsonlChangeRecord.OP_INSERT, null, data, 1);
+            return generator.generateFromJsonl(record, "docs");
+        }
+
+        @Test
+        @DisplayName("should render byte[] as bytea hex literal")
+        void shouldRenderByteArrayAsByteaHexLiteral() {
+            String sql = insertSql(new byte[]{(byte) 0xDE, (byte) 0xAD, (byte) 0xBE, (byte) 0xEF});
+
+            assertThat(sql).contains("'\\xdeadbeef'");
+            assertThat(sql).doesNotContain("[B@");
+        }
+
+        @Test
+        @DisplayName("should render empty byte[] as '\\x'")
+        void shouldRenderEmptyByteArray() {
+            assertThat(insertSql(new byte[0])).contains("'\\x'");
+        }
+
+        @Test
+        @DisplayName("should render BigDecimal via toPlainString, unquoted")
+        void shouldRenderBigDecimalAsPlainString() {
+            String sql = insertSql(new java.math.BigDecimal("1E-10"));
+
+            assertThat(sql).contains("0.0000000001");
+            assertThat(sql).doesNotContain("1E-10");
+            assertThat(sql).doesNotContain("'0.0000000001'");
+        }
+
+        @Test
+        @DisplayName("should keep long/double/boolean/string rendering unchanged")
+        void shouldKeepScalarRenderingUnchanged() {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("n", 42L);
+            data.put("d", 1.5d);
+            data.put("b", Boolean.TRUE);
+            data.put("s", "o'brien");
+            data.put("z", null);
+            JsonlChangeRecord record = new JsonlChangeRecord(JsonlChangeRecord.OP_INSERT, null, data, 1);
+
+            String sql = generator.generateFromJsonl(record, "docs");
+
+            assertThat(sql).contains("VALUES (42, 1.5, true, 'o''brien', NULL)");
         }
     }
 }

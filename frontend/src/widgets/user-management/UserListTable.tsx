@@ -64,28 +64,28 @@ export function UserListTable({
       header: ({ column }) => (
         <button
           onClick={() => column.toggleSorting()}
-          className="flex items-center gap-1 hover:text-gray-900"
+          className="flex items-center gap-1 hover:text-ink"
         >
           Name
           <ArrowUpDown className="h-3 w-3" />
         </button>
       ),
       cell: (info) => (
-        <div className="font-medium text-gray-900">{info.getValue()}</div>
+        <div className="font-medium text-ink">{info.getValue()}</div>
       ),
     }),
     columnHelper.accessor('email', {
       header: ({ column }) => (
         <button
           onClick={() => column.toggleSorting()}
-          className="flex items-center gap-1 hover:text-gray-900"
+          className="flex items-center gap-1 hover:text-ink"
         >
           Email
           <ArrowUpDown className="h-3 w-3" />
         </button>
       ),
       cell: (info) => (
-        <div className="text-sm text-gray-600">{info.getValue()}</div>
+        <div className="text-sm text-ink-secondary">{info.getValue()}</div>
       ),
     }),
     columnHelper.display({
@@ -105,7 +105,7 @@ export function UserListTable({
       header: ({ column }) => (
         <button
           onClick={() => column.toggleSorting()}
-          className="flex items-center gap-1 hover:text-gray-900"
+          className="flex items-center gap-1 hover:text-ink"
         >
           Created
           <ArrowUpDown className="h-3 w-3" />
@@ -115,12 +115,12 @@ export function UserListTable({
         try {
           const date = new Date(info.getValue())
           return (
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-ink-secondary">
               {formatDistanceToNow(date, { addSuffix: true })}
             </div>
           )
         } catch {
-          return <div className="text-sm text-gray-500">—</div>
+          return <div className="text-sm text-ink-secondary">—</div>
         }
       },
     }),
@@ -128,17 +128,17 @@ export function UserListTable({
       header: 'Last Login',
       cell: (info) => {
         const lastLogin = info.getValue()
-        if (!lastLogin) return <div className="text-sm text-gray-400">Never</div>
+        if (!lastLogin) return <div className="text-sm text-ink-muted">Never</div>
 
         try {
           const date = new Date(lastLogin)
           return (
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-ink-secondary">
               {formatDistanceToNow(date, { addSuffix: true })}
             </div>
           )
         } catch {
-          return <div className="text-sm text-gray-500">—</div>
+          return <div className="text-sm text-ink-secondary">—</div>
         }
       },
     }),
@@ -154,7 +154,7 @@ export function UserListTable({
             {onViewDetails && (
               <button
                 onClick={() => onViewDetails(user)}
-                className="rounded p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                className="rounded-lg p-1.5 text-ink-secondary hover:bg-secondary hover:text-ink"
                 title="View details"
               >
                 <Eye className="h-4 w-4" />
@@ -164,7 +164,7 @@ export function UserListTable({
             {hasAuth0 && !user.isBlocked && onLock && (
               <button
                 onClick={() => onLock(user)}
-                className="rounded p-1.5 text-orange-600 hover:bg-orange-50 hover:text-orange-900"
+                className="rounded-lg p-1.5 text-warn-solid hover:bg-secondary"
                 title="Lock account"
               >
                 <Lock className="h-4 w-4" />
@@ -174,7 +174,7 @@ export function UserListTable({
             {hasAuth0 && user.isBlocked && onUnlock && (
               <button
                 onClick={() => onUnlock(user)}
-                className="rounded p-1.5 text-green-600 hover:bg-green-50 hover:text-green-900"
+                className="rounded-lg p-1.5 text-ink-secondary hover:bg-secondary hover:text-ink"
                 title="Unlock account"
               >
                 <Unlock className="h-4 w-4" />
@@ -184,7 +184,7 @@ export function UserListTable({
             {hasAuth0 && onResetPassword && (
               <button
                 onClick={() => onResetPassword(user)}
-                className="rounded p-1.5 text-blue-600 hover:bg-blue-50 hover:text-blue-900"
+                className="rounded-lg p-1.5 text-brand hover:bg-brand-50"
                 title="Reset password"
               >
                 <KeyRound className="h-4 w-4" />
@@ -211,10 +211,10 @@ export function UserListTable({
 
   if (isLoading) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white p-8">
+      <div className="rounded-lg bg-white p-8 shadow-panel">
         <div className="flex items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-blue-600" />
-          <span className="ml-3 text-sm text-gray-600">Loading users...</span>
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-secondary border-t-brand" />
+          <span className="ml-3 text-sm text-ink-secondary">Loading users...</span>
         </div>
       </div>
     )
@@ -222,23 +222,23 @@ export function UserListTable({
 
   if (users.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-white p-8 text-center">
-        <p className="text-sm text-gray-500">No users found</p>
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
+        <p className="text-sm text-ink-secondary">No users found</p>
       </div>
     )
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-lg bg-white shadow-panel">
       <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+        <table className="min-w-full divide-y divide-separator">
+          <thead className="bg-white">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500"
+                    className="px-6 py-3 text-left text-xs font-medium text-ink-secondary"
                   >
                     {header.isPlaceholder
                       ? null
@@ -251,9 +251,9 @@ export function UserListTable({
               </tr>
             ))}
           </thead>
-          <tbody className="divide-y divide-gray-200 bg-white">
+          <tbody className="divide-y divide-separator bg-white">
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="hover:bg-gray-50">
+              <tr key={row.id} className="hover:bg-surface-hover">
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="whitespace-nowrap px-6 py-4">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

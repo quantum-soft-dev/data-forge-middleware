@@ -95,3 +95,11 @@ logging:
     org.springframework: WARN
     org.hibernate: WARN
     org.testcontainers: INFO
+
+# Delta v2 gRPC server is not bound in tests (contract tests use in-process servers)
+delta:
+  grpc:
+    enabled: false
+  egress:
+    # Slow sweep so tests exercise the explicit commit-time wake, not the fallback
+    sweep-ms: 3600000

@@ -1,5 +1,17 @@
 "use client"
 
+/**
+ * Monitoring dialogs (024, T010): radius rides on --radius (10px); actions
+ * inherit the monitoring Button variants — override per intent:
+ *   <AlertDialogAction>                                    → brand primary
+ *   <AlertDialogAction className="bg-danger-solid hover:bg-danger-solid-hover"> → destructive confirm
+ *
+ * Red warning panel inside a description (exemplar DeltaSyncDialogs.tsx):
+ *   <AlertDialogDescription asChild>
+ *     <div className="flex items-start gap-2 rounded-lg border border-danger-border
+ *                     bg-danger-bg p-3 text-sm text-danger-text">…</div>
+ *   </AlertDialogDescription>
+ */
 import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 

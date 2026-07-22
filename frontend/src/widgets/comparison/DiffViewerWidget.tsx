@@ -106,15 +106,15 @@ export function DiffViewerWidget({
   const getChangeTypeBadgeVariant = (type?: string) => {
     switch (type) {
       case 'ADDED':
-        return 'default'; // green
+        return 'success';
       case 'MODIFIED':
-        return 'secondary'; // orange/amber
+        return 'warning';
       case 'REMOVED':
-        return 'destructive'; // red
+        return 'critical';
       case 'UNCHANGED':
-        return 'outline'; // gray
+        return 'neutral';
       default:
-        return 'default';
+        return 'neutral';
     }
   };
 

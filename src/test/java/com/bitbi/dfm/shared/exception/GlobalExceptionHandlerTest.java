@@ -1,5 +1,6 @@
 package com.bitbi.dfm.shared.exception;
 
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -124,6 +125,34 @@ class GlobalExceptionHandlerTest {
         assertEquals("Internal Server Error", response.getBody().error());
         assertEquals("An unexpected error occurred", response.getBody().message());
         assertEquals("/api/v1/test", response.getBody().path());
+    }
+
+    @Test
+    @DisplayName("Should map CheckpointStorageException to 503 Service Unavailable")
+    void shouldHandleCheckpointStorageException() {
+        CheckpointStorageException ex =
+                new CheckpointStorageException("Failed to stat checkpoint snapshot: egress/x", new RuntimeException("S3 down"));
+
+        ResponseEntity<ErrorResponseDto> response = handler.handleCheckpointStorage(ex, request);
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(503, response.getBody().status());
+        assertEquals("Service Unavailable", response.getBody().error());
+    }
+
+    @Test
+    @DisplayName("Should map RejectedExecutionException to 503 Service Unavailable")
+    void shouldHandleRejectedExecutionException() {
+        java.util.concurrent.RejectedExecutionException ex =
+                new java.util.concurrent.RejectedExecutionException("rebuild queue full");
+
+        ResponseEntity<ErrorResponseDto> response = handler.handleRejectedExecution(ex, request);
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(503, response.getBody().status());
+        assertEquals("Service Unavailable", response.getBody().error());
     }
 
     @Test

@@ -6,12 +6,31 @@
  *
  * Per FR-008: Navigation menu with links to Dashboard and Accounts pages.
  * Role-based access: User Management visible only for ADMIN role.
+ * Monitoring visual language (024, T013 rev.2): floating rounded card per
+ * design_handoff_delta_sync prototype — white r10 + panel shadow inside a
+ * 1120px container; nav links are 14px/400 hover-pills, active = brand on
+ * brand-50; user shown as initials avatar.
  */
 
 import { Link } from '@tanstack/react-router'
-import { User } from 'lucide-react'
 import { LogoutButton } from '@/features/auth/logout/LogoutButton'
 import { useAuth } from '@/entities/user-session/api/useAuth'
+import { Badge } from '@/shared/ui/ui/badge'
+import { monitoringTokens } from '@/shared/ui/tokens'
+
+// Active state via aria-current (set by TanStack Router) — the attribute
+// selector outranks the base color utilities regardless of CSS order.
+const NAV_LINK_CLASSES =
+  'rounded-lg px-3 py-1.5 text-sm text-ink-secondary transition-colors ' +
+  'hover:bg-surface-subtle hover:text-ink ' +
+  'aria-[current=page]:bg-brand-50 aria-[current=page]:text-brand'
+
+/** "Boris Pliss" → "BP"; falls back to the first two characters. */
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
 
 export function Header() {
   const { user, hasRole, isRolesLoading } = useAuth()
@@ -21,126 +40,92 @@ export function Header() {
   const userName = user?.name || user?.email || 'User'
 
   return (
-    <header className="border-b border-gray-200 bg-white shadow-sm">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 items-center justify-between">
-          {/* Logo / Title */}
-          <Link to="/dashboard" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
-            <img
-              src="/favicon.svg"
-              alt="DataForge Logo"
-              className="h-8 w-8"
-            />
-            <h1 className="text-xl font-bold text-gray-900">
-              DataForge Middleware
-            </h1>
+    <header className="mx-auto mt-4 max-w-[1120px] px-6">
+      <div className="flex items-center justify-between rounded-[10px] bg-white px-4 py-2.5 shadow-panel">
+        {/* Logo / Title */}
+        <Link to="/dashboard" className="flex items-center gap-2.5 hover:opacity-90 transition-opacity">
+          <img
+            src="/favicon.svg"
+            alt="DataForge Logo"
+            className="h-7 w-7"
+          />
+          {/* Not a heading: PageHeader owns the page's h1 — two h1s break the
+              document outline for screen readers (review r3). */}
+          <span className="text-[17px] font-semibold tracking-[-0.24px] text-ink">
+            DataForge Middleware
+          </span>
+        </Link>
+
+        {/* Navigation Menu */}
+        <nav className="flex items-center gap-0.5">
+          <Link to="/dashboard" className={NAV_LINK_CLASSES}>
+            Dashboard
           </Link>
 
-          {/* Navigation Menu */}
-          <nav className="flex items-center space-x-6">
-            <Link
-              to="/dashboard"
-              className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-              activeProps={{
-                className: 'text-sm font-medium text-primary hover:text-primary',
-              }}
-            >
-              Dashboard
+          {/* Site Management - only visible for regular users (not admins) */}
+          {!isAdmin && (
+            <Link to="/account/sites" className={NAV_LINK_CLASSES}>
+              Site Management
             </Link>
+          )}
 
-            {/* Site Management - only visible for regular users (not admins) */}
-            {!isAdmin && (
-              <Link
-                to="/account/sites"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
-                Site Management
-              </Link>
-            )}
+          {/* Upload History - only visible for regular users (not admins) */}
+          {!isAdmin && (
+            <Link
+              to="/account/upload-history"
+              className={NAV_LINK_CLASSES}
+             
+            >
+              Upload History
+            </Link>
+          )}
 
-            {/* Upload History - only visible for regular users (not admins) */}
-            {!isAdmin && (
-              <Link
-                to="/account/upload-history"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
-                Upload History
-              </Link>
-            )}
+          {/* Plugins - only visible for regular users (not admins) */}
+          {!isAdmin && (
+            <Link to="/account/plugins" className={NAV_LINK_CLASSES}>
+              Plugins
+            </Link>
+          )}
 
-            {/* Plugins - only visible for regular users (not admins) */}
-            {!isAdmin && (
-              <Link
-                to="/account/plugins"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
-                Plugins
-              </Link>
-            )}
+          {/* User Management - only visible for ADMIN role */}
+          {isAdmin && (
+            <Link to="/admin/users" className={NAV_LINK_CLASSES}>
+              User Management
+            </Link>
+          )}
 
-            {/* User Management - only visible for ADMIN role */}
+          {/* Plugins - only visible for ADMIN role */}
+          {isAdmin && (
+            <Link to="/admin/plugins" className={NAV_LINK_CLASSES}>
+              Plugins
+            </Link>
+          )}
+
+          {/* Settings - only visible for ADMIN role */}
+          {isAdmin && (
+            <Link to="/admin/settings" className={NAV_LINK_CLASSES}>
+              Settings
+            </Link>
+          )}
+
+          {/* Current User */}
+          <div className="ml-3 flex items-center gap-2">
             {isAdmin && (
-              <Link
-                to="/admin/users"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
-                User Management
-              </Link>
+              <Badge variant="info" className="px-2 py-0.5">
+                Admin
+              </Badge>
             )}
-
-            {/* Plugins - only visible for ADMIN role */}
-            {isAdmin && (
-              <Link
-                to="/admin/plugins"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
-                Plugins
-              </Link>
-            )}
-
-            {/* Settings - only visible for ADMIN role */}
-            {isAdmin && (
-              <Link
-                to="/admin/settings"
-                className="text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                activeProps={{
-                  className: 'text-sm font-medium text-primary hover:text-primary',
-                }}
-              >
-                Settings
-              </Link>
-            )}
-
-            {/* Current User Info */}
-            <div className="flex items-center gap-2 ml-4 border-l border-gray-300 pl-4 text-sm text-gray-600">
-              <User className="h-4 w-4" />
-              <span className="font-medium">{userName}</span>
-              {isAdmin && (
-                <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
-                  Admin
-                </span>
-              )}
-            </div>
-
-            {/* Logout Button */}
+            <span
+              title={userName}
+              aria-label={`Signed in as ${userName}`}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-medium"
+              style={{ background: monitoringTokens.blue50, color: monitoringTokens.primary }}
+            >
+              {initialsOf(userName)}
+            </span>
             <LogoutButton />
-          </nav>
-        </div>
+          </div>
+        </nav>
       </div>
     </header>
   )

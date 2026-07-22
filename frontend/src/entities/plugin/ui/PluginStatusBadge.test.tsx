@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens'
 import { PluginStatusBadge } from './PluginStatusBadge'
 
 describe('PluginStatusBadge', () => {
@@ -22,8 +23,7 @@ describe('PluginStatusBadge', () => {
       render(<PluginStatusBadge isEnabled={true} />)
 
       const badge = screen.getByText('Enabled')
-      expect(badge).toHaveClass('bg-green-100')
-      expect(badge).toHaveClass('text-green-800')
+      expect(badge).toHaveStyle({ background: severityTokens.healthy.bg, color: severityTokens.healthy.text })
     })
 
     it('should have correct aria-label for enabled state', () => {
@@ -45,8 +45,7 @@ describe('PluginStatusBadge', () => {
       render(<PluginStatusBadge isEnabled={false} />)
 
       const badge = screen.getByText('Disabled')
-      expect(badge).toHaveClass('bg-gray-100')
-      expect(badge).toHaveClass('text-gray-800')
+      expect(badge).toHaveStyle({ background: monitoringTokens.subtleBg, color: monitoringTokens.textSecondary })
     })
 
     it('should have correct aria-label for disabled state', () => {
@@ -72,7 +71,7 @@ describe('PluginStatusBadge', () => {
       expect(badge).toHaveClass('inline-flex')
       expect(badge).toHaveClass('rounded-full')
       expect(badge).toHaveClass('px-2.5')
-      expect(badge).toHaveClass('py-0.5')
+      expect(badge).toHaveClass('py-1')
       expect(badge).toHaveClass('text-xs')
       expect(badge).toHaveClass('font-medium')
     })

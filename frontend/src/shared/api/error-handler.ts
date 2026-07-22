@@ -2,6 +2,17 @@ import { apiClient } from './client'
 import { toast } from 'sonner'
 import type { AxiosError } from 'axios'
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    /**
+     * Skip the global error toast for this request — for callers that render
+     * their own error taxonomy (e.g. openPresignedDownload), so one failure
+     * never produces two toasts.
+     */
+    suppressErrorToast?: boolean
+  }
+}
+
 /**
  * Global error handler for API requests
  *
@@ -19,17 +30,36 @@ import type { AxiosError } from 'axios'
  * Usage: Call setupErrorHandler() in App.tsx
  */
 
+/**
+ * The backend error body's message field (ErrorResponseDto.message), if any.
+ * Single home for the error-body contract — the interceptor below and callers
+ * that render their own error taxonomy (openPresignedDownload) both use it,
+ * so a DTO shape change cannot silently degrade one of them.
+ */
+export function getServerErrorMessage(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return undefined
+  }
+  const data = (error as AxiosError).response?.data
+  const message = (data as { message?: string } | undefined)?.message
+  return typeof message === 'string' && message.length > 0 ? message : undefined
+}
+
 export function setupErrorHandler() {
   apiClient.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
+      if (error.config?.suppressErrorToast) {
+        return Promise.reject(error)
+      }
+
       // Network error (no response from server)
       if (!error.response) {
         toast.error('Network error. Please check your connection and try again.')
         return Promise.reject(error)
       }
 
-      const { status, data } = error.response
+      const { status } = error.response
 
       switch (status) {
         // Note: 401 is handled by setupResponseInterceptor() in interceptors.ts
@@ -43,14 +73,14 @@ export function setupErrorHandler() {
         case 404:
           // Not found
           toast.error(
-            (data as { message?: string })?.message || 'Resource not found.'
+            getServerErrorMessage(error) ?? 'Resource not found.'
           )
           break
 
         case 409:
           // Conflict (e.g., duplicate email)
           toast.error(
-            (data as { message?: string })?.message ||
+            getServerErrorMessage(error) ??
               'A conflict occurred. Please check your input.'
           )
           break
@@ -64,7 +94,7 @@ export function setupErrorHandler() {
         default:
           // Server error or unknown error
           toast.error(
-            (data as { message?: string })?.message ||
+            getServerErrorMessage(error) ??
               'An unexpected error occurred. Please try again later.'
           )
           break

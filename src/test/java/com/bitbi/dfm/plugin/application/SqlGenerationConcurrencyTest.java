@@ -107,6 +107,9 @@ class SqlGenerationConcurrencyTest {
                 dbfStrategy,
                 cdcStrategy,
                 siteSchemaService,
+                org.mockito.Mockito.mock(DeltaSqlGenerationStrategy.class),
+                org.mockito.Mockito.mock(com.bitbi.dfm.delta.domain.ChangelogSegmentRepository.class),
+                org.mockito.Mockito.mock(com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository.class),
                 maxConcurrent,
                 semaphoreTimeoutSeconds,
                 100  // 100% threshold — disable memory pressure check in concurrency tests

@@ -17,8 +17,8 @@ export function PluginListWidget({ onPluginClick, onHistoryClick }: PluginListWi
 
   if (isError) {
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-        <p className="text-sm font-medium text-red-800">
+      <div className="rounded-lg border border-danger-border bg-danger-bg p-4">
+        <p className="text-sm font-medium text-danger-text">
           {error instanceof Error ? error.message : 'Failed to load plugins'}
         </p>
       </div>

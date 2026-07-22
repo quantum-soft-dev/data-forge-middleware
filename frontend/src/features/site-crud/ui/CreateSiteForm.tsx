@@ -137,7 +137,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
       {/* Site Name field */}
       <div className="space-y-2">
         <Label htmlFor="siteName">
-          Site Name <span className="text-destructive">*</span>
+          Site Name <span className="text-danger-text">*</span>
         </Label>
         <Input
           id="siteName"
@@ -148,7 +148,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
           aria-describedby={errors.siteName ? 'siteName-error' : undefined}
         />
         {errors.siteName && (
-          <p id="siteName-error" className="text-sm text-destructive">
+          <p id="siteName-error" className="text-sm text-danger-text">
             {errors.siteName.message}
           </p>
         )}
@@ -160,7 +160,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
       {/* Display Name field */}
       <div className="space-y-2">
         <Label htmlFor="displayName">
-          Display Name <span className="text-destructive">*</span>
+          Display Name <span className="text-danger-text">*</span>
         </Label>
         <Input
           id="displayName"
@@ -171,7 +171,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
           aria-describedby={errors.displayName ? 'displayName-error' : undefined}
         />
         {errors.displayName && (
-          <p id="displayName-error" className="text-sm text-destructive">
+          <p id="displayName-error" className="text-sm text-danger-text">
             {errors.displayName.message}
           </p>
         )}
@@ -224,7 +224,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
           )}
         </div>
         {errors.password && (
-          <p id="password-error" className="text-sm text-destructive">
+          <p id="password-error" className="text-sm text-danger-text">
             {errors.password.message}
           </p>
         )}

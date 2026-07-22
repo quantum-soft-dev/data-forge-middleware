@@ -70,70 +70,70 @@ export function EditAccountForm({
 
       {/* Name Field */}
       <div>
-        <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
-          Name <span className="text-red-500">*</span>
+        <label htmlFor="name" className="block text-sm font-medium text-ink-secondary mb-1">
+          Name <span className="text-danger-text">*</span>
         </label>
         <input
           id="name"
           type="text"
           autoFocus
           {...register('name')}
-          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
           placeholder="John Doe"
         />
         {errors.name && (
-          <p className="mt-1 text-xs text-red-600">{errors.name.message}</p>
+          <p className="mt-1 text-xs text-danger-text">{errors.name.message}</p>
         )}
       </div>
 
       {/* Email Field */}
       <div>
-        <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-          Email <span className="text-red-500">*</span>
+        <label htmlFor="email" className="block text-sm font-medium text-ink-secondary mb-1">
+          Email <span className="text-danger-text">*</span>
         </label>
         <input
           id="email"
           type="email"
           {...register('email')}
-          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
           placeholder="john@example.com"
         />
         {errors.email && (
-          <p className="mt-1 text-xs text-red-600">{errors.email.message}</p>
+          <p className="mt-1 text-xs text-danger-text">{errors.email.message}</p>
         )}
       </div>
 
       {/* Phone Field */}
       <div>
-        <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="phone" className="block text-sm font-medium text-ink-secondary mb-1">
           Phone
         </label>
         <input
           id="phone"
           type="tel"
           {...register('phone')}
-          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
           placeholder="+1234567890"
         />
         {errors.phone && (
-          <p className="mt-1 text-xs text-red-600">{errors.phone.message}</p>
+          <p className="mt-1 text-xs text-danger-text">{errors.phone.message}</p>
         )}
       </div>
 
       {/* Company Field */}
       <div>
-        <label htmlFor="company" className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="company" className="block text-sm font-medium text-ink-secondary mb-1">
           Company
         </label>
         <input
           id="company"
           type="text"
           {...register('company')}
-          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-ring"
           placeholder="Acme Corp"
         />
         {errors.company && (
-          <p className="mt-1 text-xs text-red-600">{errors.company.message}</p>
+          <p className="mt-1 text-xs text-danger-text">{errors.company.message}</p>
         )}
       </div>
 
@@ -143,14 +143,14 @@ export function EditAccountForm({
           type="button"
           onClick={onCancel}
           disabled={isSubmitting}
-          className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="rounded-lg border border-hairline bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Cancel
         </button>
         <button
           type="submit"
           disabled={isSubmitting}
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isSubmitting ? 'Saving...' : 'Save Changes'}
         </button>

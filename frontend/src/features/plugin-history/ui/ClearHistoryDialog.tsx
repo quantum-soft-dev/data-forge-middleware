@@ -104,7 +104,7 @@ export function ClearHistoryDialog({
                 <span className="text-sm text-muted-foreground">
                   Plugin status after clear:
                 </span>
-                <Badge variant="secondary">Deactivated</Badge>
+                <Badge variant="neutral">Deactivated</Badge>
               </div>
             </div>
 

@@ -1,5 +1,8 @@
 package com.bitbi.dfm.plugin.application;
 
+import com.bitbi.dfm.delta.domain.Checkpoint;
+import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.presentation.dto.FileDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -18,6 +21,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import java.io.InputStream;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -43,6 +47,8 @@ public class CsvFileQueryService {
 
     private final UploadedFileRepository uploadedFileRepository;
     private final SiteRepository siteRepository;
+    private final CheckpointRepository checkpointRepository;
+    private final S3CheckpointStorage checkpointStorage;
     private final S3Client s3Client;
     private final String bucketName;
     private final MeterRegistry meterRegistry;
@@ -50,15 +56,22 @@ public class CsvFileQueryService {
     public CsvFileQueryService(
             UploadedFileRepository uploadedFileRepository,
             SiteRepository siteRepository,
+            CheckpointRepository checkpointRepository,
+            S3CheckpointStorage checkpointStorage,
             S3Client s3Client,
             @Value("${s3.bucket.name}") String bucketName,
             MeterRegistry meterRegistry) {
         this.uploadedFileRepository = uploadedFileRepository;
         this.siteRepository = siteRepository;
+        this.checkpointRepository = checkpointRepository;
+        this.checkpointStorage = checkpointStorage;
         this.s3Client = s3Client;
         this.bucketName = bucketName;
         this.meterRegistry = meterRegistry;
     }
+
+    /** Suffix used to expose a reconstructed-table checkpoint as a downloadable file. */
+    private static final String CHECKPOINT_FILE_SUFFIX = ".csv.gz";
 
     /**
      * Lists all CSV files for a site.
@@ -76,7 +89,12 @@ public class CsvFileQueryService {
         log.debug("Listing files for siteId={}, accountId={}", siteId, accountId);
 
         // Validate site ownership
-        validateSiteOwnership(accountId, siteId);
+        Site site = validateSiteOwnership(accountId, siteId);
+
+        // V2 (Delta) sites expose reconstructed checkpoint snapshots instead of raw uploads.
+        if (site.isDeltaV2()) {
+            return listCheckpointFiles(siteId);
+        }
 
         // Get latest version of each file
         List<LatestFileInfoWithS3Key> files = uploadedFileRepository
@@ -93,6 +111,29 @@ public class CsvFileQueryService {
                         file.getOriginalFileName(),
                         file.getFileSize(),
                         file.getUploadedAt()))
+                .toList();
+    }
+
+    /**
+     * Lists the reconstructed checkpoint snapshots for a V2 (Delta) site, one per table, exposed
+     * under the legacy {@code <table>.csv.gz} naming so the Bit BI client contract is unchanged.
+     */
+    private List<FileDto> listCheckpointFiles(UUID siteId) {
+        List<Checkpoint> checkpoints = checkpointRepository.findBySiteId(siteId).stream()
+                .filter(cp -> cp.getS3KeyCsv() != null)
+                .toList();
+
+        log.info("Found {} checkpoint files for V2 siteId={}", checkpoints.size(), siteId);
+
+        meterRegistry.counter("plugin.api.files.listed",
+                "siteId", siteId.toString(),
+                "count", String.valueOf(checkpoints.size())).increment();
+
+        return checkpoints.stream()
+                .map(cp -> FileDto.of(
+                        cp.getTableName() + CHECKPOINT_FILE_SUFFIX,
+                        checkpointStorage.contentLength(cp.getS3KeyCsv()),
+                        cp.getUpdatedAt().toInstant(ZoneOffset.UTC)))
                 .toList();
     }
 
@@ -114,7 +155,12 @@ public class CsvFileQueryService {
         log.debug("Downloading file: siteId={}, fileName={}, accountId={}", siteId, fileName, accountId);
 
         // Validate site ownership
-        validateSiteOwnership(accountId, siteId);
+        Site site = validateSiteOwnership(accountId, siteId);
+
+        // V2 (Delta) sites serve the reconstructed checkpoint CSV for the requested table.
+        if (site.isDeltaV2()) {
+            return downloadCheckpointFile(siteId, fileName);
+        }
 
         // Find the file
         LatestFileInfoWithS3Key fileInfo = uploadedFileRepository
@@ -154,11 +200,48 @@ public class CsvFileQueryService {
     }
 
     /**
+     * Downloads the reconstructed checkpoint CSV for a single table of a V2 (Delta) site.
+     *
+     * <p>The {@code fileName} is the {@code <table>.csv.gz} name exposed by {@link #listFiles}; the
+     * table is resolved by stripping that suffix and matched against the site's checkpoints.</p>
+     *
+     * @throws FileNotFoundException if no checkpoint snapshot exists for the requested table
+     */
+    private FileDownloadResult downloadCheckpointFile(UUID siteId, String fileName) {
+        String tableName = fileName.endsWith(CHECKPOINT_FILE_SUFFIX)
+                ? fileName.substring(0, fileName.length() - CHECKPOINT_FILE_SUFFIX.length())
+                : fileName;
+
+        Checkpoint checkpoint = checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
+                .filter(cp -> cp.getS3KeyCsv() != null)
+                .orElseThrow(() -> {
+                    log.warn("Checkpoint snapshot not found: siteId={}, table={}", siteId, tableName);
+                    return new FileNotFoundException("File not found: " + fileName);
+                });
+
+        S3CheckpointStorage.CheckpointObject object = checkpointStorage.open(checkpoint.getS3KeyCsv());
+
+        log.info("Downloaded checkpoint CSV: siteId={}, table={}, s3Key={}",
+                siteId, tableName, checkpoint.getS3KeyCsv());
+
+        meterRegistry.counter("plugin.api.files.downloaded",
+                "siteId", siteId.toString()).increment();
+
+        return new FileDownloadResult(
+                object.inputStream(),
+                tableName + CHECKPOINT_FILE_SUFFIX,
+                object.size(),
+                "application/gzip"
+        );
+    }
+
+    /**
      * Validates that the site belongs to the specified account.
      *
+     * @return the owning site
      * @throws SecurityException if validation fails
      */
-    private void validateSiteOwnership(UUID accountId, UUID siteId) {
+    private Site validateSiteOwnership(UUID accountId, UUID siteId) {
         Site site = siteRepository.findById(siteId)
                 .orElseThrow(() -> {
                     log.warn("Site not found: siteId={}", siteId);
@@ -170,6 +253,7 @@ public class CsvFileQueryService {
                     siteId, accountId, site.getAccountId());
             throw new SecurityException("Site does not belong to your account");
         }
+        return site;
     }
 
     /**

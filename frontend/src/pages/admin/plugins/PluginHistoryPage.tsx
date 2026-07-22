@@ -10,8 +10,9 @@
  */
 
 import { useParams, Link } from '@tanstack/react-router'
-import { ArrowLeft, Database, History } from 'lucide-react'
+import { ArrowLeft, Database } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
 import { Button } from '@/shared/ui/ui/button'
 import { PluginHistoryWidget } from '@/widgets/plugin-history/PluginHistoryWidget'
 
@@ -21,10 +22,10 @@ export default function PluginHistoryPage() {
   })
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-[1120px] px-6 py-6">
         {/* Back navigation */}
         <div className="mb-6">
           <Link to="/admin/plugins">
@@ -37,13 +38,8 @@ export default function PluginHistoryPage() {
 
         {/* Page header */}
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <History className="h-8 w-8 text-gray-600" />
-            <h1 className="text-3xl font-bold text-gray-900">
-              SQL Generation History
-            </h1>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-gray-600">
+          <PageHeader title="SQL Generation History" />
+          <div className="mt-1.5 flex items-center gap-4 text-sm text-ink-secondary">
             <div className="flex items-center gap-1">
               <Database className="h-4 w-4" />
               <span>Plugin: {pluginId}</span>
@@ -54,7 +50,7 @@ export default function PluginHistoryPage() {
         </div>
 
         {/* History widget */}
-        <section className="bg-white rounded-lg shadow-sm border p-6">
+        <section className="rounded-lg bg-white p-6 shadow-panel">
           <PluginHistoryWidget pluginId={pluginId} accountId={accountId} />
         </section>
       </main>

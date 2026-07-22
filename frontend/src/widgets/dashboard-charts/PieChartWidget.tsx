@@ -7,6 +7,7 @@
 
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import type { StatusSegment } from '@/entities/dashboard-metrics/model/types'
+import { monitoringTokens } from '@/shared/ui/tokens'
 
 interface PieChartWidgetProps {
   data: StatusSegment[]
@@ -14,13 +15,13 @@ interface PieChartWidgetProps {
 
 const COLORS = {
   Active: 'hsl(var(--primary))',
-  Inactive: 'hsl(var(--muted))',
+  Inactive: monitoringTokens.textMuted,
 }
 
 export function PieChartWidget({ data }: PieChartWidgetProps) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-      <h3 className="mb-4 text-lg font-semibold text-gray-900">
+    <div className="rounded-lg bg-white p-4 shadow-panel">
+      <h3 className="mb-4 text-[15px] font-medium tracking-[-0.24px] text-ink-title">
         Status Distribution
       </h3>
       <ResponsiveContainer width="100%" height={300}>

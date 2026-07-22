@@ -13,6 +13,7 @@
  */
 
 import { Mail, User, Phone, Building, Calendar, Key } from 'lucide-react'
+import { cn } from '@/shared/lib/utils'
 import type { AccountWithKeycloakStatus } from '../model/types'
 
 interface AccountCardProps {
@@ -20,7 +21,7 @@ interface AccountCardProps {
   className?: string
 }
 
-export function AccountCard({ account, className = '' }: AccountCardProps) {
+export function AccountCard({ account, className }: AccountCardProps) {
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never'
     return new Date(dateString).toLocaleString('en-US', {
@@ -33,12 +34,12 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
   }
 
   return (
-    <div className={`rounded-lg border border-gray-200 bg-white p-6 shadow-sm ${className}`}>
+    <div className={cn('rounded-lg bg-white p-6 shadow-panel', className)}>
       {/* Header with status badges */}
       <div className="mb-4 flex items-start justify-between">
         <div className="flex-1">
-          <h3 className="text-lg font-semibold text-gray-900">{account.name}</h3>
-          <p className="text-sm text-gray-500">{account.email}</p>
+          <h3 className="text-[15px] font-medium tracking-[-0.24px] text-ink">{account.name}</h3>
+          <p className="text-sm text-ink-secondary">{account.email}</p>
         </div>
       </div>
 
@@ -65,29 +66,29 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         {/* Email */}
         <div className="flex items-start gap-2">
-          <Mail className="mt-0.5 h-4 w-4 text-gray-400" />
+          <Mail className="mt-0.5 h-4 w-4 text-ink-muted" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-gray-500">Email</p>
-            <p className="truncate text-sm text-gray-900">{account.email}</p>
+            <p className="text-xs font-medium text-ink-secondary">Email</p>
+            <p className="truncate text-sm text-ink">{account.email}</p>
           </div>
         </div>
 
         {/* Name */}
         <div className="flex items-start gap-2">
-          <User className="mt-0.5 h-4 w-4 text-gray-400" />
+          <User className="mt-0.5 h-4 w-4 text-ink-muted" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-gray-500">Name</p>
-            <p className="truncate text-sm text-gray-900">{account.name}</p>
+            <p className="text-xs font-medium text-ink-secondary">Name</p>
+            <p className="truncate text-sm text-ink">{account.name}</p>
           </div>
         </div>
 
         {/* Phone */}
         {account.phone && (
           <div className="flex items-start gap-2">
-            <Phone className="mt-0.5 h-4 w-4 text-gray-400" />
+            <Phone className="mt-0.5 h-4 w-4 text-ink-muted" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-gray-500">Phone</p>
-              <p className="truncate text-sm text-gray-900">{account.phone}</p>
+              <p className="text-xs font-medium text-ink-secondary">Phone</p>
+              <p className="truncate text-sm text-ink">{account.phone}</p>
             </div>
           </div>
         )}
@@ -95,10 +96,10 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
         {/* Company */}
         {account.company && (
           <div className="flex items-start gap-2">
-            <Building className="mt-0.5 h-4 w-4 text-gray-400" />
+            <Building className="mt-0.5 h-4 w-4 text-ink-muted" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-gray-500">Company</p>
-              <p className="truncate text-sm text-gray-900">{account.company}</p>
+              <p className="text-xs font-medium text-ink-secondary">Company</p>
+              <p className="truncate text-sm text-ink">{account.company}</p>
             </div>
           </div>
         )}
@@ -106,31 +107,31 @@ export function AccountCard({ account, className = '' }: AccountCardProps) {
         {/* Auth0 User ID */}
         {account.identityProviderUserId && (
           <div className="flex items-start gap-2 sm:col-span-2">
-            <Key className="mt-0.5 h-4 w-4 text-gray-400" />
+            <Key className="mt-0.5 h-4 w-4 text-ink-muted" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-gray-500">Auth0 User ID</p>
-              <p className="truncate font-mono text-xs text-gray-700">{account.identityProviderUserId}</p>
+              <p className="text-xs font-medium text-ink-secondary">Auth0 User ID</p>
+              <p className="truncate font-mono text-xs text-ink-secondary">{account.identityProviderUserId}</p>
             </div>
           </div>
         )}
       </div>
 
       {/* Timestamps */}
-      <div className="mt-4 border-t border-gray-200 pt-4">
+      <div className="mt-4 border-t border-separator pt-4">
         <div className="grid gap-3 text-xs sm:grid-cols-3">
           <div className="flex items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5 text-gray-400" />
+            <Calendar className="h-3.5 w-3.5 text-ink-muted" />
             <div>
-              <p className="font-medium text-gray-500">Created</p>
-              <p className="text-gray-700">{formatDate(account.createdAt)}</p>
+              <p className="font-medium text-ink-secondary">Created</p>
+              <p className="text-ink-secondary">{formatDate(account.createdAt)}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5 text-gray-400" />
+            <Calendar className="h-3.5 w-3.5 text-ink-muted" />
             <div>
-              <p className="font-medium text-gray-500">Last Login</p>
-              <p className="text-gray-700">{formatDate(account.lastLogin)}</p>
+              <p className="font-medium text-ink-secondary">Last Login</p>
+              <p className="text-ink-secondary">{formatDate(account.lastLogin)}</p>
             </div>
           </div>
         </div>

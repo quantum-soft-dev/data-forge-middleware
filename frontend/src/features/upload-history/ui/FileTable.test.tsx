@@ -172,7 +172,7 @@ describe('FileTable', () => {
 
       // Find the row containing the first file (alphabetically: inventory)
       const row = screen.getByText('inventory-2024.csv.gz').closest('tr');
-      expect(row).toHaveClass('bg-blue-50');
+      expect(row).toHaveClass('bg-brand-50');
     });
   });
 

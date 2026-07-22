@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.presentation.dto;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
@@ -25,6 +26,8 @@ import java.util.UUID;
  * @param startedAt           Batch start timestamp
  * @param completedAt         Batch completion timestamp (null if in progress)
  * @param createdAt           Batch creation timestamp
+ * @param deltaRecordCount    Total records changed in the Delta v2 session (null for v1 batches)
+ * @param deltaTableCount     Number of tables touched in the Delta v2 session (null for v1 batches)
  * @author Data Forge Team
  * @version 1.0.0
  * @see com.bitbi.dfm.batch.presentation.BatchAdminController
@@ -59,7 +62,13 @@ public record BatchSummaryDto(
         Instant completedAt,
 
         @Schema(description = "Batch creation timestamp (ISO-8601)", example = "2025-01-15T10:30:00Z")
-        Instant createdAt
+        Instant createdAt,
+
+        @Schema(description = "Total records changed in the Delta v2 session (null for v1 batches)", example = "34")
+        Long deltaRecordCount,
+
+        @Schema(description = "Number of tables touched in the Delta v2 session (null for v1 batches)", example = "6")
+        Integer deltaTableCount
 ) {
     /**
      * Create DTO from Batch entity.
@@ -78,21 +87,36 @@ public record BatchSummaryDto(
                 batch.getHasErrors(),
                 batch.getStartedAt().toInstant(ZoneOffset.UTC),
                 batch.getCompletedAt() != null ? batch.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
-                batch.getCreatedAt().toInstant(ZoneOffset.UTC)
+                batch.getCreatedAt().toInstant(ZoneOffset.UTC),
+                null,
+                null
         );
     }
 
     /**
-     * T026: Create DTO from BatchWithFileCountProjection (optimized for list view).
+     * T026: Create DTO from BatchWithFileCountProjection (optimized for list view), with no
+     * Delta v2 signal (v1 file-based batch, or caller doesn't have a segment to look up).
+     *
+     * @param projection Batch projection with file count
+     * @return BatchSummaryDto
+     */
+    public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection) {
+        return fromProjection(projection, null);
+    }
+
+    /**
+     * T6.5: Create DTO from BatchWithFileCountProjection and its (bulk-fetched) changelog
+     * segment, surfacing the Delta v2 signal in the list view.
      * <p>
      * Used by cursor-based pagination queries to avoid N+1 queries.
      * S3Path is set to empty string as it's not needed for list view.
      * </p>
      *
      * @param projection Batch projection with file count
+     * @param segment    the batch's changelog segment, or {@code null} for a v1 batch
      * @return BatchSummaryDto
      */
-    public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection) {
+    public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection, ChangelogSegment segment) {
         return new BatchSummaryDto(
                 projection.getId(),
                 projection.getSiteId(),
@@ -103,7 +127,9 @@ public record BatchSummaryDto(
                 projection.getHasErrors(),
                 projection.getStartedAt().toInstant(ZoneOffset.UTC),
                 projection.getCompletedAt() != null ? projection.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
-                projection.getStartedAt().toInstant(ZoneOffset.UTC)  // Use startedAt as createdAt approximation
+                projection.getStartedAt().toInstant(ZoneOffset.UTC),  // Use startedAt as createdAt approximation
+                segment != null ? segment.getRecordCount() : null,
+                segment != null && segment.getStats() != null ? segment.getStats().size() : null
         );
     }
 }

@@ -34,11 +34,11 @@ export function LogoutButton() {
   return (
     <button
       onClick={handleLogout}
-      className="rounded-md border border-input p-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+      className="rounded-lg p-2 text-sm font-medium text-ink-secondary hover:bg-secondary hover:text-ink transition-colors"
       title="Sign Out"
       aria-label="Sign Out"
     >
-      <LogOut className="h-4 w-4" />
+      <LogOut className="h-4 w-4" strokeWidth={1.5} />
     </button>
   )
 }

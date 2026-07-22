@@ -16,6 +16,7 @@
 import { useState, useCallback } from 'react'
 import { Loader2, FileText, AlertCircle, CheckCircle2, XCircle, Clock, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Badge } from '@/shared/ui/ui/badge'
+import { severityTokens } from '@/shared/ui/tokens'
 import { Button } from '@/shared/ui/ui/button'
 import { usePluginLogsQuery } from '../api/pluginLogsQueries'
 import { PluginTabFilters, type LogsFilterState } from './PluginTabFilters'
@@ -80,21 +81,21 @@ function formatTimestamp(isoString: string): string {
  */
 function getActionIcon(actionType: PluginActionType, success: boolean) {
   if (!success) {
-    return <XCircle className="h-4 w-4 text-red-500" />
+    return <XCircle className="h-4 w-4 text-danger-solid" />
   }
 
   switch (actionType) {
     case 'SQL_GENERATION_COMPLETED':
-      return <CheckCircle2 className="h-4 w-4 text-green-500" />
+      return <CheckCircle2 className="h-4 w-4" style={{ color: severityTokens.healthy.dot }} strokeWidth={1.5} />
     case 'SQL_GENERATION_STARTED':
       return <Clock className="h-4 w-4 text-blue-500" />
     case 'SQL_GENERATION_FAILED':
-      return <XCircle className="h-4 w-4 text-red-500" />
+      return <XCircle className="h-4 w-4 text-danger-solid" />
     case 'ACTIVATE':
     case 'DEACTIVATE':
-      return <FileText className="h-4 w-4 text-gray-500" />
+      return <FileText className="h-4 w-4 text-ink-secondary" />
     default:
-      return <FileText className="h-4 w-4 text-gray-500" />
+      return <FileText className="h-4 w-4 text-ink-secondary" />
   }
 }
 
@@ -111,9 +112,9 @@ function SqlGenerationStats({ metadata }: { metadata: SqlGenerationMetadata }) {
   }
 
   return (
-    <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-600">
+    <div className="mt-2 flex flex-wrap gap-2 text-xs text-ink-secondary">
       {insertCount !== undefined && (
-        <span className="rounded bg-green-100 px-2 py-0.5 text-green-700">
+        <span className="rounded-full px-2 py-0.5 tabular-nums" style={{ background: severityTokens.healthy.bg, color: severityTokens.healthy.text }}>
           +{insertCount} INSERT
         </span>
       )}
@@ -123,12 +124,12 @@ function SqlGenerationStats({ metadata }: { metadata: SqlGenerationMetadata }) {
         </span>
       )}
       {deleteCount !== undefined && (
-        <span className="rounded bg-red-100 px-2 py-0.5 text-red-700">
+        <span className="rounded-full px-2 py-0.5 tabular-nums" style={{ background: severityTokens.critical.bg, color: severityTokens.critical.text }}>
           -{deleteCount} DELETE
         </span>
       )}
       {durationMs !== undefined && (
-        <span className="rounded bg-gray-100 px-2 py-0.5 text-gray-600">
+        <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-ink-secondary tabular-nums">
           {durationMs}ms
         </span>
       )}
@@ -143,30 +144,27 @@ function LogEntry({ entry }: { entry: PluginLogEntry }) {
   const { actionType, success, errorMessage, metadata, occurredAt, siteDomain } = entry
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+    <div className="rounded-lg bg-white p-4 shadow-panel">
       <div className="flex items-start justify-between">
         <div className="flex flex-wrap items-center gap-2">
           {getActionIcon(actionType, success)}
-          <span className="font-medium text-gray-900">
+          <span className="font-medium text-ink">
             {formatActionType(actionType)}
           </span>
-          <Badge
-            variant={success ? 'default' : 'destructive'}
-            className={success ? 'bg-green-100 text-green-700 hover:bg-green-100' : ''}
-          >
+          <Badge variant={success ? 'success' : 'critical'} dot>
             {success ? 'Success' : 'Failed'}
           </Badge>
           {siteDomain && (
-            <Badge variant="outline" className="text-gray-600">
+            <Badge variant="neutral">
               {siteDomain}
             </Badge>
           )}
         </div>
-        <span className="text-xs text-gray-500 whitespace-nowrap ml-2">{formatTimestamp(occurredAt)}</span>
+        <span className="text-xs text-ink-secondary whitespace-nowrap ml-2">{formatTimestamp(occurredAt)}</span>
       </div>
 
       {errorMessage && (
-        <div className="mt-2 flex items-start gap-2 rounded bg-red-50 p-2 text-sm text-red-700">
+        <div className="mt-2 flex items-start gap-2 rounded-lg bg-danger-bg p-2 text-sm text-danger-text">
           <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <span>{errorMessage}</span>
         </div>
@@ -220,12 +218,12 @@ export function PluginLogsTab({ pluginId }: PluginLogsTabProps) {
 
       {isLoading ? (
         <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-          <span className="ml-3 text-sm text-gray-500">Loading logs...</span>
+          <Loader2 className="h-8 w-8 animate-spin text-ink-muted" />
+          <span className="ml-3 text-sm text-ink-secondary">Loading logs...</span>
         </div>
       ) : isError ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
-          <p className="text-sm text-red-600">
+        <div className="rounded-lg border border-danger-border bg-danger-bg p-4 text-center">
+          <p className="text-sm text-danger-text">
             Failed to fetch logs: {error?.message || 'Unknown error'}
           </p>
         </div>
@@ -239,10 +237,10 @@ export function PluginLogsTab({ pluginId }: PluginLogsTabProps) {
 
             if (!data || visibleLogs.length === 0) {
               return (
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-                  <FileText className="mx-auto h-12 w-12 text-gray-400" />
-                  <p className="mt-4 text-sm text-gray-500">No log entries</p>
-                  <p className="text-xs text-gray-400">
+                <div className="rounded-lg bg-white p-8 text-center shadow-panel">
+                  <FileText className="mx-auto h-12 w-12 text-ink-muted" />
+                  <p className="mt-4 text-sm text-ink-secondary">No log entries</p>
+                  <p className="text-xs text-ink-muted">
                     {filters.siteId || filters.from || filters.to
                       ? 'Try adjusting your filters.'
                       : 'Plugin activity will appear here once you start using it.'}
@@ -259,8 +257,8 @@ export function PluginLogsTab({ pluginId }: PluginLogsTabProps) {
 
                 {/* Pagination */}
                 {data.totalPages > 1 && (
-                  <div className="flex items-center justify-between border-t border-gray-200 pt-4">
-                    <div className="text-sm text-gray-500">
+                  <div className="flex items-center justify-between border-t border-separator pt-4">
+                    <div className="text-sm text-ink-secondary">
                       Page {data.page + 1} of {data.totalPages} ({data.totalElements} total)
                     </div>
                     <div className="flex items-center gap-2">

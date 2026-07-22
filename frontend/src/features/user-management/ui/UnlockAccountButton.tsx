@@ -53,7 +53,7 @@ export function UnlockAccountButton({ account, onSuccess, className = '' }: Unlo
         disabled={isDisabled}
         className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
           isDisabled
-            ? 'cursor-not-allowed bg-gray-100 text-gray-400'
+            ? 'cursor-not-allowed bg-surface-subtle text-ink-muted'
             : 'bg-green-100 text-green-700 hover:bg-green-200'
         } ${className}`}
         aria-label={`Unlock account for ${account.email}`}
@@ -85,11 +85,11 @@ export function UnlockAccountButton({ account, onSuccess, className = '' }: Unlo
             <div className="mb-4">
               <h2
                 id="unlock-dialog-title"
-                className="text-lg font-semibold text-gray-900"
+                className="text-[15px] font-medium tracking-[-0.24px] text-ink"
               >
                 Unlock Account
               </h2>
-              <p className="mt-2 text-sm text-gray-600">
+              <p className="mt-2 text-sm text-ink-secondary">
                 Are you sure you want to unlock the account for <strong>{account.email}</strong>?
               </p>
             </div>
@@ -104,7 +104,7 @@ export function UnlockAccountButton({ account, onSuccess, className = '' }: Unlo
               <button
                 onClick={handleCancel}
                 disabled={unlockMutation.isPending}
-                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-hairline px-4 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>

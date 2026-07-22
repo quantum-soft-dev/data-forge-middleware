@@ -2,6 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Auth0Provider } from './providers/Auth0Provider'
 import App from './App'
+// Geist 400/500/600 self-hosted (023, F13 — design handoff: weights 400/500/600 only, never 700)
+import '@fontsource/geist-sans/400.css'
+import '@fontsource/geist-sans/500.css'
+import '@fontsource/geist-sans/600.css'
 import '@/shared/styles/index.css'
 
 /**

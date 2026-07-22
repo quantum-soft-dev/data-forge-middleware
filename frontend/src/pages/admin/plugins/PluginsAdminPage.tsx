@@ -11,6 +11,9 @@
 import { useState } from 'react'
 import { Plug, FileText, Database } from 'lucide-react'
 import { Header } from '@/widgets/header/Header'
+import { PageHeader } from '@/shared/ui/page-header'
+import { Badge } from '@/shared/ui/ui/badge'
+import { Tabs, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs'
 import { PluginListWidget } from '@/widgets/plugin-admin/PluginListWidget'
 import { AuditLogWidget } from '@/widgets/plugin-admin/AuditLogWidget'
 import { SqlHistoryWidget } from '@/widgets/plugin-admin/SqlHistoryWidget'
@@ -32,69 +35,51 @@ export default function PluginsAdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-white">
       <Header />
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Page header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Plugin Administration</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            View registered plugins and their audit logs
-          </p>
-        </div>
+      <main className="mx-auto max-w-[1120px] px-6 py-6">
+        <PageHeader
+          className="mb-6"
+          title="Plugin Administration"
+          subtitle="View registered plugins and their audit logs"
+        />
 
         {/* Tabs */}
-        <div className="mb-6 border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-            <button
-              onClick={() => {
-                setActiveTab('plugins')
-                setSelectedPluginId(undefined)
-              }}
-              className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium ${
-                activeTab === 'plugins'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
-              }`}
-            >
-              <Plug className="h-4 w-4" />
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const tab = value as TabType
+            setActiveTab(tab)
+            if (tab === 'plugins') setSelectedPluginId(undefined)
+          }}
+          className="mb-6"
+        >
+          <TabsList aria-label="Tabs">
+            <TabsTrigger value="plugins" className="gap-2">
+              <Plug className="h-4 w-4" strokeWidth={1.5} />
               Registered Plugins
-            </button>
-            <button
-              onClick={() => setActiveTab('audit')}
-              className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium ${
-                activeTab === 'audit'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
-              }`}
-            >
-              <FileText className="h-4 w-4" />
+            </TabsTrigger>
+            <TabsTrigger value="audit" className="gap-2">
+              <FileText className="h-4 w-4" strokeWidth={1.5} />
               Audit Logs
               {selectedPluginId && activeTab === 'audit' && (
-                <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
+                <Badge variant="info" className="ml-1 px-2 py-0.5">
                   {selectedPluginId}
-                </span>
+                </Badge>
               )}
-            </button>
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium ${
-                activeTab === 'history'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
-              }`}
-            >
-              <Database className="h-4 w-4" />
+            </TabsTrigger>
+            <TabsTrigger value="history" className="gap-2">
+              <Database className="h-4 w-4" strokeWidth={1.5} />
               SQL History
               {selectedPluginId && activeTab === 'history' && (
-                <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
+                <Badge variant="info" className="ml-1 px-2 py-0.5">
                   {selectedPluginId}
-                </span>
+                </Badge>
               )}
-            </button>
-          </nav>
-        </div>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         {/* Tab content */}
         {activeTab === 'plugins' && (

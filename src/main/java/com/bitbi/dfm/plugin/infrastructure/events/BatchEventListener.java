@@ -6,8 +6,9 @@ import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import com.bitbi.dfm.shared.domain.events.BatchExpiredEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Event listener that bridges domain events to plugin event dispatch.
@@ -43,9 +44,14 @@ public class BatchEventListener {
      * <p>Requires accountId to be present in the event (added in Phase 7).
      * Events without accountId are logged and skipped.</p>
      *
+     * <p>Runs AFTER_COMMIT: {@code BatchLifecycleService.completeBatch} publishes from inside
+     * the caller's transaction (for Delta v2, {@code DeltaSessionCommitService.commit} — the
+     * async dispatch must not run before the changelog segment row and COMPLETED status are
+     * committed). {@code fallbackExecution} keeps non-transactional publishers working.</p>
+     *
      * @param event the batch completion domain event
      */
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onBatchCompleted(BatchCompletedEvent event) {
         log.debug("Received BatchCompletedEvent: batchId={}, accountId={}",
                 event.batchId(), event.accountId());
@@ -80,7 +86,7 @@ public class BatchEventListener {
      *
      * @param event the batch expired domain event
      */
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onBatchExpired(BatchExpiredEvent event) {
         log.debug("Received BatchExpiredEvent: batchId={}, accountId={}",
                 event.batchId(), event.accountId());

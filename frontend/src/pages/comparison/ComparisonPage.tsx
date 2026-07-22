@@ -17,6 +17,8 @@ import { comparisonFormSchema, type ComparisonFormData } from '@/features/file-c
 import { useBatchHistory } from '@/entities/batch/api/queries';
 import { useBatchDetails } from '@/entities/batch/api/queries';
 import { Button } from '@/shared/ui/ui/button';
+import { PageHeader } from '@/shared/ui/page-header';
+import { comparisonStatusLabel } from '@/entities/comparison/model/comparisonStatus';
 import { toast } from 'sonner';
 
 export function ComparisonPage() {
@@ -72,7 +74,7 @@ export function ComparisonPage() {
   const createComparison = useCreateComparison({
     onSuccess: (data) => {
       toast.success('Comparison created successfully!', {
-        description: `Comparison ID: ${data.id} - Status: ${data.status}`,
+        description: `Comparison ID: ${data.id} - Status: ${comparisonStatusLabel(data.status)}`,
       });
       // Navigate to comparison details page
       navigate({ to: `/account/comparisons/${data.id}` });
@@ -105,29 +107,28 @@ export function ComparisonPage() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Create File Comparison</h1>
-        <p className="mt-2 text-gray-600">
-          Compare files between two upload sessions to track changes
-        </p>
-      </div>
+    <div className="container mx-auto max-w-[1120px] px-6 py-6">
+      <PageHeader
+        className="mb-6"
+        title="Create File Comparison"
+        subtitle="Compare files between two upload sessions to track changes"
+      />
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         {/* Batch Selection Section */}
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-xl font-semibold">Select Batches</h2>
+        <div className="rounded-lg bg-white shadow-panel p-6">
+          <h2 className="mb-4 text-[17px] font-medium tracking-[-0.24px]">Select Batches</h2>
           
           <div className="grid gap-4 md:grid-cols-2">
             {/* Current Batch Selector */}
             <div>
-              <label htmlFor="currentBatchId" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="currentBatchId" className="block text-sm font-medium text-ink-secondary">
                 Current Batch (Source)
               </label>
               <select
                 id="currentBatchId"
                 {...register('currentBatchId')}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="mt-1 block w-full rounded-md border border-hairline px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-ring"
                 disabled={isLoadingBatches}
               >
                 <option value="">
@@ -146,13 +147,13 @@ export function ComparisonPage() {
 
             {/* Target Batch Selector */}
             <div>
-              <label htmlFor="targetBatchId" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="targetBatchId" className="block text-sm font-medium text-ink-secondary">
                 Target Batch (Baseline)
               </label>
               <select
                 id="targetBatchId"
                 {...register('targetBatchId')}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="mt-1 block w-full rounded-md border border-hairline px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-ring"
                 disabled={isLoadingBatches}
               >
                 <option value="">
@@ -172,9 +173,9 @@ export function ComparisonPage() {
         </div>
 
         {/* File Selection Section */}
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-xl font-semibold">Select Files</h2>
-          <p className="mb-4 text-sm text-gray-600">
+        <div className="rounded-lg bg-white shadow-panel p-6">
+          <h2 className="mb-4 text-[17px] font-medium tracking-[-0.24px]">Select Files</h2>
+          <p className="mb-4 text-sm text-ink-secondary">
             Choose specific files to compare, or select all files from the current batch.
           </p>
 
@@ -185,12 +186,12 @@ export function ComparisonPage() {
               onSelectionChange={handleFileSelection}
             />
           ) : currentBatchId ? (
-            <div className="rounded-md border border-gray-200 bg-gray-50 p-8 text-center">
-              <p className="text-sm text-gray-600">Loading files from selected batch...</p>
+            <div className="rounded-md bg-surface-subtle p-8 text-center">
+              <p className="text-sm text-ink-secondary">Loading files from selected batch...</p>
             </div>
           ) : (
-            <div className="rounded-md border border-gray-200 bg-gray-50 p-8 text-center">
-              <p className="text-sm text-gray-600">
+            <div className="rounded-md bg-surface-subtle p-8 text-center">
+              <p className="text-sm text-ink-secondary">
                 Please select a current batch above to view and select files for comparison.
               </p>
             </div>

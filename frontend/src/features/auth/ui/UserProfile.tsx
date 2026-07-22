@@ -46,15 +46,15 @@ export function UserProfile() {
             <img
               src={user.picture}
               alt={user.name || 'User avatar'}
-              className="h-16 w-16 rounded-full border-2 border-gray-200"
+              className="h-16 w-16 rounded-full border-2 border-separator"
             />
           ) : (
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gray-200">
-              <User className="h-8 w-8 text-gray-500" />
+              <User className="h-8 w-8 text-ink-secondary" />
             </div>
           )}
           <div>
-            <h3 className="text-lg font-semibold">{user.name || 'Unknown User'}</h3>
+            <h3 className="text-[15px] font-medium tracking-[-0.24px]">{user.name || 'Unknown User'}</h3>
             <p className="text-sm text-muted-foreground">Auth0 Account</p>
           </div>
         </div>

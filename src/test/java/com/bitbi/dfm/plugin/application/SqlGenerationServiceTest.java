@@ -84,6 +84,15 @@ class SqlGenerationServiceTest {
     private CdcSqlGenerationStrategy cdcStrategy;
 
     @Mock
+    private DeltaSqlGenerationStrategy deltaStrategy;
+
+    @Mock
+    private com.bitbi.dfm.delta.domain.ChangelogSegmentRepository changelogSegmentRepository;
+
+    @Mock
+    private PluginDeltaBaselineRepository pluginDeltaBaselineRepository;
+
+    @Mock
     private Counter counter;
 
     @Mock
@@ -114,6 +123,9 @@ class SqlGenerationServiceTest {
                 dbfStrategy,
                 cdcStrategy,
                 siteSchemaService,
+                deltaStrategy,
+                changelogSegmentRepository,
+                pluginDeltaBaselineRepository,
                 2,
                 120,
                 80
@@ -241,6 +253,9 @@ class SqlGenerationServiceTest {
                     realDbfStrategy,
                     cdcStrategy,
                     siteSchemaService,
+                    deltaStrategy,
+                    changelogSegmentRepository,
+                    pluginDeltaBaselineRepository,
                     2,
                     120,
                     100  // 100% threshold — disable memory pressure check in this test
@@ -330,6 +345,125 @@ class SqlGenerationServiceTest {
             verify(s3SqlFileStorageService).storeSqlFile(any(), any(), anyString());
             // Verify the skipped file metric was incremented
             assertThat(realRegistry.counter("sql.generation.files.skipped.invalid_headers").count()).isEqualTo(1.0);
+        }
+    }
+
+    @Nested
+    @DisplayName("Delta v2 routing (026-bitbi-delta-sql)")
+    class DeltaV2Routing {
+
+        private final UUID batchId = UUID.randomUUID();
+        private final UUID siteId = UUID.randomUUID();
+        private final UUID accountId = UUID.randomUUID();
+        private final Long accountPluginId = 7L;
+
+        private SqlGenerationService deltaService;
+        private Batch batch;
+        private Site site;
+        private AccountPlugin accountPlugin;
+        private com.bitbi.dfm.delta.domain.ChangelogSegment segment;
+
+        @BeforeEach
+        void setUpDelta() {
+            deltaService = new SqlGenerationService(
+                    batchRepository,
+                    siteRepository,
+                    accountPluginRepository,
+                    sqlGenerationRepository,
+                    s3SqlFileStorageService,
+                    new SimpleMeterRegistry(),
+                    pluginAuditService,
+                    dbfStrategy,
+                    cdcStrategy,
+                    siteSchemaService,
+                    deltaStrategy,
+                    changelogSegmentRepository,
+                    pluginDeltaBaselineRepository,
+                    2,
+                    120,
+                    100
+            );
+            deltaService.init();
+
+            batch = mock(Batch.class);
+            when(batch.getId()).thenReturn(batchId);
+            when(batch.getSiteId()).thenReturn(siteId);
+            when(batch.getAccountId()).thenReturn(accountId);
+            when(batch.getUploadedFiles()).thenReturn(List.of());
+
+            site = mock(Site.class);
+            when(site.getId()).thenReturn(siteId);
+            when(site.isDeltaV2()).thenReturn(true);
+            when(site.getSiteType()).thenReturn(SiteType.DBF);
+
+            accountPlugin = mock(AccountPlugin.class);
+            when(accountPlugin.isBaselineBatch(any())).thenReturn(false);
+            when(accountPlugin.hasBaselineBatch()).thenReturn(false); // would trigger case 2 for V1
+
+            segment = com.bitbi.dfm.delta.domain.ChangelogSegment.create(
+                    siteId, batchId, 11L, 20L, 10L, "hash", "delta/x", "DELTA", Map.of());
+
+            when(accountPluginRepository.findById(accountPluginId)).thenReturn(Optional.of(accountPlugin));
+            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+            when(batchRepository.findByIdWithFiles(batchId)).thenReturn(Optional.of(batch));
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+            when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(false);
+            when(changelogSegmentRepository.findByBatchId(batchId)).thenReturn(List.of(segment));
+            when(siteSchemaService.getTableSchemas(siteId)).thenReturn(Map.of());
+            when(pluginDeltaBaselineRepository.baselineSeqsBySiteId(siteId)).thenReturn(Map.of());
+            when(s3SqlFileStorageService.storeSqlFile(any(), any(), anyString())).thenReturn("plugins/bit-bi/x.sql");
+            when(s3SqlFileStorageService.getFileSize(anyString())).thenReturn(42L);
+            when(sqlGenerationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        }
+
+        @Test
+        @DisplayName("should bypass batch-baseline cases and generate from segments for V2 sites")
+        void shouldGenerateFromSegmentsBypassingBatchBaseline() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isPresent();
+            // batch-level baseline must not be touched for V2 sites
+            verify(accountPlugin, never()).setBaselineBatchId(any());
+            verify(accountPluginRepository, never()).save(any());
+            // record carries the segment seq range, no comparison batch
+            assertThat(result.get().getFirstSeq()).isEqualTo(11L);
+            assertThat(result.get().getLastSeq()).isEqualTo(20L);
+            assertThat(result.get().getComparisonBatchId()).isNull();
+        }
+
+        @Test
+        @DisplayName("should keep the idempotency guard for V2 batches")
+        void shouldKeepIdempotencyGuard() throws Exception {
+            when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(true);
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isEmpty();
+            verify(deltaStrategy, never()).generate(any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should skip when the V2 batch has no segments")
+        void shouldSkipWhenNoSegments() throws Exception {
+            when(changelogSegmentRepository.findByBatchId(batchId)).thenReturn(List.of());
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).isEmpty();
+            verify(deltaStrategy, never()).generate(any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should reject regeneration for V2 sites")
+        void shouldRejectRegenerateForDeltaV2() {
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> deltaService.regenerateForBatch(batchId, accountPluginId))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Delta v2");
         }
     }
 }

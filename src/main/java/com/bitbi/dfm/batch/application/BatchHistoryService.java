@@ -8,6 +8,10 @@ import com.bitbi.dfm.batch.infrastructure.JpaBatchRepository;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
+import com.bitbi.dfm.batch.presentation.dto.DeltaSeqRangeDto;
+import com.bitbi.dfm.batch.presentation.dto.DeltaTableStatsDto;
+import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.slf4j.Logger;
@@ -20,6 +24,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -52,10 +58,13 @@ public class BatchHistoryService {
 
     private final JpaBatchRepository batchRepository;
     private final JpaSiteRepository siteRepository;
+    private final ChangelogSegmentRepository changelogSegmentRepository;
 
-    public BatchHistoryService(JpaBatchRepository batchRepository, JpaSiteRepository siteRepository) {
+    public BatchHistoryService(JpaBatchRepository batchRepository, JpaSiteRepository siteRepository,
+                               ChangelogSegmentRepository changelogSegmentRepository) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
+        this.changelogSegmentRepository = changelogSegmentRepository;
     }
 
     /**
@@ -105,9 +114,22 @@ public class BatchHistoryService {
                 ? projections.subList(0, pageSize)
                 : projections;
 
+        // Bulk-fetch each page batch's changelog segment (Delta v2 signal), one query for the
+        // whole page instead of one per batch.
+        Map<UUID, ChangelogSegment> segmentsByBatchId = pageItems.isEmpty()
+                ? Map.of()
+                : changelogSegmentRepository
+                        .findByBatchIdIn(pageItems.stream().map(BatchWithFileCountProjection::getId).toList())
+                        .stream()
+                        // Merge on duplicate batch_id (no UNIQUE constraint enforces one segment per
+                        // batch): keep the lowest first_seq so the list never 500s if a batch ever
+                        // has two segment rows (review r4). The list DTO only needs a delta signal.
+                        .collect(Collectors.toMap(ChangelogSegment::getBatchId, s -> s,
+                                (a, b) -> a.getFirstSeq() <= b.getFirstSeq() ? a : b));
+
         // Convert projections to DTOs
         List<BatchSummaryDto> dtos = pageItems.stream()
-                .map(BatchSummaryDto::fromProjection)
+                .map(p -> BatchSummaryDto.fromProjection(p, segmentsByBatchId.get(p.getId())))
                 .collect(Collectors.toList());
 
         // Generate cursor for next page
@@ -249,6 +271,40 @@ public class BatchHistoryService {
         logger.info("Returning batch details for batchId={} with {} files",
                 batchId, batch.getUploadedFiles().size());
 
-        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles());
+        List<ChangelogSegment> segments = changelogSegmentRepository.findByBatchId(batchId);
+        return BatchDetailDto.fromEntityAndFiles(batch, batch.getUploadedFiles(),
+                resolveDeltaStats(segments), resolveMode(segments), resolveSeqRange(segments));
+    }
+
+    /**
+     * Per-table insert/update/delete counts for a Delta v2 batch, sorted by table name for a
+     * stable display order. Empty for v1 file-based batches (no changelog segment).
+     */
+    private static List<DeltaTableStatsDto> resolveDeltaStats(List<ChangelogSegment> segments) {
+        return segments.stream()
+                .map(ChangelogSegment::getStats)
+                .filter(Objects::nonNull)
+                .flatMap(stats -> stats.entrySet().stream())
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> DeltaTableStatsDto.of(entry.getKey(), entry.getValue()))
+                .toList();
+    }
+
+    /** Session mode of a Delta v2 batch — all segments of one session share it. Null for v1 batches. */
+    private static String resolveMode(List<ChangelogSegment> segments) {
+        return segments.isEmpty() ? null : segments.get(0).getMode();
+    }
+
+    /**
+     * Sequence range covered by a Delta v2 batch: min first_seq / max last_seq over the session's
+     * segments (B9). Null for v1 batches.
+     */
+    private static DeltaSeqRangeDto resolveSeqRange(List<ChangelogSegment> segments) {
+        if (segments.isEmpty()) {
+            return null;
+        }
+        long first = segments.stream().mapToLong(ChangelogSegment::getFirstSeq).min().orElseThrow();
+        long last = segments.stream().mapToLong(ChangelogSegment::getLastSeq).max().orElseThrow();
+        return new DeltaSeqRangeDto(first, last);
     }
 }

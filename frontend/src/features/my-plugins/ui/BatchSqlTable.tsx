@@ -56,7 +56,7 @@ function ResultCell({ batch }: { batch: BatchSqlStatus }) {
   // Baseline batch - no SQL needed
   if (batch.isBaseline) {
     return (
-      <Badge variant="secondary" className="bg-gray-100 text-gray-600">
+      <Badge variant="neutral">
         Baseline
       </Badge>
     )
@@ -77,11 +77,11 @@ function ResultCell({ batch }: { batch: BatchSqlStatus }) {
 
     return (
       <div className="flex flex-col gap-0.5">
-        <Badge variant="default" className="bg-green-100 text-green-700 hover:bg-green-100 w-fit">
+        <Badge variant="success" dot className="w-fit">
           SQL Generated
         </Badge>
         {stats.length > 0 && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-ink-secondary">
             {stats.join(', ')}
           </span>
         )}
@@ -92,7 +92,7 @@ function ResultCell({ batch }: { batch: BatchSqlStatus }) {
   // No changes detected - generation was attempted but no differences found
   if (batch.noChangesDetected) {
     return (
-      <Badge variant="secondary" className="bg-gray-100 text-gray-600">
+      <Badge variant="neutral">
         No Changes
       </Badge>
     )
@@ -100,7 +100,7 @@ function ResultCell({ batch }: { batch: BatchSqlStatus }) {
 
   // No SQL yet - pending
   return (
-    <Badge variant="outline" className="border-amber-300 text-amber-700">
+    <Badge variant="warning">
       Pending
     </Badge>
   )
@@ -140,7 +140,7 @@ function BatchActions({
           <Info className="h-4 w-4" />
         </Button>
         <span
-          className="text-xs text-gray-400 cursor-help"
+          className="text-xs text-ink-muted cursor-help"
           title="Baseline batch - no SQL needed. It serves as the reference point for changes."
         >
           Baseline
@@ -153,8 +153,8 @@ function BatchActions({
   if (isPending) {
     return (
       <div className="flex items-center gap-2">
-        <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-        <span className="text-xs text-gray-500">Processing...</span>
+        <Loader2 className="h-4 w-4 animate-spin text-ink-muted" />
+        <span className="text-xs text-ink-secondary">Processing...</span>
       </div>
     )
   }
@@ -187,7 +187,7 @@ function BatchActions({
           variant="ghost"
           size="sm"
           onClick={() => onDeleteSql(batch)}
-          className="h-8 w-8 p-0 text-red-500 hover:text-red-600"
+          className="h-8 w-8 p-0 text-danger-text hover:bg-danger-bg"
           title="Delete SQL"
         >
           <Trash2 className="h-4 w-4" />
@@ -220,7 +220,7 @@ function BatchActions({
           <Info className="h-4 w-4" />
         </Button>
         <span
-          className="text-xs text-gray-400 cursor-help"
+          className="text-xs text-ink-muted cursor-help"
           title="No changes detected between this batch and the previous one."
         >
           No changes
@@ -270,18 +270,18 @@ export function BatchSqlTable({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-        <span className="ml-3 text-sm text-gray-500">Loading batches...</span>
+        <Loader2 className="h-8 w-8 animate-spin text-ink-muted" />
+        <span className="ml-3 text-sm text-ink-secondary">Loading batches...</span>
       </div>
     )
   }
 
   if (batches.length === 0) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-        <Database className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-4 text-sm text-gray-500">No completed batches</p>
-        <p className="text-xs text-gray-400">
+      <div className="rounded-lg bg-white p-8 text-center shadow-panel">
+        <Database className="mx-auto h-12 w-12 text-ink-muted" />
+        <p className="mt-4 text-sm text-ink-secondary">No completed batches</p>
+        <p className="text-xs text-ink-muted">
           {hasFilters
             ? 'Try adjusting your filters.'
             : 'Completed batches will appear here for SQL generation.'}
@@ -307,7 +307,7 @@ export function BatchSqlTable({
           {batches.map((batch) => (
             <TableRow key={batch.batchId}>
               <TableCell className="font-medium">{batch.siteDomain}</TableCell>
-              <TableCell className="text-sm text-gray-500">
+              <TableCell className="text-sm text-ink-secondary">
                 {formatTimestamp(batch.completedAt)}
               </TableCell>
               <TableCell>{batch.fileCount}</TableCell>

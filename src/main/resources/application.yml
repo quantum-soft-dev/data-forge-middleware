@@ -147,6 +147,9 @@ plugin:
     semaphore-timeout-seconds: ${PLUGIN_SQL_GENERATION_SEMAPHORE_TIMEOUT_SECONDS:120}
     # JVM heap usage percentage threshold; generation aborts if exceeded
     heap-threshold-percent: ${PLUGIN_SQL_GENERATION_HEAP_THRESHOLD_PERCENT:80}
+    # Delta v2 SQL queue (026-bitbi-delta-sql): worker pool size and fallback sweep interval
+    delta-max-concurrent: ${PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT:2}
+    delta-sweep-ms: ${PLUGIN_SQL_GENERATION_DELTA_SWEEP_MS:60000}
 
 plugins:
   bitbi:
@@ -165,6 +168,40 @@ device-authorization:
 # Application base URL (used for API callbacks)
 app:
   api-base-url: ${APP_API_BASE_URL:https://api.dataforge.com}
+
+# Delta Client v2 (gRPC ingestion — feature 022)
+delta:
+  grpc:
+    # Bind and serve the Delta v2 gRPC ingestion endpoint
+    enabled: ${DELTA_GRPC_ENABLED:true}
+    # Port for the Delta v2 gRPC server (separate from the HTTP server.port)
+    port: ${DELTA_GRPC_PORT:9090}
+    # TLS for the gRPC ingestion transport (the site Bearer token travels in metadata). Off by
+    # default for local/in-cluster plaintext; enable here or terminate TLS at an ingress/sidecar.
+    tls:
+      enabled: ${DELTA_GRPC_TLS_ENABLED:false}
+      cert-path: ${DELTA_GRPC_TLS_CERT_PATH:}
+      key-path: ${DELTA_GRPC_TLS_KEY_PATH:}
+    # Keepalive + max connection age bound half-open/hung streams (server closes -> onError reaps).
+    keepalive-seconds: ${DELTA_GRPC_KEEPALIVE_SECONDS:300}
+    max-connection-age-seconds: ${DELTA_GRPC_MAX_CONN_AGE_SECONDS:3600}
+  ingestion:
+    # Max records a single (non-CONTINUOUS) session may buffer before it is rejected (OOM guard);
+    # very large snapshots should stream in CONTINUOUS mode, which seals bounded segments.
+    max-session-records: ${DELTA_MAX_SESSION_RECORDS:2000000}
+    # Staged (dropped, awaiting resume) sessions older than this are evicted and their batches failed
+    # (default just over the 60-min batch timeout), so an abandoned session cannot leak its buffer.
+    staged-ttl-millis: ${DELTA_STAGED_TTL_MILLIS:3900000}
+    # How often the staged-session eviction sweep runs.
+    staged-sweep-millis: ${DELTA_STAGED_SWEEP_MILLIS:300000}
+    # CONTINUOUS mode also seals a non-empty segment this long after the last seal (time trigger),
+    # so a low-throughput stream that never reaches the record count still bounds staleness.
+    continuous-seal-millis: ${DELTA_CONTINUOUS_SEAL_MILLIS:300000}
+  egress:
+    # Concurrent delta-Parquet egress workers per instance (Task 8)
+    max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
+    # Fallback sweep interval (ms) picking up segments missed by the commit-time wake
+    sweep-ms: ${DELTA_EGRESS_SWEEP_MS:60000}
 
 # OpenAPI Configuration
 springdoc:

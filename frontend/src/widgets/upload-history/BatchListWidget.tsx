@@ -13,10 +13,18 @@ import { useBatchHistory } from '@/entities/batch/api/queries';
 import { useSites } from '@/features/site-crud/model/queries';
 import { BatchListView } from '@/features/upload-history/ui/BatchListView';
 
+interface BatchListWidgetProps {
+  /**
+   * Lock the list to one site (023, F3 — site-detail "Upload history" tab).
+   * Hides the site filter dropdown and shows only this site's batches.
+   */
+  siteId?: string;
+}
+
 /**
  * T038: Batch list widget with data fetching
  */
-export function BatchListWidget() {
+export function BatchListWidget({ siteId }: BatchListWidgetProps = {}) {
   const navigate = useNavigate();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const {
@@ -30,8 +38,9 @@ export function BatchListWidget() {
   } = useBatchHistory(20);
   const { data: sites } = useSites();
 
-  // Flatten all pages into single array
-  const batches = data?.pages.flatMap((page) => page.items) ?? [];
+  // Flatten all pages into single array; when locked to a site, keep only its batches
+  const allBatches = data?.pages.flatMap((page) => page.items) ?? [];
+  const batches = siteId ? allBatches.filter((batch) => batch.siteId === siteId) : allBatches;
 
   // Create site ID to name lookup map for displaying site names
   const siteLookup = useMemo(() => {
@@ -67,7 +76,7 @@ export function BatchListWidget() {
       onLoadMore={fetchNextPage}
       error={error?.message ?? null}
       onBatchClick={handleBatchClick}
-      sites={sites}
+      sites={siteId ? undefined : sites}
       siteLookup={siteLookup}
       onRefresh={handleRefresh}
       isRefreshing={isRefreshing}

@@ -17,6 +17,7 @@
  * @module pages/comparison/ComparisonListPage
  */
 
+import { PageHeader } from '@/shared/ui/page-header';
 import { ComparisonListWidget } from '@/widgets/comparison/ComparisonListWidget';
 
 /**
@@ -37,14 +38,13 @@ import { ComparisonListWidget } from '@/widgets/comparison/ComparisonListWidget'
  */
 export function ComparisonListPage() {
   return (
-    <div className="container mx-auto py-8 px-4">
+    <div className="container mx-auto max-w-[1120px] px-6 py-6">
       {/* Page Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">File Comparisons</h1>
-        <p className="text-muted-foreground mt-2">
-          View and manage all your file comparison results
-        </p>
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="File Comparisons"
+        subtitle="View and manage all your file comparison results"
+      />
 
       {/* Comparison List Widget */}
       <ComparisonListWidget pageSize={10} />

@@ -87,15 +87,15 @@ export function ResetPasswordDialog({
                 <KeyRound className="h-5 w-5 text-orange-600" />
                 <h2
                   id="reset-password-dialog-title"
-                  className="text-lg font-semibold text-gray-900"
+                  className="text-[15px] font-medium tracking-[-0.24px] text-ink"
                 >
                   Reset Password
                 </h2>
               </div>
-              <p className="mt-2 text-sm text-gray-600">
+              <p className="mt-2 text-sm text-ink-secondary">
                 Are you sure you want to reset the password for <strong>{account.email}</strong>?
               </p>
-              <p className="mt-2 text-sm text-gray-500 italic">
+              <p className="mt-2 text-sm text-ink-secondary italic">
                 A password reset link will be generated. Send this link to the user to set a new password.
               </p>
             </div>
@@ -110,7 +110,7 @@ export function ResetPasswordDialog({
               <button
                 onClick={handleCancel}
                 disabled={resetMutation.isPending}
-                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-hairline px-4 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -132,12 +132,12 @@ export function ResetPasswordDialog({
                 <Check className="h-5 w-5 text-green-600" />
                 <h2
                   id="reset-password-dialog-title"
-                  className="text-lg font-semibold text-gray-900"
+                  className="text-[15px] font-medium tracking-[-0.24px] text-ink"
                 >
                   Password Reset Link Generated
                 </h2>
               </div>
-              <p className="mt-2 text-sm text-gray-600">
+              <p className="mt-2 text-sm text-ink-secondary">
                 A password reset link has been generated for <strong>{account.email}</strong>.
               </p>
             </div>
@@ -148,7 +148,7 @@ export function ResetPasswordDialog({
                 ⚠️ Save this link now. Send it to the user to reset their password.
               </p>
               <div className="flex items-center gap-2 bg-white rounded border border-red-200 p-3">
-                <code className="flex-1 font-mono text-xs text-gray-900 select-all break-all">
+                <code className="flex-1 font-mono text-xs text-ink select-all break-all">
                   {resetResponse.passwordResetLink}
                 </code>
                 <button
@@ -163,7 +163,7 @@ export function ResetPasswordDialog({
                   )}
                 </button>
               </div>
-              <p className="text-xs text-gray-600 mt-2">
+              <p className="text-xs text-ink-secondary mt-2">
                 Expires: {new Date(resetResponse.expiresAt).toLocaleDateString()} at {new Date(resetResponse.expiresAt).toLocaleTimeString()} (24 hours)
               </p>
             </div>

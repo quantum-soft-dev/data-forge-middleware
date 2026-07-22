@@ -6,6 +6,7 @@ import com.bitbi.dfm.batch.presentation.dto.BatchResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.DeviceControllerHelper;
+import com.bitbi.dfm.site.application.ClientApiVersionGuard;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -47,18 +48,22 @@ public class DeviceBatchController {
 
     private final BatchLifecycleService batchLifecycleService;
     private final AuthorizationHelper authorizationHelper;
+    private final ClientApiVersionGuard clientApiVersionGuard;
 
     /**
      * Constructor injection for dependencies.
      *
      * @param batchLifecycleService Service for batch lifecycle operations
      * @param authorizationHelper   Helper for JWT-based authorization
+     * @param clientApiVersionGuard Per-site strangler guard for the HTTP file API
      */
     public DeviceBatchController(
             BatchLifecycleService batchLifecycleService,
-            AuthorizationHelper authorizationHelper) {
+            AuthorizationHelper authorizationHelper,
+            ClientApiVersionGuard clientApiVersionGuard) {
         this.batchLifecycleService = batchLifecycleService;
         this.authorizationHelper = authorizationHelper;
+        this.clientApiVersionGuard = clientApiVersionGuard;
     }
 
     /**
@@ -118,6 +123,8 @@ public class DeviceBatchController {
             UUID siteId = authorizationHelper.getAuthenticatedSiteId();
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
 
+            clientApiVersionGuard.assertHttpFileApiAllowed(siteId);
+
             logger.info("Device API: Starting batch - siteId={}", siteId);
 
             // Delegate to service layer
@@ -129,6 +136,10 @@ public class DeviceBatchController {
         } catch (AuthorizationHelper.UnauthorizedException e) {
             logger.warn("Device API: Unauthorized batch start - {}", e.getMessage());
             return DeviceControllerHelper.handleUnauthorizedException(e);
+
+        } catch (ClientApiVersionGuard.HttpFileApiDisabledException e) {
+            logger.warn("Device API: HTTP file API disabled for V2 site - {}", e.getMessage());
+            return DeviceControllerHelper.handleHttpFileApiDisabledException(e);
 
         } catch (BatchLifecycleService.ActiveBatchExistsException e) {
             logger.warn("Device API: Active batch exists - {}", e.getMessage());

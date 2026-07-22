@@ -27,6 +27,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ComparisonSummaryWidget } from '../ComparisonSummaryWidget';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import type { ComparisonSummary } from '@/entities/comparison/model/types';
 
 // Mock the useDownloadSummaryReport hook
@@ -107,8 +108,11 @@ describe('ComparisonSummaryWidget', () => {
     // 70% changed (5 changed + 2 added) / 10 total
     const badges = screen.getAllByText('70% Changed');
     expect(badges.length).toBeGreaterThan(0);
-    // Badge should have destructive variant for >50%
-    expect(badges[0].className).toContain('destructive');
+    // Badge should have the critical (alpha red) treatment for >50%
+    expect(badges[0]).toHaveStyle({
+      background: severityTokens.critical.bg,
+      color: severityTokens.critical.text,
+    });
   });
 
   it('should display formatted timestamp correctly', () => {
@@ -233,8 +237,11 @@ describe('ComparisonSummaryWidget', () => {
     // 10% changed (1 changed + 0 added) / 10 total
     const badges = screen.getAllByText('10% Changed');
     expect(badges.length).toBeGreaterThan(0);
-    // Badge should have secondary variant for <20%
-    expect(badges[0].className).toContain('secondary');
+    // Badge should have the neutral (subtle) treatment for <20%
+    expect(badges[0]).toHaveStyle({
+      background: monitoringTokens.subtleBg,
+      color: monitoringTokens.textSecondary,
+    });
   });
 
   it('should show default badge color for medium change percentage', () => {
@@ -256,10 +263,12 @@ describe('ComparisonSummaryWidget', () => {
     // 30% changed (3 changed + 0 added) / 10 total
     const badges = screen.getAllByText('30% Changed');
     expect(badges.length).toBeGreaterThan(0);
-    // Badge should have default variant for 20-50% (check for inline-flex which is always present)
+    // Badge should have the info (brand blue) treatment for 20-50%
     expect(badges[0].className).toContain('inline-flex');
-    expect(badges[0].className).not.toContain('destructive');
-    expect(badges[0].className).not.toContain('secondary');
+    expect(badges[0]).toHaveStyle({
+      background: monitoringTokens.blue50,
+      color: monitoringTokens.primary,
+    });
   });
 
   it('should handle 0% change correctly', () => {

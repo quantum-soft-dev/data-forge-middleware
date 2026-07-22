@@ -1,6 +1,14 @@
 # Test Profile Configuration
 # Overrides for integration tests
 
+# Delta v2 gRPC server is not bound in tests (contract tests use in-process servers)
+delta:
+  grpc:
+    enabled: false
+  egress:
+    # Slow sweep so tests exercise the explicit commit-time wake, not the fallback
+    sweep-ms: 3600000
+
 spring:
   main:
     allow-bean-definition-overriding: true  # Allow test beans to override production beans

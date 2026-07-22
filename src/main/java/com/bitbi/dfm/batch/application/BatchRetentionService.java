@@ -2,6 +2,7 @@ package com.bitbi.dfm.batch.application;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -29,18 +30,21 @@ public class BatchRetentionService {
     private final UploadedFileRepository uploadedFileRepository;
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final S3FileStorageService s3FileStorageService;
+    private final ChangelogSegmentService changelogSegmentService;
 
     public BatchRetentionService(
             BatchRepository batchRepository,
             com.bitbi.dfm.site.domain.SiteRepository siteRepository,
             UploadedFileRepository uploadedFileRepository,
             PluginSqlGenerationRepository sqlGenerationRepository,
-            S3FileStorageService s3FileStorageService) {
+            S3FileStorageService s3FileStorageService,
+            ChangelogSegmentService changelogSegmentService) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.sqlGenerationRepository = sqlGenerationRepository;
         this.s3FileStorageService = s3FileStorageService;
+        this.changelogSegmentService = changelogSegmentService;
     }
 
     public BatchCleanupSummary runCleanup(BatchCleanupRequest request) {
@@ -139,6 +143,9 @@ public class BatchRetentionService {
                 // Prevent leaving plugin SQL generations referencing a deleted comparison batch.
                 sqlGenerationRepository.deleteByComparisonBatchId(batchId);
                 sqlGenerationRepository.deleteBySourceBatchId(batchId);
+
+                // Remove Delta v2 changelog segments (DB + S3) so the batch_id FK does not block delete.
+                changelogSegmentService.deleteByBatchId(batchId);
 
                 batchRepository.deleteById(batchId);
                 summary.deletedBatches++;

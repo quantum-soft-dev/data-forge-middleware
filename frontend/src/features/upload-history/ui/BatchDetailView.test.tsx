@@ -12,6 +12,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BatchDetailView } from './BatchDetailView';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
 import type { BatchDetail } from '@/entities/batch/model/types';
 
 describe('BatchDetailView', () => {
@@ -148,7 +149,7 @@ describe('BatchDetailView', () => {
 
       expect(screen.getByText(/upload session/i)).toBeInTheDocument();
       expect(screen.getByText(new RegExp(mockBatch.id))).toBeInTheDocument();
-      expect(screen.getByText(mockBatch.status)).toBeInTheDocument();
+      expect(screen.getByText('Completed')).toBeInTheDocument();
     });
 
     it('should display success icon when hasErrors is false', () => {
@@ -237,7 +238,7 @@ describe('BatchDetailView', () => {
       // Check for XCircle icon (error indicator) based on FAILED status
       const errorIcon = document.querySelector('.lucide-circle-x');
       expect(errorIcon).toBeInTheDocument();
-      expect(errorIcon).toHaveClass('text-red-500');
+      expect(errorIcon).toHaveStyle({ color: severityTokens.critical.dot });
     });
 
     it('should display success indicator for COMPLETED_WITH_WARNINGS status', () => {
@@ -255,7 +256,7 @@ describe('BatchDetailView', () => {
       // lucide-react uses class like 'lucide-circle-check-big' for CheckCircle
       const successIcon = document.querySelector('[class*="lucide-circle-check"]');
       expect(successIcon).toBeInTheDocument();
-      expect(successIcon).toHaveClass('text-green-500');
+      expect(successIcon).toHaveStyle({ color: severityTokens.healthy.dot });
     });
 
     it('should display loading indicator for IN_PROGRESS status', () => {
@@ -273,7 +274,7 @@ describe('BatchDetailView', () => {
       // lucide-react uses class like 'lucide-loader-2' or 'lucide-loader'
       const loadingIcon = document.querySelector('[class*="lucide-loader"]');
       expect(loadingIcon).toBeInTheDocument();
-      expect(loadingIcon).toHaveClass('text-blue-500', 'animate-spin');
+      expect(loadingIcon).toHaveClass('text-brand', 'animate-spin');
     });
   });
 
@@ -392,8 +393,8 @@ describe('BatchDetailView', () => {
         />
       );
 
-      const statusBadge = screen.getByText('COMPLETED');
-      expect(statusBadge).toHaveClass('bg-green-100', 'text-green-800');
+      const statusBadge = screen.getByText('Completed');
+      expect(statusBadge).toHaveStyle({ background: severityTokens.healthy.bg, color: severityTokens.healthy.text });
     });
 
     it('should display blue badge for IN_PROGRESS status', () => {
@@ -407,8 +408,8 @@ describe('BatchDetailView', () => {
         />
       );
 
-      const statusBadge = screen.getByText('IN_PROGRESS');
-      expect(statusBadge).toHaveClass('bg-blue-100', 'text-blue-800');
+      const statusBadge = screen.getByText('In progress');
+      expect(statusBadge).toHaveStyle({ background: monitoringTokens.blue50, color: monitoringTokens.primary });
     });
 
     it('should display red badge for FAILED status', () => {
@@ -422,8 +423,70 @@ describe('BatchDetailView', () => {
         />
       );
 
-      const statusBadge = screen.getByText('FAILED');
-      expect(statusBadge).toHaveClass('bg-red-100', 'text-red-800');
+      const statusBadge = screen.getByText('Failed');
+      expect(statusBadge).toHaveStyle({ background: severityTokens.critical.bg, color: severityTokens.critical.text });
+    });
+  });
+
+  // F10 (023, DoD #1): the three delta states
+  describe('Delta v2 batch surfaces (F10)', () => {
+    const deltaBatch: BatchDetail = {
+      ...mockBatch,
+      id: 'd3f8e0f1-1111-2222-3333-444455556666',
+      uploadedFilesCount: 0,
+      files: [],
+      mode: 'CONTINUOUS',
+      seqRange: { first: 4801, last: 5100 },
+      deltaStats: [
+        { table: 'orders', inserts: 120, updates: 45, deletes: 3 },
+        { table: 'customers', inserts: 10, updates: 0, deletes: 7 },
+      ],
+    };
+
+    it('renders the redesigned delta surfaces and hides the entire file UI', () => {
+      renderWithQueryClient(<BatchDetailView batch={deltaBatch} isLoading={false} />);
+
+      // Meta card: short id, chips
+      expect(screen.getByText('Batch #d3f8e0f1')).toBeInTheDocument();
+      expect(screen.getByText('Delta session')).toBeInTheDocument();
+      expect(screen.getByText('CONTINUOUS')).toBeInTheDocument();
+      expect(screen.getByText('4,801 – 5,100')).toBeInTheDocument();
+
+      // Table changes with signed colored values, sorted by table name, Total row
+      expect(screen.getByText('Table changes')).toBeInTheDocument();
+      const rows = screen.getAllByTestId(/delta-stats-row-/);
+      expect(rows[0]).toHaveAttribute('data-testid', 'delta-stats-row-customers');
+      expect(rows[1]).toHaveAttribute('data-testid', 'delta-stats-row-orders');
+      expect(screen.getByText('+120')).toBeInTheDocument();
+      expect(screen.getByText('−3')).toBeInTheDocument();
+      const totalRow = screen.getByTestId('delta-stats-total-row');
+      expect(totalRow).toHaveTextContent('+130');
+      expect(totalRow).toHaveTextContent('45');
+      expect(totalRow).toHaveTextContent('−10');
+      expect(totalRow).toHaveTextContent('185');
+
+      // File UI hidden
+      expect(screen.queryByText(/^Files \(/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /download/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /excel/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /compare/i })).not.toBeInTheDocument();
+    });
+
+    it('shows the empty-session state when both deltaStats and files are empty', () => {
+      const emptyBatch: BatchDetail = { ...mockBatch, uploadedFilesCount: 0, files: [], deltaStats: [] };
+      renderWithQueryClient(<BatchDetailView batch={emptyBatch} isLoading={false} />);
+
+      expect(screen.getByText('No changes in this session')).toBeInTheDocument();
+      expect(screen.queryByTestId('delta-batch-detail')).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Files \(/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the unchanged v1 behavior when files are present', () => {
+      renderWithQueryClient(<BatchDetailView batch={mockBatch} isLoading={false} />);
+
+      expect(screen.getByText('Files (3)')).toBeInTheDocument();
+      expect(screen.queryByTestId('delta-batch-detail')).not.toBeInTheDocument();
+      expect(screen.queryByText('No changes in this session')).not.toBeInTheDocument();
     });
   });
 });

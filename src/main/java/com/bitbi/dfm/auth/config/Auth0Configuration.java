@@ -8,7 +8,7 @@ import com.auth0.net.Request;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -79,6 +79,7 @@ public class Auth0Configuration {
      */
     @Bean
     @Profile("!test")
+    @ConditionalOnExpression("'${auth0.management.client-id:}' != ''")
     public ManagementAPI managementAPI() {
         logger.info("Initializing Auth0 ManagementAPI for domain: {}", domain);
 

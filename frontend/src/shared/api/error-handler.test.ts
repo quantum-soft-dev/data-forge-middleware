@@ -1,0 +1,62 @@
+/**
+ * Global error toast interceptor: callers that render their own error
+ * taxonomy (e.g. openPresignedDownload) opt out via `suppressErrorToast`
+ * in the request config, so a failed request never shows two toasts.
+ */
+
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { toast } from 'sonner';
+import { apiClient } from './client';
+import { setupErrorHandler } from './error-handler';
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+/** Adapter that makes any request fail as a 404 without a network. */
+const notFoundAdapter = async (config: InternalAxiosRequestConfig) => {
+  const response = {
+    data: { message: 'Parquet file not found' },
+    status: 404,
+    statusText: 'Not Found',
+    headers: {},
+    config,
+  } as AxiosResponse;
+  throw new AxiosError(
+    'Request failed with status code 404',
+    AxiosError.ERR_BAD_REQUEST,
+    config,
+    null,
+    response,
+  );
+};
+
+describe('setupErrorHandler', () => {
+  beforeAll(() => {
+    setupErrorHandler();
+  });
+
+  beforeEach(() => {
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it('toasts HTTP errors by default', async () => {
+    await expect(
+      apiClient.get('/anything', { adapter: notFoundAdapter }),
+    ).rejects.toThrow();
+
+    expect(toast.error).toHaveBeenCalledWith('Parquet file not found');
+  });
+
+  it('stays silent when the request opts out via suppressErrorToast', async () => {
+    await expect(
+      apiClient.get('/anything', { adapter: notFoundAdapter, suppressErrorToast: true }),
+    ).rejects.toThrow();
+
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});

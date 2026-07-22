@@ -41,6 +41,26 @@ export interface BatchSummary {
   startedAt: string;
   /** Batch completion timestamp (ISO-8601, null if in progress) */
   completedAt: string | null;
+  /** Total records changed in the Delta v2 session (null/absent for v1 file-based batches) */
+  deltaRecordCount?: number | null;
+  /** Number of tables touched in the Delta v2 session (null/absent for v1 file-based batches) */
+  deltaTableCount?: number | null;
+}
+
+/**
+ * Per-table insert/update/delete counts for a Delta v2 session
+ *
+ * Matches: DeltaTableStatsDto.java
+ */
+export interface DeltaTableStat {
+  /** Table name */
+  table: string;
+  /** Rows inserted */
+  inserts: number;
+  /** Rows updated */
+  updates: number;
+  /** Rows deleted */
+  deletes: number;
 }
 
 /**
@@ -83,6 +103,12 @@ export interface BatchDetail {
   completedAt: string | null;
   /** List of file metadata */
   files: FileMetadata[];
+  /** Per-table insert/update/delete counts for Delta v2 sessions (empty for v1 file-based batches) */
+  deltaStats?: DeltaTableStat[];
+  /** Delta session mode (DELTA | CONTINUOUS | FULL_SNAPSHOT); null/absent for v1 batches (B9). */
+  mode?: string | null;
+  /** Sequence range covered by the Delta session; null/absent for v1 batches (B9). */
+  seqRange?: { first: number; last: number } | null;
 }
 
 /**

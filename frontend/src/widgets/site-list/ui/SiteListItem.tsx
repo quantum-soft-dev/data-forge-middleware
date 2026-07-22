@@ -24,12 +24,17 @@ import {
   AlertDialogTitle,
 } from '@/shared/ui/ui/alert-dialog';
 import { Card, CardContent } from '@/shared/ui/ui/card';
-import { CheckCircle2, XCircle, Trash2, Power, PowerOff } from 'lucide-react';
+import { Input } from '@/shared/ui/ui/input';
+import { Trash2, Power, PowerOff } from 'lucide-react';
 import type { Site } from '@/entities/site';
 import { format } from 'date-fns';
 
 interface SiteListItemProps {
   site: Site;
+  /** Right-aligned status content (023, F11 — sync health pill). Wraps under the name on narrow widths. */
+  statusSlot?: React.ReactNode;
+  /** Open the site-detail page (023, F3). Makes the site info block clickable. */
+  onOpen?: (siteId: string) => void;
   onActivate?: (siteId: string) => void;
   onDeactivate?: (siteId: string) => void;
   onDelete?: (siteId: string) => void;
@@ -40,6 +45,8 @@ interface SiteListItemProps {
 
 export function SiteListItem({
   site,
+  statusSlot,
+  onOpen,
   onActivate,
   onDeactivate,
   onDelete,
@@ -84,29 +91,26 @@ export function SiteListItem({
     <>
       <Card>
         <CardContent className="p-4">
-          <div className="flex items-center justify-between gap-4">
-            {/* Site info */}
-            <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            {/* Site info (clickable when onOpen is provided) */}
+            <div
+              className={`flex-1 min-w-0${onOpen ? ' cursor-pointer' : ''}`}
+              onClick={onOpen ? () => onOpen(site.id) : undefined}
+              role={onOpen ? 'link' : undefined}
+              aria-label={onOpen ? `Open ${site.siteName}` : undefined}
+            >
               <div className="flex items-center gap-2 mb-1">
-                <h3 className="font-semibold text-lg truncate">{site.siteName}</h3>
-                <Badge variant={site.isActive ? 'default' : 'secondary'}>
-                  {site.isActive ? (
-                    <>
-                      <CheckCircle2 className="mr-1 h-3 w-3" />
-                      Active
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="mr-1 h-3 w-3" />
-                      Inactive
-                    </>
-                  )}
+                <h3 className="truncate text-[15px] font-medium tracking-[-0.24px] text-ink">
+                  {site.siteName}
+                </h3>
+                <Badge variant={site.isActive ? 'success' : 'neutral'} dot>
+                  {site.isActive ? 'Active' : 'Inactive'}
                 </Badge>
-                <Badge
-                  variant={site.siteType === 'POSTGRES_CDC' ? 'outline' : 'secondary'}
-                  className={site.siteType === 'POSTGRES_CDC' ? 'border-blue-400 text-blue-600' : ''}
-                >
+                <Badge variant="neutral">
                   {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' : 'DBF'}
+                </Badge>
+                <Badge variant={site.clientApiVersion === 'V2' ? 'info' : 'neutral'}>
+                  {site.clientApiVersion === 'V2' ? 'Delta v2' : 'v1'}
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground truncate">{site.name}</p>
@@ -116,11 +120,11 @@ export function SiteListItem({
               {showRetentionControls && (
                 <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                   <span>Retention (days):</span>
-                  <input
+                  <Input
                     type="number"
                     min={1}
                     max={3650}
-                    className="h-7 w-20 rounded border border-gray-200 px-2 text-xs text-gray-900"
+                    className="h-7 w-20 px-2 text-xs"
                     value={retentionInput}
                     onChange={(event) => setRetentionInput(event.target.value)}
                     disabled={isLoading}
@@ -141,6 +145,13 @@ export function SiteListItem({
                 </div>
               )}
             </div>
+
+            {/* Sync health (023, F11) — right-aligned, wraps under the name before the actions */}
+            {statusSlot !== undefined && (
+              <div className="order-3 basis-full sm:order-none sm:basis-auto sm:ml-auto flex items-center">
+                {statusSlot}
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex items-center gap-2">
@@ -167,7 +178,7 @@ export function SiteListItem({
 
               {/* Delete button */}
               <Button
-                variant="destructive"
+                variant="destructive-outline"
                 size="sm"
                 onClick={() => setShowDeleteDialog(true)}
                 disabled={isLoading}
@@ -195,7 +206,7 @@ export function SiteListItem({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeactivateConfirm} className="bg-orange-500 hover:bg-orange-600">
+            <AlertDialogAction onClick={handleDeactivateConfirm} className="bg-warn-solid hover:bg-warn-solid-hover">
               Deactivate Site
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -208,7 +219,7 @@ export function SiteListItem({
           <AlertDialogHeader>
             <AlertDialogTitle>Permanently Delete Site</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
-              <p className="font-semibold text-destructive">
+              <p className="font-medium text-danger-text">
                 ⚠️ WARNING: This action cannot be undone!
               </p>
               <p>
@@ -231,7 +242,7 @@ export function SiteListItem({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+            <AlertDialogAction onClick={handleDelete} className="bg-danger-solid hover:bg-danger-solid-hover">
               Yes, Permanently Delete
             </AlertDialogAction>
           </AlertDialogFooter>

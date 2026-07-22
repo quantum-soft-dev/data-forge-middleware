@@ -14,21 +14,13 @@ import { Badge } from '@/shared/ui/ui/badge';
 import { Button } from '@/shared/ui/ui/button';
 import { GitCompare, Calendar, Eye, Loader2 } from 'lucide-react';
 import { formatDateTime } from '@/shared/lib/formatters';
+import { comparisonStatusLabel, comparisonStatusVariant } from '@/entities/comparison/model/comparisonStatus';
 
 interface ComparisonHistorySectionProps {
   /** Current batch ID */
   batchId: string;
 }
 
-/**
- * Badge colors for comparison status
- */
-const statusColors: Record<string, 'secondary' | 'default' | 'destructive'> = {
-  PENDING: 'secondary',
-  IN_PROGRESS: 'default',
-  COMPLETED: 'default',
-  FAILED: 'destructive',
-};
 
 /**
  * Displays comparison history for a batch
@@ -116,8 +108,8 @@ export function ComparisonHistorySection({ batchId }: ComparisonHistorySectionPr
                   <span className="text-sm font-medium">
                     Comparison #{comparison.id}
                   </span>
-                  <Badge variant={statusColors[comparison.status]}>
-                    {comparison.status}
+                  <Badge variant={comparisonStatusVariant(comparison.status)}>
+                    {comparisonStatusLabel(comparison.status)}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">

@@ -92,7 +92,7 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange, unreadOnl
 
   if (!data || data.content.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500">
+      <div className="text-center py-8 text-ink-secondary">
         {unreadOnly ? 'No unread errors' : 'No global errors found'}
       </div>
     )
@@ -104,15 +104,15 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange, unreadOnl
   return (
     <div>
       {/* Header with bulk actions */}
-      <div className="flex items-center justify-between p-3 border-b bg-gray-50">
+      <div className="flex items-center justify-between border-b border-separator bg-surface-subtle p-3">
         <div className="flex items-center gap-3">
           <Checkbox
             checked={allSelected}
             onCheckedChange={handleSelectAll}
             aria-label="Select all errors"
-            className={someSelected ? 'data-[state=checked]:bg-gray-400' : ''}
+            className={someSelected ? 'data-[state=checked]:bg-ink-muted' : ''}
           />
-          <span className="text-sm text-gray-600">
+          <span className="text-sm text-ink-secondary">
             {selectedIds.size > 0
               ? `${selectedIds.size} selected`
               : `${data.totalElements} errors`}
@@ -146,8 +146,8 @@ export function GlobalErrorList({ data, isLoading, page, onPageChange, unreadOnl
 
       {/* Pagination */}
       {data.totalPages > 1 && (
-        <div className="flex items-center justify-between p-3 border-t">
-          <span className="text-sm text-gray-600">
+        <div className="flex items-center justify-between border-t border-separator p-3">
+          <span className="text-sm text-ink-secondary">
             Page {page + 1} of {data.totalPages}
           </span>
           <div className="flex gap-2">

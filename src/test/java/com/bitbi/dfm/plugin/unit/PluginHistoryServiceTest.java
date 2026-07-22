@@ -64,6 +64,9 @@ class PluginHistoryServiceTest {
     @Mock
     private SqlGenerationService sqlGenerationService;
 
+    @Mock
+    private com.bitbi.dfm.plugin.application.PluginDeltaBaselineService pluginDeltaBaselineService;
+
     @InjectMocks
     private PluginHistoryService pluginHistoryService;
 
@@ -412,6 +415,9 @@ class PluginHistoryServiceTest {
 
             // Verify plugin NOT deactivated (key difference from clearHistory)
             verify(mockAccountPlugin, never()).deactivate();
+
+            // 026: per-table delta baselines recaptured on reinit
+            verify(pluginDeltaBaselineService).recaptureForReinit(mockAccountPlugin);
         }
 
         @Test

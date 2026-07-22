@@ -2,6 +2,8 @@
  * Formatting utility functions for Upload History feature
  */
 
+import { formatDistanceToNow } from 'date-fns';
+
 /**
  * Format bytes to human-readable size string
  *
@@ -107,6 +109,51 @@ export function formatTime(iso: string): string {
     hour12: false,
   };
   return date.toLocaleTimeString('en-US', options);
+}
+
+/**
+ * Format a number with en-US thousands separators (Delta Sync UI, F1)
+ *
+ * All Delta counters (row counts, sequences, lag) are potentially large numbers
+ * and must always render with grouping separators.
+ *
+ * @param value - Number to format
+ * @returns Formatted string (e.g., "1,204,500")
+ *
+ * @example
+ * formatNumber(4821) // "4,821"
+ * formatNumber(1204500) // "1,204,500"
+ */
+export function formatNumber(value: number): string {
+  return value.toLocaleString('en-US');
+}
+
+/**
+ * Format an ISO-8601 timestamp as a relative phrase (Delta Sync UI, F1)
+ *
+ * @param iso - ISO-8601 datetime string
+ * @returns Relative phrase with suffix (e.g., "about 3 hours ago")
+ *
+ * @example
+ * formatRelativeTime("2026-07-05T09:00:00Z") // "about 3 hours ago" (at 12:00Z)
+ */
+export function formatRelativeTime(iso: string): string {
+  return formatDistanceToNow(new Date(iso), { addSuffix: true });
+}
+
+/**
+ * Format an ISO-8601 timestamp as a short date for dense table cells (Delta Sync UI, F1)
+ *
+ * Format: "MMM DD, HH:mm" with a zero-padded day and 24h time, no seconds.
+ *
+ * @param iso - ISO-8601 datetime string
+ * @returns Short date string (e.g., "Jul 05, 12:41")
+ */
+export function formatShortDate(iso: string): string {
+  const date = new Date(iso);
+  const datePart = date.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+  const timePart = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${datePart}, ${timePart}`;
 }
 
 /**

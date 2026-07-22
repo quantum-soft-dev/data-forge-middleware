@@ -11,7 +11,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BatchListView } from './BatchListView';
+import { monitoringTokens, severityTokens } from '@/shared/ui/tokens';
+import { STATUS_LABELS } from '@/features/upload-history/model/batchStatus';
 import type { BatchSummary } from '@/entities/batch/model/types';
+
+/** The status <select> options share labels with pills — pick the pill (rounded-full). */
+const getPill = (label: string) =>
+  screen.getAllByText(label).find((el) => el.className.includes('rounded-full'))!;
+
 
 // Helper to generate ISO date string relative to now
 const daysAgo = (days: number, hoursOffset = 0): string => {
@@ -66,6 +73,26 @@ describe('BatchListView', () => {
     },
   ];
 
+  describe('Status Filter', () => {
+    it('offers every status of the shared mapping, so no visible pill is unfilterable', () => {
+      render(
+        <BatchListView
+          batches={mockBatches}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      const select = screen.getByDisplayValue('All Status');
+      const values = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+      for (const status of Object.keys(STATUS_LABELS)) {
+        expect(values).toContain(status);
+      }
+    });
+  });
+
   describe('Loading State', () => {
     it('should display loading spinner when isLoading is true', () => {
       render(
@@ -117,7 +144,7 @@ describe('BatchListView', () => {
       expect(screen.getByText(errorMessage)).toBeInTheDocument();
       // Error should be in a red-styled container
       const errorContainer = screen.getByText(errorMessage).closest('div');
-      expect(errorContainer).toHaveClass('border-red-200');
+      expect(errorContainer).toHaveClass('border-danger-border');
     });
 
     it('should not display batch list when error is present', () => {
@@ -200,10 +227,10 @@ describe('BatchListView', () => {
       );
 
       // mockBatches has: 1 COMPLETED, 1 FAILED, 1 IN_PROGRESS, 1 COMPLETED_WITH_WARNINGS
-      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-      expect(screen.getByText('FAILED')).toBeInTheDocument();
-      expect(screen.getByText('IN_PROGRESS')).toBeInTheDocument();
-      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+      expect(getPill('Completed')).toBeInTheDocument();
+      expect(getPill('Failed')).toBeInTheDocument();
+      expect(getPill('In progress')).toBeInTheDocument();
+      expect(getPill('Completed (Warnings)')).toBeInTheDocument();
     });
 
     it('should display file size in human-readable format', () => {
@@ -274,9 +301,11 @@ describe('BatchListView', () => {
         />
       );
 
-      // CheckCircle icon should be present
-      const checkCircle = container.querySelector('.text-green-500');
-      expect(checkCircle).toBeInTheDocument();
+      // Success pill with dot should be present
+      void container;
+      const pill = getPill('Completed');
+      expect(pill).toHaveStyle({ background: severityTokens.healthy.bg });
+      expect(pill.querySelector('span')).not.toBeNull(); // dot
     });
 
     it('should display red X for FAILED status', () => {
@@ -293,9 +322,12 @@ describe('BatchListView', () => {
         />
       );
 
-      // XCircle icon should be present for FAILED status
-      const xCircle = container.querySelector('.text-red-500');
-      expect(xCircle).toBeInTheDocument();
+      // Critical pill should be present for FAILED status
+      void container;
+      expect(getPill('Failed')).toHaveStyle({
+        background: severityTokens.critical.bg,
+        color: severityTokens.critical.text,
+      });
     });
 
     it('should display green checkmark for COMPLETED_WITH_WARNINGS status', () => {
@@ -311,9 +343,12 @@ describe('BatchListView', () => {
         />
       );
 
-      // CheckCircle icon should be present for COMPLETED_WITH_WARNINGS status
-      const checkCircle = container.querySelector('.text-green-500');
-      expect(checkCircle).toBeInTheDocument();
+      // Warning pill should be present for COMPLETED_WITH_WARNINGS status
+      void container;
+      expect(getPill('Completed (Warnings)')).toHaveStyle({
+        background: severityTokens.elevated.bg,
+        color: severityTokens.elevated.text,
+      });
     });
 
     it('should display blue spinner for IN_PROGRESS status', () => {
@@ -329,10 +364,13 @@ describe('BatchListView', () => {
         />
       );
 
-      // Loader2 icon should be present for IN_PROGRESS status
+      // Spinner should render inside the info pill for IN_PROGRESS status
       const loader = container.querySelector('[class*="lucide-loader"]');
       expect(loader).toBeInTheDocument();
-      expect(loader).toHaveClass('text-blue-500', 'animate-spin');
+      expect(loader).toHaveClass('animate-spin');
+      expect(getPill('In progress')).toHaveStyle({
+        background: monitoringTokens.blue50,
+      });
     });
 
     it('should apply correct badge color based on status', () => {
@@ -346,25 +384,29 @@ describe('BatchListView', () => {
         />
       );
 
-      // COMPLETED status should have green badge
-      const completedBadge = screen.getByText('COMPLETED');
-      expect(completedBadge).toHaveClass('bg-green-100');
-      expect(completedBadge).toHaveClass('text-green-800');
+      // COMPLETED status should have the success pill treatment
+      expect(getPill('Completed')).toHaveStyle({
+        background: severityTokens.healthy.bg,
+        color: severityTokens.healthy.text,
+      });
 
-      // FAILED status should have red badge
-      const failedBadge = screen.getByText('FAILED');
-      expect(failedBadge).toHaveClass('bg-red-100');
-      expect(failedBadge).toHaveClass('text-red-800');
+      // FAILED status should have the critical pill treatment
+      expect(getPill('Failed')).toHaveStyle({
+        background: severityTokens.critical.bg,
+        color: severityTokens.critical.text,
+      });
 
-      // IN_PROGRESS status should have blue badge
-      const inProgressBadge = screen.getByText('IN_PROGRESS');
-      expect(inProgressBadge).toHaveClass('bg-blue-100');
-      expect(inProgressBadge).toHaveClass('text-blue-800');
+      // IN_PROGRESS status should have the info pill treatment
+      expect(getPill('In progress')).toHaveStyle({
+        background: monitoringTokens.blue50,
+        color: monitoringTokens.primary,
+      });
 
-      // COMPLETED_WITH_WARNINGS status should have yellow badge
-      const warningsBadge = screen.getByText('Completed (Warnings)');
-      expect(warningsBadge).toHaveClass('bg-yellow-100');
-      expect(warningsBadge).toHaveClass('text-yellow-800');
+      // COMPLETED_WITH_WARNINGS status should have the warning pill treatment
+      expect(getPill('Completed (Warnings)')).toHaveStyle({
+        background: severityTokens.elevated.bg,
+        color: severityTokens.elevated.text,
+      });
     });
   });
 
@@ -477,8 +519,8 @@ describe('BatchListView', () => {
         />
       );
 
-      // Batch items should have hover:bg-gray-50 class
-      const batchItem = container.querySelector('.hover\\:bg-gray-50');
+      // Batch items should have the monitoring hover class
+      const batchItem = container.querySelector('.hover\\:bg-surface-hover');
       expect(batchItem).toBeInTheDocument();
     });
   });
@@ -513,7 +555,7 @@ describe('BatchListView', () => {
       const button = screen.getByRole('button');
       expect(button).toBeDisabled();
       expect(button).toHaveClass('disabled:opacity-50');
-      expect(button).toHaveClass('disabled:cursor-not-allowed');
+      expect(button).toHaveClass('disabled:pointer-events-none');
     });
   });
 
@@ -590,6 +632,46 @@ describe('BatchListView', () => {
     });
   });
 
+  describe('Delta v2 batches (T6.6)', () => {
+    it('should show changes/tables instead of files for a Delta batch', () => {
+      const deltaBatch: BatchSummary = {
+        ...mockBatches[0],
+        uploadedFilesCount: 0,
+        totalSize: 0,
+        deltaRecordCount: 34,
+        deltaTableCount: 6,
+      };
+
+      render(
+        <BatchListView
+          batches={[deltaBatch]}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/34 changes • 6 tables/i)).toBeInTheDocument();
+      expect(screen.queryByText(/files/i)).not.toBeInTheDocument();
+    });
+
+    it('should still show file count for v1 batches without a Delta signal', () => {
+      render(
+        <BatchListView
+          batches={[mockBatches[0]]}
+          isLoading={false}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/5 files/i)).toBeInTheDocument();
+      expect(screen.queryByText(/changes/i)).not.toBeInTheDocument();
+    });
+  });
+
   describe('Site Filter', () => {
     const mockSites = [
       { id: '123e4567-e89b-12d3-a456-426614174001', accountId: 'acc-1', domain: 'site1.com', name: 'Site 1', isActive: true, createdAt: '2025-01-01' },
@@ -641,21 +723,21 @@ describe('BatchListView', () => {
       );
 
       // Initially should show all 4 batches - check by counting status badges
-      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-      expect(screen.getByText('FAILED')).toBeInTheDocument();
-      expect(screen.getByText('IN_PROGRESS')).toBeInTheDocument();
-      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
+      expect(getPill('Completed')).toBeInTheDocument();
+      expect(getPill('Failed')).toBeInTheDocument();
+      expect(getPill('In progress')).toBeInTheDocument();
+      expect(getPill('Completed (Warnings)')).toBeInTheDocument();
 
       // Select Site 2 (has only mockBatches[3])
       const siteSelect = screen.getByDisplayValue('All Sites');
       await user.selectOptions(siteSelect, '123e4567-e89b-12d3-a456-426614174002');
 
       // Should only show the batch from Site 2 (COMPLETED_WITH_WARNINGS)
-      expect(screen.getByText('Completed (Warnings)')).toBeInTheDocument();
-      // Other batches should not be visible
-      expect(screen.queryByText('COMPLETED')).not.toBeInTheDocument();
-      expect(screen.queryByText('FAILED')).not.toBeInTheDocument();
-      expect(screen.queryByText('IN_PROGRESS')).not.toBeInTheDocument();
+      expect(getPill('Completed (Warnings)')).toBeInTheDocument();
+      // Other batches should not be visible (pill lookup — select options share labels)
+      expect(screen.queryAllByText('Completed').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
+      expect(screen.queryAllByText('Failed').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
+      expect(screen.queryAllByText('In progress').find((el) => el.className.includes('rounded-full'))).toBeUndefined();
     });
 
     it('should include site filter in clear filters', async () => {

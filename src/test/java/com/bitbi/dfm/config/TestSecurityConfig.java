@@ -291,7 +291,7 @@ public class TestSecurityConfig {
     @org.springframework.core.annotation.Order(3)
     public SecurityFilterChain bitBiPluginApiFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/tables")
+            .securityMatcher("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -323,7 +323,7 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (handled by Order 1)
-                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (handled by Order 3)
+                .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (handled by Order 3)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
