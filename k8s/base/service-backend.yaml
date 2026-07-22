@@ -14,3 +14,8 @@ spec:
       port: 8080
       targetPort: 8080
       protocol: TCP
+    # Delta Client v2 gRPC ingestion (DeltaIngestionService)
+    - name: grpc
+      port: 9090
+      targetPort: 9090
+      protocol: TCP

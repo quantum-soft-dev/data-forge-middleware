@@ -16,4 +16,15 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1536Mi"
+          # Self-signed cert for the Delta gRPC port (9090): Google's external ALB
+          # requires TLS to h2 backends but does not validate the cert. Created
+          # out-of-band (never in git) — see deploy/gke/README.md "gRPC ingestion".
+          volumeMounts:
+            - name: grpc-tls
+              mountPath: /etc/forge/grpc-tls
+              readOnly: true
+      volumes:
+        - name: grpc-tls
+          secret:
+            secretName: forge-backend-grpc-tls
       topologySpreadConstraints: []   # dev: no zone spreading (single replica)
