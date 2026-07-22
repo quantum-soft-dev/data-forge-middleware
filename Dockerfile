@@ -4,7 +4,8 @@
 # ============================================
 # Stage 1: Build Stage
 # ============================================
-FROM eclipse-temurin:25-jdk-alpine AS builder
+# glibc-based image required: protoc / protoc-gen-grpc-java binaries do not run on musl (Alpine)
+FROM eclipse-temurin:25-jdk AS builder
 
 # Set working directory
 WORKDIR /app
