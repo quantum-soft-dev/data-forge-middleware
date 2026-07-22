@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forge-config
+  namespace: forge
+data:
+  AWS_S3_BUCKET_NAME: "dfm-stage-uploads"
+  SPRING_DATA_REDIS_HOST: "REPLACE_MEMORYSTORE_STAGE_IP"
+  SPRING_DATA_REDIS_PORT: "6379"
+  AUTH0_DOMAIN: "REPLACE_STAGE_AUTH0_DOMAIN"
+  AUTH0_ISSUER: "https://REPLACE_STAGE_AUTH0_DOMAIN/"
+  AUTH0_MGMT_AUDIENCE: "https://REPLACE_STAGE_AUTH0_DOMAIN/api/v2/"
+  AUTH0_AUDIENCE: "https://api.dataforge.com"
+  DEVICE_AUTH_VERIFICATION_URI: "https://REPLACE_STAGE_FORGE_DOMAIN/device-verify"
+  APP_API_BASE_URL: "https://REPLACE_STAGE_FORGE_DOMAIN"

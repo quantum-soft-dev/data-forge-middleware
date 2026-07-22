@@ -1,0 +1,9 @@
+# Enable container-native load balancing (standalone NEG) so the GKE Gateway
+# routes directly to frontend pods, mirroring bitbi-api's service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-frontend
+  namespace: forge
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'

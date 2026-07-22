@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  # No in-cluster Redis: stage uses Memorystore (host set in configmap-patch).
+
+images:
+  - name: us-central1-docker.pkg.dev/bitbi-production/forge-app/backend
+    newName: us-central1-docker.pkg.dev/bitbi-stage/forge-app/backend
+    newTag: latest
+  - name: us-central1-docker.pkg.dev/bitbi-production/forge-app/frontend
+    newName: us-central1-docker.pkg.dev/bitbi-stage/forge-app/frontend
+    newTag: latest
+
+patches:
+  - path: deployment-backend-patch.yaml
+    target:
+      kind: Deployment
+      name: forge-backend
+  - path: configmap-patch.yaml
+    target:
+      kind: ConfigMap
+      name: forge-config
+  - path: configmap-frontend-patch.yaml
+    target:
+      kind: ConfigMap
+      name: forge-frontend-config
+  - path: serviceaccount-patch.yaml
+    target:
+      kind: ServiceAccount
+      name: forge-app
+  - path: hpa-patch.yaml
+    target:
+      kind: HorizontalPodAutoscaler
+      name: forge-backend-hpa

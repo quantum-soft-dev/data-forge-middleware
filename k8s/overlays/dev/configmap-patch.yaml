@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forge-config
+  namespace: forge
+data:
+  AWS_S3_BUCKET_NAME: "dfm-dev-uploads"
+  # Auth0 dev tenant (values from the current forge AWS dev deployment — non-secret).
+  AUTH0_DOMAIN: "dev-dfm.us.auth0.com"
+  AUTH0_ISSUER: "https://dev-dfm.us.auth0.com/"
+  AUTH0_MGMT_AUDIENCE: "https://dev-dfm.us.auth0.com/api/v2/"
+  AUTH0_AUDIENCE: "https://dev-dfm.bitbi.io"
+  # Claim-key prefix emitted by the Auth0 Post-Login Action, NOT a URL that gets
+  # resolved — it is deliberately decoupled from the external hostname. The
+  # dev-dfm tenant is shared with the AWS dev deployment, so changing this would
+  # require an Action edit that breaks whichever deployment is not updated.
+  AUTH0_CLAIMS_NAMESPACE: "https://dev.dfm.bitbi.io"
+  # Device Authorization Flow verification page. Returned to the client as
+  # `verificationUri` for a human to open in a browser, so it must be the external
+  # hostname — a cluster-internal address is unreachable from outside the cluster.
+  DEVICE_AUTH_VERIFICATION_URI: "https://test.dfm.bitbi.io/device-verify"

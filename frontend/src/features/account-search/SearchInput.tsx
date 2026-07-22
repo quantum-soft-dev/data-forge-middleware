@@ -5,7 +5,7 @@
  * Per spec: 400ms debounce delay.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Search, X } from 'lucide-react'
 
 interface SearchInputProps {
@@ -20,8 +20,16 @@ export function SearchInput({
   defaultValue = '',
 }: SearchInputProps) {
   const [value, setValue] = useState(defaultValue)
+  const isFirstRender = useRef(true)
 
   useEffect(() => {
+    // Skip the initial render: the effect would otherwise report the untouched
+    // default value back as a search the user never performed.
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
+
     const handler = setTimeout(() => {
       onSearch(value)
     }, 400) // 400ms debounce per spec

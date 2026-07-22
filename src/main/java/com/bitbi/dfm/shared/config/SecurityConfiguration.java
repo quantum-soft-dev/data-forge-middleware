@@ -393,7 +393,7 @@ public class SecurityConfiguration {
      * <ul>
      *   <li>/api/v1/device/auth/token (POST) - NEW Device API token endpoint</li>
      *   <li>/api/v1/auth/token (POST) - Legacy token endpoint (deprecated)</li>
-     *   <li>/actuator/health, /actuator/info - Health checks</li>
+     *   <li>/actuator/health, /actuator/health/** (liveness/readiness probes), /actuator/info - Health checks</li>
      *   <li>/swagger-ui/**, /v3/api-docs/** - API documentation</li>
      * </ul>
      * <p>
@@ -409,7 +409,7 @@ public class SecurityConfiguration {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.POST, "/api/v1/device/auth/token").permitAll() // NEW Device API token endpoint
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint
-                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()
             );
