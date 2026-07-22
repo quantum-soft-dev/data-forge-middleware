@@ -17,13 +17,12 @@ kind: Gateway
 metadata:
   name: forge-gateway
   namespace: forge
-  # TODO(cert): certmap temporarily DISABLED so the LB serves the self-signed
-  # placeholder cert instead of blocking on the PROVISIONING managed cert (which
-  # still covers the old dev.dfm.bitbi.io and cannot provision until DNS exists).
-  # Re-enable once the managed cert for test.dfm.bitbi.io is ACTIVE (after the
-  # A record test.dfm.bitbi.io -> 136.68.136.183 is added and the cert re-issued):
-  # annotations:
-  #   networking.gke.io/certmap: forge-dev-certmap
+  # Google-managed cert for test.dfm.bitbi.io via Certificate Manager map.
+  # NOTE: this annotation was enabled manually in the cluster after the DNS
+  # cutover but never committed, so every `kubectl apply -k` reverted the
+  # Gateway to the self-signed placeholder and broke TLS. Keep it in git.
+  annotations:
+    networking.gke.io/certmap: forge-dev-certmap
 spec:
   gatewayClassName: gke-l7-global-external-managed
   addresses:
