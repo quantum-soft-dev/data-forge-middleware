@@ -25,3 +25,8 @@ data:
   DELTA_GRPC_TLS_ENABLED: "true"
   DELTA_GRPC_TLS_CERT_PATH: "/etc/forge/grpc-tls/tls.crt"
   DELTA_GRPC_TLS_KEY_PATH: "/etc/forge/grpc-tls/tls.key"
+  # netty-tcnative (BoringSSL) is glibc-only and SIGSEGVs on the Alpine/musl
+  # runtime image the moment gRPC TLS loads it — force the JDK TLS provider
+  # instead (fine for the single LB->pod hop). JAVA_TOOL_OPTIONS, not JAVA_OPTS:
+  # the latter is set in the Dockerfile and a pod env var would replace it.
+  JAVA_TOOL_OPTIONS: "-Dio.grpc.netty.shaded.io.netty.handler.ssl.noOpenSsl=true"
