@@ -1,4 +1,5 @@
 import org.springframework.boot.gradle.tasks.bundling.BootJar
+import org.springframework.boot.gradle.tasks.run.BootRun
 
 plugins {
     java
@@ -204,4 +205,11 @@ protobuf {
 
 tasks.named<BootJar>("bootJar") {
     archiveFileName = "${project.name}.jar"
+}
+
+tasks.named<BootRun>("bootRun") {
+    if(project.hasProperty("dev")) {
+        systemProperty("spring.profiles.active", "dev")
+        environment("AWS_S3_BUCKET_NAME", "dfm-uploads")
+    }
 }
