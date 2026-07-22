@@ -118,10 +118,12 @@ dev overlay mounts the Secret and sets `DELTA_GRPC_TLS_*` (configmap patch), ann
 `HealthCheckPolicy` on 9090 + a `GCPBackendPolicy` raising the LB backend timeout to 3600s so
 long-lived ingest streams aren't severed (matches the server's max-connection-age).
 
-Smoke test (expects `UNAUTHENTICATED` from `DeltaAuthInterceptor`, which proves LB → pod h2 works):
+Smoke test (expects `UNAUTHENTICATED` from `DeltaAuthInterceptor`, which proves LB → pod h2 works).
+The server registers no gRPC reflection service, so grpcurl needs the proto (run from the repo root):
 
 ```bash
-grpcurl -d '{}' test.dfm.bitbi.io:443 com.bitbi.dfm.delta.v2.DeltaIngestion/GetSyncState
+grpcurl -import-path src/main/proto -proto delta-ingestion.proto \
+  -d '{}' test.dfm.bitbi.io:443 com.bitbi.dfm.delta.v2.DeltaIngestion/GetSyncState
 ```
 
 ## Placeholders to fill before a real deploy
