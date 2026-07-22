@@ -90,6 +90,68 @@ spec:
             scheme: https
             statusCode: 301
 ---
+# Delta Client v2 gRPC ingestion on the SAME host/port (test.dfm.bitbi.io:443).
+# gRPC calls are HTTP/2 POSTs to /<proto-package>.<Service>/<Method>; this
+# PathPrefix is more specific than the frontend catch-all "/", so it wins route
+# precedence. The LB speaks HTTP/2+TLS to the backend pod (see the
+# `cloud.google.com/app-protocols` Service annotation and the self-signed
+# `forge-backend-grpc-tls` Secret mounted by the backend Deployment) — Google's
+# external ALB only allows h2 to backends over TLS.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forge-grpc-route
+  namespace: forge
+spec:
+  parentRefs:
+    - name: forge-gateway
+      sectionName: https
+  hostnames:
+    - test.dfm.bitbi.io
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /com.bitbi.dfm.delta.v2.DeltaIngestion
+      backendRefs:
+        - name: forge-backend
+          port: 9090
+---
+# The gRPC port serves TLS-only h2, so a plain-HTTP health check would fail;
+# a TCP connect is sufficient to prove the server is up (the app exposes no
+# separate gRPC health service).
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: forge-backend-grpc-hc
+  namespace: forge
+spec:
+  default:
+    config:
+      type: TCP
+      tcpHealthCheck:
+        port: 9090
+  targetRef:
+    group: ""
+    kind: Service
+    name: forge-backend
+---
+# Long-lived client streams (StreamChanges): raise the LB backend timeout to
+# match the server's max-connection-age (3600s); the default 30s would sever
+# an in-flight ingest stream.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: forge-backend-grpc-policy
+  namespace: forge
+spec:
+  default:
+    timeoutSec: 3600
+  targetRef:
+    group: ""
+    kind: Service
+    name: forge-backend
+---
 # Container-native LB health check hits the frontend nginx /health endpoint.
 apiVersion: networking.gke.io/v1
 kind: HealthCheckPolicy

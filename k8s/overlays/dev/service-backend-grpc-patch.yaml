@@ -1,0 +1,10 @@
+# Tell the GKE Gateway to speak HTTP/2 (h2 over TLS — required by Google's
+# external ALB for gRPC) to the backend's `grpc` port. Dev-only: the pod serves
+# TLS on 9090 only where the forge-backend-grpc-tls Secret is mounted.
+apiVersion: v1
+kind: Service
+metadata:
+  name: forge-backend
+  namespace: forge
+  annotations:
+    cloud.google.com/app-protocols: '{"grpc":"HTTP2"}'

@@ -108,6 +108,10 @@ service DeltaIngestion {
 Generate stubs from [`delta-ingestion.proto`](../src/main/proto/delta-ingestion.proto) for your language
 (`protoc` / `grpc_tools`). The transport requires **HTTP/2 + TLS** end to end (mind any proxy/LB in front).
 
+On the GKE test environment the endpoint is published on the **same host and port as the HTTP API**:
+`https://test.dfm.bitbi.io:443` (TLS on, no separate gRPC host or port). Routing is by the gRPC path
+prefix at the load balancer — see `deploy/gke/README.md`, "gRPC ingestion".
+
 ---
 
 ## Authentication

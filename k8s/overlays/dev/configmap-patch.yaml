@@ -19,3 +19,9 @@ data:
   # `verificationUri` for a human to open in a browser, so it must be the external
   # hostname — a cluster-internal address is unreachable from outside the cluster.
   DEVICE_AUTH_VERIFICATION_URI: "https://test.dfm.bitbi.io/device-verify"
+  # Delta gRPC (9090) serves TLS in-pod: the external ALB only speaks HTTP/2 to
+  # backends over TLS, and the site Bearer token travels in gRPC metadata.
+  # Cert/key come from the forge-backend-grpc-tls Secret (see deployment patch).
+  DELTA_GRPC_TLS_ENABLED: "true"
+  DELTA_GRPC_TLS_CERT_PATH: "/etc/forge/grpc-tls/tls.crt"
+  DELTA_GRPC_TLS_KEY_PATH: "/etc/forge/grpc-tls/tls.key"

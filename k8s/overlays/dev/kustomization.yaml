@@ -41,3 +41,7 @@ patches:
     target:
       kind: Service
       name: forge-frontend
+  - path: service-backend-grpc-patch.yaml
+    target:
+      kind: Service
+      name: forge-backend

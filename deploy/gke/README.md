@@ -12,9 +12,12 @@ ingress) — bitbi reaches forge at `http://forge-backend.forge.svc.cluster.loca
 ## What kustomize applies vs. what is provisioned out-of-band
 
 `kubectl apply -k` creates: namespace, ServiceAccount, ConfigMaps, Deployments, Services, HPA, PDB,
-and (dev) Redis. It does **not** create the `forge-secrets` Secret — that is synced separately so
-secrets never live in git. The backend pod will stay `Pending`/`CrashLoop` until `forge-secrets`
-exists.
+and (dev) Redis. It does **not** create Secrets — those are provisioned separately so secrets never
+live in git. The backend pod will stay `Pending`/`CrashLoop` until both exist:
+
+- `forge-secrets` — app credentials, synced via `sync-secrets.sh` (below);
+- `forge-backend-grpc-tls` (dev) — self-signed cert for the Delta gRPC port, see
+  [gRPC ingestion](#grpc-ingestion--delta-client-v2-dev).
 
 ## Prerequisites (provisioned via Terraform — see `infra/`)
 
@@ -88,6 +91,37 @@ Check status:
 kubectl -n forge get gateway forge-gateway -o wide
 gcloud certificate-manager certificates describe forge-dev-cert --project bitbi-dev \
   --format='value(managed.state)'
+```
+
+## gRPC ingestion — Delta Client v2 (dev)
+
+The Delta v2 gRPC endpoint (`DeltaIngestion`, in-pod port 9090) is published through the **same**
+Gateway host and port as the HTTP API: clients connect to `https://test.dfm.bitbi.io:443` with TLS
+on (`grpc_insecure = false`). No separate host, DNS record, or port exists. Routing: an `HTTPRoute`
+matches the gRPC path prefix `/com.bitbi.dfm.delta.v2.DeltaIngestion` (more specific than the
+frontend catch-all `/`) and forwards to `forge-backend:9090`.
+
+Google's external ALB only speaks HTTP/2 to backends **over TLS** (it does not validate the cert),
+so the pod serves TLS on 9090 with a self-signed cert. Create it once, out-of-band:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout /tmp/grpc-tls.key -out /tmp/grpc-tls.crt -subj "/CN=forge-backend-grpc"
+kubectl -n forge create secret tls forge-backend-grpc-tls \
+  --cert=/tmp/grpc-tls.crt --key=/tmp/grpc-tls.key
+rm /tmp/grpc-tls.key /tmp/grpc-tls.crt
+```
+
+Pieces (all in git except the Secret): backend Deployment/Service expose port `grpc` 9090 (base);
+dev overlay mounts the Secret and sets `DELTA_GRPC_TLS_*` (configmap patch), annotates the Service
+`cloud.google.com/app-protocols: '{"grpc":"HTTP2"}'`, and adds `forge-grpc-route` + a TCP
+`HealthCheckPolicy` on 9090 + a `GCPBackendPolicy` raising the LB backend timeout to 3600s so
+long-lived ingest streams aren't severed (matches the server's max-connection-age).
+
+Smoke test (expects `UNAUTHENTICATED` from `DeltaAuthInterceptor`, which proves LB → pod h2 works):
+
+```bash
+grpcurl -d '{}' test.dfm.bitbi.io:443 com.bitbi.dfm.delta.v2.DeltaIngestion/GetSyncState
 ```
 
 ## Placeholders to fill before a real deploy
