@@ -696,7 +696,7 @@ class DeltaIngestionStreamChangesContractTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 16777216L);
+                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 1L); // seal < tiny budget
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -722,6 +722,68 @@ class DeltaIngestionStreamChangesContractTest {
         } finally {
             capChannel.shutdownNow();
             capServer.shutdownNow();
+        }
+    }
+
+    @Test
+    void sealBytesAtOrAboveTheSessionByteBudgetFailsFastAtStartup() {
+        // With continuous-seal-bytes >= max-session-bytes the budget would reject a fat CONTINUOUS
+        // stream before the byte seal ever fires (reachable when auto = maxHeap/8 <= 16MiB on a tiny
+        // heap). A misconfiguration must fail the boot with a clear message, not lurk as a comment.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new DeltaIngestionService(
+                        mock(DeltaSyncStateService.class), batchLifecycle, siteSchemaService,
+                        mock(DeltaSessionCommitService.class), new DeltaMetrics(new SimpleMeterRegistry()),
+                        2000000, 100L, 3900000L, 300000L, 100L)); // seal == budget
+        assertTrue(e.getMessage().contains("continuous-seal-bytes"), e.getMessage());
+        assertTrue(e.getMessage().contains("max-session-bytes"), e.getMessage());
+    }
+
+    @Test
+    void continuousByteOverflowDoesNotAdviseContinuousMode() throws Exception {
+        // A CONTINUOUS session can still trip the budget when budget - seal threshold is smaller
+        // than one record: "stream in CONTINUOUS mode" would be nonsense advice there — the message
+        // must point at the config knobs instead.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        long recordSize = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
+                .getSerializedSize();
+        long sealBytes = recordSize + 1;  // first record does not seal...
+        long budget = recordSize + 2;     // ...and the second does not fit (valid: seal < budget)
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService tight = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes);
+        String name = InProcessServerBuilder.generateName();
+        Server srv = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(tight, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel ch = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(ch);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
+            s.onNext(start(SessionMode.CONTINUOUS, 1L));
+            s.onNext(change("t", Op.INSERT, 1L));
+            s.onNext(change("t", Op.INSERT, 2L)); // budget exceeded before the seal threshold
+
+            ServerEvent last = received.get(received.size() - 1);
+            assertTrue(last.hasError());
+            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertTrue(last.getError().getMessage().contains("byte"), last.getError().getMessage());
+            assertFalse(last.getError().getMessage().contains("CONTINUOUS"),
+                    "a continuous session must not be advised to use CONTINUOUS mode: "
+                            + last.getError().getMessage());
+            assertTrue(last.getError().getMessage().contains("max-session-bytes"),
+                    "the message must point at the config knobs: " + last.getError().getMessage());
+            verify(batchLifecycle).failBatch(batchId);
+        } finally {
+            ch.shutdownNow();
+            srv.shutdownNow();
         }
     }
 

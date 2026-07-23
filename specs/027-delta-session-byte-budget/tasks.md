@@ -44,6 +44,12 @@ of killing the JVM.
   ~2 records under a tiny threshold, no errors).
 - [x] **T4** — Docs (`docs/delta-client-v2-guide.md`: session size limit, continuous seal triggers,
   troubleshooting row), k8s dev patch comment, this spec.
+- [x] **T5** (review p.1) — `delta.sessions.overflow` tagged `reason=records|bytes`, so an incident
+  can be told apart from the metric alone.
+- [x] **T6** (review p.2–4) — fail-fast at startup when `continuous-seal-bytes >= max-session-bytes`
+  (reachable via the auto budget on a heap <= 128MiB); the byte-overflow message points at the
+  config knobs instead of advising CONTINUOUS to a session that already is; docs/yml no longer
+  scope the budget to non-CONTINUOUS sessions (it applies to all, seals make it a backstop).
 
 ## Gates
 

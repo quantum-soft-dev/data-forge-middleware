@@ -99,6 +99,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         this.stagedTtlMillis = stagedTtlMillis;
         this.continuousSealMillis = continuousSealMillis;
         this.continuousSealBytes = continuousSealBytes;
+        // Fail fast: with the seal threshold at or above the budget, a fat CONTINUOUS stream would
+        // hit OVERFLOW_BYTES before the byte seal ever fires. Reachable when the auto budget
+        // (maxHeap/8) drops to <= 16MiB on a heap of <= 128MiB.
+        if (continuousSealBytes >= this.maxSessionBytes) {
+            throw new IllegalArgumentException(
+                    "delta.ingestion.continuous-seal-bytes (" + continuousSealBytes
+                            + ") must be below the session byte budget (delta.ingestion.max-session-bytes, "
+                            + "resolved to " + this.maxSessionBytes
+                            + "), or the budget rejects a continuous stream before the seal fires");
+        }
     }
 
     /**
@@ -299,9 +309,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // still buffer gigabytes on-heap (a 439k-row snapshot OOMed a 1536Mi pod).
                         // Reject with a clean session error instead of killing the JVM.
                         metrics.sessionOverflowedBytes();
+                        // "Use CONTINUOUS mode" is nonsense advice to a session that already is —
+                        // reachable only when budget minus seal threshold is smaller than one record.
                         emitError(ErrorCode.INTERNAL,
-                                "Session exceeded the " + maxSessionBytes + "-byte buffer budget; stream "
-                                        + "large datasets in CONTINUOUS mode",
+                                "Session exceeded the " + maxSessionBytes + "-byte buffer budget; "
+                                        + (continuous
+                                        ? "raise delta.ingestion.max-session-bytes or lower "
+                                                + "delta.ingestion.continuous-seal-bytes"
+                                        : "stream large datasets in CONTINUOUS mode"),
                                 RecoveryAction.NEED_REBASELINE);
                         return;
                     }

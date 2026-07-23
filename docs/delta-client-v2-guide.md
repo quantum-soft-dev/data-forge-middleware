@@ -255,13 +255,14 @@ See `ChangelogContentHash` for the reference implementation.
 **`SessionEnd.last_seq`** must equal the highest `seq` you sent (the last `ChangeRecord`'s). The
 server rejects a non-zero mismatch with `RECONCILIATION_FAILED`; send `0` to opt out of the check.
 
-**Session size limit.** A single non-CONTINUOUS session is capped both by **record count**
+**Session size limit.** A single session is capped both by **record count**
 (`delta.ingestion.max-session-records`, default 2,000,000) and by the **cumulative serialized size**
 of its records (`delta.ingestion.max-session-bytes`; the default `0` means auto — an eighth of the
 server's max heap, since the server buffers the whole session on-heap until commit). A dataset
 exceeding either cap is rejected with `INTERNAL` (naming the cap that tripped) — stream it in
-[continuous mode](#continuous-mode), which seals bounded segments as it goes. Overflow rejections are
-counted by the `delta.sessions.overflow` meter.
+[continuous mode](#continuous-mode), whose seals reset the buffer far below the caps (there they
+only backstop; `continuous-seal-bytes < max-session-bytes` is enforced at startup). Overflow
+rejections are counted by the `delta.sessions.overflow` meter, tagged `reason=records|bytes`.
 
 ---
 
