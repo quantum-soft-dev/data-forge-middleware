@@ -42,9 +42,17 @@ public final class DeltaParquetWriter {
      * @return Parquet file bytes
      */
     public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records) {
-        Schema avro = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
-        List<GenericRecord> rows = new ArrayList<>(records.size());
+        List<Map<String, Value>> cellRows = new ArrayList<>(records.size());
         for (ChangeRecord change : records) {
+            Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
+            cells.putAll(change.getDataMap());
+            cellRows.add(cells);
+        }
+        Schema avro = ParquetCheckpointWriter.widenDecimalsToFit(
+                ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema), cellRows);
+        List<GenericRecord> rows = new ArrayList<>(records.size());
+        for (int i = 0; i < records.size(); i++) {
+            ChangeRecord change = records.get(i);
             GenericRecord row = new GenericData.Record(avro);
             row.put("_op", change.getOp().name());
             row.put("_seq", change.getSeq());
@@ -54,8 +62,7 @@ public final class DeltaParquetWriter {
             row.put("_changed", change.getOp() == com.bitbi.dfm.delta.grpc.v2.Op.UPDATE
                     ? String.join(",", change.getDataMap().keySet())
                     : null);
-            Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
-            cells.putAll(change.getDataMap());
+            Map<String, Value> cells = cellRows.get(i);
             for (ColumnDefinition column : tableSchema.columns()) {
                 row.put(column.name(), ParquetCheckpointWriter.coerceValue(
                         cells.get(column.name()), avro.getField(column.name()).schema()));

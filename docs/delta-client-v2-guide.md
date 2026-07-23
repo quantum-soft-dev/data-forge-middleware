@@ -476,6 +476,13 @@ Parquet (via Avro logical types) as:
 `nullable: true` columns become a nullable union. Column and table names must be valid PostgreSQL identifiers
 (`^[A-Za-z_][A-Za-z0-9_]{0,62}$`).
 
+Declare `numeric(p,s)` truthfully: values are rescaled to the declared scale on write, and if a value needs
+more precision than declared, the server **widens the Parquet decimal type to fit** (logged server-side as a
+schema-vs-data warning) rather than failing the file — but the declared schema is what consumers see, so an
+understated precision means per-file type drift. A table whose data cannot be rendered against its declared
+schema at all (e.g. unparsable values) is skipped from typed Parquet egress — the segment still completes for
+the remaining tables.
+
 ---
 
 ## What the server produces (egress)

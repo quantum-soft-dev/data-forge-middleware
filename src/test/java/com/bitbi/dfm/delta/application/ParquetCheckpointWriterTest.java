@@ -160,6 +160,33 @@ class ParquetCheckpointWriterTest {
                 "an unrecognized boolean text must throw (per-table skip), not silently write false");
     }
 
+    @Test
+    void widensDeclaredDecimalWhenDataExceedsItsPrecision() throws Exception {
+        // Same widening contract as the delta writer: a declared numeric(7,2) with 9-digit data must
+        // not fail the file (a poison table would be skipped from every checkpoint) — the declared
+        // precision widens to fit.
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("price", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        Map<String, Value> row = new LinkedHashMap<>();
+        row.put("id", intVal(1));
+        row.put("price", decVal("1234567.89"));
+
+        Path file = tempDir.resolve("widened.parquet");
+        Files.write(file, ParquetCheckpointWriter.toParquet("t", schema, List.of(row)));
+
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            GenericRecord r = reader.read();
+            assertEquals(new BigDecimal("1234567.89"), r.get("price"));
+            LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(r.getSchema(), "price").getLogicalType();
+            assertEquals(9, decimal.getPrecision(), "declared precision widened to fit the data");
+            assertEquals(2, decimal.getScale(), "declared scale is kept");
+        }
+    }
+
     /** The value branch of a field's schema (unwrapping a nullable union). */
     private static Schema branch(Schema record, String field) {
         Schema s = record.getField(field).schema();
