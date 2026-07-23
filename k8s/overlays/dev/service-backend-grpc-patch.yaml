@@ -1,6 +1,14 @@
 # Tell the GKE Gateway to speak HTTP/2 (h2 over TLS — required by Google's
 # external ALB for gRPC) to the backend's `grpc` port. Dev-only: the pod serves
 # TLS on 9090 only where the forge-backend-grpc-tls Secret is mounted.
+#
+# The Gateway controller reads the standard `appProtocol` field on the Service
+# port — verified empirically: with only the legacy `app-protocols` annotation
+# (Ingress-era) the LB backend service stayed PROTOCOL=HTTP (plaintext h1 into
+# the TLS port -> "connection termination"). The annotation is kept as
+# belt-and-suspenders; `appProtocol` is what actually flips it to HTTP2, and it
+# is added via a JSON patch in kustomization.yaml because kustomize's strategic
+# merge silently drops appProtocol from ServicePort.
 apiVersion: v1
 kind: Service
 metadata:
