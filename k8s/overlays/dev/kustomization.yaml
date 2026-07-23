@@ -45,3 +45,13 @@ patches:
     target:
       kind: Service
       name: forge-backend
+  # appProtocol on the grpc port (index 1 in base) — the GKE Gateway controller
+  # keys the LB backend protocol off this field. JSON patch because kustomize's
+  # strategic merge drops appProtocol from ServicePort.
+  - target:
+      kind: Service
+      name: forge-backend
+    patch: |-
+      - op: add
+        path: /spec/ports/1/appProtocol
+        value: HTTP2
