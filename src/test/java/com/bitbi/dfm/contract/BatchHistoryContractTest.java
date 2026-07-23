@@ -375,6 +375,34 @@ class BatchHistoryContractTest extends BaseIntegrationTest {
     }
 
     /**
+     * TC06b: Cross-account batch details with Accept: application/json returns 403, not 500.
+     * <p>
+     * Two controllers are mapped on GET /api/v1/history/batches/{batchId}: BatchHistoryController
+     * (no produces, handles authorization failures itself) and BatchHistoryAdminController
+     * (produces=application/json, translates them into ResponseStatusException). Real clients send
+     * Accept: application/json and are routed to the latter, so its ResponseStatusException(403)
+     * must reach the client as 403 — not be swallowed by the generic 500 handler
+     * (seen live on GKE test 2026-07-23).
+     * </p>
+     */
+    @Test
+    @DisplayName("TC06b: GET /api/user/batches/{batchId} with Accept: application/json should return 403 for cross-account batch, not 500")
+    void tc06b_getBatchDetails_withJsonAccept_shouldReturn403Not500WhenUnauthorized() throws Exception {
+        // Given: Batch owned by a different account than the authenticated user's
+        String otherAccountBatchId = "0199bab2-dddd-dddd-dddd-dddddddddddd";
+
+        // When: GET with Accept: application/json (routes to BatchHistoryAdminController)
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", otherAccountBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .accept(MediaType.APPLICATION_JSON))
+
+                // Then: 403 Forbidden with the declared reason — not 500
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("Access denied"));
+    }
+
+    /**
      * T043 (TC07): Get batch details returns 404 when batchId doesn't exist
      * <p>
      * Given: Authenticated client with valid JWT
