@@ -45,7 +45,7 @@ class DeltaIngestionGetSyncStateContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 new DeltaSyncStateService(repository), mock(BatchLifecycleService.class),
                 mock(SiteSchemaService.class), mock(DeltaSessionCommitService.class),
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L);
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()

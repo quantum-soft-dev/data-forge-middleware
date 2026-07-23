@@ -62,6 +62,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final long stagedTtlMillis;
     /** In CONTINUOUS mode, also seal a non-empty segment this long after the last seal (time trigger). */
     private final long continuousSealMillis;
+    /** In CONTINUOUS mode, also seal once this many serialized bytes have accumulated (byte trigger). */
+    private final long continuousSealBytes;
 
     /**
      * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
@@ -84,7 +86,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis,
                                  @org.springframework.beans.factory.annotation.Value(
-                                         "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis) {
+                                         "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.continuous-seal-bytes:16777216}") long continuousSealBytes) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
@@ -94,6 +98,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         this.maxSessionBytes = resolveMaxSessionBytes(maxSessionBytes);
         this.stagedTtlMillis = stagedTtlMillis;
         this.continuousSealMillis = continuousSealMillis;
+        this.continuousSealBytes = continuousSealBytes;
     }
 
     /**
@@ -315,7 +320,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 boolean sizeReached = buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS;
                 boolean timeReached = buffer.acceptedCount() > 0
                         && System.currentTimeMillis() - lastSealMillis >= continuousSealMillis;
-                if (continuous && (sizeReached || timeReached)) {
+                // Byte trigger: 100 fat records can weigh as much as thousands of thin ones (each may
+                // approach the 4MB gRPC message cap), so a fat stream seals into more, smaller
+                // segments instead of a bloated buffer. Keeps the buffer far below the session byte
+                // budget, which then only backstops misconfiguration.
+                boolean bytesReached = buffer.acceptedBytes() >= continuousSealBytes;
+                if (continuous && (sizeReached || timeReached || bytesReached)) {
                     sealContinuous(true);
                 }
             }

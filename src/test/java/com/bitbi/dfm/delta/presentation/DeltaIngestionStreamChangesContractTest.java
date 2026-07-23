@@ -67,7 +67,7 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L);
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
@@ -655,7 +655,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L); // cap = 2 records
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L); // cap = 2 records
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -696,7 +696,7 @@ class DeltaIngestionStreamChangesContractTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L);
+                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 16777216L);
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -753,7 +753,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService timed = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L); // seal on every record
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L); // seal on every record
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(timed, authContext(SITE, ACCOUNT))).build().start();
@@ -768,6 +768,57 @@ class DeltaIngestionStreamChangesContractTest {
 
             long seals = received.stream().filter(ServerEvent::hasCommitted).count();
             assertTrue(seals >= 2, "each record seals via the time trigger (got " + seals + ")");
+        } finally {
+            ch.shutdownNow();
+            srv.shutdownNow();
+        }
+    }
+
+    @Test
+    void continuousByteTriggerSealsBelowTheRecordThreshold() throws Exception {
+        // 100 fat records can weigh as much as thousands of thin ones (each may approach the 4MB
+        // gRPC message cap): CONTINUOUS mode must also seal on buffered bytes, not just count/time,
+        // so a fat stream degrades into more, smaller segments instead of a bloated buffer.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID id1 = UUID.randomUUID();
+        UUID id2 = UUID.randomUUID();
+        UUID id3 = UUID.randomUUID();
+        Batch b1 = mockBatch(id1);
+        Batch b2 = mockBatch(id2);
+        Batch b3 = mockBatch(id3);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+        long sealBytes = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
+                .getSerializedSize() * 2L; // seal after every two records
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService sized = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L,
+                sealBytes);
+        String name = InProcessServerBuilder.generateName();
+        Server srv = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(sized, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel ch = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(ch);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            CountDownLatch done = new CountDownLatch(1);
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, done));
+            s.onNext(start(SessionMode.CONTINUOUS, 1L));
+            for (long seq = 1; seq <= 5; seq++) {
+                s.onNext(change("t", Op.INSERT, seq));
+            }
+            s.onCompleted(); // half-close flushes the tail
+            assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
+
+            List<ServerEvent> committed = received.stream().filter(ServerEvent::hasCommitted).toList();
+            assertEquals(3, committed.size(), "two byte-trigger seals + a final seal on close");
+            assertEquals(2L, committed.get(0).getCommitted().getCommittedSeq());
+            assertEquals(4L, committed.get(1).getCommitted().getCommittedSeq());
+            assertEquals(5L, committed.get(2).getCommitted().getCommittedSeq());
+            assertTrue(received.stream().noneMatch(ServerEvent::hasError), "byte seals are not errors");
         } finally {
             ch.shutdownNow();
             srv.shutdownNow();

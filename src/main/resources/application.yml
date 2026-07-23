@@ -201,6 +201,10 @@ delta:
     # CONTINUOUS mode also seals a non-empty segment this long after the last seal (time trigger),
     # so a low-throughput stream that never reaches the record count still bounds staleness.
     continuous-seal-millis: ${DELTA_CONTINUOUS_SEAL_MILLIS:300000}
+    # CONTINUOUS mode also seals once this many serialized bytes have accumulated (byte trigger),
+    # so 100 fat records (each may approach the 4MB gRPC cap) cannot bloat the segment buffer.
+    # Keep this well below max-session-bytes, or the budget rejects before the seal fires.
+    continuous-seal-bytes: ${DELTA_CONTINUOUS_SEAL_BYTES:16777216}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
