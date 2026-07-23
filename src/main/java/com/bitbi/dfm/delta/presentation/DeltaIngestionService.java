@@ -378,7 +378,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
                 }
-                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords);
+                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords, Long.MAX_VALUE);
                 sessionMode = start.getMode().name();
                 // For a delta replay (first_seq below the watermark) the segment's first_seq is the
                 // first genuinely-new sequence, not the replayed start, so the persisted segment row
@@ -466,7 +466,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (continueStream) {
                     batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
                     firstSeq = committedSeq + 1;
-                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords);
+                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, Long.MAX_VALUE);
                     sinceAck = 0;
                     metrics.sessionStarted();
                 }
