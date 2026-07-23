@@ -34,13 +34,14 @@ RUN ls -lh build/libs/
 # ============================================
 # Stage 2: Runtime Stage (Production)
 # ============================================
-FROM eclipse-temurin:25-jre-alpine AS production
+# glibc-based image required: snappy-java native lib (Parquet egress compression) does not load on musl (Alpine)
+FROM eclipse-temurin:25-jre AS production
 
 # Install curl for health checks
-RUN apk add --no-cache curl
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
-RUN addgroup -S dfm && adduser -S dfm -G dfm
+RUN groupadd --system dfm && useradd --system --gid dfm --no-create-home dfm
 
 # Set working directory
 WORKDIR /app
@@ -78,13 +79,13 @@ ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
 # ============================================
 # Stage 3: Development Stage (Optional)
 # ============================================
-FROM eclipse-temurin:25-jdk-alpine AS development
+FROM eclipse-temurin:25-jdk AS development
 
-# Install curl and bash for debugging
-RUN apk add --no-cache curl bash
+# Install curl for debugging (bash ships with the base image)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN addgroup -S dfm && adduser -S dfm -G dfm
+RUN groupadd --system dfm && useradd --system --gid dfm --no-create-home dfm
 
 WORKDIR /app
 
