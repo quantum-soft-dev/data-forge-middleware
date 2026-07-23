@@ -10,10 +10,12 @@ spec:
       containers:
         - name: backend
           # Sized for Delta v2 full-snapshot ingest: a non-CONTINUOUS session
-          # buffers every streamed record on-heap (the max-session-records guard
-          # counts rows, not bytes) — a 439k-row snapshot OOMed the previous
-          # 1536Mi limit (~1.15Gi heap at MaxRAMPercentage=75) and the liveness
-          # kill reset the client's stream mid-upload.
+          # buffers every streamed record on-heap — a 439k-row snapshot OOMed the
+          # previous 1536Mi limit (~1.15Gi heap at MaxRAMPercentage=75) and the
+          # liveness kill reset the client's stream mid-upload. The byte-aware
+          # guard (delta.ingestion.max-session-bytes, auto = maxHeap/8) now
+          # rejects such a session cleanly instead of OOMing, but this memory is
+          # still what lets that legit snapshot size actually succeed.
           resources:
             requests:
               cpu: "500m"
