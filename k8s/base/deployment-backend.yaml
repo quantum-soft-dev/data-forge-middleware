@@ -47,23 +47,30 @@ spec:
               memory: "2Gi"
           # Slow boot: Flyway migrations + JVM warmup can take minutes.
           # startupProbe gates liveness/readiness until the app is actually up.
+          # timeoutSeconds 5 everywhere: the default 1s is razor-thin under GC
+          # pressure — during a heavy Delta ingest a stop-the-world pause makes
+          # the health endpoint miss 1s, three misses get the container killed
+          # mid-stream, and the client sees its upload reset.
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 8080
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 60   # up to ~10 min to become ready
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
               port: 8080
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 8080
             periodSeconds: 30
+            timeoutSeconds: 5
             failureThreshold: 3
           lifecycle:
             preStop:
