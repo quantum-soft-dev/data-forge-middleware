@@ -9,13 +9,18 @@ spec:
     spec:
       containers:
         - name: backend
+          # Sized for Delta v2 full-snapshot ingest: a non-CONTINUOUS session
+          # buffers every streamed record on-heap (the max-session-records guard
+          # counts rows, not bytes) — a 439k-row snapshot OOMed the previous
+          # 1536Mi limit (~1.15Gi heap at MaxRAMPercentage=75) and the liveness
+          # kill reset the client's stream mid-upload.
           resources:
             requests:
-              cpu: "250m"
-              memory: "768Mi"
+              cpu: "500m"
+              memory: "2Gi"
             limits:
-              cpu: "1000m"
-              memory: "1536Mi"
+              cpu: "2000m"
+              memory: "3Gi"
           # Self-signed cert for the Delta gRPC port (9090): Google's external ALB
           # requires TLS to h2 backends but does not validate the cert. Created
           # out-of-band (never in git) — see deploy/gke/README.md "gRPC ingestion".
