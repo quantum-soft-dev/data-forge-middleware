@@ -41,6 +41,12 @@ class GlobalExceptionHandlerContractTest {
             throw new DataIntegrityViolationException(
                     "could not execute statement; duplicate key value violates unique constraint \"uq_sites_domain\"");
         }
+
+        @GetMapping("/test/response-status")
+        public String responseStatus() {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Access denied");
+        }
     }
 
     private MockMvc mockMvc;
@@ -84,5 +90,17 @@ class GlobalExceptionHandlerContractTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(not(containsString("uq_sites_domain"))))
                 .andExpect(jsonPath("$.message").value(not(containsString("duplicate key"))));
+    }
+
+    @Test
+    @DisplayName("ResponseStatusException passes through with its declared status and reason, not 500")
+    void shouldPassResponseStatusExceptionThroughWithDeclaredStatus() throws Exception {
+        mockMvc.perform(get("/test/response-status"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").value("Forbidden"))
+                .andExpect(jsonPath("$.message").value("Access denied"))
+                .andExpect(jsonPath("$.path").value("/test/response-status"))
+                .andExpect(jsonPath("$.timestamp").exists());
     }
 }
