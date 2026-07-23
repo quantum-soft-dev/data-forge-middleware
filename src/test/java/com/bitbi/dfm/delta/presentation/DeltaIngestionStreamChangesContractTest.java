@@ -717,8 +717,8 @@ class DeltaIngestionStreamChangesContractTest {
                     "the error must name the byte budget, not the record cap: " + last.getError().getMessage());
             assertEquals(RecoveryAction.NEED_REBASELINE, last.getError().getAction());
             verify(batchLifecycle).failBatch(any());
-            assertEquals(1.0, registry.get("delta.sessions.overflow").counter().count(),
-                    "a byte-budget rejection is counted");
+            assertEquals(1.0, registry.get("delta.sessions.overflow").tag("reason", "bytes").counter().count(),
+                    "a byte-budget rejection is counted under reason=bytes");
         } finally {
             capChannel.shutdownNow();
             capServer.shutdownNow();

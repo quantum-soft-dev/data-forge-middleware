@@ -22,7 +22,9 @@ class DeltaMetricsTest {
         metrics.sessionCommitted();
         metrics.sessionCommitted();
         metrics.reconciliationFailed();
-        metrics.sessionOverflowed();
+        metrics.sessionOverflowedRecords();
+        metrics.sessionOverflowedBytes();
+        metrics.sessionOverflowedBytes();
         metrics.recordSeqLag(5L);
         metrics.recordSeqLag(3L);
         String built = metrics.timeCheckpoint(() -> "ok");
@@ -31,7 +33,9 @@ class DeltaMetricsTest {
         assertEquals(1.0, registry.get("delta.sessions.started").counter().count());
         assertEquals(2.0, registry.get("delta.sessions.committed").counter().count());
         assertEquals(1.0, registry.get("delta.reconciliation.failures").counter().count());
-        assertEquals(1.0, registry.get("delta.sessions.overflow").counter().count());
+        // The reason tag tells an incident apart without going to logs: which cap tripped.
+        assertEquals(1.0, registry.get("delta.sessions.overflow").tag("reason", "records").counter().count());
+        assertEquals(2.0, registry.get("delta.sessions.overflow").tag("reason", "bytes").counter().count());
         assertEquals(1L, registry.get("delta.checkpoint.duration").timer().count());
 
         DistributionSummary lag = registry.get("delta.seq.lag").summary();

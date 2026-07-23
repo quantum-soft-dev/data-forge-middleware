@@ -287,7 +287,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // The session exceeded the per-session record cap: reject rather than buffer
                         // the whole dataset in heap (OOM guard). A very large snapshot should stream in
                         // CONTINUOUS mode, which seals bounded segments as it goes.
-                        metrics.sessionOverflowed();
+                        metrics.sessionOverflowedRecords();
                         emitError(ErrorCode.INTERNAL,
                                 "Session exceeded the " + maxSessionRecords + "-record limit; stream large "
                                         + "datasets in CONTINUOUS mode",
@@ -298,7 +298,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // The record cap counts rows, not bytes: a fat-but-few-rows snapshot could
                         // still buffer gigabytes on-heap (a 439k-row snapshot OOMed a 1536Mi pod).
                         // Reject with a clean session error instead of killing the JVM.
-                        metrics.sessionOverflowed();
+                        metrics.sessionOverflowedBytes();
                         emitError(ErrorCode.INTERNAL,
                                 "Session exceeded the " + maxSessionBytes + "-byte buffer budget; stream "
                                         + "large datasets in CONTINUOUS mode",
