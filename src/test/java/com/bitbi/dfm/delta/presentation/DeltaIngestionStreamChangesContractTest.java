@@ -67,7 +67,7 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L, 300000L);
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
@@ -655,7 +655,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, 3900000L, 300000L); // cap = 2 records
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L); // cap = 2 records
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -680,6 +680,62 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void sessionExceedingByteBudgetRejectedInsteadOfBufferingUnbounded() throws Exception {
+        // The record cap counts rows, not bytes: a 439k-row full snapshot OOMed a 1536Mi pod while
+        // far under the 2M-row limit. Past the byte budget the session must degrade into a clean
+        // SESSION-level error (and a failed batch) instead of killing the JVM.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch batch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        long budget = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
+                .getSerializedSize() * 2L; // room for two records, not three
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaIngestionService capped = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L);
+        String name = InProcessServerBuilder.generateName();
+        Server capServer = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel capChannel = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(capChannel);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
+            s.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            s.onNext(change("t", Op.INSERT, 1L));
+            s.onNext(change("t", Op.INSERT, 2L));
+            s.onNext(change("t", Op.INSERT, 3L)); // past the byte budget
+
+            ServerEvent last = received.get(received.size() - 1);
+            assertTrue(last.hasError());
+            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertTrue(last.getError().getMessage().contains("byte"),
+                    "the error must name the byte budget, not the record cap: " + last.getError().getMessage());
+            assertEquals(RecoveryAction.NEED_REBASELINE, last.getError().getAction());
+            verify(batchLifecycle).failBatch(any());
+            assertEquals(1.0, registry.get("delta.sessions.overflow").counter().count(),
+                    "a byte-budget rejection is counted");
+        } finally {
+            capChannel.shutdownNow();
+            capServer.shutdownNow();
+        }
+    }
+
+    @Test
+    void byteBudgetAutoDefaultScalesWithMaxHeap() {
+        // 0 (the config default) resolves to maxHeap/8 of serialized bytes, so the guard scales with
+        // the pod instead of a fixed number that is either too big for small pods or rejects legit
+        // snapshots on big ones. An explicit value is taken as-is.
+        assertEquals(Runtime.getRuntime().maxMemory() / 8, DeltaIngestionService.resolveMaxSessionBytes(0L));
+        assertEquals(Runtime.getRuntime().maxMemory() / 8, DeltaIngestionService.resolveMaxSessionBytes(-1L));
+        assertEquals(123456789L, DeltaIngestionService.resolveMaxSessionBytes(123456789L));
+    }
+
+    @Test
     void continuousTimeTriggerSealsBelowTheRecordThreshold() throws Exception {
         // With a 0 ms time trigger, a low-throughput continuous stream seals each record instead of
         // waiting for the 100-record count — bounding staleness for trickle clients (review r4).
@@ -697,7 +753,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService timed = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L, 0L); // seal on every record
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L); // seal on every record
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(timed, authContext(SITE, ACCOUNT))).build().start();

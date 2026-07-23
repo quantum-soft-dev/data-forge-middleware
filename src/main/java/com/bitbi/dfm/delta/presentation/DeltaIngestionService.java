@@ -56,6 +56,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final DeltaMetrics metrics;
     /** Max records one session may buffer before the server rejects it (OOM guard). */
     private final int maxSessionRecords;
+    /** Max cumulative serialized bytes one session may buffer before the server rejects it (OOM guard). */
+    private final long maxSessionBytes;
     /** Staged sessions older than this are evicted by the sweep (defends against a leak). */
     private final long stagedTtlMillis;
     /** In CONTINUOUS mode, also seal a non-empty segment this long after the last seal (time trigger). */
@@ -78,6 +80,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.max-session-records:2000000}") int maxSessionRecords,
                                  @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.max-session-bytes:0}") long maxSessionBytes,
+                                 @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis,
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis) {
@@ -87,8 +91,19 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         this.commitService = commitService;
         this.metrics = metrics;
         this.maxSessionRecords = maxSessionRecords;
+        this.maxSessionBytes = resolveMaxSessionBytes(maxSessionBytes);
         this.stagedTtlMillis = stagedTtlMillis;
         this.continuousSealMillis = continuousSealMillis;
+    }
+
+    /**
+     * Resolve the per-session byte budget: a non-positive value (the config default) means auto —
+     * an eighth of the max heap, so the guard scales with the pod. The budget counts serialized
+     * proto bytes; the retained heap of buffered records is roughly 3–5x that, so an eighth keeps
+     * the worst-case buffer well under half the heap.
+     */
+    static long resolveMaxSessionBytes(long configured) {
+        return configured > 0 ? configured : Runtime.getRuntime().maxMemory() / 8;
     }
 
     /**
@@ -267,9 +282,21 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // The session exceeded the per-session record cap: reject rather than buffer
                         // the whole dataset in heap (OOM guard). A very large snapshot should stream in
                         // CONTINUOUS mode, which seals bounded segments as it goes.
+                        metrics.sessionOverflowed();
                         emitError(ErrorCode.INTERNAL,
                                 "Session exceeded the " + maxSessionRecords + "-record limit; stream large "
                                         + "datasets in CONTINUOUS mode",
+                                RecoveryAction.NEED_REBASELINE);
+                        return;
+                    }
+                    case OVERFLOW_BYTES -> {
+                        // The record cap counts rows, not bytes: a fat-but-few-rows snapshot could
+                        // still buffer gigabytes on-heap (a 439k-row snapshot OOMed a 1536Mi pod).
+                        // Reject with a clean session error instead of killing the JVM.
+                        metrics.sessionOverflowed();
+                        emitError(ErrorCode.INTERNAL,
+                                "Session exceeded the " + maxSessionBytes + "-byte buffer budget; stream "
+                                        + "large datasets in CONTINUOUS mode",
                                 RecoveryAction.NEED_REBASELINE);
                         return;
                     }
@@ -378,7 +405,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
                 }
-                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords, Long.MAX_VALUE);
+                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords, maxSessionBytes);
                 sessionMode = start.getMode().name();
                 // For a delta replay (first_seq below the watermark) the segment's first_seq is the
                 // first genuinely-new sequence, not the replayed start, so the persisted segment row
@@ -466,7 +493,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (continueStream) {
                     batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
                     firstSeq = committedSeq + 1;
-                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, Long.MAX_VALUE);
+                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, maxSessionBytes);
                     sinceAck = 0;
                     metrics.sessionStarted();
                 }

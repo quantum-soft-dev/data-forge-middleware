@@ -22,6 +22,7 @@ class DeltaMetricsTest {
         metrics.sessionCommitted();
         metrics.sessionCommitted();
         metrics.reconciliationFailed();
+        metrics.sessionOverflowed();
         metrics.recordSeqLag(5L);
         metrics.recordSeqLag(3L);
         String built = metrics.timeCheckpoint(() -> "ok");
@@ -30,6 +31,7 @@ class DeltaMetricsTest {
         assertEquals(1.0, registry.get("delta.sessions.started").counter().count());
         assertEquals(2.0, registry.get("delta.sessions.committed").counter().count());
         assertEquals(1.0, registry.get("delta.reconciliation.failures").counter().count());
+        assertEquals(1.0, registry.get("delta.sessions.overflow").counter().count());
         assertEquals(1L, registry.get("delta.checkpoint.duration").timer().count());
 
         DistributionSummary lag = registry.get("delta.seq.lag").summary();
