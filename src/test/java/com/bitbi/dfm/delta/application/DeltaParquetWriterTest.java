@@ -130,6 +130,51 @@ class DeltaParquetWriterTest {
         assertNull(update.get("price"), "price unchanged (also a null cell, but not in _changed)");
     }
 
+    @Test
+    void widensDeclaredDecimalWhenDataExceedsItsPrecision() throws Exception {
+        // The declared schema says numeric(7,2) but the data carries 9 significant digits (a client
+        // schema understating its data — seen live: "Cannot encode decimal with precision 9 as max
+        // precision 7" poisoned a whole segment). The writer widens the declared precision to fit
+        // instead of failing the file.
+        TableSchema narrow = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("price", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "price", decVal("1234567.89"))),
+                change(Op.INSERT, 2L, Map.of("id", intVal(2)),
+                        Map.of("id", intVal(2), "price", decVal("1.05"))));
+
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", narrow, records));
+
+        assertEquals(new BigDecimal("1234567.89"), rows.get(0).get("price"));
+        assertEquals(new BigDecimal("1.05"), rows.get(1).get("price"));
+        LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(rows.get(0).getSchema(), "price").getLogicalType();
+        assertEquals(9, decimal.getPrecision(), "declared precision widened to fit the data");
+        assertEquals(2, decimal.getScale(), "declared scale is kept");
+    }
+
+    @Test
+    void widensDecimalWhenScalingUpPushesPrecisionOverTheDeclaredLimit() throws Exception {
+        // 9 digits at scale 0 declared as numeric(9,2): rescaling to 2 makes an 11-digit unscaled
+        // value, which overflows the declared precision even though the raw digit count fit.
+        TableSchema narrow = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("amount", "numeric(9,2)", false)),
+                List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "amount", decVal("123456789"))));
+
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", narrow, records));
+
+        assertEquals(new BigDecimal("123456789.00"), rows.get(0).get("amount"));
+        LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(rows.get(0).getSchema(), "amount").getLogicalType();
+        assertEquals(11, decimal.getPrecision());
+        assertEquals(2, decimal.getScale());
+    }
+
     private List<GenericRecord> readBack(byte[] parquet) throws Exception {
         assertFalse(parquet.length == 0, "parquet bytes written");
         Path file = tempDir.resolve("delta.parquet");

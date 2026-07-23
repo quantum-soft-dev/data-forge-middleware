@@ -50,6 +50,8 @@ import java.util.Map;
  */
 public final class ParquetCheckpointWriter {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ParquetCheckpointWriter.class);
+
     private static final CompressionCodecName CODEC = CompressionCodecName.SNAPPY;
 
     private ParquetCheckpointWriter() {
@@ -64,7 +66,7 @@ public final class ParquetCheckpointWriter {
      * @return Parquet file bytes
      */
     public static byte[] toParquet(String tableName, TableSchema tableSchema, List<Map<String, Value>> rows) {
-        Schema avro = ParquetSchemaMapper.toAvroSchema(tableName, tableSchema);
+        Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
         List<GenericRecord> records = new java.util.ArrayList<>(rows.size());
         for (Map<String, Value> row : rows) {
             records.add(toRecord(avro, tableSchema, row));
@@ -98,6 +100,64 @@ public final class ParquetCheckpointWriter {
      */
     static Object coerceValue(Value value, Schema fieldSchema) {
         return coerce(value, branch(fieldSchema));
+    }
+
+    /**
+     * Widen declared decimal columns whose data does not fit their declared precision (a client
+     * schema understating its data would otherwise fail the whole file: "Cannot encode decimal
+     * with precision N as max precision M"). The declared scale is kept — values are rescaled to
+     * it on write regardless — and the precision grows to the widest value actually present
+     * (measured after that rescale). Shared by the checkpoint and delta writers.
+     *
+     * @param recordSchema the schema typed from the declared columns
+     * @param rows         each row's column → wire value
+     * @return the same schema, or a rebuilt one with widened decimal columns
+     */
+    static Schema widenDecimalsToFit(Schema recordSchema, List<Map<String, Value>> rows) {
+        Map<String, Integer> widened = null;
+        for (Schema.Field field : recordSchema.getFields()) {
+            if (!(branch(field.schema()).getLogicalType() instanceof LogicalTypes.Decimal decimal)) {
+                continue;
+            }
+            int needed = decimal.getPrecision();
+            for (Map<String, Value> row : rows) {
+                Value value = row.get(field.name());
+                Object java = value == null ? null : ValueMapper.toJava(value);
+                if (java == null) {
+                    continue;
+                }
+                needed = Math.max(needed,
+                        toBigDecimal(java).setScale(decimal.getScale(), RoundingMode.HALF_UP).precision());
+            }
+            if (needed > decimal.getPrecision()) {
+                if (widened == null) {
+                    widened = new java.util.LinkedHashMap<>();
+                }
+                widened.put(field.name(), needed);
+                log.warn("Column {} of table {} declared decimal({},{}) but its data needs precision {} — "
+                                + "widening the Parquet type (check the declared schema against the data)",
+                        field.name(), recordSchema.getName(), decimal.getPrecision(), decimal.getScale(), needed);
+            }
+        }
+        if (widened == null) {
+            return recordSchema;
+        }
+        List<Schema.Field> fields = new java.util.ArrayList<>(recordSchema.getFields().size());
+        for (Schema.Field field : recordSchema.getFields()) {
+            Schema fieldSchema = field.schema();
+            Integer precision = widened.get(field.name());
+            if (precision != null) {
+                LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(fieldSchema).getLogicalType();
+                Schema wider = LogicalTypes.decimal(precision, decimal.getScale())
+                        .addToSchema(Schema.create(Schema.Type.BYTES));
+                fieldSchema = fieldSchema.getType() == Schema.Type.UNION
+                        ? Schema.createUnion(Schema.create(Schema.Type.NULL), wider)
+                        : wider;
+            }
+            fields.add(new Schema.Field(field.name(), fieldSchema, field.doc(), field.defaultVal()));
+        }
+        return Schema.createRecord(recordSchema.getName(), recordSchema.getDoc(),
+                recordSchema.getNamespace(), recordSchema.isError(), fields);
     }
 
     /**

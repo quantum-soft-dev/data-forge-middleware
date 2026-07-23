@@ -90,7 +90,20 @@ public class DeltaEgressService {
                         table, segment.getSiteId());
                 return;
             }
-            byte[] parquet = DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords);
+            byte[] parquet;
+            try {
+                parquet = DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords);
+            } catch (RuntimeException e) {
+                // One poison table (data the declared schema cannot render) must not wedge the
+                // queue: without this the whole segment rolls back and the sweep retries it forever,
+                // blocking every other table — the skip-and-continue contract CheckpointService
+                // documents. Render only: an upload failure is transient and must keep the segment
+                // pending for the sweep, so it stays outside the catch.
+                log.error("Delta Parquet render failed for table {} of site {} (seq {}..{}) — skipping "
+                                + "the table's delta file (check the declared schema against the data)",
+                        table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
+                return;
+            }
             storage.uploadDelta(segment.getSiteId(), table, segment.getFirstSeq(), segment.getLastSeq(), parquet);
         });
 
