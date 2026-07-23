@@ -1,7 +1,6 @@
 package com.bitbi.dfm.batch.presentation;
 
 import com.bitbi.dfm.batch.application.BatchHistoryService;
-import com.bitbi.dfm.batch.domain.exception.BatchNotFoundException;
 import com.bitbi.dfm.batch.domain.exception.UnauthorizedBatchAccessException;
 import com.bitbi.dfm.batch.presentation.dto.*;
 import com.bitbi.dfm.error.application.ErrorLoggingService;
@@ -11,6 +10,8 @@ import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
 import com.bitbi.dfm.upload.application.ExcelExportService;
 import com.bitbi.dfm.upload.application.FileDownloadService;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -31,15 +32,27 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
  * REST controller for upload history and file download operations.
  * <p>
+ * The single controller for /api/v1/history/batches — serves every request shape regardless
+ * of the Accept header (previously a second controller with produces=application/json shadowed
+ * these routes and Accept-based routing caused diverging error handling).
+ * </p>
+ * <p>
  * Provides endpoints for:
  * - Viewing upload history (User Story 1)
  * - Viewing batch details and file list (User Story 2)
  * - Downloading files (User Story 3)
+ * </p>
+ * <p>
+ * Account resolution uses {@link AuthorizationHelper} (accountId claim → sub UUID → email/
+ * preferred_username lookup). Domain exceptions (BatchNotFoundException,
+ * UnauthorizedBatchAccessException, AuthorizationHelper.UnauthorizedException) propagate to
+ * GlobalExceptionHandler, which renders the standard ErrorResponseDto.
  * </p>
  *
  * @author Data Forge Team
@@ -59,25 +72,32 @@ public class BatchHistoryController {
     private final ExcelExportService excelExportService;
     private final ErrorLoggingService errorLoggingService;
     private final AuthorizationHelper authorizationHelper;
+    private final MeterRegistry meterRegistry;
 
     public BatchHistoryController(
             BatchHistoryService batchHistoryService,
             FileDownloadService fileDownloadService,
             ExcelExportService excelExportService,
             ErrorLoggingService errorLoggingService,
-            AuthorizationHelper authorizationHelper
+            AuthorizationHelper authorizationHelper,
+            MeterRegistry meterRegistry
     ) {
         this.batchHistoryService = batchHistoryService;
         this.fileDownloadService = fileDownloadService;
         this.excelExportService = excelExportService;
         this.errorLoggingService = errorLoggingService;
         this.authorizationHelper = authorizationHelper;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
      * List upload history with cursor-based pagination.
      * <p>
      * GET /api/v1/history/batches?cursor={cursor}&limit={limit}
+     * </p>
+     * <p>
+     * Users without a linked Account (pure Auth0 users, e.g. admins) get an empty page
+     * instead of an error. Invalid limits fall back to the service default (20).
      * </p>
      *
      * @param cursor Pagination cursor (optional, null for first page)
@@ -87,41 +107,35 @@ public class BatchHistoryController {
     @GetMapping
     @Operation(
             summary = "List upload history",
-            description = "Get paginated list of user's upload sessions with cursor-based pagination"
+            description = "Get paginated list of user's upload sessions with cursor-based pagination. " +
+                    "Users without a linked account receive an empty page."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Upload history retrieved successfully"),
-            @ApiResponse(responseCode = "403", description = "Unauthorized access", content = @Content)
+            @ApiResponse(responseCode = "401", description = "Not authenticated", content = @Content)
     })
     public ResponseEntity<CursorPageResponseDto<BatchSummaryDto>> listBatches(
             @Parameter(description = "Pagination cursor (null for first page)")
             @RequestParam(required = false) String cursor,
 
             @Parameter(description = "Page size (default: 20, max: 100)")
-            @RequestParam(defaultValue = "20") int limit
+            @RequestParam(required = false) Integer limit
     ) {
+        Timer.Sample sample = Timer.start(meterRegistry);
         try {
-            // Get authenticated account ID
-            UUID accountId = authorizationHelper.getAuthenticatedAccountId();
+            Optional<UUID> accountId = authorizationHelper.getOptionalAuthenticatedAccountId();
 
-            logger.debug("Listing batches for accountId={}, cursor={}, limit={}", accountId, cursor, limit);
-
-            // Validate limit
-            if (limit < 1 || limit > 100) {
-                limit = 20; // Default
+            if (accountId.isEmpty()) {
+                // Pure Auth0 users (e.g. admins) have no Account record — degrade to an empty page
+                logger.debug("No account linked to authenticated user, returning empty batch history");
+                return ResponseEntity.ok(CursorPageResponseDto.empty());
             }
 
-            CursorPageResponseDto<BatchSummaryDto> response =
-                    batchHistoryService.listBatchHistory(accountId, cursor, limit);
+            logger.debug("Listing batches for accountId={}, cursor={}, limit={}", accountId.get(), cursor, limit);
 
-            return ResponseEntity.ok(response);
-
-        } catch (AuthorizationHelper.UnauthorizedException e) {
-            logger.warn("Unauthorized upload history access: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        } catch (Exception e) {
-            logger.error("Failed to list batches", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+            return ResponseEntity.ok(batchHistoryService.listBatchHistory(accountId.get(), cursor, limit));
+        } finally {
+            sample.stop(meterRegistry.timer("batch.history.user.list"));
         }
     }
 
@@ -141,41 +155,23 @@ public class BatchHistoryController {
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Batch details retrieved successfully"),
+            @ApiResponse(responseCode = "401", description = "Not authenticated or no linked account"),
             @ApiResponse(responseCode = "403", description = "Batch does not belong to user"),
             @ApiResponse(responseCode = "404", description = "Batch not found")
     })
-    public ResponseEntity<?> getBatchDetails(
+    public ResponseEntity<BatchDetailDto> getBatchDetails(
             @Parameter(description = "Batch ID", required = true)
             @PathVariable UUID batchId
     ) {
+        Timer.Sample sample = Timer.start(meterRegistry);
         try {
-            // Get authenticated account ID
             UUID accountId = authorizationHelper.getAuthenticatedAccountId();
 
             logger.debug("Getting batch details: batchId={}, accountId={}", batchId, accountId);
 
-            BatchDetailDto response = batchHistoryService.getBatchDetails(batchId, accountId);
-
-            return ResponseEntity.ok(response);
-
-        } catch (AuthorizationHelper.UnauthorizedException e) {
-            logger.warn("Unauthorized batch details access: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-
-        } catch (UnauthorizedBatchAccessException e) {
-            logger.warn("Batch access denied: batchId={}, {}", batchId, e.getMessage());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(createErrorResponse(HttpStatus.FORBIDDEN, e.getMessage()));
-
-        } catch (BatchNotFoundException e) {
-            logger.warn("Batch not found: {}", batchId);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(createErrorResponse(HttpStatus.NOT_FOUND, "Batch not found"));
-
-        } catch (Exception e) {
-            logger.error("Failed to get batch details: batchId={}", batchId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to retrieve batch details"));
+            return ResponseEntity.ok(batchHistoryService.getBatchDetails(batchId, accountId));
+        } finally {
+            sample.stop(meterRegistry.timer("batch.details.user.load"));
         }
     }
 
