@@ -189,6 +189,11 @@ delta:
     # Max records a single (non-CONTINUOUS) session may buffer before it is rejected (OOM guard);
     # very large snapshots should stream in CONTINUOUS mode, which seals bounded segments.
     max-session-records: ${DELTA_MAX_SESSION_RECORDS:2000000}
+    # Max cumulative serialized bytes a single session may buffer before it is rejected (byte-aware
+    # OOM guard — the record cap alone let a 439k-row snapshot OOM a 1536Mi pod). Applies to every
+    # session; CONTINUOUS seals reset the buffer far below it, so there it only backstops.
+    # 0 = auto: an eighth of the max heap (retained heap is ~3-5x the serialized size).
+    max-session-bytes: ${DELTA_MAX_SESSION_BYTES:0}
     # Staged (dropped, awaiting resume) sessions older than this are evicted and their batches failed
     # (default just over the 60-min batch timeout), so an abandoned session cannot leak its buffer.
     staged-ttl-millis: ${DELTA_STAGED_TTL_MILLIS:3900000}
@@ -197,6 +202,10 @@ delta:
     # CONTINUOUS mode also seals a non-empty segment this long after the last seal (time trigger),
     # so a low-throughput stream that never reaches the record count still bounds staleness.
     continuous-seal-millis: ${DELTA_CONTINUOUS_SEAL_MILLIS:300000}
+    # CONTINUOUS mode also seals once this many serialized bytes have accumulated (byte trigger),
+    # so 100 fat records (each may approach the 4MB gRPC cap) cannot bloat the segment buffer.
+    # Must be below max-session-bytes — validated at startup.
+    continuous-seal-bytes: ${DELTA_CONTINUOUS_SEAL_BYTES:16777216}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}

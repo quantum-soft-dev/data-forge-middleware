@@ -255,9 +255,14 @@ See `ChangelogContentHash` for the reference implementation.
 **`SessionEnd.last_seq`** must equal the highest `seq` you sent (the last `ChangeRecord`'s). The
 server rejects a non-zero mismatch with `RECONCILIATION_FAILED`; send `0` to opt out of the check.
 
-**Session size limit.** A single non-CONTINUOUS session is capped (server config
-`delta.ingestion.max-session-records`, default 2,000,000). A larger dataset is rejected with
-`INTERNAL` — stream it in [continuous mode](#continuous-mode), which seals bounded segments as it goes.
+**Session size limit.** A single session is capped both by **record count**
+(`delta.ingestion.max-session-records`, default 2,000,000) and by the **cumulative serialized size**
+of its records (`delta.ingestion.max-session-bytes`; the default `0` means auto — an eighth of the
+server's max heap, since the server buffers the whole session on-heap until commit). A dataset
+exceeding either cap is rejected with `INTERNAL` (naming the cap that tripped) — stream it in
+[continuous mode](#continuous-mode), whose seals reset the buffer far below the caps (there they
+only backstop; `continuous-seal-bytes < max-session-bytes` is enforced at startup). Overflow
+rejections are counted by the `delta.sessions.overflow` meter, tagged `reason=records|bytes`.
 
 ---
 
@@ -395,8 +400,11 @@ or whenever you're unsure of alignment.
 For near-real-time ingestion, open a session with `mode = CONTINUOUS` and **never send `SessionEnd`** — push
 change records as they occur and keep the stream open.
 
-- The server **seals** a segment automatically once it reaches a size threshold, emitting a
-  `SessionCommitted{committed_seq, segment_s3_key}` for each sealed segment, and continues accumulating the next.
+- The server **seals** a segment automatically once it reaches a record count (fixed at 100), a byte size
+  (`delta.ingestion.continuous-seal-bytes`, default 16 MiB — so fat records seal into more, smaller
+  segments), or a time since the last seal (`delta.ingestion.continuous-seal-millis`, default 5 min),
+  emitting a `SessionCommitted{committed_seq, segment_s3_key}` for each sealed segment, and continues
+  accumulating the next.
 - When you close the stream gracefully, the server flushes the final segment (even an empty one) and
   completes its batch, so a clean close never leaves the site blocked.
 - Gap detection applies as for DELTA.
@@ -620,6 +628,7 @@ for ev in stub.StreamChanges(client_events(), metadata=md):
 | `SEQUENCE_GAP` at `SessionStart` | `first_seq` > `last_applied_seq + 1` (forward gap) | `GetSyncState` then open at `+1`, or `FULL_SNAPSHOT` to re-baseline (a replay at ≤ watermark is accepted, not a gap) |
 | `RECONCILIATION_FAILED` | `SessionEnd` per-table counts, `content_hash`, or `last_seq` ≠ records sent | count exactly per table; set `last_seq` to your highest seq; for resume use **cumulative** counts |
 | `INTERNAL` "exceeded … record limit" | one non-continuous session buffered too many records | stream large datasets in `CONTINUOUS` mode |
+| `INTERNAL` "exceeded … byte buffer budget" | one non-continuous session buffered too many bytes (fat rows can trip this far below the record cap) | stream large datasets in `CONTINUOUS` mode, or raise `DELTA_MAX_SESSION_BYTES` alongside pod memory |
 | `ACTIVE_SESSION_EXISTS` | another session live for this site (or a prior dropped batch not yet timed out) | serialize sessions; for a resumable DELTA drop, reconnect to get `RESUME_FROM` |
 | `UPDATE` rejected | the table is keyless (empty `primary_key`) | emit `DELETE` + `INSERT` instead |
 | Wrong Parquet types / parse errors in egress | wire value doesn't match declared type | send decimals/dates/timestamps as **strings**; keep `SubmitSchema` in sync with the data |

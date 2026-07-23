@@ -56,10 +56,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final DeltaMetrics metrics;
     /** Max records one session may buffer before the server rejects it (OOM guard). */
     private final int maxSessionRecords;
+    /** Max cumulative serialized bytes one session may buffer before the server rejects it (OOM guard). */
+    private final long maxSessionBytes;
     /** Staged sessions older than this are evicted by the sweep (defends against a leak). */
     private final long stagedTtlMillis;
     /** In CONTINUOUS mode, also seal a non-empty segment this long after the last seal (time trigger). */
     private final long continuousSealMillis;
+    /** In CONTINUOUS mode, also seal once this many serialized bytes have accumulated (byte trigger). */
+    private final long continuousSealBytes;
 
     /**
      * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
@@ -78,17 +82,43 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.max-session-records:2000000}") int maxSessionRecords,
                                  @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.max-session-bytes:0}") long maxSessionBytes,
+                                 @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis,
                                  @org.springframework.beans.factory.annotation.Value(
-                                         "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis) {
+                                         "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.continuous-seal-bytes:16777216}") long continuousSealBytes) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
         this.commitService = commitService;
         this.metrics = metrics;
         this.maxSessionRecords = maxSessionRecords;
+        this.maxSessionBytes = resolveMaxSessionBytes(maxSessionBytes);
         this.stagedTtlMillis = stagedTtlMillis;
         this.continuousSealMillis = continuousSealMillis;
+        this.continuousSealBytes = continuousSealBytes;
+        // Fail fast: with the seal threshold at or above the budget, a fat CONTINUOUS stream would
+        // hit OVERFLOW_BYTES before the byte seal ever fires. Reachable when the auto budget
+        // (maxHeap/8) drops to <= 16MiB on a heap of <= 128MiB.
+        if (continuousSealBytes >= this.maxSessionBytes) {
+            throw new IllegalArgumentException(
+                    "delta.ingestion.continuous-seal-bytes (" + continuousSealBytes
+                            + ") must be below the session byte budget (delta.ingestion.max-session-bytes, "
+                            + "resolved to " + this.maxSessionBytes
+                            + "), or the budget rejects a continuous stream before the seal fires");
+        }
+    }
+
+    /**
+     * Resolve the per-session byte budget: a non-positive value (the config default) means auto —
+     * an eighth of the max heap, so the guard scales with the pod. The budget counts serialized
+     * proto bytes; the retained heap of buffered records is roughly 3–5x that, so an eighth keeps
+     * the worst-case buffer well under half the heap.
+     */
+    static long resolveMaxSessionBytes(long configured) {
+        return configured > 0 ? configured : Runtime.getRuntime().maxMemory() / 8;
     }
 
     /**
@@ -267,9 +297,26 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // The session exceeded the per-session record cap: reject rather than buffer
                         // the whole dataset in heap (OOM guard). A very large snapshot should stream in
                         // CONTINUOUS mode, which seals bounded segments as it goes.
+                        metrics.sessionOverflowedRecords();
                         emitError(ErrorCode.INTERNAL,
                                 "Session exceeded the " + maxSessionRecords + "-record limit; stream large "
                                         + "datasets in CONTINUOUS mode",
+                                RecoveryAction.NEED_REBASELINE);
+                        return;
+                    }
+                    case OVERFLOW_BYTES -> {
+                        // The record cap counts rows, not bytes: a fat-but-few-rows snapshot could
+                        // still buffer gigabytes on-heap (a 439k-row snapshot OOMed a 1536Mi pod).
+                        // Reject with a clean session error instead of killing the JVM.
+                        metrics.sessionOverflowedBytes();
+                        // "Use CONTINUOUS mode" is nonsense advice to a session that already is —
+                        // reachable only when budget minus seal threshold is smaller than one record.
+                        emitError(ErrorCode.INTERNAL,
+                                "Session exceeded the " + maxSessionBytes + "-byte buffer budget; "
+                                        + (continuous
+                                        ? "raise delta.ingestion.max-session-bytes or lower "
+                                                + "delta.ingestion.continuous-seal-bytes"
+                                        : "stream large datasets in CONTINUOUS mode"),
                                 RecoveryAction.NEED_REBASELINE);
                         return;
                     }
@@ -288,7 +335,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 boolean sizeReached = buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS;
                 boolean timeReached = buffer.acceptedCount() > 0
                         && System.currentTimeMillis() - lastSealMillis >= continuousSealMillis;
-                if (continuous && (sizeReached || timeReached)) {
+                // Byte trigger: 100 fat records can weigh as much as thousands of thin ones (each may
+                // approach the 4MB gRPC message cap), so a fat stream seals into more, smaller
+                // segments instead of a bloated buffer. Keeps the buffer far below the session byte
+                // budget, which then only backstops misconfiguration.
+                boolean bytesReached = buffer.acceptedBytes() >= continuousSealBytes;
+                if (continuous && (sizeReached || timeReached || bytesReached)) {
                     sealContinuous(true);
                 }
             }
@@ -378,7 +430,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
                 }
-                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords);
+                buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords, maxSessionBytes);
                 sessionMode = start.getMode().name();
                 // For a delta replay (first_seq below the watermark) the segment's first_seq is the
                 // first genuinely-new sequence, not the replayed start, so the persisted segment row
@@ -466,7 +518,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (continueStream) {
                     batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
                     firstSeq = committedSeq + 1;
-                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords);
+                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, maxSessionBytes);
                     sinceAck = 0;
                     metrics.sessionStarted();
                 }

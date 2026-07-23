@@ -67,7 +67,7 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L, 300000L);
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
@@ -655,7 +655,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, 3900000L, 300000L); // cap = 2 records
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L); // cap = 2 records
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -680,6 +680,124 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void sessionExceedingByteBudgetRejectedInsteadOfBufferingUnbounded() throws Exception {
+        // The record cap counts rows, not bytes: a 439k-row full snapshot OOMed a 1536Mi pod while
+        // far under the 2M-row limit. Past the byte budget the session must degrade into a clean
+        // SESSION-level error (and a failed batch) instead of killing the JVM.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch batch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        long budget = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
+                .getSerializedSize() * 2L; // room for two records, not three
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaIngestionService capped = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 1L); // seal < tiny budget
+        String name = InProcessServerBuilder.generateName();
+        Server capServer = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel capChannel = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(capChannel);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
+            s.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            s.onNext(change("t", Op.INSERT, 1L));
+            s.onNext(change("t", Op.INSERT, 2L));
+            s.onNext(change("t", Op.INSERT, 3L)); // past the byte budget
+
+            ServerEvent last = received.get(received.size() - 1);
+            assertTrue(last.hasError());
+            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertTrue(last.getError().getMessage().contains("byte"),
+                    "the error must name the byte budget, not the record cap: " + last.getError().getMessage());
+            assertEquals(RecoveryAction.NEED_REBASELINE, last.getError().getAction());
+            verify(batchLifecycle).failBatch(any());
+            assertEquals(1.0, registry.get("delta.sessions.overflow").tag("reason", "bytes").counter().count(),
+                    "a byte-budget rejection is counted under reason=bytes");
+        } finally {
+            capChannel.shutdownNow();
+            capServer.shutdownNow();
+        }
+    }
+
+    @Test
+    void sealBytesAtOrAboveTheSessionByteBudgetFailsFastAtStartup() {
+        // With continuous-seal-bytes >= max-session-bytes the budget would reject a fat CONTINUOUS
+        // stream before the byte seal ever fires (reachable when auto = maxHeap/8 <= 16MiB on a tiny
+        // heap). A misconfiguration must fail the boot with a clear message, not lurk as a comment.
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new DeltaIngestionService(
+                        mock(DeltaSyncStateService.class), batchLifecycle, siteSchemaService,
+                        mock(DeltaSessionCommitService.class), new DeltaMetrics(new SimpleMeterRegistry()),
+                        2000000, 100L, 3900000L, 300000L, 100L)); // seal == budget
+        assertTrue(e.getMessage().contains("continuous-seal-bytes"), e.getMessage());
+        assertTrue(e.getMessage().contains("max-session-bytes"), e.getMessage());
+    }
+
+    @Test
+    void continuousByteOverflowDoesNotAdviseContinuousMode() throws Exception {
+        // A CONTINUOUS session can still trip the budget when budget - seal threshold is smaller
+        // than one record: "stream in CONTINUOUS mode" would be nonsense advice there — the message
+        // must point at the config knobs instead.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        long recordSize = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
+                .getSerializedSize();
+        long sealBytes = recordSize + 1;  // first record does not seal...
+        long budget = recordSize + 2;     // ...and the second does not fit (valid: seal < budget)
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService tight = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes);
+        String name = InProcessServerBuilder.generateName();
+        Server srv = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(tight, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel ch = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(ch);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
+            s.onNext(start(SessionMode.CONTINUOUS, 1L));
+            s.onNext(change("t", Op.INSERT, 1L));
+            s.onNext(change("t", Op.INSERT, 2L)); // budget exceeded before the seal threshold
+
+            ServerEvent last = received.get(received.size() - 1);
+            assertTrue(last.hasError());
+            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertTrue(last.getError().getMessage().contains("byte"), last.getError().getMessage());
+            assertFalse(last.getError().getMessage().contains("CONTINUOUS"),
+                    "a continuous session must not be advised to use CONTINUOUS mode: "
+                            + last.getError().getMessage());
+            assertTrue(last.getError().getMessage().contains("max-session-bytes"),
+                    "the message must point at the config knobs: " + last.getError().getMessage());
+            verify(batchLifecycle).failBatch(batchId);
+        } finally {
+            ch.shutdownNow();
+            srv.shutdownNow();
+        }
+    }
+
+    @Test
+    void byteBudgetAutoDefaultScalesWithMaxHeap() {
+        // 0 (the config default) resolves to maxHeap/8 of serialized bytes, so the guard scales with
+        // the pod instead of a fixed number that is either too big for small pods or rejects legit
+        // snapshots on big ones. An explicit value is taken as-is.
+        assertEquals(Runtime.getRuntime().maxMemory() / 8, DeltaIngestionService.resolveMaxSessionBytes(0L));
+        assertEquals(Runtime.getRuntime().maxMemory() / 8, DeltaIngestionService.resolveMaxSessionBytes(-1L));
+        assertEquals(123456789L, DeltaIngestionService.resolveMaxSessionBytes(123456789L));
+    }
+
+    @Test
     void continuousTimeTriggerSealsBelowTheRecordThreshold() throws Exception {
         // With a 0 ms time trigger, a low-throughput continuous stream seals each record instead of
         // waiting for the 100-record count — bounding staleness for trickle clients (review r4).
@@ -697,7 +815,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService timed = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, 3900000L, 0L); // seal on every record
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L); // seal on every record
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(timed, authContext(SITE, ACCOUNT))).build().start();
@@ -712,6 +830,57 @@ class DeltaIngestionStreamChangesContractTest {
 
             long seals = received.stream().filter(ServerEvent::hasCommitted).count();
             assertTrue(seals >= 2, "each record seals via the time trigger (got " + seals + ")");
+        } finally {
+            ch.shutdownNow();
+            srv.shutdownNow();
+        }
+    }
+
+    @Test
+    void continuousByteTriggerSealsBelowTheRecordThreshold() throws Exception {
+        // 100 fat records can weigh as much as thousands of thin ones (each may approach the 4MB
+        // gRPC message cap): CONTINUOUS mode must also seal on buffered bytes, not just count/time,
+        // so a fat stream degrades into more, smaller segments instead of a bloated buffer.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID id1 = UUID.randomUUID();
+        UUID id2 = UUID.randomUUID();
+        UUID id3 = UUID.randomUUID();
+        Batch b1 = mockBatch(id1);
+        Batch b2 = mockBatch(id2);
+        Batch b3 = mockBatch(id3);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+        long sealBytes = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
+                .getSerializedSize() * 2L; // seal after every two records
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService sized = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L,
+                sealBytes);
+        String name = InProcessServerBuilder.generateName();
+        Server srv = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(sized, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel ch = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(ch);
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            CountDownLatch done = new CountDownLatch(1);
+            StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, done));
+            s.onNext(start(SessionMode.CONTINUOUS, 1L));
+            for (long seq = 1; seq <= 5; seq++) {
+                s.onNext(change("t", Op.INSERT, seq));
+            }
+            s.onCompleted(); // half-close flushes the tail
+            assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
+
+            List<ServerEvent> committed = received.stream().filter(ServerEvent::hasCommitted).toList();
+            assertEquals(3, committed.size(), "two byte-trigger seals + a final seal on close");
+            assertEquals(2L, committed.get(0).getCommitted().getCommittedSeq());
+            assertEquals(4L, committed.get(1).getCommitted().getCommittedSeq());
+            assertEquals(5L, committed.get(2).getCommitted().getCommittedSeq());
+            assertTrue(received.stream().noneMatch(ServerEvent::hasError), "byte seals are not errors");
         } finally {
             ch.shutdownNow();
             srv.shutdownNow();

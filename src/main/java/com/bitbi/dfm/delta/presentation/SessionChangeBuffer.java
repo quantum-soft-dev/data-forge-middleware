@@ -32,24 +32,32 @@ final class SessionChangeBuffer {
         /** {@code seq > lastSeq + 1}: a sequence gap — the session must be rejected. */
         GAP,
         /** The record cap for one session was reached — the session must be rejected (OOM guard). */
-        OVERFLOW
+        OVERFLOW,
+        /** The byte budget for one session was reached — the session must be rejected (OOM guard). */
+        OVERFLOW_BYTES
     }
 
     private long lastSeq;
     private final List<ChangeRecord> accepted = new ArrayList<>();
     private final int maxRecords;
+    private final long maxBytes;
+    private long acceptedBytes;
 
     SessionChangeBuffer(long startSeq) {
-        this(startSeq, Integer.MAX_VALUE);
+        this(startSeq, Integer.MAX_VALUE, Long.MAX_VALUE);
     }
 
     /**
      * @param startSeq   the server watermark the session continues from
      * @param maxRecords the maximum records one session may buffer before {@link Result#OVERFLOW}
+     * @param maxBytes   the maximum cumulative serialized size (bytes) one session may buffer before
+     *                   {@link Result#OVERFLOW_BYTES} — the record cap alone lets a fat-but-few-rows
+     *                   snapshot buffer gigabytes on-heap
      */
-    SessionChangeBuffer(long startSeq, int maxRecords) {
+    SessionChangeBuffer(long startSeq, int maxRecords, long maxBytes) {
         this.lastSeq = startSeq;
         this.maxRecords = maxRecords;
+        this.maxBytes = maxBytes;
     }
 
     /**
@@ -70,8 +78,13 @@ final class SessionChangeBuffer {
         if (accepted.size() >= maxRecords) {
             return Result.OVERFLOW; // do not advance or retain — the caller rejects the session
         }
+        long size = record.getSerializedSize();
+        if (acceptedBytes + size > maxBytes) {
+            return Result.OVERFLOW_BYTES; // do not advance or retain — the caller rejects the session
+        }
         lastSeq = seq;
         accepted.add(record);
+        acceptedBytes += size;
         return Result.ACCEPTED;
     }
 
@@ -81,6 +94,11 @@ final class SessionChangeBuffer {
 
     int acceptedCount() {
         return accepted.size();
+    }
+
+    /** Cumulative serialized size of the accepted records (approximates the buffer's heap weight). */
+    long acceptedBytes() {
+        return acceptedBytes;
     }
 
     List<ChangeRecord> accepted() {

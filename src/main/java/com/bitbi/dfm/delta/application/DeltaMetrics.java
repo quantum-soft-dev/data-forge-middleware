@@ -14,6 +14,8 @@ import java.util.function.Supplier;
  * <ul>
  *   <li>{@code delta.sessions.started} / {@code delta.sessions.committed} — session lifecycle counters</li>
  *   <li>{@code delta.reconciliation.failures} — sessions rejected at SessionEnd (CR §10)</li>
+ *   <li>{@code delta.sessions.overflow} — sessions rejected for exceeding the per-session buffer
+ *       cap (the OOM guard), tagged {@code reason=records|bytes} by which cap tripped</li>
  *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
@@ -31,6 +33,8 @@ public class DeltaMetrics {
     private final Counter sessionsStarted;
     private final Counter sessionsCommitted;
     private final Counter reconciliationFailures;
+    private final Counter sessionOverflowsRecords;
+    private final Counter sessionOverflowsBytes;
     private final Timer checkpointDuration;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
@@ -45,6 +49,12 @@ public class DeltaMetrics {
         this.reconciliationFailures = Counter.builder("delta.reconciliation.failures")
                 .description("Delta sessions rejected for failing reconciliation at SessionEnd")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.sessionOverflowsRecords = Counter.builder("delta.sessions.overflow")
+                .description("Delta sessions rejected for exceeding the per-session buffer cap")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", "records").register(registry);
+        this.sessionOverflowsBytes = Counter.builder("delta.sessions.overflow")
+                .description("Delta sessions rejected for exceeding the per-session buffer cap")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", "bytes").register(registry);
         this.checkpointDuration = Timer.builder("delta.checkpoint.duration")
                 .description("Time to materialize a delta checkpoint")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
@@ -69,6 +79,16 @@ public class DeltaMetrics {
     /** A session was rejected at SessionEnd for failing reconciliation. */
     public void reconciliationFailed() {
         reconciliationFailures.increment();
+    }
+
+    /** A session was rejected for exceeding the per-session record cap. */
+    public void sessionOverflowedRecords() {
+        sessionOverflowsRecords.increment();
+    }
+
+    /** A session was rejected for exceeding the per-session byte budget. */
+    public void sessionOverflowedBytes() {
+        sessionOverflowsBytes.increment();
     }
 
     /** Record how far the committed watermark is ahead of the last checkpoint. Negative is ignored. */
