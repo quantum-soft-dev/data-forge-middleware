@@ -13,7 +13,7 @@
 
 ### Frontend
 - **React 19.2** + **TypeScript 5.6** + **Vite 5.4**
-- **TanStack Query v5** + **React Router v6** + **shadcn/ui** + **Tailwind CSS 3.4**
+- **TanStack Query v5** + **TanStack Router v1** (code-based routes in `src/app/router.tsx`) + **shadcn/ui** + **Tailwind CSS 3.4**
 - **@auth0/auth0-react 2.8.0** + **Axios** + **Zod** + **React Hook Form**
 - **Vitest + React Testing Library**
 
