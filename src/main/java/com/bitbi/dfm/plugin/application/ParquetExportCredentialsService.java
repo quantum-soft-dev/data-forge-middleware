@@ -85,12 +85,12 @@ public class ParquetExportCredentialsService {
 
         String login = (String) accountPlugin.getPluginData().get(LOGIN_FIELD);
         if (login == null) {
-            // Activation predates credential minting (should not happen) — mint a full pair.
-            login = ParquetExportCredentials.generate().login();
+            // Activation predates credential minting (should not happen) — backfill a login.
+            login = ParquetExportCredentials.generateLogin();
         }
 
         ParquetExportCredentials credentials =
-                new ParquetExportCredentials(login, ParquetExportCredentials.generate().password());
+                new ParquetExportCredentials(login, ParquetExportCredentials.generatePassword());
         accountPlugin.updatePluginData(Map.of(
                 LOGIN_FIELD, credentials.login(),
                 PASSWORD_HASH_FIELD, passwordEncoder.encode(credentials.password())));

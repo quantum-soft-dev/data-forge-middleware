@@ -34,14 +34,17 @@ class DownloadLinkPurgeSchedulerTest {
         properties.setPurgeRetentionDays(7);
         DownloadLinkPurgeScheduler scheduler =
                 new DownloadLinkPurgeScheduler(downloadLinkRepository, properties);
-        when(downloadLinkRepository.purge(any())).thenReturn(3);
+        when(downloadLinkRepository.purge(any(), any())).thenReturn(3);
 
         scheduler.purgeStaleLinks();
 
         ArgumentCaptor<LocalDateTime> cutoffCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(downloadLinkRepository).purge(cutoffCaptor.capture());
+        ArgumentCaptor<LocalDateTime> nowCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(downloadLinkRepository).purge(cutoffCaptor.capture(), nowCaptor.capture());
         LocalDateTime expected = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
         long driftSeconds = Math.abs(ChronoUnit.SECONDS.between(expected, cutoffCaptor.getValue()));
         assertTrue(driftSeconds < 60, "cutoff must be ~now-7d, drift was " + driftSeconds + "s");
+        long nowDrift = Math.abs(ChronoUnit.SECONDS.between(LocalDateTime.now(ZoneOffset.UTC), nowCaptor.getValue()));
+        assertTrue(nowDrift < 60, "now must be UTC application time, drift was " + nowDrift + "s");
     }
 }

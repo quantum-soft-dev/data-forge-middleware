@@ -149,8 +149,15 @@ public class ParquetExportApiController {
         try {
             return LocalDateTime.parse(since);
         } catch (DateTimeParseException e) {
+            // fall through: value may carry an offset (Z / +02:00) — normalize to UTC
+        }
+        try {
+            return java.time.OffsetDateTime.parse(since)
+                    .withOffsetSameInstant(java.time.ZoneOffset.UTC)
+                    .toLocalDateTime();
+        } catch (DateTimeParseException e) {
             throw new IllegalArgumentException(
-                    "Invalid 'since' value, expected ISO 8601 datetime (e.g. 2026-07-27T00:00:00)");
+                    "Invalid 'since' value, expected ISO 8601 datetime (e.g. 2026-07-27T00:00:00 or 2026-07-27T00:00:00Z)");
         }
     }
 

@@ -30,9 +30,9 @@ public class DownloadLinkPurgeScheduler {
 
     @Scheduled(fixedDelayString = "${plugin.parquet-export.purge-interval-ms:3600000}")
     public void purgeStaleLinks() {
-        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC)
-                .minusDays(properties.getPurgeRetentionDays());
-        int deleted = downloadLinkRepository.purge(cutoff);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime cutoff = now.minusDays(properties.getPurgeRetentionDays());
+        int deleted = downloadLinkRepository.purge(cutoff, now);
         if (deleted > 0) {
             log.info("Purged {} stale download links (cutoff={})", deleted, cutoff);
         }

@@ -54,7 +54,7 @@ public class ParquetExportBasicAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
+        String path = request.getRequestURI().substring(request.getContextPath().length());
         return !(path.equals(FILES_PATH) || path.startsWith(FILES_PATH + "/"));
     }
 

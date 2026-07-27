@@ -137,6 +137,21 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("Should accept since with UTC offset (Z) and normalize to UTC")
+    void shouldAcceptSinceWithOffset() throws Exception {
+        when(fileService.listFiles(eq(ACCOUNT_ID), eq(LocalDateTime.of(2026, 7, 1, 0, 0)),
+                any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(new FileListing(List.of(), 0, 50, false));
+        when(downloadLinkService.registerLinks(eq(ACCOUNT_PLUGIN_ID), eq(List.of())))
+                .thenReturn(List.of());
+
+        mockMvc.perform(get(FILES_PATH)
+                        .header("Authorization", basicAuth("pex_testLogin001:goodPassword"))
+                        .param("since", "2026-07-01T02:00:00+02:00"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("Should return 400 for malformed since")
     void shouldReturn400ForMalformedSince() throws Exception {
         mockMvc.perform(get(FILES_PATH)

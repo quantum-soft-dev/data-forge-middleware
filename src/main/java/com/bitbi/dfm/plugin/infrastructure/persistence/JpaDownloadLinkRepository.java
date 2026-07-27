@@ -46,8 +46,8 @@ public interface JpaDownloadLinkRepository
     @Transactional
     @Query(value = """
             DELETE FROM download_links dl
-             WHERE (dl.consumed_at IS NOT NULL OR dl.expires_at < NOW())
+             WHERE (dl.consumed_at IS NOT NULL OR dl.expires_at < :now)
                AND dl.created_at < :cutoff
             """, nativeQuery = true)
-    int purge(@Param("cutoff") LocalDateTime cutoff);
+    int purge(@Param("cutoff") LocalDateTime cutoff, @Param("now") LocalDateTime now);
 }

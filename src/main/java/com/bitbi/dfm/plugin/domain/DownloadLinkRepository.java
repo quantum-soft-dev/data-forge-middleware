@@ -21,9 +21,11 @@ public interface DownloadLinkRepository {
     int consume(String token, LocalDateTime now);
 
     /**
-     * Delete consumed or expired links created before the cutoff.
+     * Delete consumed or expired links created before the cutoff. {@code now} is passed in
+     * (UTC application time) so the expiry comparison uses the same clock as {@link #consume},
+     * not the database session's timezone.
      *
      * @return number of rows deleted
      */
-    int purge(LocalDateTime cutoff);
+    int purge(LocalDateTime cutoff, LocalDateTime now);
 }

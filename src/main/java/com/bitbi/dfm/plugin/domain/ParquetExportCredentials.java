@@ -25,8 +25,17 @@ public record ParquetExportCredentials(String login, String password) {
     }
 
     public static ParquetExportCredentials generate() {
-        return new ParquetExportCredentials(LOGIN_PREFIX + randomAlphanumeric(LOGIN_LENGTH),
-                randomAlphanumeric(PASSWORD_LENGTH));
+        return new ParquetExportCredentials(generateLogin(), generatePassword());
+    }
+
+    /** A fresh login only — used when rotation must backfill a missing login. */
+    public static String generateLogin() {
+        return LOGIN_PREFIX + randomAlphanumeric(LOGIN_LENGTH);
+    }
+
+    /** A fresh password only — used by rotation, which keeps the existing login. */
+    public static String generatePassword() {
+        return randomAlphanumeric(PASSWORD_LENGTH);
     }
 
     /**
