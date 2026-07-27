@@ -196,6 +196,42 @@ class BatchTerminalTransitionLockingIntegrationTest extends BaseIntegrationTest 
         assertEquals(BatchStatus.NOT_COMPLETED, reload(batchId).getStatus());
     }
 
+    @Test
+    void heartbeatIsIgnoredOnceTheBatchIsTerminal() {
+        // 031/T10: touchActivity updated by id alone, so a late gRPC frame stamped last_activity_at
+        // onto a COMPLETED / FAILED / NOT_COMPLETED batch. Harmless to the sweeper (it filters on
+        // IN_PROGRESS) but it fabricates evidence of a live session for whoever reads the row while
+        // investigating an incident.
+        for (BatchStatus terminal : List.of(BatchStatus.COMPLETED, BatchStatus.FAILED,
+                BatchStatus.NOT_COMPLETED, BatchStatus.CANCELLED)) {
+            UUID batchId = expiredBatch("term-" + terminal.name().toLowerCase());
+            jdbc.update("UPDATE batches SET status = ?, completed_at = now() WHERE id = ?",
+                    terminal.name(), batchId);
+            LocalDateTime before = lastActivityOf(batchId);
+
+            batchLifecycleService.touchActivity(batchId);
+
+            assertEquals(before, lastActivityOf(batchId),
+                    "a late heartbeat must not touch a " + terminal + " batch");
+        }
+    }
+
+    @Test
+    void heartbeatStillStampsALiveBatch() {
+        UUID batchId = expiredBatch("livebeat");
+        LocalDateTime before = lastActivityOf(batchId);
+
+        batchLifecycleService.touchActivity(batchId);
+
+        assertTrue(lastActivityOf(batchId).isAfter(before),
+                "an IN_PROGRESS batch still records liveness");
+    }
+
+    private LocalDateTime lastActivityOf(UUID batchId) {
+        return jdbc.queryForObject("SELECT last_activity_at FROM batches WHERE id = ?",
+                LocalDateTime.class, batchId);
+    }
+
     private void assertStaleTerminalWriteIsRejected(Consumer<Batch> transition, String tag) {
         UUID batchId = expiredBatch(tag);
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);

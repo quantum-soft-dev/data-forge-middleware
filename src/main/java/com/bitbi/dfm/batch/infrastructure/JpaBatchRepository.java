@@ -62,13 +62,22 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      * {@code OptimisticLockingFailureException} into the gRPC ingest path, killing live sessions.
      * </p>
      *
+     * <p>
+     * Restricted to IN_PROGRESS batches (031/T10): a gRPC frame that arrives after the session's
+     * batch was completed, failed or reaped would otherwise stamp fresh activity onto a terminal
+     * row. The sweeper filters on IN_PROGRESS so nothing misbehaved, but the row then carried
+     * evidence of a live session that had already ended — misleading anyone reading it during an
+     * incident review.
+     * </p>
+     *
      * @param batchId batch identifier
      * @param now     activity timestamp
-     * @return number of rows updated (0 when the batch no longer exists)
+     * @return number of rows updated (0 when the batch is gone or no longer IN_PROGRESS)
      */
     @Modifying
     @Transactional
-    @Query("UPDATE Batch b SET b.lastActivityAt = :now WHERE b.id = :batchId")
+    @Query("UPDATE Batch b SET b.lastActivityAt = :now WHERE b.id = :batchId "
+            + "AND b.status = com.bitbi.dfm.batch.domain.BatchStatus.IN_PROGRESS")
     int touchActivity(UUID batchId, LocalDateTime now);
 
     /**
