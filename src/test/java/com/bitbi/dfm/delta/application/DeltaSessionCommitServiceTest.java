@@ -92,6 +92,37 @@ class DeltaSessionCommitServiceTest {
     }
 
     @Test
+    void commitSegmentPersistsAndAdvancesWatermarkWithoutCompletingBatch() {
+        // 029: a mid-session seal is a durability event, not a batch boundary — the session's
+        // single batch must stay IN_PROGRESS across N seals.
+        ChangelogSegment segment = mock(ChangelogSegment.class);
+        when(segment.getS3Key()).thenReturn("delta/site/segments/s1.pb.gz");
+        when(segmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
+        List<ChangeRecord> records = List.of(ChangeRecord.newBuilder().setSeq(100L).build());
+
+        String key = commit.commitSegment(SITE, BATCH, "CONTINUOUS", 1L, 100L, records);
+
+        assertEquals("delta/site/segments/s1.pb.gz", key);
+        InOrder order = inOrder(segmentService, syncStateService);
+        order.verify(segmentService).persist(SITE, BATCH, "CONTINUOUS", 1L, records);
+        order.verify(syncStateService).advanceWatermark(SITE, 100L);
+        verify(batchLifecycleService, never()).completeBatch(any());
+        verify(batchLifecycleService, never()).startBatch(any(), any());
+        verify(egressWorker).wake();
+    }
+
+    @Test
+    void commitSegmentWithEmptyRecordsIsNoop() {
+        String key = commit.commitSegment(SITE, BATCH, "CONTINUOUS", 5L, 4L, List.of());
+
+        assertEquals("", key);
+        verify(segmentService, never()).persist(any(), any(), any(), anyLong(), any());
+        verify(syncStateService, never()).advanceWatermark(any(), anyLong());
+        verify(batchLifecycleService, never()).completeBatch(any());
+        verify(egressWorker, never()).wake();
+    }
+
+    @Test
     void nonRebaselineCommitDoesNotTouchTheBaseline() {
         when(segmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(mock(ChangelogSegment.class));
         commit.commit(SITE, BATCH, "DELTA", 1L, 1L, List.of(ChangeRecord.newBuilder().setSeq(1L).build()));
