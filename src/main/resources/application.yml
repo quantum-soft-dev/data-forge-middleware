@@ -203,9 +203,12 @@ delta:
     # session; CONTINUOUS seals reset the buffer far below it, so there it only backstops.
     # 0 = auto: an eighth of the max heap (retained heap is ~3-5x the serialized size).
     max-session-bytes: ${DELTA_MAX_SESSION_BYTES:0}
-    # Staged (dropped, awaiting resume) sessions older than this are evicted and their batches failed
-    # (default just over the 60-min batch timeout), so an abandoned session cannot leak its buffer.
-    staged-ttl-millis: ${DELTA_STAGED_TTL_MILLIS:3900000}
+    # Staged (dropped, awaiting resume) sessions older than this are evicted and their batches failed,
+    # so an abandoned session cannot leak its buffer. Must stay BELOW batch.timeout.minutes with room
+    # for the sweep interval below (50 min + 5 min sweep < 60 min): a staged session outliving its
+    # batch is resumable onto a batch the timeout sweeper has already reaped, which used to fail late
+    # at the final commit (030). Guarded by DeltaIngestionStagedTtlConfigTest.
+    staged-ttl-millis: ${DELTA_STAGED_TTL_MILLIS:3000000}
     # How often the staged-session eviction sweep runs.
     staged-sweep-millis: ${DELTA_STAGED_SWEEP_MILLIS:300000}
     # CONTINUOUS mode also seals a non-empty segment this long after the last seal (time trigger),

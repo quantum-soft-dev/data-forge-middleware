@@ -84,7 +84,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.max-session-bytes:0}") long maxSessionBytes,
                                  @org.springframework.beans.factory.annotation.Value(
-                                         "${delta.ingestion.staged-ttl-millis:3900000}") long stagedTtlMillis,
+                                         "${delta.ingestion.staged-ttl-millis:3000000}") long stagedTtlMillis,
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis,
                                  @org.springframework.beans.factory.annotation.Value(
@@ -122,9 +122,15 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     }
 
     /**
-     * Evict staged sessions older than the TTL (default just over the 60-min batch timeout) and fail
-     * their orphaned batches, so a client that drops mid-session and never resumes cannot leak its
-     * buffer (and the still-active batch) indefinitely (review r4).
+     * Evict staged sessions older than the TTL and fail their orphaned batches, so a client that
+     * drops mid-session and never resumes cannot leak its buffer (and the still-active batch)
+     * indefinitely (review r4).
+     * <p>
+     * 030: the TTL sits <em>below</em> {@code batch.timeout.minutes} (50 min against 60, leaving
+     * room for this sweep's 5-minute granularity). It used to sit just above it, which left a
+     * window where a staged session was still resumable onto a batch the timeout sweeper had
+     * already reaped — a failure that only surfaced at the final commit.
+     * </p>
      */
     @org.springframework.scheduling.annotation.Scheduled(fixedDelayString =
             "${delta.ingestion.staged-sweep-millis:300000}")
