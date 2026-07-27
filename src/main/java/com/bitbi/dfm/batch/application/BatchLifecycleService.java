@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -328,6 +329,42 @@ public class BatchLifecycleService {
 
         logger.info("Batch marked as NOT_COMPLETED: batchId={}", batchId);
         return saved;
+    }
+
+    /**
+     * Reap a timed-out batch, but only while it is <em>still</em> expired (030/T06).
+     * <p>
+     * The timeout sweeper selects expired batches and then transitions them one by one. A live
+     * Delta v2 session can touch its batch in that gap; {@link #markBatchNotCompleted(UUID)} would
+     * kill it anyway — the very incident feature 029 exists to prevent. (Until 030 the
+     * optimistic-lock bump in the old liveness write accidentally blocked that; removing the bump —
+     * necessary, since it was crashing the ingest path — also removed the accidental guard.) This
+     * conditional update re-checks status and cutoff atomically, so a revived session survives.
+     * </p>
+     *
+     * @param batchId    batch identifier
+     * @param cutoffTime the cutoff the sweeper's SELECT used; never recompute it per batch, or a
+     *                   batch can be judged against a cutoff it was never selected by
+     * @return true when the batch was reaped, false when it was revived, vanished or is terminal
+     */
+    public boolean markBatchNotCompletedIfStillExpired(UUID batchId, LocalDateTime cutoffTime) {
+        // accountId is immutable, so reading it up front is safe and keeps the expiry event
+        // publishable without re-reading a row the bulk update has since changed.
+        Optional<Batch> existing = batchRepository.findById(batchId);
+        if (existing.isEmpty()) {
+            logger.debug("Timeout sweep: batch vanished, skipping: batchId={}", batchId);
+            return false;
+        }
+        UUID accountId = existing.get().getAccountId();
+
+        if (batchRepository.markNotCompletedIfStillExpired(batchId, cutoffTime, LocalDateTime.now()) == 0) {
+            logger.debug("Timeout sweep: batch revived or already terminal, skipping: batchId={}", batchId);
+            return false;
+        }
+
+        eventPublisher.publishEvent(new BatchExpiredEvent(batchId, accountId));
+        logger.info("Batch marked as NOT_COMPLETED by timeout sweep: batchId={}", batchId);
+        return true;
     }
 
     /**

@@ -64,16 +64,27 @@ public class BatchTimeoutScheduler {
         logger.info("Found {} expired batches to mark as NOT_COMPLETED", expiredBatches.size());
 
         int successCount = 0;
+        int skippedCount = 0;
         int failureCount = 0;
 
         for (Batch batch : expiredBatches) {
             try {
-                batchLifecycleService.markBatchNotCompleted(batch.getId());
-                successCount++;
+                // 030/T06: conditional on the SAME cutoff this run selected with. A live Delta v2
+                // session can touch its batch between the SELECT above and this transition; an
+                // unconditional mark would kill it, which is the incident 029 exists to prevent.
+                // Recomputing the cutoff here would judge a batch against a cutoff it was never
+                // selected by, so it is passed down instead.
+                if (batchLifecycleService.markBatchNotCompletedIfStillExpired(batch.getId(), cutoffTime)) {
+                    successCount++;
+                } else {
+                    // Revived by a live session, or already terminal (e.g. another instance got
+                    // there first) — a normal outcome, not a failure.
+                    skippedCount++;
+                }
             } catch (OptimisticLockException e) {
                 // Another scheduler instance already updated this batch - this is expected
                 logger.debug("Batch already updated by another instance: batchId={}", batch.getId());
-                successCount++; // Count as success since batch was processed
+                skippedCount++;
             } catch (Exception e) {
                 logger.error("Failed to mark batch as NOT_COMPLETED: batchId={}, error={}",
                            batch.getId(), e.getMessage(), e);
@@ -81,7 +92,8 @@ public class BatchTimeoutScheduler {
             }
         }
 
-        logger.info("Batch timeout check completed: {} succeeded, {} failed",
-                   successCount, failureCount);
+        logger.info("Batch timeout check completed: {} succeeded, {} skipped (still live or already terminal), "
+                        + "{} failed",
+                   successCount, skippedCount, failureCount);
     }
 }

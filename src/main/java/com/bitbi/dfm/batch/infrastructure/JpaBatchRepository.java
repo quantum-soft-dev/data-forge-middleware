@@ -65,6 +65,34 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
     int touchActivity(UUID batchId, LocalDateTime now);
 
     /**
+     * Reap an expired batch, but only while it is <em>still</em> expired and IN_PROGRESS (030/T06).
+     * <p>
+     * The status and cutoff predicates make the sweeper's transition atomic with its own decision.
+     * Between the sweeper's SELECT and this UPDATE a live Delta v2 session may touch the batch, and
+     * killing it then is precisely the incident 029 set out to prevent. PostgreSQL's READ COMMITTED
+     * re-evaluates the WHERE clause after waiting on a concurrent writer's row lock, so a touch
+     * that lands first turns this into a 0-row no-op instead of a lost live session.
+     * </p>
+     * <p>
+     * Mirrors {@link #findExpiredBatches}' {@code COALESCE(lastActivityAt, startedAt)} so v1
+     * batches (which never record activity) keep their started_at-based expiry.
+     * </p>
+     *
+     * @param batchId    batch identifier
+     * @param cutoffTime the cutoff the sweeper's SELECT used
+     * @param now        completion timestamp
+     * @return 1 when reaped, 0 when revived or already terminal
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE Batch b SET b.status = com.bitbi.dfm.batch.domain.BatchStatus.NOT_COMPLETED, "
+            + "b.completedAt = :now "
+            + "WHERE b.id = :batchId "
+            + "AND b.status = com.bitbi.dfm.batch.domain.BatchStatus.IN_PROGRESS "
+            + "AND COALESCE(b.lastActivityAt, b.startedAt) < :cutoffTime")
+    int markNotCompletedIfStillExpired(UUID batchId, LocalDateTime cutoffTime, LocalDateTime now);
+
+    /**
      * Find all expired IN_PROGRESS batches.
      * <p>
      * Used by BatchTimeoutScheduler to mark batches as NOT_COMPLETED.
