@@ -164,6 +164,26 @@ public class BatchLifecycleService {
     }
 
     /**
+     * Whether a batch is still live and may take further work (030).
+     * <p>
+     * Used by the Delta v2 resume path: a staged session parked for a reconnect can outlive its
+     * batch, because the timeout sweeper reaps an IN_PROGRESS batch after
+     * {@code batch.timeout.minutes}. Re-attaching to a reaped batch only surfaces at the final
+     * commit, so the resume checks first. A missing batch answers {@code false} rather than
+     * throwing — the caller wants a decision, not an exception.
+     * </p>
+     *
+     * @param batchId batch identifier
+     * @return true when the batch exists and is IN_PROGRESS
+     */
+    @Transactional(readOnly = true)
+    public boolean isBatchInProgress(UUID batchId) {
+        return batchRepository.findById(batchId)
+                .map(batch -> batch.getStatus() == BatchStatus.IN_PROGRESS)
+                .orElse(false);
+    }
+
+    /**
      * Complete batch successfully.
      * <p>
      * Validates batch is IN_PROGRESS before completion.

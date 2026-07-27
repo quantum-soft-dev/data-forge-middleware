@@ -446,6 +446,8 @@ class DeltaIngestionStreamChangesContractTest {
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
         when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        // 030/T02: the batch is still live, so the resume re-attaches to it.
+        when(batchLifecycle.isBatchInProgress(batchId)).thenReturn(true);
 
         // --- Session 1: open, stage 121 & 122, then drop mid-stream (no SessionEnd). ---
         List<ServerEvent> first = new CopyOnWriteArrayList<>();
@@ -490,6 +492,100 @@ class DeltaIngestionStreamChangesContractTest {
         ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
         verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("DELTA"), eq(121L), records.capture());
         assertEquals(3, records.getValue().size(), "segment spans staged + replayed records");
+    }
+
+    @Test
+    void resumeOntoReapedBatchOpensFreshBatchAndKeepsStagedRecords() throws Exception {
+        // 030/T02: a staged session can outlive its batch — the timeout sweeper reaps an
+        // IN_PROGRESS batch into NOT_COMPLETED while the client is away. Re-attaching blindly used
+        // to fail late, at the final commit. The resume now notices and opens a fresh batch,
+        // carrying the staged buffer into it so nothing staged before the drop is lost.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID reapedBatchId = UUID.randomUUID();
+        UUID freshBatchId = UUID.randomUUID();
+        Batch reapedBatch = mockBatch(reapedBatchId);
+        Batch freshBatch = mockBatch(freshBatchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(reapedBatch, freshBatch);
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        // --- Session 1: open, stage 121 & 122, then drop mid-stream (no SessionEnd). ---
+        List<ServerEvent> first = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(collect(first, new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.DELTA, 121L));
+        s1.onNext(change("t", Op.INSERT, 121L));
+        s1.onNext(change("t", Op.INSERT, 122L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        // --- The sweeper reaps the staged batch while the client is away. ---
+        when(batchLifecycle.isBatchInProgress(reapedBatchId)).thenReturn(false);
+
+        // --- Session 2: reconnect. The staged batch is terminal, so a fresh one is opened. ---
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 121L));
+
+        assertTrue(second.get(0).hasOpened(), "resume still opens the session");
+        assertEquals(RecoveryAction.RESUME_FROM, second.get(0).getOpened().getAction());
+        assertEquals(123L, second.get(0).getOpened().getResumeFromSeq(),
+                "staged records survive the batch swap — resume from highest staged seq + 1");
+        assertEquals(freshBatchId.toString(), second.get(0).getOpened().getServerSessionId(),
+                "the session runs under the fresh batch, not the reaped one");
+
+        s2.onNext(change("t", Op.INSERT, 123L));
+        s2.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(123L)
+                .putPerTable("t", TableStats.newBuilder().setInserts(3).build()).build()).build());
+        s2.onCompleted();
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "resumed stream did not complete");
+        ServerEvent committed = second.get(second.size() - 1);
+        assertTrue(committed.hasCommitted(), "resumed session commits under the fresh batch");
+        assertEquals(123L, committed.getCommitted().getCommittedSeq());
+
+        verify(batchLifecycle, times(2)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).completeBatch(freshBatchId);
+        verify(batchLifecycle, never()).completeBatch(reapedBatchId);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
+        verify(changelogSegmentService)
+                .persist(eq(SITE), eq(freshBatchId), eq("DELTA"), eq(121L), records.capture());
+        assertEquals(3, records.getValue().size(),
+                "segment spans the staged + replayed records — no data lost to the batch swap");
+    }
+
+    @Test
+    void resumeOntoReapedBatchSurfacesActiveSessionExistsWhenNoBatchCanOpen() throws Exception {
+        // 030/T02: the fresh batch obeys "one active batch per site" like any other session start.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID reapedBatchId = UUID.randomUUID();
+        Batch reapedBatch = mockBatch(reapedBatchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenReturn(reapedBatch)
+                .thenThrow(new BatchLifecycleService.ActiveBatchExistsException(
+                        "Site already has an active batch: " + SITE));
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        List<ServerEvent> first = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(collect(first, new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.DELTA, 121L));
+        s1.onNext(change("t", Op.INSERT, 121L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        when(batchLifecycle.isBatchInProgress(reapedBatchId)).thenReturn(false);
+
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 121L));
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "rejected resume did not complete");
+        ServerEvent last = second.get(second.size() - 1);
+        assertTrue(last.hasError(), "resume is rejected, not silently re-attached");
+        assertEquals(ErrorCode.ACTIVE_SESSION_EXISTS, last.getError().getCode());
     }
 
     @Test

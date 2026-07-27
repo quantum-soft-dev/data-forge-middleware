@@ -384,6 +384,39 @@ class BatchLifecycleServiceTest {
     }
 
     @Nested
+    @DisplayName("isBatchInProgress()")
+    class IsBatchInProgress {
+
+        @Test
+        @DisplayName("should be true for an IN_PROGRESS batch")
+        void shouldBeTrueForInProgress() {
+            Batch batch = mock(Batch.class);
+            when(batch.getStatus()).thenReturn(BatchStatus.IN_PROGRESS);
+            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+
+            assertThat(service.isBatchInProgress(batchId)).isTrue();
+        }
+
+        @Test
+        @DisplayName("should be false for a batch the timeout sweeper already reaped")
+        void shouldBeFalseForNotCompleted() {
+            Batch batch = mock(Batch.class);
+            when(batch.getStatus()).thenReturn(BatchStatus.NOT_COMPLETED);
+            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+
+            assertThat(service.isBatchInProgress(batchId)).isFalse();
+        }
+
+        @Test
+        @DisplayName("should be false for a missing batch instead of throwing")
+        void shouldBeFalseWhenMissing() {
+            when(batchRepository.findById(batchId)).thenReturn(Optional.empty());
+
+            assertThat(service.isBatchInProgress(batchId)).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("markBatchHasErrors()")
     class MarkBatchHasErrors {
 
