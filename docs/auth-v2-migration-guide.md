@@ -419,21 +419,26 @@ refresh(A) -> reuse!     401 refresh_token_revoked, B revoked as well
 refresh(B)               401 refresh_token_revoked
 ```
 
-**Scope is the rotation chain, not the site.** Every run of the Device Authorization Flow starts an
-independent chain (a "token family", tracked internally by `family_id`); each rotation inherits it.
-Reuse revokes one chain:
+**Scope is the rotation chain, not the site.** Every run of the Device Authorization Flow starts a
+chain (a "token family", tracked internally by `family_id`); each rotation inherits it. Reuse
+revokes one chain:
 
 ```
-session A:  A1 -> A2        session B:  B1 -> B2       (same site, independent chains)
+old session:  A1 -> A2      current session:  B1 -> B2      (same site, different chains)
 refresh(A1) -> reuse!       401, chain A dead (A1 and A2)
-refresh(B2)                 200, session B unaffected
+refresh(B2)                 200, the current session is unaffected
 ```
 
 This is a security property, not tidiness. A site accumulates the revoked tokens of every past
-session — approving a new Device Authorization deliberately revokes the previous session
-(see the FAQ), and rotation revokes a token on every refresh. If reuse revoked site-wide, any one of
-those historical tokens — long dead and otherwise useless — would become a repeatable way to log out
-whichever session is currently live, by anyone who kept a copy.
+session — rotation revokes one on every refresh, and re-authorization revokes the previous session
+wholesale. If reuse revoked site-wide, any one of those historical tokens — long dead and otherwise
+useless — would become a repeatable way to log out whatever session is live now, for anyone who kept
+a copy.
+
+**This does not mean a site runs several sessions at once.** One site is one client installation:
+re-running the device flow with the same site name reattaches to the same site and revokes its
+tokens site-wide, so at most one chain is live at a time (see the next section). `family_id` scopes
+reuse detection; it is not a parallel-session feature.
 
 Not treated as reuse (the chain survives):
 
@@ -450,8 +455,21 @@ no usable response, **do not replay the old token** — treat it as a lost sessi
 Device Authorization Flow, or persist the new token before acknowledging the response.
 
 Concurrency note: parallel refreshes from several threads/processes with the **same** token count as
-reuse and kill that chain. Serialize refreshes within a session. Separate sessions of the same site
-refresh independently and never interfere.
+reuse and kill that chain. Serialize refreshes within a client.
+
+### 1b. Re-authorization supersedes the previous session
+
+A site is one client installation. `getOrCreateSite` keys on `(accountId, siteName)`, so running the
+Configurator wizard again with the same site name reattaches to the **existing** site rather than
+creating a second one — and approving it revokes that site's refresh tokens, ending the previous
+session.
+
+This is intentional: otherwise the refresh token left on the old installation would stay usable for
+its full 90-day TTL, on a machine that may since have been decommissioned, re-imaged or passed on.
+
+**Client impact:** after re-running the wizard, the previous installation stops working immediately
+and must be re-authorized to come back. If you want two machines collecting in parallel, give them
+**different site names** — they are then different sites, not two sessions of one site.
 
 ### 2. Site and parent account status enforced on every request
 
@@ -481,7 +499,7 @@ token itself, so a future TTL change cannot make the response drift from reality
 
 | Change | Compatible? | What breaks |
 |---|---|---|
-| Reuse detection revokes the reused token's **rotation chain** | **Behaviour change (intended)** | A device replaying an already-rotated refresh token is fully logged out and must re-run the Device Authorization Flow. Previously the replay just failed and every token kept working. Other sessions of the same site are **not** affected. |
+| Reuse detection revokes the reused token's **rotation chain** | **Behaviour change (intended)** | A device replaying an already-rotated refresh token is fully logged out and must re-run the Device Authorization Flow. Previously the replay just failed and every token kept working. Tokens outside that chain — e.g. the site's current session when an older token is replayed — are **not** affected. |
 | Parent account status checked on validation | **Behaviour change (intended)** | Sites of a deactivated account start returning `401` immediately instead of continuing until their JWT expires (up to 1 hour). |
 | `refreshTokenExpiresAt` read from the entity | Fully compatible | Nothing — same value, same format. |
 | `family_id` on `refresh_tokens` (migration **V43**) | Fully compatible | Nothing. Additive column, `NOT NULL` with a database-side default; existing tokens stay valid and each becomes a chain of one. Safe for rolling deploys — an instance running the previous version inserts without the column and the default assigns an isolated family. |
@@ -564,5 +582,5 @@ A: Yes. Site names support unicode characters (letters, numbers, dots, hyphens, 
 | JWT TTL | 24 hours | 1 hour |
 | JWT claims | `siteId`, `accountId`, `domain` | `siteId`, `accountId` (no `domain`) |
 | S3 paths (new batches) | `{accountId}/{compositeDomain}/{date}/{time}/` | `{accountId}/{siteId}/{date}/{time}/` |
-| Refresh token reuse | Replay rejected, every token survived | Replay revokes that token's rotation chain (re-authorization required); other sessions of the site are untouched |
+| Refresh token reuse | Replay rejected, every token survived | Replay revokes that token's rotation chain (re-authorization required); tokens outside that chain, such as the site's current session, are untouched |
 | Account deactivation | Effective when the access token expires (up to 1h) | Effective immediately on the next request |

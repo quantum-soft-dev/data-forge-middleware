@@ -3,10 +3,16 @@
 -- Author: Data Forge Team
 -- Date: 2026-07-27
 --
--- Refresh token reuse detection must revoke the compromised ROTATION CHAIN, not every
--- token of the site. A site legitimately holds several independent chains at once - each
--- run of the Device Authorization Flow starts one - so revoking by site_id let anyone
--- holding a single stale, already-revoked token repeatedly kill the site's live session.
+-- Refresh token reuse detection must revoke the compromised ROTATION CHAIN, not every token
+-- the site ever had. A site accumulates the revoked tokens of all its past sessions - rotation
+-- revokes one on every refresh, and re-authorization revokes the previous session wholesale -
+-- so revoking by site_id let anyone holding a single stale, already-revoked token replay it to
+-- kill the site's current live session, repeatedly.
+--
+-- family_id scopes reuse detection ONLY. It does not introduce parallel sessions: one site is
+-- one client installation, and re-running the Device Authorization Flow with the same site name
+-- reattaches to that site and still revokes its tokens site-wide, so at most one family is live
+-- at a time (see DeviceAuthorizationService.verify, DeviceFlowSessionSupersedeContractTest).
 --
 -- Backfill strategy: every pre-existing row gets its OWN unique family_id, i.e. each legacy
 -- token is a family of one. gen_random_uuid() is VOLATILE, so ADD COLUMN ... DEFAULT rewrites
