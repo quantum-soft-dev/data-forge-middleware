@@ -341,7 +341,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 // budget, which then only backstops misconfiguration.
                 boolean bytesReached = buffer.acceptedBytes() >= continuousSealBytes;
                 if (continuous && (sizeReached || timeReached || bytesReached)) {
-                    sealContinuous(true);
+                    sealSegment();
                 }
             }
 
@@ -485,9 +485,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             /**
-             * Commit orchestration for one segment: persist it, advance the watermark, complete the
-             * batch, record metrics, and emit {@code SessionCommitted}. Shared by {@code SessionEnd}
-             * and continuous sealing.
+             * Session-completing commit: persist the final segment (when non-empty), advance the
+             * watermark, complete the session's batch, record metrics, and emit
+             * {@code SessionCommitted}. Used by {@code SessionEnd} and the final continuous flush;
+             * mid-stream seals go through {@link #sealSegment()} instead and never touch the batch.
              */
             private void emitSealed(long committedSeq, List<ChangeRecord> records, boolean rebaselineCommit) {
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
@@ -507,21 +508,27 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             /**
-             * Seal the current continuous-mode segment (T5.4). When {@code continueStream} is true,
-             * open the next segment under a fresh batch and keep the stream open; otherwise this is
-             * the final flush on stream close.
+             * Seal the current continuous-mode segment mid-stream (T5.4, reshaped by 029): the
+             * segment commits durably under the session's single batch and the buffer restarts —
+             * the batch itself stays {@code IN_PROGRESS} until the session closes. A seal is a
+             * storage-durability event, not a batch boundary.
              */
-            private void sealContinuous(boolean continueStream) {
+            private void sealSegment() {
                 long committedSeq = buffer.lastSeq();
-                emitSealed(committedSeq, buffer.accepted(), false); // CONTINUOUS is never a rebaseline
+                long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
+                String segmentKey = commitService.commitSegment(
+                        siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
+                metrics.recordSeqLag(committedSeq - checkpointSeq);
+                responseObserver.onNext(ServerEvent.newBuilder()
+                        .setCommitted(SessionCommitted.newBuilder()
+                                .setCommittedSeq(committedSeq)
+                                .setSegmentS3Key(segmentKey)
+                                .build())
+                        .build());
                 lastSealMillis = System.currentTimeMillis();
-                if (continueStream) {
-                    batchId = batchLifecycleService.startBatch(accountId, siteId).getId();
-                    firstSeq = committedSeq + 1;
-                    buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, maxSessionBytes);
-                    sinceAck = 0;
-                    metrics.sessionStarted();
-                }
+                firstSeq = committedSeq + 1;
+                buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, maxSessionBytes);
+                sinceAck = 0;
             }
 
             /**
@@ -608,12 +615,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
                 try {
                     if (continuous) {
-                        // Flush the final segment and complete its batch, then close (T5.4). Even an
-                        // empty buffer must be sealed: after a threshold seal opened a fresh batch, a
-                        // clean close with no further records would otherwise leave that batch
-                        // IN_PROGRESS, blocking the site with ACTIVE_SESSION_EXISTS until the sweeper (P1).
+                        // Flush the final segment (possibly empty — no segment row is written then)
+                        // and complete the session's single batch, then close (T5.4/029). Even a
+                        // zero-record close must complete the batch: it is one honest upload attempt,
+                        // and an IN_PROGRESS leftover would block the site with ACTIVE_SESSION_EXISTS
+                        // until the sweeper (P1).
                         if (buffer != null) {
-                            sealContinuous(false);
+                            emitSealed(buffer.lastSeq(), buffer.accepted(), false);
+                            committed = true;
                         }
                     } else {
                         // Half-close without SessionEnd = abandoned periodic session — stage for resume (T5.1).

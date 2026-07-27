@@ -527,15 +527,13 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
-    void continuousModeSealsSegmentsWithoutSessionEnd() throws Exception {
+    void continuousModeSealsSegmentsUnderOneSessionBatch() throws Exception {
+        // 029: seals are durability events, not batch boundaries — one client session = one batch,
+        // however many ~100-record segments it seals.
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
-        UUID id1 = UUID.randomUUID();
-        UUID id2 = UUID.randomUUID();
-        UUID id3 = UUID.randomUUID();
-        Batch b1 = mockBatch(id1);
-        Batch b2 = mockBatch(id2);
-        Batch b3 = mockBatch(id3);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
 
         long total = 250L;
         List<ServerEvent> received = runSession(req -> {
@@ -555,32 +553,30 @@ class DeltaIngestionStreamChangesContractTest {
                 "each sealed segment reports an s3 key"));
         assertTrue(received.stream().noneMatch(ServerEvent::hasError), "no error in continuous mode");
 
-        // One batch per sealed segment.
-        verify(batchLifecycle, times(3)).startBatch(ACCOUNT, SITE);
-        verify(batchLifecycle).completeBatch(id1);
-        verify(batchLifecycle).completeBatch(id2);
-        verify(batchLifecycle).completeBatch(id3);
+        // One batch for the whole session, completed exactly once at close.
+        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).completeBatch(batchId);
+        verify(batchLifecycle, never()).failBatch(any());
 
-        // Three segments, contiguous and complete: [1..100], [101..200], [201..250].
-        verify(changelogSegmentService).persist(eq(SITE), eq(id1), eq("CONTINUOUS"), eq(1L),
+        // Three segments, contiguous and complete, all under the session's batch: [1..100],
+        // [101..200], [201..250].
+        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
                 argThat((List<ChangeRecord> r) -> r.size() == 100));
-        verify(changelogSegmentService).persist(eq(SITE), eq(id2), eq("CONTINUOUS"), eq(101L),
+        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(101L),
                 argThat((List<ChangeRecord> r) -> r.size() == 100));
-        verify(changelogSegmentService).persist(eq(SITE), eq(id3), eq("CONTINUOUS"), eq(201L),
+        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(201L),
                 argThat((List<ChangeRecord> r) -> r.size() == 50));
     }
 
     @Test
-    void continuousExactThresholdCloseDoesNotStrandTheFreshBatch() throws Exception {
-        // Exactly 100 records: the threshold seal commits batch 1 and opens a fresh batch 2 with an
-        // empty buffer. A clean half-close must complete batch 2 too, or it stays IN_PROGRESS and
-        // blocks the site with ACTIVE_SESSION_EXISTS until the 60-min sweeper (P1).
+    void continuousExactThresholdCloseCompletesTheSessionBatchOnce() throws Exception {
+        // Exactly 100 records: the threshold seal commits a segment but keeps the session's batch
+        // open; the clean half-close completes that same batch (029). No successor batch is ever
+        // pre-opened, so nothing can be stranded and no empty trailing batch row appears.
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
-        UUID id1 = UUID.randomUUID();
-        UUID id2 = UUID.randomUUID();
-        Batch b1 = mockBatch(id1);
-        Batch b2 = mockBatch(id2);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2);
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
 
         runSession(req -> {
             req.onNext(start(SessionMode.CONTINUOUS, 1L));
@@ -590,10 +586,29 @@ class DeltaIngestionStreamChangesContractTest {
             // No more records; runSession half-closes the stream.
         });
 
-        verify(batchLifecycle, times(2)).startBatch(ACCOUNT, SITE);
-        verify(batchLifecycle).completeBatch(id1);
-        verify(batchLifecycle).completeBatch(id2); // the fresh empty batch must not be stranded
+        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(any());
+        // The threshold seal wrote the one and only segment; the close flushed no second one.
+        verify(changelogSegmentService, times(1)).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"),
+                eq(1L), argThat((List<ChangeRecord> r) -> r.size() == 100));
+    }
+
+    @Test
+    void continuousZeroRecordSessionCompletesItsBatchWithNoSegment() throws Exception {
+        // A session that opens and closes without records is still one honest upload attempt:
+        // its single batch completes with zero changes and no segment row (029, FR-004/FR-005).
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+
+        runSession(req -> req.onNext(start(SessionMode.CONTINUOUS, 1L)));
+
+        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).completeBatch(batchId);
+        verify(batchLifecycle, never()).failBatch(any());
+        verify(changelogSegmentService, never()).persist(any(), any(), any(), anyLong(), any());
     }
 
     @Test
