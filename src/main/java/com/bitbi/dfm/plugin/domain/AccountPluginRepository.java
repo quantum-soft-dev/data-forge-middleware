@@ -53,6 +53,13 @@ public interface AccountPluginRepository {
     List<AccountPlugin> findActiveByPluginId(String pluginId);
 
     /**
+     * Direct lookup of an active activation by its stored plugin_data login
+     * (Parquet Export Basic Auth, 028): one indexed point query instead of scanning
+     * every activation. Backed by the V40 unique expression index.
+     */
+    Optional<AccountPlugin> findActiveByPluginIdAndLogin(String pluginId, String login);
+
+    /**
      * Checks if an active activation exists for the account-plugin pair.
      * @param accountId the account identifier
      * @param pluginId the plugin identifier

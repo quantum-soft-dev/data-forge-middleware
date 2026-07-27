@@ -2,6 +2,7 @@ package com.bitbi.dfm.shared.config;
 
 import com.bitbi.dfm.auth.config.Auth0Properties;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import com.bitbi.dfm.plugin.presentation.ParquetExportBasicAuthFilter;
 import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 import com.bitbi.dfm.shared.auth.AuthenticationAuditLogger;
 import org.springframework.context.annotation.Bean;
@@ -66,16 +67,19 @@ public class SecurityConfiguration {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter;
+    private final ParquetExportBasicAuthFilter parquetExportBasicAuthFilter;
     private final AuthenticationAuditLogger authenticationAuditLogger;
     private final Auth0Properties auth0Properties;
 
     public SecurityConfiguration(
             JwtAuthenticationFilter jwtAuthenticationFilter,
             PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter,
+            ParquetExportBasicAuthFilter parquetExportBasicAuthFilter,
             AuthenticationAuditLogger authenticationAuditLogger,
             Auth0Properties auth0Properties) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.pluginApiKeyAuthenticationFilter = pluginApiKeyAuthenticationFilter;
+        this.parquetExportBasicAuthFilter = parquetExportBasicAuthFilter;
         this.authenticationAuditLogger = authenticationAuditLogger;
         this.auth0Properties = auth0Properties;
     }
@@ -248,10 +252,48 @@ public class SecurityConfiguration {
     }
 
     /**
-     * UI/Admin API filter chain (NEW unified structure).
+     * Parquet Export Plugin API filter chain (028-parquet-export-plugin).
      * <p>
      * <b>Order 4</b>: Fourth priority - evaluated AFTER Bit BI Plugin API filter chain<br>
-     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/** and /api/v1/plugins/bit-bi/**)<br>
+     * <b>Matches</b>: /api/v1/plugins/parquet-export/**<br>
+     * <b>Authentication</b>: HTTP Basic (/files) via ParquetExportBasicAuthFilter;
+     * /download/** is anonymous — the one-time token is the credential
+     * </p>
+     * <p>
+     * The plugin's /activate and /deactivate endpoints stay on OAuth2 (catch-all chain), same
+     * split as Bit BI.
+     * </p>
+     *
+     * @see com.bitbi.dfm.plugin.presentation.ParquetExportBasicAuthFilter
+     */
+    @Bean
+    @Order(4)
+    public SecurityFilterChain parquetExportPluginApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/plugins/parquet-export/files", "/api/v1/plugins/parquet-export/download/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/plugins/parquet-export/download/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(parquetExportBasicAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
+                    response.setHeader("WWW-Authenticate", "Basic realm=\"parquet-export\"");
+                    response.sendError(401, "Unauthorized - Basic authentication required");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
+     * UI/Admin API filter chain (NEW unified structure).
+     * <p>
+     * <b>Order 5</b>: Fifth priority - evaluated AFTER the plugin API filter chains<br>
+     * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/**, /api/v1/plugins/bit-bi/** and /api/v1/plugins/parquet-export/**)<br>
      * <b>Authentication</b>: Keycloak OAuth2 Resource Server only
      * </p>
      * <p>
@@ -273,7 +315,7 @@ public class SecurityConfiguration {
      * @since 4.0.0 (API Unification)
      */
     @Bean
-    @Order(4)
+    @Order(5)
     public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/v1/**")
@@ -282,6 +324,7 @@ public class SecurityConfiguration {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (already handled by Order 1)
                 .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (already handled by Order 3)
+                .requestMatchers("/api/v1/plugins/parquet-export/files", "/api/v1/plugins/parquet-export/download/**").denyAll() // Explicitly deny (already handled by Order 4, 028)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
@@ -322,7 +365,7 @@ public class SecurityConfiguration {
      * @deprecated Use {@link #adminApiFilterChain(HttpSecurity)} instead (Order 4)
      */
     @Bean
-    @Order(5)
+    @Order(6)
     @Deprecated(since = "4.0.0", forRemoval = true)
     public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
         http
@@ -361,7 +404,7 @@ public class SecurityConfiguration {
      * @deprecated Legacy paths - user endpoints migrated to /api/v1/history/**
      */
     @Bean
-    @Order(6)
+    @Order(7)
     @Deprecated(since = "4.0.0", forRemoval = true)
     public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
         http
@@ -401,7 +444,7 @@ public class SecurityConfiguration {
      * </p>
      */
     @Bean
-    @Order(7)
+    @Order(8)
     public SecurityFilterChain defaultFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())

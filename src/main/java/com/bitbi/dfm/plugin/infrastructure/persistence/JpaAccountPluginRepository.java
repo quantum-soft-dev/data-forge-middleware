@@ -42,6 +42,16 @@ public interface JpaAccountPluginRepository extends JpaRepository<AccountPlugin,
     List<AccountPlugin> findActiveByPluginId(@Param("pluginId") String pluginId);
 
     @Override
+    @Query(value = """
+            SELECT * FROM account_plugins ap
+            WHERE ap.plugin_id = :pluginId
+              AND ap.is_active = true
+              AND ap.plugin_data ->> 'login' = :login
+            """, nativeQuery = true)
+    Optional<AccountPlugin> findActiveByPluginIdAndLogin(@Param("pluginId") String pluginId,
+                                                         @Param("login") String login);
+
+    @Override
     @Query("SELECT CASE WHEN COUNT(ap) > 0 THEN true ELSE false END FROM AccountPlugin ap WHERE ap.accountId = :accountId AND ap.pluginId = :pluginId AND ap.active = true")
     boolean existsActiveByAccountIdAndPluginId(
             @Param("accountId") UUID accountId,
