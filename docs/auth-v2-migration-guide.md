@@ -385,8 +385,8 @@ public class DataForgeClient {
 | 200 | — | Success | Store new tokens |
 | 400 | `invalid_request` | Missing refreshToken | Check request body |
 | 401 | `refresh_token_expired` | Refresh token TTL exceeded (90 days) | Re-run Device Authorization Flow |
-| 401 | `refresh_token_revoked` | Token was revoked (e.g., site re-authorized) | Re-run Device Authorization Flow |
-| 401 | `invalid_refresh_token` | Token not found or invalid | Re-run Device Authorization Flow |
+| 401 | `refresh_token_revoked` | Token was revoked (site re-authorized, **or reuse detected** — see below) | Re-run Device Authorization Flow |
+| 400 | `invalid_refresh_token` | Token not found, or the site / parent account is inactive | Re-run Device Authorization Flow; if the account is deactivated, stop |
 | 500 | `internal_error` | Server error | Retry with exponential backoff |
 
 ### API Call Errors (Bearer JWT)
@@ -394,7 +394,79 @@ public class DataForgeClient {
 | HTTP Status | Meaning | Action |
 |-------------|---------|--------|
 | 401 | JWT expired or invalid | Refresh token, retry |
+| 401 | Site **or its parent account** has been deactivated | Stop; contact the account owner. Refreshing will not help |
 | 403 | Site doesn't own this resource | Check siteId |
+
+---
+
+## Token Security Hardening
+
+Three defects found in a security audit of the Auth V2 token mechanics were fixed. Two of them
+change runtime behaviour — read the compatibility notes below before upgrading.
+
+### 1. Refresh token reuse detection
+
+Refresh tokens are rotated: each successful refresh revokes the presented token and issues a new
+one. Presenting an **already-rotated** token now revokes **every refresh token of that site**, not
+just the replayed one (RFC 6819 §5.2.2.3, OAuth 2.0 Security BCP §4.14.2).
+
+A rotated token can only be replayed if it leaked, and the server cannot distinguish the attacker
+from the legitimate device — so the whole family is dropped and the device must re-authorize.
+
+```
+refresh(A) -> B          200, A revoked
+refresh(A) -> reuse!     401 refresh_token_revoked, B revoked as well
+refresh(B)               401 refresh_token_revoked
+```
+
+Not treated as reuse (the family survives):
+
+- **expired** tokens — expiry is not compromise, `401 refresh_token_expired`
+- **unknown** tokens — never issued or already purged, `400 invalid_refresh_token`
+
+**Client impact:** a client that refreshes correctly (always storing the newest refresh token,
+never refreshing twice with the same one) is unaffected. Clients that retry a refresh with the
+*old* token after a timeout will now be logged out entirely. If a refresh request times out with
+no usable response, **do not replay the old token** — treat it as a lost session and re-run the
+Device Authorization Flow, or persist the new token before acknowledging the response.
+
+Concurrency note: parallel refreshes from several threads/processes with the same token count as
+reuse. Serialize refreshes per site.
+
+### 2. Site and parent account status enforced on every request
+
+`validateToken` already re-checked that the site still exists and is active on every API call, but
+never checked the **parent account**. A deactivated account therefore kept working until each
+already-issued JWT expired (up to 1 hour).
+
+Both flags are now checked on every request through a single joined query, so the validation path
+still costs one database round-trip.
+
+**Effect:** deactivating an account immediately cuts off every site it owns — in-flight access
+tokens included. Deactivating a single site behaves exactly as before. Clients receive `401` on all
+Device API calls; refreshing does **not** help either — the refresh path already rejected inactive
+accounts and answers `400 invalid_refresh_token`. The client must stop until the account is
+reactivated.
+
+### 3. `refreshTokenExpiresAt` reflects the stored value
+
+`refreshTokenExpiresAt` (in both the refresh response and the Device Flow token response) was
+recomputed as `now + 90 days` instead of being read from the persisted token. The values agreed
+only because both derived from the same constant. The API now reports the expiry stored on the
+token itself, so a future TTL change cannot make the response drift from reality.
+
+**Client impact:** none. Values are unchanged for the current 90-day TTL.
+
+### Backwards compatibility
+
+| Change | Compatible? | What breaks |
+|---|---|---|
+| Reuse detection revokes the token family | **Behaviour change (intended)** | A device replaying an already-rotated refresh token is fully logged out and must re-run the Device Authorization Flow. Previously the replay just failed and other tokens kept working. |
+| Parent account status checked on validation | **Behaviour change (intended)** | Sites of a deactivated account start returning `401` immediately instead of continuing until their JWT expires (up to 1 hour). |
+| `refreshTokenExpiresAt` read from the entity | Fully compatible | Nothing — same value, same format. |
+
+No API shapes, endpoints, status codes or error identifiers changed, and no database migration is
+required. Both behaviour changes only ever turn a previously-accepted request into a `401`.
 
 ---
 
@@ -441,6 +513,12 @@ A: Re-run the Device Authorization Flow. The user will need to approve again.
 **Q: Can a site have multiple active refresh tokens?**
 A: No. When a new Device Authorization is approved for the same site, all previous refresh tokens are revoked.
 
+**Q: What happens if I refresh twice with the same refresh token?**
+A: The second attempt is treated as token reuse: every refresh token of that site is revoked and the device must re-run the Device Authorization Flow. Always store the rotated token from the response, and never retry a refresh with the old token. See "Token Security Hardening".
+
+**Q: My account was deactivated — how long do existing tokens keep working?**
+A: They stop working immediately. Site and parent account status are re-checked on every API call, so deactivation no longer waits for the access token to expire.
+
 **Q: Why was the composite domain removed?**
 A: The `accountId_siteName` format was an internal implementation detail that leaked into the API. Site names now support unicode and are identified by the `(accountId, siteName)` pair internally.
 
@@ -462,3 +540,5 @@ A: Yes. Site names support unicode characters (letters, numbers, dots, hyphens, 
 | JWT TTL | 24 hours | 1 hour |
 | JWT claims | `siteId`, `accountId`, `domain` | `siteId`, `accountId` (no `domain`) |
 | S3 paths (new batches) | `{accountId}/{compositeDomain}/{date}/{time}/` | `{accountId}/{siteId}/{date}/{time}/` |
+| Refresh token reuse | Replay rejected, other tokens survived | Replay revokes the site's whole token family (re-authorization required) |
+| Account deactivation | Effective when the access token expires (up to 1h) | Effective immediately on the next request |
