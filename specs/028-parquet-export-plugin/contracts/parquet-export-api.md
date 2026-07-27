@@ -36,11 +36,11 @@ Query parameters:
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `since` | ISO 8601 datetime | epoch | strictly-greater filter on `producedAt` |
+| `since` | ISO 8601 datetime (offset accepted, normalized to UTC) | epoch | strictly-greater filter on `producedAt` |
 | `siteId` | UUID | — | must belong to the account (else empty result) |
 | `table` | string | — | table name filter |
 | `type` | `delta` \| `checkpoint` | both | |
-| `page` | int ≥ 0 | 0 | |
+| `cursor` | opaque string | — | previous response's `nextCursor` (keyset over `(producedAt, s3Key)`) |
 | `size` | int 1..100 | 50 | |
 
 **200 OK**:
@@ -67,11 +67,21 @@ Query parameters:
       "linkExpiresAt": "2026-07-27T11:15:00"
     }
   ],
-  "page": 0, "size": 50, "hasMore": false
+  "size": 50, "hasMore": false, "nextCursor": null
 }
 ```
 
 Side effect: one `download_links` row registered per returned file.
+
+Pagination contract:
+
+- keyset cursor, NOT offset paging: continue a sweep by passing `nextCursor`; `nextCursor` is
+  non-null iff `hasMore` is true;
+- a page may contain fewer than `size` entries (even zero) with `hasMore=true` — delta
+  candidates dropped by the S3 existence probe still advance the cursor. Clients MUST iterate
+  on `hasMore`, never on an empty `files` list;
+- `since` may only be advanced between complete sweeps (after `hasMore=false`), to the max
+  observed `producedAt` — never between pages of one sweep.
 
 **Errors**:
 - **400**: malformed `since` / `siteId` / `type` / `size` out of range.

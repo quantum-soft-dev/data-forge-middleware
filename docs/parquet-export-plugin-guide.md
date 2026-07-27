@@ -49,15 +49,29 @@ Authorization: Basic base64(login:password)
 
 | Param | Meaning | Default |
 |---|---|---|
-| `since` | ISO 8601 datetime; only files **produced after** this moment | epoch |
+| `since` | ISO 8601 datetime (offsets like `Z`/`+02:00` accepted, normalized to UTC); only files **produced after** this moment | epoch |
 | `siteId` | limit to one site (must belong to the account) | all sites |
 | `table` | table-name filter | all tables |
 | `type` | `delta` \| `checkpoint` | both |
-| `page` / `size` | pagination, `size` ≤ 100 | 0 / 50 |
+| `cursor` | opaque keyset cursor — the previous response's `nextCursor` | start |
+| `size` | page size ≤ 100 | 50 |
 
-`producedAt` is the delta segment's `egress_at` or the checkpoint's `updated_at`. The filter is
-strictly greater-than, so the **incremental sync pattern** is: remember `max(producedAt)` from
-each response and pass it as the next `since` — no deep paging needed.
+`producedAt` is the delta segment's `egress_at` or the checkpoint's `updated_at`; the `since`
+filter is strictly greater-than.
+
+**Sync protocol (mandatory reading):**
+
+1. **One sweep = one `since`.** Call with a fixed `since`, then keep passing the returned
+   `nextCursor` until `hasMore` is `false`. Only after the sweep completes may you advance
+   `since` to the max `producedAt` you observed. Never bump `since` between pages: many files
+   share one `producedAt` (a segment fans out to one file per table), and a mid-sweep bump
+   would silently skip the rest of that timestamp.
+2. **Drive iteration by `hasMore`, not by an empty list.** A page can contain fewer than
+   `size` entries — even zero — while `hasMore` is still `true` (delta candidates whose Parquet
+   the egress skipped are dropped after pagination). The cursor advances past them.
+3. **Always pass `since` in steady state.** `since` defaults to epoch; the server paginates in
+   SQL so an unbounded sweep is safe, but it makes the client re-walk (and re-register links
+   for) the entire history every time. Epoch is for the initial backfill only.
 
 Response (one entry per file; a fresh one-time link is registered per entry on every call):
 
@@ -74,13 +88,17 @@ Response (one entry per file; a fresh one-time link is registered per entry on e
       "linkExpiresAt": "2026-07-27T11:15:00"
     }
   ],
-  "page": 0, "size": 50, "hasMore": false
+  "size": 50, "hasMore": false, "nextCursor": null
 }
 ```
 
-Errors: `400` malformed filters, `401` + `WWW-Authenticate: Basic` on bad credentials or a
-deactivated plugin, `429` + `Retry-After` on the per-account rate limit (shared Bucket4j bucket,
-100 req/min).
+`nextCursor` is non-null exactly when `hasMore` is `true`.
+
+Errors: `400` malformed filters or cursor, `401` + `WWW-Authenticate: Basic` on bad credentials
+or a deactivated plugin, `429` + `Retry-After` on the per-account rate limit.
+
+> **Note:** the rate limit is the shared per-account plugin bucket (Bucket4j, 100 req/min) —
+> an account that also uses the Bit BI plugin API shares this budget across both plugins.
 
 ## Downloading
 
@@ -102,6 +120,20 @@ and S3 answers 404 — the link is consumed; re-list to get a fresh entry.
 ## Housekeeping
 
 A scheduled job deletes consumed/expired `download_links` rows older than the retention window.
+
+## Operational notes
+
+- **Anonymous download route**: `/download/{token}` has no application-level rate limit (the
+  token is the credential; unknown tokens cost one indexed lookup and increment the
+  `plugin.parquet.export.download.rejected{reason="unknown"}` Micrometer counter, with no audit
+  write). For internet-facing deployments add ingress/WAF rate limiting on
+  `/api/v1/plugins/parquet-export/download/**`.
+- **`plugins.parquet-export.enabled=false`** only unregisters the plugin SPI bean — new
+  activations become impossible, but existing activations keep authenticating and the
+  `/files`, `/download` and rotate-password endpoints stay live. To cut off a specific client,
+  deactivate its plugin (or rotate the password).
+- **Login is a public identifier**: lookup happens before the BCrypt check, so response timing
+  distinguishes known from unknown logins. This is by design — the secret is the password.
 
 ## Configuration (`application.yml`)
 
@@ -125,9 +157,9 @@ plugins:
   denyAll carve-outs in the OAuth2 catch-all.
 - Credentials: `ParquetExportCredentialsService` — `plugin_data = {login, passwordHash}` (BCrypt),
   login-first lookup = one BCrypt comparison per request.
-- Catalog: `ParquetExportFileService` — delta files derived from egressed `changelog_segments`
-  (per-table fan-out from `stats` keys + `deltaExists` probe), checkpoints from `checkpoints`
-  rows with `s3_key_parquet`.
+- Catalog: `ParquetExportFileService` + `ParquetExportCatalogDao` — filtering, per-table
+  fan-out (`jsonb_object_keys(stats)`) and keyset pagination `(producedAt, s3Key)` run in SQL
+  (bounded to `size + 1` rows per source); the `deltaExists` probe runs per served page.
 - Links: `DownloadLink` / `download_links` (V39), `DownloadLinkService` (atomic consume + 60 s
   presign), `DownloadLinkPurgeScheduler`.
 - Audit: `PluginAuditService` — `FILES_LISTED`, `LINK_CONSUMED`, `LINK_REJECTED`,
