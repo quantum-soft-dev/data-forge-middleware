@@ -304,7 +304,9 @@ public class DeviceAuthorizationService {
                 authorization.getSiteType()
         );
 
-        // Revoke any existing refresh tokens for this site
+        // Re-authorization supersedes the previous session: one site = one client installation,
+        // so the refresh token left on the old installation must not outlive the re-install.
+        // Removing this line is a security regression - see DeviceFlowSessionSupersedeContractTest.
         refreshTokenService.revokeAllForSite(siteResult.site().getId());
 
         // Update authorization with site info
