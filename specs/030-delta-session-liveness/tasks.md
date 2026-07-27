@@ -1,7 +1,13 @@
 # 030 — Delta session liveness: tasks
 
-**Status**: T01–T04 implemented. Both 029/PR #60 follow-ups closed; documented in
-`docs/cr-batch-per-session.md` → "Session liveness and resume (030)".
+**Status**: T01–T08 implemented. Both 029/PR #60 follow-ups closed (T01–T04); T05 fixes an older
+022/029 data-corruption bug found in review; T06 repairs a regression T01 introduced; T07 fixes a
+pre-existing dead config key; T08 realigns the client guide. Documented in
+`docs/cr-batch-per-session.md` → "Session liveness and resume (030)" and
+`docs/delta-client-v2-guide.md`.
+
+**PR must call out**: fixing the dead `batch.timeout-minutes` key (T07) means environments that set
+`BATCH_TIMEOUT_MINUTES` start honouring it instead of silently running on 60.
 
 Closes the two follow-ups left open by review of feature 029 (batch-per-session, PR #60).
 Both are ways a **live** Delta v2 gRPC session gets killed by server-side bookkeeping.
@@ -168,3 +174,69 @@ receives the original snapshot's first sequence and the commit contract needs no
 **Files.** `delta/presentation/DeltaIngestionService.java`.
 
 Commit: `fix(delta): preserve rebaseline intent across staged resume (T05)`
+
+---
+
+## T06 — the timeout sweep must not kill a live session (blocker, regression from T01)
+
+**Introduced by T01 of this feature.** Before T01, `touchActivity` did a `save()` that bumped
+`@Version`, and that bump *incidentally* protected a live session: the sweeper read the batch, wrote
+`NOT_COMPLETED`, lost the optimistic lock and backed off. Removing the bump was necessary — it was
+throwing `OptimisticLockingFailureException` into the gRPC ingest path — but it also removed the
+only thing stopping the sweeper from reaping a live batch. The optimistic lock was simultaneously
+the bug and the guard.
+
+`BatchTimeoutScheduler` SELECTs expired batches, then transitions each with **no** re-check of
+status or cutoff. A live session touching in that gap is killed anyway: the exact incident 029
+exists to prevent.
+
+**Design.** Replace the unconditional transition with an atomic conditional one —
+`UPDATE ... SET status='NOT_COMPLETED' WHERE id=:id AND status='IN_PROGRESS' AND
+COALESCE(last_activity_at, started_at) < :cutoff`. Zero rows = revived or already terminal → skip,
+log at debug, count separately as "skipped" in the run summary. The scheduler passes down **the same
+cutoff its SELECT used**; recomputing per batch would judge a batch against a cutoff it was never
+selected by. Under READ COMMITTED an UPDATE that blocks on a concurrent touch re-evaluates its WHERE
+against the committed row, so a revived session always wins.
+
+**Tests (red first)**
+- sweeper skips a batch revived after its SELECT (deterministic: seed expired → take cutoff → touch
+  → transition); **failed on the pre-fix code**;
+- sweeper still reaps a genuinely silent batch — the guard against making it impotent;
+- v1 batch (`last_activity_at` NULL) still reaped by `started_at`, fresh one left alone;
+- live session survives a concurrent touch storm vs sweep;
+- scheduler unit tests: the transition gets the SELECT's cutoff, and the unconditional
+  `markBatchNotCompleted` is never called.
+- `completeBatch`/`failBatch` scenarios stay as they were — a session that ended on purpose should
+  end. The previous "sweep" storm scenario was **wrong** and is replaced: it asserted the sweeper
+  wins, which is precisely the bug.
+
+Commit: `fix(batch): make the timeout sweep conditional so it cannot kill a live session (T06)`
+
+---
+
+## T07 — the sweeper read a property that does not exist
+
+**Pre-existing.** `BatchTimeoutScheduler` declared `@Value("${batch.timeout-minutes:60}")`, but
+`application.yml` declares the nested key `batch.timeout.minutes`. `@Value` does no relaxed binding,
+so the placeholder never resolved: the sweeper always used its hard-coded 60 and
+`BATCH_TIMEOUT_MINUTES` **never worked**. It also meant T03's invariant was asserted against a key
+the runtime ignores — the ordering held by luck.
+
+Fix the placeholder; retarget the config test at whichever key the scheduler actually reads
+(extracted from the annotation) and assert that key exists in the shipped yml.
+
+**Prod behaviour change** — environments that set `BATCH_TIMEOUT_MINUTES` have been running on 60
+regardless and will start honouring the configured value. Must be called out in the PR description.
+
+Commit: `fix(batch): read the timeout from the property that actually exists (T07)`
+
+---
+
+## T08 — client guide contradicts the new resume behaviour
+
+`docs/delta-client-v2-guide.md` promised the same `server_session_id` on resume and a TTL above 60
+minutes; T02 and T03 made both false. Document that `server_session_id` may change on resume (staged
+data and `resume_from_seq` unaffected), that it must be re-read per `SessionOpened` and never cached
+across a drop, that `ACTIVE_SESSION_EXISTS` is the rejection path, and correct the TTL to 50 minutes.
+
+Commit: `docs(delta): correct the client guide for resume batch swap and TTL (T08)`
