@@ -184,9 +184,8 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
      * <b>Then</b>: Request is rejected by the Device API chain with 401 and no token is issued
      * </p>
      * <p>
-     * The path never had a controller: Basic Auth token generation lives at
-     * {@link ApiRoutes#AUTH_TOKEN}. It used to be permitAll in two filter chains, which made a
-     * non-existent route publicly reachable. Guards against the permitAll rules coming back.
+     * The path never had a controller, yet it used to be permitAll in two filter chains, which made
+     * a non-existent route publicly reachable. Guards against the permitAll rules coming back.
      * </p>
      */
     @Test
@@ -218,34 +217,9 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
                 .andExpect(status().isUnauthorized());
     }
 
-    /**
-     * TC07c: No path issues a Custom JWT for Basic Auth credentials.
-     * <p>
-     * <b>Given</b>: Valid Basic Auth credentials (domain:clientSecret)<br>
-     * <b>When</b>: POST /api/v1/auth/token (the deprecated {@code AuthController} mapping)<br>
-     * <b>Then</b>: 401 Unauthorized and no token — the Order 5 {@code /api/v1/**} OAuth2 chain
-     * matches this path before the default chain, so its permitAll rule there is unreachable and
-     * the controller is never invoked
-     * </p>
-     * <p>
-     * This pins the Auth V2 posture: the only anonymous token issuance is the Device Authorization
-     * Flow ({@code /api/v1/device/authorize} + {@code /api/v1/device/token}). Whether the shadowed
-     * {@code AuthController} should be re-opened or deleted is an owner decision; either way this
-     * test must be revisited deliberately rather than drift silently.
-     * </p>
-     */
-    @Test
-    @DisplayName("TC07c: Basic Auth token issuance should not be anonymously reachable")
-    void basicAuthTokenIssuanceShouldNotBeReachable() throws Exception {
-        String credentials = java.util.Base64.getEncoder()
-                .encodeToString("store-01.example.com:valid-secret-uuid".getBytes());
-
-        mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
-                        .header("Authorization", "Basic " + credentials)
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.token").doesNotExist());
-    }
+    // TC07c (Basic Auth token issuance is not reachable) moved to AuthTokenSurfaceContractTest,
+    // which additionally asserts that no controller maps the path at all — a strictly stronger
+    // guard now that AuthController has been deleted.
 
     /**
      * TC07b: Device auth refresh endpoint should be accessible without authentication.

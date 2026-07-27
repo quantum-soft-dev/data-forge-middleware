@@ -19,31 +19,13 @@
  * Base path for Device API endpoints.
  * All device-facing endpoints (IoT devices, mobile apps, data collection clients)
  * are under this base path and use Custom JWT authentication.
+ *
+ * The frontend is not a device client: it only serves the browser half of the Device
+ * Authorization Flow (DEVICE_AUTHORIZATION_VERIFY below). The batch, file, error and token
+ * constants that used to live here were never referenced by any component — devices call those
+ * endpoints directly — so they were removed rather than left to drift out of sync with the backend.
  */
 export const DEVICE_API_BASE = '/v1/device';
-
-// Device Authentication
-export const DEVICE_AUTH = `${DEVICE_API_BASE}/auth`;
-export const DEVICE_AUTH_TOKEN = `${DEVICE_AUTH}/token`;
-
-// Device Batches
-export const DEVICE_BATCHES = `${DEVICE_API_BASE}/batches`;
-export const DEVICE_BATCHES_START = `${DEVICE_BATCHES}/start`;
-export const DEVICE_BATCHES_COMPLETE = (id: string) => `${DEVICE_BATCHES}/${id}/complete`;
-export const DEVICE_BATCHES_FAIL = (id: string) => `${DEVICE_BATCHES}/${id}/fail`;
-export const DEVICE_BATCHES_CANCEL = (id: string) => `${DEVICE_BATCHES}/${id}/cancel`;
-export const DEVICE_BATCHES_GET = (id: string) => `${DEVICE_BATCHES}/${id}`;
-
-// Device Files
-export const DEVICE_FILES = `${DEVICE_API_BASE}/files`;
-export const DEVICE_FILES_UPLOAD = (batchId: string) => `${DEVICE_FILES}/batches/${batchId}/upload`;
-export const DEVICE_FILES_GET = (batchId: string, fileId: string) => `${DEVICE_FILES}/batches/${batchId}/files/${fileId}`;
-
-// Device Errors
-export const DEVICE_ERRORS = `${DEVICE_API_BASE}/errors`;
-export const DEVICE_ERRORS_LOG = DEVICE_ERRORS;
-export const DEVICE_ERRORS_LOG_BATCH = (batchId: string) => `${DEVICE_ERRORS}/batches/${batchId}`;
-export const DEVICE_ERRORS_GET = (errorId: string) => `${DEVICE_ERRORS}/${errorId}`;
 
 // ==================== UI/Admin API ====================
 
@@ -174,6 +156,5 @@ export const ADMIN_PLUGIN_HISTORY_SUMMARY = (pluginId: string, accountId: string
  * 3. On approve → site is created automatically
  * 4. Device polls /token (public) → receives credentials when approved
  */
-export const DEVICE_AUTHORIZATION = `${DEVICE_API_BASE}/authorize`;
-export const DEVICE_AUTHORIZATION_TOKEN = `${DEVICE_API_BASE}/token`;
+// Only /verify is a browser-side route; /authorize and /token are called by the device itself.
 export const DEVICE_AUTHORIZATION_VERIFY = `${DEVICE_API_BASE}/verify`;
