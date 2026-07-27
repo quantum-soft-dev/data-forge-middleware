@@ -61,9 +61,9 @@ docker-compose up postgres localstack     # Start dependencies
 - **Repository Pattern**: Interface in domain, JPA in infrastructure
 
 ### Authentication
-- **Client API v1** (`/api/dfc/**`): Custom JWT (HMAC-SHA256). _Legacy — being deprecated, see API Evolution below._
-- **Client API v2** (`/api/v1/device/**`): OAuth 2.0 Device Authorization Flow with access + refresh tokens (Auth V2). Site declares `siteName` + `siteType` at registration. _Go-forward client path._
-- **Admin API** (`/api/admin/**`, `/api/v1/**`): Auth0 OAuth2 (ROLE_ADMIN/ROLE_USER)
+- **Client API v1** (`/api/dfc/**`): Custom JWT (HMAC-SHA256). _Legacy and unreachable — the only v1 token-issuance endpoint was removed; the surface itself is scheduled for deletion. See API Evolution below._
+- **Client API v2** (`/api/v1/device/**`): OAuth 2.0 Device Authorization Flow with access + refresh tokens (Auth V2). Site declares `siteName` + `siteType` at registration. _Go-forward client path — the only way a client obtains a token._
+- **Admin API** (`/api/v1/**`): Auth0 OAuth2 (ROLE_ADMIN/ROLE_USER)
 - **Plugin API** (`/api/v1/plugins/bit-bi/**`): API key via `X-Plugin-Api-Key` header; per-account rate limiting (Bucket4j token bucket)
 
 ### User Types
