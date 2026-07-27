@@ -32,6 +32,53 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
     @Autowired
     private RefreshTokenService refreshTokenService;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    /**
+     * Build a refresh request for the given opaque token.
+     */
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder refreshRequest(String token) throws Exception {
+        String body = objectMapper.writeValueAsString(java.util.Map.of("refreshToken", token));
+        return post(ApiRoutes.DEVICE_AUTH_REFRESH)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body);
+    }
+
+    /**
+     * Perform a successful refresh and return the rotated refresh token.
+     */
+    private String refreshFor(String token) throws Exception {
+        String responseBody = mockMvc.perform(refreshRequest(token))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(responseBody).get("refreshToken").asText();
+    }
+
+    /**
+     * Force a stored refresh token past its expiry (tokens have a 90-day TTL by default).
+     */
+    private void expireToken(String opaqueToken) throws Exception {
+        int updated = jdbcTemplate.update(
+                "UPDATE refresh_tokens SET expires_at = now() - interval '1 day' WHERE token_hash = ?",
+                sha256Hex(opaqueToken));
+        org.assertj.core.api.Assertions.assertThat(updated).isEqualTo(1);
+    }
+
+    /**
+     * Mirror of the storage hashing used by RefreshTokenService (tokens are stored as SHA-256 hex).
+     */
+    private static String sha256Hex(String input) throws Exception {
+        byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return java.util.HexFormat.of().formatHex(hash);
+    }
+
     @Test
     @DisplayName("Should refresh token successfully and return new access + refresh tokens")
     void shouldRefreshTokenSuccessfully() throws Exception {
@@ -137,6 +184,57 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
                         .content(requestBody))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+    }
+
+    @Test
+    @DisplayName("Should revoke the whole token family when a rotated refresh token is reused")
+    void shouldRevokeWholeFamilyOnReuse() throws Exception {
+        // Given: token A rotated into token B
+        String tokenA = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        String tokenB = refreshFor(tokenA);
+
+        // When: the already-rotated token A is replayed (reuse detection)
+        mockMvc.perform(refreshRequest(tokenA))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+
+        // Then: the still-valid token B is dead too - the whole family was revoked
+        mockMvc.perform(refreshRequest(tokenB))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+    }
+
+    @Test
+    @DisplayName("Should allow successive rotations without killing the family")
+    void shouldAllowSuccessiveRotations() throws Exception {
+        String token = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+
+        // Three rotations in a row must all succeed
+        for (int i = 0; i < 3; i++) {
+            token = refreshFor(token);
+        }
+
+        // And the last issued token is still usable
+        mockMvc.perform(refreshRequest(token))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Should reject an expired refresh token without revoking the family")
+    void shouldNotRevokeFamilyForExpiredToken() throws Exception {
+        // Given: an expired token and a sibling token of the same site
+        String expiredToken = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        String siblingToken = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        expireToken(expiredToken);
+
+        // When: the expired token is presented → 401 expired (not revoked)
+        mockMvc.perform(refreshRequest(expiredToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_expired"));
+
+        // Then: expiration is not compromise - the sibling still works
+        mockMvc.perform(refreshRequest(siblingToken))
+                .andExpect(status().isOk());
     }
 
     @Test

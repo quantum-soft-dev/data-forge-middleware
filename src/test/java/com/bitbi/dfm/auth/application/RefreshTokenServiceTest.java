@@ -174,6 +174,64 @@ class RefreshTokenServiceTest {
         }
 
         @Test
+        @DisplayName("Should revoke the whole token family when a revoked token is reused (reuse detection)")
+        void shouldRevokeWholeFamilyOnReuse() {
+            String opaqueToken = "stolen-token";
+            String tokenHash = RefreshTokenService.sha256(opaqueToken);
+
+            RefreshToken rotatedToken = RefreshToken.create(siteId, tokenHash);
+            rotatedToken.revoke();
+
+            when(refreshTokenRepository.findByTokenHash(tokenHash))
+                    .thenReturn(Optional.of(rotatedToken));
+
+            assertThatThrownBy(() -> refreshTokenService.refreshAccessToken(opaqueToken))
+                    .isInstanceOf(RefreshTokenService.RefreshTokenRevokedException.class);
+
+            // RFC 6819 / OAuth 2.0 Security BCP: reuse of a rotated token means the family is compromised
+            verify(refreshTokenRepository).revokeAllBySiteId(siteId);
+        }
+
+        @Test
+        @DisplayName("Should not revoke the token family on a successful rotation")
+        void shouldNotRevokeFamilyOnSuccessfulRotation() {
+            String opaqueToken = "healthy-token";
+            String tokenHash = RefreshTokenService.sha256(opaqueToken);
+
+            RefreshToken existingToken = RefreshToken.create(siteId, tokenHash);
+            Site mockSite = mock(Site.class);
+            Account mockAccount = mock(Account.class);
+
+            when(refreshTokenRepository.findByTokenHash(tokenHash))
+                    .thenReturn(Optional.of(existingToken));
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
+            when(mockSite.getIsActive()).thenReturn(true);
+            when(mockSite.getAccountId()).thenReturn(accountId);
+            when(accountRepository.findById(accountId)).thenReturn(Optional.of(mockAccount));
+            when(mockAccount.getIsActive()).thenReturn(true);
+            when(jwtTokenProvider.generateToken(siteId, accountId)).thenReturn(mock(JwtToken.class));
+            when(refreshTokenRepository.save(any(RefreshToken.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            refreshTokenService.refreshAccessToken(opaqueToken);
+
+            verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
+        }
+
+        @Test
+        @DisplayName("Should not revoke the token family for an unknown token")
+        void shouldNotRevokeFamilyForUnknownToken() {
+            String unknownToken = "never-issued";
+            when(refreshTokenRepository.findByTokenHash(RefreshTokenService.sha256(unknownToken)))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> refreshTokenService.refreshAccessToken(unknownToken))
+                    .isInstanceOf(RefreshTokenService.InvalidRefreshTokenException.class);
+
+            verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
+        }
+
+        @Test
         @DisplayName("Should throw RefreshTokenExpiredException for expired token")
         void shouldThrowForExpiredToken() throws Exception {
             String opaqueToken = "expired-token";
@@ -191,6 +249,9 @@ class RefreshTokenServiceTest {
             assertThatThrownBy(() -> refreshTokenService.refreshAccessToken(opaqueToken))
                     .isInstanceOf(RefreshTokenService.RefreshTokenExpiredException.class)
                     .hasMessageContaining("expired");
+
+            // Expiration is not compromise: the rest of the family must survive
+            verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
         }
 
         @Test
