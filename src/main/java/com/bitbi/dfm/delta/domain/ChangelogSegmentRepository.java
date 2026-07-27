@@ -69,4 +69,14 @@ public interface ChangelogSegmentRepository {
      * @return number of segments re-enqueued
      */
     int clearPluginSqlBySiteId(UUID siteId);
+
+    /**
+     * Segments whose delta Parquet egress completed after {@code since}, oldest first
+     * (Parquet Export plugin listing, 028).
+     *
+     * @param siteId site identifier
+     * @param since  strictly-greater egress_at bound
+     * @return egressed segments ordered by egressAt, firstSeq
+     */
+    java.util.List<ChangelogSegment> findEgressedSince(UUID siteId, java.time.LocalDateTime since);
 }

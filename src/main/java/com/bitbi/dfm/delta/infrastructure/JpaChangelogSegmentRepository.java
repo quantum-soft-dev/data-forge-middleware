@@ -81,4 +81,12 @@ public interface JpaChangelogSegmentRepository
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL WHERE s.siteId = :siteId")
     int clearPluginSqlBySiteId(UUID siteId);
+
+    @Override
+    @Query("""
+            SELECT s FROM ChangelogSegment s
+            WHERE s.siteId = :siteId AND s.egressAt IS NOT NULL AND s.egressAt > :since
+            ORDER BY s.egressAt, s.firstSeq
+            """)
+    java.util.List<ChangelogSegment> findEgressedSince(UUID siteId, java.time.LocalDateTime since);
 }
