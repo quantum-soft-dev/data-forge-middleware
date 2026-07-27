@@ -396,8 +396,8 @@ public class TestSecurityConfig {
     /**
      * Default security filter chain for remaining endpoints.
      * <p>
-     * Order 7: Lowest priority - catches all remaining requests.
-     * Allows public access to actuator, swagger, and auth token endpoints.
+     * Order 8: Lowest priority - catches all remaining requests.
+     * Allows public access to actuator and swagger; everything else is denied.
      * </p>
      */
     @Bean
@@ -409,7 +409,6 @@ public class TestSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint (shadowed by the Order 5 /api/v1/** chain)
                 .anyRequest().denyAll()
             );
 

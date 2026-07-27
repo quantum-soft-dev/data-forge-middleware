@@ -16,8 +16,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * {@link DeviceAuthController} serves exactly one operation: {@code POST /refresh} (Auth V2 token
  * rotation, public because the refresh token is the credential). Basic Auth token generation is
- * <b>not</b> part of this surface — it lives at {@link ApiRoutes#AUTH_TOKEN} (deprecated
- * {@code AuthController}) and is covered by {@code AuthContractTest}.
+ * <b>not</b> part of this surface — nor of any other: the legacy {@code /api/v1/auth/token} endpoint
+ * has been deleted, and {@code AuthTokenSurfaceContractTest} pins that clients now obtain tokens
+ * solely through the Device Authorization Flow.
  * </p>
  * <p>
  * These tests used to assert Basic Auth token issuance at {@code /api/v1/device/auth/token}, a path

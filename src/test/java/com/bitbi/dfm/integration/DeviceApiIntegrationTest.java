@@ -179,34 +179,4 @@ class DeviceApiIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.error").value("Forbidden"));
     }
 
-    /**
-     * Verify that the legacy token endpoint rejects invalid credentials.
-     * <p>
-     * Basic Auth token generation is mapped by {@link ApiRoutes#AUTH_TOKEN} ({@code AuthController}),
-     * not by the Device API. The test previously targeted {@code /api/v1/device/auth/token}, which
-     * has no controller at all.
-     * </p>
-     * <p>
-     * Still disabled: {@code /api/v1/auth/token} is unreachable behind the Order 5
-     * {@code /api/v1/**} OAuth2 filter chain, so Spring Security answers 401 without the
-     * controller's JSON error body (see {@code AuthContractTest} for the full note).
-     * </p>
-     */
-    @Disabled("Unreachable: /api/v1/auth/token is shadowed by the Order 5 /api/v1/** OAuth2 chain")
-    @Test
-    @DisplayName("Should reject invalid credentials at legacy token endpoint")
-    void shouldRejectInvalidCredentialsAtLegacyTokenEndpoint() throws Exception {
-        // Given: Invalid credentials (wrong secret)
-        String invalidCredentials = Base64.getEncoder()
-                .encodeToString("store-01.example.com:wrong-secret".getBytes());
-
-        // When: Attempt authentication with invalid credentials
-        // Then: 401 Unauthorized
-        mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
-                        .header("Authorization", "Basic " + invalidCredentials)
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.error").value("Unauthorized"));
-    }
 }

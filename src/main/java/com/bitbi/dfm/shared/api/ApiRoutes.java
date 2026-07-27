@@ -242,22 +242,6 @@ public final class ApiRoutes {
      */
     public static final String ADMIN_API_BASE = "/api/v1";
 
-    // Legacy client authentication
-    /**
-     * Legacy client token endpoint (Basic Auth).
-     * <p>
-     * Method: POST<br>
-     * Authentication: Basic Auth (site domain + client secret)<br>
-     * Returns: Custom JWT token for client API calls
-     * </p>
-     *
-     * @deprecated Auth V2: clients obtain tokens via the Device Authorization Flow
-     * ({@link #DEVICE_AUTHORIZATION_AUTHORIZE} / {@link #DEVICE_AUTHORIZATION_TOKEN}) and renew them
-     * via {@link #DEVICE_AUTH_REFRESH}. Served by the deprecated {@code AuthController}.
-     */
-    @Deprecated
-    public static final String AUTH_TOKEN = ADMIN_API_BASE + "/auth/token";
-
     // Accounts
     /**
      * Base path for account management endpoints.
