@@ -6,8 +6,10 @@ import com.bitbi.dfm.batch.domain.BatchStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,6 +39,30 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      */
     @Query("SELECT b FROM Batch b WHERE b.siteId = :siteId AND b.status = 'IN_PROGRESS'")
     Optional<Batch> findActiveBySiteId(UUID siteId);
+
+    /**
+     * Stamp the batch's last session activity (029, made lock-free in 030).
+     * <p>
+     * A JPQL bulk update writes the column directly: it neither loads the aggregate nor bumps
+     * {@code @Version} (only {@code UPDATE VERSIONED} would), so the Delta v2 liveness signal never
+     * competes for the version with a concurrent transition — the timeout sweeper marking the batch
+     * NOT_COMPLETED, a segment commit, an error flag. Before this, the loser of that race threw
+     * {@code OptimisticLockingFailureException} straight into the gRPC ingest path.
+     * </p>
+     * <p>
+     * Carries its own {@code @Transactional} so the ingest path (no ambient transaction) gets a
+     * self-contained write whose failure rolls back cleanly, leaving nothing for the best-effort
+     * caller to poison.
+     * </p>
+     *
+     * @param batchId batch identifier
+     * @param now     activity timestamp
+     * @return number of rows updated (0 when the batch no longer exists)
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE Batch b SET b.lastActivityAt = :now WHERE b.id = :batchId")
+    int touchActivity(UUID batchId, LocalDateTime now);
 
     /**
      * Find all expired IN_PROGRESS batches.

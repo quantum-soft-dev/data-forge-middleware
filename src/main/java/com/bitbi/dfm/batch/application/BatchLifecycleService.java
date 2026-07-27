@@ -14,7 +14,9 @@ import com.bitbi.dfm.site.domain.SiteType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -134,19 +136,31 @@ public class BatchLifecycleService {
      * at a bounded cadence (session start/resume, Ack watermark, segment seal) so the timeout
      * sweeper can tell a long-lived live session from a silently abandoned one.
      * <p>
-     * Best-effort: the liveness signal must never fail the ingest stream, so a missing/terminal
-     * batch is logged and swallowed.
+     * 030: a lock-free, single-column update — never a load-modify-save. {@link Batch} is
+     * {@code @Version}ed, so the old read-modify-write made this liveness stamp compete for the
+     * version with real transitions (the sweeper failing the batch, a segment commit) and the loser
+     * threw {@code OptimisticLockingFailureException} into the gRPC ingest path, killing a healthy
+     * live session. A stamp is not a state transition and has no business in that protocol.
+     * </p>
+     * <p>
+     * Best-effort on top of that: a missing/terminal batch (0 rows) and any persistence failure are
+     * logged and swallowed, because the liveness signal must never fail the ingest stream. Runs
+     * with {@code SUPPORTS} so the swallow happens outside the write's own transaction (see
+     * {@code JpaBatchRepository#touchActivity}) rather than inside a doomed one.
      * </p>
      *
      * @param batchId batch identifier
      */
+    @Transactional(propagation = Propagation.SUPPORTS)
     public void touchActivity(UUID batchId) {
-        batchRepository.findById(batchId).ifPresentOrElse(
-                batch -> {
-                    batch.touchActivity();
-                    batchRepository.save(batch);
-                },
-                () -> logger.warn("touchActivity: batch not found, skipping: batchId={}", batchId));
+        try {
+            if (batchRepository.touchActivity(batchId, LocalDateTime.now()) == 0) {
+                logger.warn("touchActivity: batch not found, skipping: batchId={}", batchId);
+            }
+        } catch (DataAccessException e) {
+            logger.warn("touchActivity: liveness stamp failed, ignoring: batchId={}, error={}",
+                    batchId, e.getMessage());
+        }
     }
 
     /**

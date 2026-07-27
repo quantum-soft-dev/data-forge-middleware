@@ -13,18 +13,22 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -339,26 +343,43 @@ class BatchLifecycleServiceTest {
     class TouchActivity {
 
         @Test
-        @DisplayName("should touch the batch's activity timestamp and save")
-        void shouldTouchActivityAndSave() {
-            Batch batch = mock(Batch.class);
-            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
-            when(batchRepository.save(batch)).thenReturn(batch);
+        @DisplayName("should stamp last activity via a targeted update, not a load-modify-save")
+        void shouldTouchActivityWithTargetedUpdate() {
+            when(batchRepository.touchActivity(eq(batchId), any(LocalDateTime.class))).thenReturn(1);
 
+            LocalDateTime before = LocalDateTime.now();
             service.touchActivity(batchId);
+            LocalDateTime after = LocalDateTime.now();
 
-            verify(batch).touchActivity();
-            verify(batchRepository).save(batch);
+            ArgumentCaptor<LocalDateTime> stamp = ArgumentCaptor.forClass(LocalDateTime.class);
+            verify(batchRepository).touchActivity(eq(batchId), stamp.capture());
+            assertThat(stamp.getValue()).isBetween(before, after);
+
+            // 030/T01: the liveness write must not load or re-save the aggregate — that is what put
+            // it into the @Version protocol and made it lose races against the timeout sweeper.
+            verify(batchRepository, never()).findById(batchId);
+            verify(batchRepository, never()).save(any());
         }
 
         @Test
-        @DisplayName("should be best-effort: a missing batch must not throw into the ingest path")
+        @DisplayName("should be best-effort: a missing batch (0 rows updated) must not throw into the ingest path")
         void shouldNotThrowWhenBatchMissing() {
-            when(batchRepository.findById(batchId)).thenReturn(Optional.empty());
+            when(batchRepository.touchActivity(eq(batchId), any(LocalDateTime.class))).thenReturn(0);
 
             service.touchActivity(batchId);
 
             verify(batchRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should swallow a persistence failure so it never reaches the ingest path")
+        void shouldSwallowOptimisticLockingFailure() {
+            when(batchRepository.touchActivity(eq(batchId), any(LocalDateTime.class)))
+                    .thenThrow(new OptimisticLockingFailureException("row changed concurrently"));
+
+            service.touchActivity(batchId);
+
+            verify(batchRepository).touchActivity(eq(batchId), any(LocalDateTime.class));
         }
     }
 
