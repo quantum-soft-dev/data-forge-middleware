@@ -42,9 +42,12 @@ import java.util.stream.Collectors;
  * <p><b>Legacy API Support (Pre-Migration):</b></p>
  * <ul>
  *   <li>/api/dfc/** → Custom JWT (legacy Device API paths)</li>
- *   <li>/api/admin/** → Keycloak OAuth2 with ROLE_ADMIN (legacy Admin paths)</li>
- *   <li>/api/user/**, /api/sites/**, /api/account/** → Keycloak OAuth2 (legacy User paths)</li>
  * </ul>
+ * <p>The {@code /api/admin/**} and {@code /api/user/**}, {@code /api/sites/**},
+ * {@code /api/account/**} chains were removed: no controller ever mapped those prefixes, so they
+ * now fall through to the default chain's denyAll. Their {@code /api/v1/**} successors
+ * ({@code /api/v1/admin/**}, {@code /api/v1/account/**}, {@code /api/v1/sites/**}) are served by
+ * the Order 5 chain and are unaffected.</p>
  *
  * <p><b>Architecture:</b> Each filter chain operates independently. Requests are routed to the first
  * matching SecurityFilterChain based on path patterns. There is no dual authentication or token type
@@ -350,86 +353,9 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Legacy Keycloak filter chain for old Admin UI endpoints.
-     * <p>
-     * <b>Order 4</b>: Fourth priority<br>
-     * <b>Matches</b>: /api/admin/**<br>
-     * <b>Authentication</b>: Keycloak OAuth2 Resource Server (requires ROLE_ADMIN)
-     * </p>
-     * <p>
-     * <b>DEPRECATED</b>: This filter chain supports legacy /api/admin/** paths during
-     * migration period. Will return 410 Gone after migration via DeprecatedEndpointFilter.
-     * </p>
-     *
-     * @deprecated Use {@link #adminApiFilterChain(HttpSecurity)} instead (Order 4)
-     */
-    @Bean
-    @Order(6)
-    @Deprecated(since = "4.0.0", forRemoval = true)
-    public SecurityFilterChain legacyKeycloakFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/admin/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .anyRequest().hasRole("ADMIN")
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2
-                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
-            )
-            .exceptionHandling(ex -> ex
-                .authenticationEntryPoint((request, response, authException) -> {
-                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
-                    response.sendError(401, "Unauthorized - Keycloak authentication required");
-                })
-            );
-
-        return http.build();
-    }
-
-    /**
-     * Legacy user filter chain for authenticated user endpoints.
-     * <p>
-     * <b>Order 6</b>: Sixth priority<br>
-     * <b>Matches</b>: /api/sites/**, /api/account/**, /api/user/**<br>
-     * <b>Authentication</b>: Keycloak OAuth2 Resource Server (any authenticated user)
-     * </p>
-     * <p>
-     * <b>DEPRECATED</b>: This filter chain supports legacy /api/user/**, /api/sites/**,
-     * /api/account/** paths during migration period. Will return 410 Gone after migration
-     * via DeprecatedEndpointFilter.
-     * </p>
-     *
-     * @deprecated Legacy paths - user endpoints migrated to /api/v1/history/**
-     */
-    @Bean
-    @Order(7)
-    @Deprecated(since = "4.0.0", forRemoval = true)
-    public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .anyRequest().authenticated()
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2
-                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
-            )
-            .exceptionHandling(ex -> ex
-                .authenticationEntryPoint((request, response, authException) -> {
-                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
-                    response.sendError(401, "Unauthorized - Authentication required");
-                })
-            );
-
-        return http.build();
-    }
-
-    /**
      * Default filter chain for public and remaining endpoints.
      * <p>
-     * <b>Order 7</b>: Lowest priority (catches all remaining requests)<br>
+     * <b>Order 8</b>: Lowest priority (catches all remaining requests)<br>
      * <b>Public access</b>:
      * </p>
      * <ul>
