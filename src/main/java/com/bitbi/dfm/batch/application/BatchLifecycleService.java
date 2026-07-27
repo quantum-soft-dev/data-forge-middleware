@@ -156,7 +156,10 @@ public class BatchLifecycleService {
     public void touchActivity(UUID batchId) {
         try {
             if (batchRepository.touchActivity(batchId, LocalDateTime.now()) == 0) {
-                logger.warn("touchActivity: batch not found, skipping: batchId={}", batchId);
+                // 031/T10: also the normal outcome for a frame that arrives after the batch ended —
+                // debug, not warn, since a late heartbeat on a finished session is expected noise.
+                logger.debug("touchActivity: batch missing or no longer IN_PROGRESS, skipping: batchId={}",
+                        batchId);
             }
         } catch (DataAccessException e) {
             logger.warn("touchActivity: liveness stamp failed, ignoring: batchId={}, error={}",
