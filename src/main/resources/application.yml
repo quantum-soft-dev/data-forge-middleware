@@ -11,7 +11,7 @@ spring:
       resourceserver:
         jwt:
           issuer-uri: https://${auth0.domain}/
-          audiences: ${auth0.api-audience}
+          audiences: ${auth0.api.audience}
 
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/dfm}
