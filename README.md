@@ -9,7 +9,7 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 - **Multi-tenant Architecture**: Account-based isolation with site-level authentication
 - **Batch Upload Management**: Track upload sessions with lifecycle states and metadata
 - **S3 Integration**: Secure file storage with automatic retry and checksum validation
-- **Admin Portal**: Keycloak-secured endpoints for account and site management
+- **Admin Portal**: Auth0-secured (OAuth2 / JWT) endpoints for account and site management
 - **Observability**: Structured JSON logging, metrics, and health checks
 - **PostgreSQL 16**: Partitioned error logs and optimized queries
 
@@ -18,14 +18,14 @@ Data Forge Middleware provides a RESTful API for managing batch file uploads fro
 - **Java 25** (Temurin/Corretto recommended)
 - **PostgreSQL 16+** with partitioning support
 - **AWS S3** or LocalStack for development
-- **Keycloak** (optional, for admin endpoints)
+- **Auth0 tenant** (for the Admin/UI API and the frontend; see [docs/local-auth0.md](docs/local-auth0.md))
 - **Gradle 9.0+** (wrapper included)
 
 ## Quick Start
 
 ### Option 0: DevContainer (Local Dev Environment)
 
-This repo includes a DevContainer that starts infrastructure (PostgreSQL, Redis, LocalStack S3, Keycloak)
+This repo includes a DevContainer that starts infrastructure (PostgreSQL, Redis, LocalStack S3)
 via `docker-compose.dev.yml` and provides a Java 25 + Node 20 dev environment.
 
 1. Configure backend env vars in `.env` (see `.env.example`).
@@ -36,7 +36,7 @@ via `docker-compose.dev.yml` and provides a Java 25 + Node 20 dev environment.
 6. Start frontend: `cd frontend && npm install && npm run dev`
 
 Notes:
-- Auth is via Auth0 (Keycloak is present in the dev compose for legacy/dev tooling, but is not the primary auth provider).
+- Auth is via Auth0. Keycloak is legacy: it is no longer part of the dev or default Docker stack (see [Legacy: Keycloak](#legacy-keycloak)).
 - LocalStack bucket `dfm-uploads` is created automatically by `docker-compose.dev.yml`.
 - Auth0 setup details: `docs/local-auth0.md`
 - If backend fails with Flyway checksum mismatch, wipe local volumes: `docker-compose -f docker-compose.dev.yml down -v` then `up -d`.
@@ -46,7 +46,7 @@ Notes:
 Run infrastructure services in Docker and DFM from IDE for debugging:
 
 ```bash
-# Start infrastructure (PostgreSQL, Keycloak, LocalStack)
+# Start infrastructure (PostgreSQL, Redis, LocalStack)
 ./scripts/docker-dev.sh start
 
 # Or manually
@@ -60,8 +60,11 @@ Then in IntelliJ IDEA:
 
 Infrastructure services:
 - **PostgreSQL**: localhost:5432 (user: `postgres`, password: `postgres`, database: `dfm`)
-- **Keycloak**: http://localhost:8081 (admin/admin, realm: dfm)
+- **Redis**: localhost:6379
 - **LocalStack S3**: http://localhost:4566 (bucket: dfm-uploads)
+
+Authentication is not part of the local stack — the backend validates Auth0-issued
+JWTs against your tenant (`AUTH0_*` env vars, see [docs/local-auth0.md](docs/local-auth0.md)).
 
 **Stop infrastructure:**
 ```bash
@@ -75,7 +78,7 @@ See [docker-compose.dev.yml](docker-compose.dev.yml) for configuration details.
 The easiest way to run the complete stack:
 
 ```bash
-# Start all services (PostgreSQL, Keycloak, LocalStack S3, DFM Backend)
+# Start all services (PostgreSQL, Redis, LocalStack S3, DFM Backend)
 docker-compose up -d
 
 # Check services are healthy
@@ -88,13 +91,12 @@ docker-compose logs -f dfm-backend
 Services will be available at:
 - **Application API**: http://localhost:8080
 - **Swagger UI**: http://localhost:8080/swagger-ui.html
-- **Keycloak Admin**: http://localhost:8081 (admin/admin)
-- **PostgreSQL**: localhost:5432 (databases: `dfm`, `keycloak`)
+- **PostgreSQL**: localhost:5432 (database: `dfm`)
 - **LocalStack S3**: http://localhost:4566
 
-**Pre-configured Keycloak users:**
-- Admin: `admin` / `admin` (ROLE_ADMIN)
-- User: `user` / `user` (ROLE_USER)
+The backend requires `AUTH0_*` environment variables (see `.env.example`); roles come
+from the `https://api.dataforge.com/roles` custom claim on the Auth0 access token —
+there are no locally provisioned identity-provider users.
 
 See [docker/README.md](docker/README.md) for detailed Docker configuration.
 
@@ -244,13 +246,13 @@ curl -X POST http://localhost:8080/api/v1/batch/{batchId}/complete \
   -H "Authorization: Bearer <jwt-token>"
 ```
 
-### Admin API (Keycloak Required)
+### Admin API (Auth0 Access Token Required)
 
 #### Create Account
 
 ```bash
 curl -X POST http://localhost:8080/admin/accounts \
-  -H "Authorization: Bearer <keycloak-token>" \
+  -H "Authorization: Bearer <auth0-access-token>" \
   -H "Content-Type: application/json" \
   -d '{
     "email": "user@example.com",
@@ -262,13 +264,30 @@ curl -X POST http://localhost:8080/admin/accounts \
 
 ```bash
 curl -X POST http://localhost:8080/admin/accounts/{accountId}/sites \
-  -H "Authorization: Bearer <keycloak-token>" \
+  -H "Authorization: Bearer <auth0-access-token>" \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "example.com",
     "displayName": "Example Site"
   }'
 ```
+
+### Legacy: Keycloak
+
+Keycloak was the original identity provider and has been fully replaced by Auth0.
+The OAuth2 resource server is configured against the Auth0 issuer
+(`auth/config/Auth0SecurityConfig.java`, `shared/config/SecurityConfiguration.java`,
+`spring.security.oauth2.resourceserver.jwt.issuer-uri` = `https://${auth0.domain}/`),
+and the frontend uses `@auth0/auth0-react`.
+
+Remaining Keycloak references in the tree are legacy and are **not** part of the dev or
+default Docker stack (neither `docker-compose.dev.yml` nor `docker-compose.yml` runs a
+Keycloak container):
+
+- `docker-compose.prod.yml` still defines a `keycloak` service and points the resource
+  server at a Keycloak issuer — stale, not a reference for new deployments.
+- `docker/keycloak/dfm-realm.json` and the `keycloak` database notes in `docker/README.md`.
+- `keycloak.enabled: false` in `application-test.yml`.
 
 ## Architecture
 
