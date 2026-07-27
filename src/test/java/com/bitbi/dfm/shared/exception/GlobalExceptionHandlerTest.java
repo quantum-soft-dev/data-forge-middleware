@@ -156,6 +156,62 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("Should pass ResponseStatusException through with its declared status and reason")
+    void shouldPassResponseStatusExceptionThrough() {
+        // Given: a controller deliberately signalling 403 (e.g. cross-account batch access)
+        org.springframework.web.server.ResponseStatusException ex =
+                new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied");
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleResponseStatusException(ex, request);
+
+        // Then: declared status/reason reach the client unchanged
+        assertNotNull(response);
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(403, response.getBody().status());
+        assertEquals("Forbidden", response.getBody().error());
+        assertEquals("Access denied", response.getBody().message());
+        assertEquals("/api/v1/test", response.getBody().path());
+    }
+
+    @Test
+    @DisplayName("Should pass ResponseStatusException 404 through unchanged")
+    void shouldPassResponseStatusException404Through() {
+        // Given
+        org.springframework.web.server.ResponseStatusException ex =
+                new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND, "Batch not found");
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleResponseStatusException(ex, request);
+
+        // Then
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(404, response.getBody().status());
+        assertEquals("Not Found", response.getBody().error());
+        assertEquals("Batch not found", response.getBody().message());
+    }
+
+    @Test
+    @DisplayName("Should use status reason phrase when ResponseStatusException has no reason")
+    void shouldFallBackToReasonPhraseWhenResponseStatusExceptionHasNoReason() {
+        // Given: no reason supplied
+        org.springframework.web.server.ResponseStatusException ex =
+                new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED);
+
+        // When
+        ResponseEntity<ErrorResponseDto> response = handler.handleResponseStatusException(ex, request);
+
+        // Then: message falls back to the status reason phrase instead of null
+        assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(401, response.getBody().status());
+        assertEquals("Unauthorized", response.getBody().error());
+        assertEquals("Unauthorized", response.getBody().message());
+    }
+
+    @Test
     @DisplayName("Should handle generic Exception with 500 Internal Server Error")
     void shouldHandleGenericException() {
         // Given

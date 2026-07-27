@@ -137,6 +137,66 @@ class BatchHistoryContractTest extends BaseIntegrationTest {
     }
 
     /**
+     * TC01b: List batches with explicit Accept: application/json header.
+     * <p>
+     * A single controller serves /api/v1/history/batches regardless of the Accept header.
+     * Real frontend clients send Accept: application/json; this pins that the response
+     * structure is identical to the no-Accept request (TC01).
+     * </p>
+     */
+    @Test
+    @DisplayName("TC01b: GET /api/user/batches with Accept: application/json should return same structure as without Accept")
+    void tc01b_listBatches_withJsonAccept_shouldReturn200WithBatchSummaryList() throws Exception {
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .accept(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.hasNext").isBoolean());
+    }
+
+    /**
+     * TC14: User without a linked Account gets an empty list, not an error.
+     * <p>
+     * Pure Auth0 admin users have no PostgreSQL Account record. The upload history list
+     * must degrade to an empty page for them (production behavior of the JSON path
+     * before consolidation), for requests both with and without an Accept header.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC14: GET /api/user/batches without linked account should return 200 with empty list (no Accept header)")
+    void tc14_listBatches_withoutLinkedAccount_shouldReturnEmptyList() throws Exception {
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT)
+                        .header("Authorization", "Bearer mock-jwt-token-no-account")
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.items").isEmpty())
+                .andExpect(jsonPath("$.hasNext").value(false));
+    }
+
+    /**
+     * TC14b: Same as TC14 but with Accept: application/json (real frontend request shape).
+     */
+    @Test
+    @DisplayName("TC14b: GET /api/user/batches without linked account should return 200 with empty list (Accept: application/json)")
+    void tc14b_listBatches_withoutLinkedAccount_withJsonAccept_shouldReturnEmptyList() throws Exception {
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT)
+                        .header("Authorization", "Bearer mock-jwt-token-no-account")
+                        .accept(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.items").isEmpty())
+                .andExpect(jsonPath("$.hasNext").value(false));
+    }
+
+    /**
      * T021 (TC02): Verify correct structure for any user
      * <p>
      * Given: Authenticated user (may or may not have uploads)
@@ -352,6 +412,28 @@ class BatchHistoryContractTest extends BaseIntegrationTest {
     }
 
     /**
+     * TC05b: Batch details with explicit Accept: application/json header.
+     * <p>
+     * Pins that the JSON-Accept request (real frontend shape) is served by the same
+     * consolidated controller and returns the same BatchDetailDto structure as TC05.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC05b: GET /api/user/batches/{batchId} with Accept: application/json should return BatchDetailDto")
+    void tc05b_getBatchDetails_withJsonAccept_shouldReturn200WithFileList() throws Exception {
+        String batchId = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", batchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .accept(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(batchId))
+                .andExpect(jsonPath("$.files").isArray());
+    }
+
+    /**
      * T042 (TC06): Get batch details returns 403 when batch doesn't belong to user
      * <p>
      * Given: Authenticated client with valid JWT
@@ -375,6 +457,34 @@ class BatchHistoryContractTest extends BaseIntegrationTest {
     }
 
     /**
+     * TC06b: Cross-account batch details with Accept: application/json returns 403, not 500.
+     * <p>
+     * Historically two controllers were mapped on GET /api/v1/history/batches/{batchId} and the
+     * Accept header decided which one served the request, with diverging error handling (seen
+     * live on GKE test 2026-07-23 as a 500). A single controller now serves both request shapes:
+     * UnauthorizedBatchAccessException flows to GlobalExceptionHandler, which renders the
+     * standard ErrorResponseDto with status 403.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC06b: GET /api/user/batches/{batchId} with Accept: application/json should return 403 for cross-account batch, not 500")
+    void tc06b_getBatchDetails_withJsonAccept_shouldReturn403Not500WhenUnauthorized() throws Exception {
+        // Given: Batch owned by a different account than the authenticated user's
+        String otherAccountBatchId = "0199bab2-dddd-dddd-dddd-dddddddddddd";
+
+        // When: GET with Accept: application/json (real frontend request shape)
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", otherAccountBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .accept(MediaType.APPLICATION_JSON))
+
+                // Then: 403 Forbidden with the standard ErrorResponseDto body — not 500
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").value("Forbidden"))
+                .andExpect(jsonPath("$.message", containsString("is not authorized to access batch")));
+    }
+
+    /**
      * T043 (TC07): Get batch details returns 404 when batchId doesn't exist
      * <p>
      * Given: Authenticated client with valid JWT
@@ -395,6 +505,59 @@ class BatchHistoryContractTest extends BaseIntegrationTest {
 
                 // Then: 404 Not Found
                 .andExpect(status().isNotFound());
+    }
+
+    /**
+     * TC07b: Non-existent batch with Accept: application/json returns 404 with ErrorResponseDto.
+     */
+    @Test
+    @DisplayName("TC07b: GET /api/user/batches/{batchId} with Accept: application/json should return 404 when batch doesn't exist")
+    void tc07b_getBatchDetails_withJsonAccept_shouldReturn404WhenBatchNotFound() throws Exception {
+        String nonExistentBatchId = "00000000-0000-0000-0000-000000000000";
+
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", nonExistentBatchId)
+                        .header("Authorization", "Bearer " + jwtToken)
+                        .accept(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.error").value("Not Found"));
+    }
+
+    /**
+     * TC15: Batch details for a user without a linked Account returns 401.
+     * <p>
+     * Unlike the list endpoint (which degrades to an empty page, TC14), batch details
+     * cannot be authorized without an accountId, so the request is rejected as
+     * unauthenticated — for requests both with and without an Accept header.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC15: GET /api/user/batches/{batchId} without linked account should return 401 (no Accept header)")
+    void tc15_getBatchDetails_withoutLinkedAccount_shouldReturn401() throws Exception {
+        String batchId = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", batchId)
+                        .header("Authorization", "Bearer mock-jwt-token-no-account")
+                        .contentType(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * TC15b: Same as TC15 but with Accept: application/json (real frontend request shape).
+     */
+    @Test
+    @DisplayName("TC15b: GET /api/user/batches/{batchId} without linked account should return 401 (Accept: application/json)")
+    void tc15b_getBatchDetails_withoutLinkedAccount_withJsonAccept_shouldReturn401() throws Exception {
+        String batchId = "c3d4e5f6-a7b8-9012-cdef-123456789012";
+
+        mockMvc.perform(get(BATCH_HISTORY_ENDPOINT + "/{batchId}", batchId)
+                        .header("Authorization", "Bearer mock-jwt-token-no-account")
+                        .accept(MediaType.APPLICATION_JSON))
+
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401));
     }
 
     // ============================================================================

@@ -145,25 +145,37 @@ public class TestSecurityConfig {
                 subject = accountId; // Subject is accountId for extraction
                 email = "user2@test.com";
                 username = "user2";
+            } else if ("mock-jwt-token-no-account".equals(token)) {
+                // Authenticated user with NO linked Account record (e.g. pure Auth0 admin):
+                // no accountId claims, non-UUID subject, email absent from test-data.sql
+                roles = List.of("USER");
+                accountId = null;
+                subject = "auth0|test-no-account";
+                email = "no-account@test.com";
+                username = "no-account";
             } else {
                 // Invalid token - throw BadJwtException which Spring Security translates to 401
                 throw new org.springframework.security.oauth2.jwt.BadJwtException("Invalid JWT token: " + token);
             }
 
-            return Jwt.withTokenValue(token)
+            Jwt.Builder builder = Jwt.withTokenValue(token)
                     .header("alg", "none")
                     .header("typ", "JWT")
                     .subject(subject)
                     .claim("email", email)
                     .claim("preferred_username", username)
-                    .claim("accountId", accountId)
-                    .claim("https://api.test.com/accountId", accountId) // Namespaced claim for Auth0 (matches application-test.yml)
                     .claim("https://api.test.com/email", email) // Namespaced email claim
                     .claim("https://api.test.com/roles", roles) // Namespaced roles claim
                     .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
-                    .expiresAt(Instant.now().plusSeconds(3600))
-                    .build();
+                    .expiresAt(Instant.now().plusSeconds(3600));
+
+            if (accountId != null) {
+                builder.claim("accountId", accountId)
+                        .claim("https://api.test.com/accountId", accountId); // Namespaced claim for Auth0 (matches application-test.yml)
+            }
+
+            return builder.build();
         };
     }
 

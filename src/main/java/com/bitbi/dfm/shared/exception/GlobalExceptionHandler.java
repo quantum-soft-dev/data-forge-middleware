@@ -1355,6 +1355,37 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle ResponseStatusException — pass the declared status and reason through unchanged.
+     * <p>
+     * Controllers throw ResponseStatusException to signal intentional 403/404/401 responses
+     * (e.g. BatchHistoryAdminController on cross-account batch access). Without this handler
+     * the generic Exception handler turns such routine denials into 500 responses with an
+     * ERROR-level stack trace (seen live on GKE test 2026-07-23).
+     * </p>
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ErrorResponseDto> handleResponseStatusException(
+            org.springframework.web.server.ResponseStatusException ex,
+            HttpServletRequest request) {
+
+        logger.warn("Response status exception: {} {}", ex.getStatusCode(), ex.getReason());
+
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        String error = (status != null) ? status.getReasonPhrase() : ex.getStatusCode().toString();
+        String message = (ex.getReason() != null) ? ex.getReason() : error;
+
+        ErrorResponseDto body = new ErrorResponseDto(
+                Instant.now(),
+                ex.getStatusCode().value(),
+                error,
+                message,
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(ex.getStatusCode()).body(body);
+    }
+
+    /**
      * Handle generic exceptions (500 Internal Server Error).
      */
     @ExceptionHandler(Exception.class)
