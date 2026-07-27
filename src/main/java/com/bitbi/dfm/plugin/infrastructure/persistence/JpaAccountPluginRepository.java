@@ -52,33 +52,29 @@ public interface JpaAccountPluginRepository extends JpaRepository<AccountPlugin,
                                                          @Param("login") String login);
 
     @Override
+    @Query("""
+            SELECT ap FROM AccountPlugin ap
+            WHERE ap.pluginId = :pluginId
+              AND ap.active = true
+              AND ap.apiKeyLookup = :apiKeyLookup
+            """)
+    Optional<AccountPlugin> findActiveByPluginIdAndApiKeyLookup(@Param("pluginId") String pluginId,
+                                                                @Param("apiKeyLookup") String apiKeyLookup);
+
+    @Override
+    @Query("""
+            SELECT ap FROM AccountPlugin ap
+            WHERE ap.pluginId = :pluginId
+              AND ap.active = true
+              AND ap.apiKeyLookup IS NULL
+            """)
+    List<AccountPlugin> findActiveByPluginIdWithoutApiKeyLookup(@Param("pluginId") String pluginId);
+
+    @Override
     @Query("SELECT CASE WHEN COUNT(ap) > 0 THEN true ELSE false END FROM AccountPlugin ap WHERE ap.accountId = :accountId AND ap.pluginId = :pluginId AND ap.active = true")
     boolean existsActiveByAccountIdAndPluginId(
             @Param("accountId") UUID accountId,
             @Param("pluginId") String pluginId);
-
-    /**
-     * Internal method for JSONB containment query.
-     * Uses PostgreSQL JSONB containment operator @> for efficient key lookup.
-     */
-    @Query(value = """
-        SELECT * FROM account_plugins
-        WHERE plugin_id = :pluginId
-          AND plugin_data @> CAST(:apiKeyJson AS jsonb)
-        """, nativeQuery = true)
-    Optional<AccountPlugin> findByPluginIdAndApiKeyJson(
-            @Param("pluginId") String pluginId,
-            @Param("apiKeyJson") String apiKeyJson);
-
-    /**
-     * Finds an active account plugin by plugin ID and API key.
-     * Formats the API key as JSON and delegates to the native query.
-     */
-    @Override
-    default Optional<AccountPlugin> findByPluginIdAndApiKey(String pluginId, String apiKey) {
-        String apiKeyJson = String.format("{\"apiKey\": \"%s\"}", apiKey);
-        return findByPluginIdAndApiKeyJson(pluginId, apiKeyJson);
-    }
 
     @Override
     Page<AccountPlugin> findByPluginIdAndActiveTrue(String pluginId, Pageable pageable);

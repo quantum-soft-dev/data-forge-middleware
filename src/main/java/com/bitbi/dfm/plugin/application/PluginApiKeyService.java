@@ -13,6 +13,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 
 /**
@@ -122,11 +124,19 @@ public class PluginApiKeyService {
 
     /**
      * Validates an API Key and returns the associated AccountPlugin if valid.
-     * Performance requirement: <50ms (SC-004).
      * <p>
-     * Security: Uses BCrypt comparison which is intentionally slow (~100ms) to prevent
-     * timing attacks. For better performance with many accounts, consider caching or
-     * adding an indexed key prefix lookup.
+     * Cost: one indexed point query on {@code api_key_lookup} (hex SHA-256 of the key, V42) plus
+     * at most one BCrypt comparison — independent of how many accounts have the plugin active.
+     * BCrypt itself is deliberately slow (~100 ms at strength 10), and that single comparison
+     * dominates the wall time; this method is therefore not, and cannot be, a sub-50ms operation.
+     * What it does guarantee is constant cost: a malformed key never reaches the database, and an
+     * unknown well-formed key costs no BCrypt at all, so unauthenticated traffic cannot amplify
+     * into O(n) hashing.
+     * </p>
+     * <p>
+     * Security: the SHA-256 lookup only selects the candidate row; verification still runs against
+     * the BCrypt hash. Activations issued before V42 have no lookup and fall back to a scan over
+     * that (shrinking) subset — see {@link #validateAgainstLegacyActivations}.
      * </p>
      *
      * @param apiKeyValue The raw API key value
@@ -144,17 +154,22 @@ public class PluginApiKeyService {
                 return Optional.empty();
             }
 
-            // Load all active bit-bi plugin activations and compare BCrypt hashes
-            // Note: This is O(n) where n = active accounts, but BCrypt prevents timing attacks
-            List<AccountPlugin> activePlugins = accountPluginRepository.findActiveByPluginId(PLUGIN_ID);
+            // Indexed point query + exactly one BCrypt comparison.
+            Optional<AccountPlugin> matched = accountPluginRepository
+                    .findActiveByPluginIdAndApiKeyLookup(PLUGIN_ID, PluginApiKey.lookupOf(apiKeyValue))
+                    .filter(AccountPlugin::isActive)
+                    .filter(accountPlugin -> accountPlugin.getPluginData()
+                            .get(API_KEY_HASH_FIELD) instanceof String hash
+                            && passwordEncoder.matches(apiKeyValue, hash));
 
-            for (AccountPlugin accountPlugin : activePlugins) {
-                String storedHash = getStoredApiKeyHash(accountPlugin);
-                if (storedHash != null && passwordEncoder.matches(apiKeyValue, storedHash)) {
-                    log.debug("API key validated for accountId={}", accountPlugin.getAccountId());
-                    meterRegistry.counter("plugin.api.key.validation.success").increment();
-                    return Optional.of(accountPlugin);
-                }
+            if (matched.isEmpty()) {
+                matched = validateAgainstLegacyActivations(apiKeyValue);
+            }
+
+            if (matched.isPresent()) {
+                log.debug("API key validated for accountId={}", matched.get().getAccountId());
+                meterRegistry.counter("plugin.api.key.validation.success").increment();
+                return matched;
             }
 
             log.debug("API key not found or does not match any account plugin");
@@ -167,33 +182,54 @@ public class PluginApiKeyService {
     }
 
     /**
-     * Extracts the stored API key hash from plugin data.
-     * Supports both new format (apiKeyHash) and legacy format (apiKey) for migration.
+     * Fallback for activations whose key was issued before the lookup column existed (V42): the
+     * plaintext is not stored, so their lookup cannot be backfilled and they can only be found by
+     * scanning. The scan is restricted to rows with a null lookup, so it drains to nothing as keys
+     * are rotated — watch {@code plugin.api.key.validation.legacy.hit} and delete this path once it
+     * stays at zero.
      */
-    private String getStoredApiKeyHash(AccountPlugin accountPlugin) {
+    private Optional<AccountPlugin> validateAgainstLegacyActivations(String apiKeyValue) {
+        List<AccountPlugin> legacyActivations =
+                accountPluginRepository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID);
+        if (legacyActivations.isEmpty()) {
+            return Optional.empty();
+        }
+
+        for (AccountPlugin accountPlugin : legacyActivations) {
+            if (legacyKeyMatches(accountPlugin, apiKeyValue)) {
+                log.info("API key validated through the pre-V42 fallback for accountId={}; "
+                        + "rotate the key to move it onto the indexed path", accountPlugin.getAccountId());
+                return Optional.of(accountPlugin);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Compares a candidate key against a pre-V42 activation.
+     * <p>
+     * Hashed keys use BCrypt. Plaintext keys (the oldest format) are compared byte-wise in
+     * constant time — the previous implementation called {@code passwordEncoder.encode()} on the
+     * stored plaintext and fed the result to {@code matches()}, which, because of the random salt,
+     * is nothing but a ~100 ms string equality check run on every read.
+     * </p>
+     */
+    private boolean legacyKeyMatches(AccountPlugin accountPlugin, String apiKeyValue) {
         Map<String, Object> pluginData = accountPlugin.getPluginData();
-        if (pluginData == null) {
-            return null;
+
+        if (pluginData.get(API_KEY_HASH_FIELD) instanceof String storedHash) {
+            return passwordEncoder.matches(apiKeyValue, storedHash);
         }
 
-        // Try new hash field first
-        Object hashValue = pluginData.get(API_KEY_HASH_FIELD);
-        if (hashValue instanceof String) {
-            return (String) hashValue;
-        }
-
-        // Legacy support: If old plain-text key exists, hash it on-the-fly for comparison
-        // This allows existing keys to work during migration
-        Object legacyKey = pluginData.get("apiKey");
-        if (legacyKey instanceof String legacyKeyStr && PluginApiKey.isValid(legacyKeyStr)) {
+        if (pluginData.get(LEGACY_API_KEY_FIELD) instanceof String storedPlaintext) {
             log.warn("Legacy plain-text API key found for accountId={}. Please rotate the key.",
                     accountPlugin.getAccountId());
-            // For legacy keys, we compare directly (not ideal but maintains compatibility)
-            // The key will be hashed on next rotation
-            return passwordEncoder.encode(legacyKeyStr);
+            return MessageDigest.isEqual(
+                    storedPlaintext.getBytes(StandardCharsets.UTF_8),
+                    apiKeyValue.getBytes(StandardCharsets.UTF_8));
         }
 
-        return null;
+        return false;
     }
 
     /**
@@ -212,7 +248,7 @@ public class PluginApiKeyService {
         return accountPluginRepository
                 .findByAccountIdAndPluginId(accountId, PLUGIN_ID)
                 .map(ap -> ap.getPluginData().get(API_KEY_HASH_FIELD) != null
-                        || ap.getPluginData().get("apiKey") != null) // Legacy support
+                        || ap.getPluginData().get(LEGACY_API_KEY_FIELD) != null) // Legacy support
                 .orElse(false);
     }
 

@@ -12,6 +12,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,7 +20,11 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -35,14 +40,14 @@ class PluginApiKeyServiceTest {
     private static final String PLUGIN_ID = "bit-bi";
 
     private AccountPluginRepository repository;
-    private PasswordEncoder encoder;
+    private CountingPasswordEncoder encoder;
     private PluginApiKeyService service;
     private UUID accountId;
 
     @BeforeEach
     void setUp() {
         repository = mock(AccountPluginRepository.class);
-        encoder = new BCryptPasswordEncoder();
+        encoder = new CountingPasswordEncoder();
         service = new PluginApiKeyService(repository, new SimpleMeterRegistry(), encoder);
         accountId = UUID.randomUUID();
         when(repository.save(any(AccountPlugin.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -50,6 +55,33 @@ class PluginApiKeyServiceTest {
 
     private AccountPlugin activation(Map<String, Object> pluginData) {
         return AccountPlugin.activate(accountId, PLUGIN_ID, pluginData);
+    }
+
+    /**
+     * BCrypt encoder that records how often it is used — the whole point of 031 is that a
+     * validation costs exactly one comparison and never an encode.
+     */
+    private static final class CountingPasswordEncoder implements PasswordEncoder {
+        private final PasswordEncoder delegate = new BCryptPasswordEncoder();
+        private int matchesCalls;
+        private int encodeCalls;
+
+        @Override
+        public String encode(CharSequence rawPassword) {
+            encodeCalls++;
+            return delegate.encode(rawPassword);
+        }
+
+        @Override
+        public boolean matches(CharSequence rawPassword, String encodedPassword) {
+            matchesCalls++;
+            return delegate.matches(rawPassword, encodedPassword);
+        }
+
+        void reset() {
+            matchesCalls = 0;
+            encodeCalls = 0;
+        }
     }
 
     @Nested
@@ -141,6 +173,174 @@ class PluginApiKeyServiceTest {
 
             assertThatThrownBy(() -> service.rotateApiKey(accountId))
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("rotated key should validate, previous key should not")
+        void rotatedKeyShouldValidate() {
+            AccountPlugin activation = activation(Map.of());
+            when(repository.findById(7L)).thenReturn(Optional.of(activation));
+            when(repository.findByAccountIdAndPluginId(accountId, PLUGIN_ID))
+                    .thenReturn(Optional.of(activation));
+
+            PluginApiKey first = service.generateApiKey(7L);
+            PluginApiKey rotated = service.rotateApiKey(accountId);
+
+            when(repository.findActiveByPluginIdAndApiKeyLookup(PLUGIN_ID, rotated.lookup()))
+                    .thenReturn(Optional.of(activation));
+            when(repository.findActiveByPluginIdAndApiKeyLookup(PLUGIN_ID, first.lookup()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            assertThat(service.validateApiKey(rotated.value())).contains(activation);
+            assertThat(service.validateApiKey(first.value())).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("validateApiKey()")
+    class ValidateApiKey {
+
+        private final String rawKey = PluginApiKey.generate().value();
+        private final String lookup = PluginApiKey.lookupOf(rawKey);
+
+        private AccountPlugin activationWithLookup(String key) {
+            AccountPlugin activation = activation(Map.of("apiKeyHash", encoder.encode(key)));
+            activation.updateApiKeyLookup(PluginApiKey.lookupOf(key));
+            encoder.reset();
+            return activation;
+        }
+
+        @Test
+        @DisplayName("should accept a valid key with exactly one BCrypt comparison")
+        void shouldAcceptValidKeyWithSingleBcryptComparison() {
+            AccountPlugin activation = activationWithLookup(rawKey);
+            when(repository.findActiveByPluginIdAndApiKeyLookup(PLUGIN_ID, lookup))
+                    .thenReturn(Optional.of(activation));
+
+            Optional<AccountPlugin> result = service.validateApiKey(rawKey);
+
+            assertThat(result).contains(activation);
+            assertThat(encoder.matchesCalls).as("exactly one BCrypt comparison").isEqualTo(1);
+            assertThat(encoder.encodeCalls).as("no BCrypt work on the read path").isZero();
+            verify(repository, never()).findActiveByPluginId(any());
+            verify(repository, never()).findActiveByPluginIdWithoutApiKeyLookup(any());
+        }
+
+        @Test
+        @DisplayName("should reject an unknown key without scanning every activation")
+        void shouldRejectUnknownKeyWithoutScan() {
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            Optional<AccountPlugin> result = service.validateApiKey(rawKey);
+
+            assertThat(result).isEmpty();
+            assertThat(encoder.matchesCalls).as("no BCrypt work for an unknown key").isZero();
+            verify(repository, never()).findActiveByPluginId(any());
+        }
+
+        @Test
+        @DisplayName("should reject a malformed key before touching the database")
+        void shouldRejectMalformedKeyWithoutDbAccess() {
+            assertThat(service.validateApiKey("not-a-plugin-key")).isEmpty();
+            assertThat(service.validateApiKey("")).isEmpty();
+            assertThat(service.validateApiKey(null)).isEmpty();
+
+            verifyNoInteractions(repository);
+            assertThat(encoder.matchesCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("should reject an inactive activation even if the lookup resolves")
+        void shouldRejectInactiveActivation() {
+            AccountPlugin activation = activationWithLookup(rawKey);
+            activation.deactivate();
+            when(repository.findActiveByPluginIdAndApiKeyLookup(PLUGIN_ID, lookup))
+                    .thenReturn(Optional.of(activation));
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            assertThat(service.validateApiKey(rawKey)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should reject a key whose lookup resolves but whose hash does not match")
+        void shouldRejectMismatchedHash() {
+            AccountPlugin activation = activationWithLookup(PluginApiKey.generate().value());
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.of(activation));
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            assertThat(service.validateApiKey(rawKey)).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("validateApiKey() — legacy activations without a lookup")
+    class ValidateLegacyActivations {
+
+        private final String rawKey = PluginApiKey.generate().value();
+
+        @Test
+        @DisplayName("should still authenticate a hashed key that predates the lookup column")
+        void shouldAuthenticateLegacyHashedKey() {
+            AccountPlugin legacy = activation(Map.of("apiKeyHash", encoder.encode(rawKey)));
+            encoder.reset();
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of(legacy));
+
+            assertThat(service.validateApiKey(rawKey)).contains(legacy);
+            assertThat(encoder.encodeCalls).as("no BCrypt encode on the read path").isZero();
+        }
+
+        @Test
+        @DisplayName("should still authenticate a plaintext key without hashing it on read")
+        void shouldAuthenticateLegacyPlaintextKey() {
+            AccountPlugin legacy = activation(Map.of("apiKey", rawKey));
+            encoder.reset();
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of(legacy));
+
+            assertThat(service.validateApiKey(rawKey)).contains(legacy);
+            assertThat(encoder.encodeCalls)
+                    .as("comparing against a plaintext key must not mint a BCrypt hash")
+                    .isZero();
+            assertThat(encoder.matchesCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("should reject a wrong key against a legacy plaintext activation")
+        void shouldRejectWrongKeyAgainstLegacyPlaintext() {
+            AccountPlugin legacy = activation(Map.of("apiKey", PluginApiKey.generate().value()));
+            encoder.reset();
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of(legacy));
+
+            assertThat(service.validateApiKey(rawKey)).isEmpty();
+            assertThat(encoder.encodeCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("should ignore legacy rows with no credentials at all")
+        void shouldIgnoreRowsWithoutCredentials() {
+            AccountPlugin legacy = activation(Map.of("tenantId", "t-1"));
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of(legacy));
+
+            assertThat(service.validateApiKey(rawKey)).isEmpty();
         }
     }
 }
