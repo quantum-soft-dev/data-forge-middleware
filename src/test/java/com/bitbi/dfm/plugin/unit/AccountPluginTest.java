@@ -42,6 +42,36 @@ class AccountPluginTest {
     }
 
     @Nested
+    @DisplayName("removePluginData()")
+    class RemovePluginDataMethod {
+
+        @Test
+        @DisplayName("should remove the given key (updatePluginData only merges, it cannot delete)")
+        void shouldRemoveKey() {
+            Map<String, Object> data = new java.util.HashMap<>();
+            data.put("apiKey", "plk_secret");
+            data.put("tenantId", "t-1");
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, data);
+
+            plugin.removePluginData("apiKey");
+
+            assertThat(plugin.getPluginData())
+                    .doesNotContainKey("apiKey")
+                    .containsEntry("tenantId", "t-1");
+        }
+
+        @Test
+        @DisplayName("should be a no-op for an absent key")
+        void shouldIgnoreAbsentKey() {
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+
+            plugin.removePluginData("nope");
+
+            assertThat(plugin.getPluginData()).containsEntry("tenantId", "tenant-123");
+        }
+    }
+
+    @Nested
     @DisplayName("apiKeyLookup (031)")
     class ApiKeyLookupField {
 

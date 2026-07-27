@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -30,18 +31,30 @@ public class PluginApiKeyService {
 
     private static final Logger log = LoggerFactory.getLogger(PluginApiKeyService.class);
     private static final String API_KEY_HASH_FIELD = "apiKeyHash";
+    private static final String LEGACY_API_KEY_FIELD = "apiKey";
     private static final String PLUGIN_ID = "bit-bi";
-
-    private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     private final AccountPluginRepository accountPluginRepository;
     private final MeterRegistry meterRegistry;
+    private final PasswordEncoder passwordEncoder;
 
+    @Autowired
     public PluginApiKeyService(
             AccountPluginRepository accountPluginRepository,
             MeterRegistry meterRegistry) {
+        this(accountPluginRepository, meterRegistry, new BCryptPasswordEncoder());
+    }
+
+    /**
+     * Visible for testing: lets a test observe how many BCrypt comparisons a validation costs.
+     */
+    PluginApiKeyService(
+            AccountPluginRepository accountPluginRepository,
+            MeterRegistry meterRegistry,
+            PasswordEncoder passwordEncoder) {
         this.accountPluginRepository = accountPluginRepository;
         this.meterRegistry = meterRegistry;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
@@ -60,21 +73,33 @@ public class PluginApiKeyService {
         AccountPlugin accountPlugin = accountPluginRepository.findById(accountPluginId)
                 .orElseThrow(() -> new IllegalArgumentException("AccountPlugin not found: " + accountPluginId));
 
+        return generateApiKeyFor(accountPlugin);
+    }
+
+    /**
+     * Issues a new key for an already loaded activation, replacing any previous one.
+     * <p>
+     * Writes two derivations of the same key: the BCrypt hash (verification) and the SHA-256
+     * lookup handle (index). They must always be written together — a hash without a lookup
+     * degrades the activation to the legacy fallback scan.
+     * </p>
+     */
+    private PluginApiKey generateApiKeyFor(AccountPlugin accountPlugin) {
         PluginApiKey apiKey = PluginApiKey.generate();
 
         // Security: Store BCrypt hash of API key, not the raw key
         String apiKeyHash = passwordEncoder.encode(apiKey.value());
 
-        Map<String, Object> updatedData = new HashMap<>(accountPlugin.getPluginData());
-        updatedData.put(API_KEY_HASH_FIELD, apiKeyHash);
-        // Remove old plain-text key if exists (migration from old format)
-        updatedData.remove("apiKey");
-        accountPlugin.updatePluginData(updatedData);
+        accountPlugin.updatePluginData(Map.of(API_KEY_HASH_FIELD, apiKeyHash));
+        // Drop the old plain-text key if present (migration from the pre-hash format).
+        // updatePluginData() merges, so the removal has to be explicit.
+        accountPlugin.removePluginData(LEGACY_API_KEY_FIELD);
+        accountPlugin.updateApiKeyLookup(apiKey.lookup());
 
         accountPluginRepository.save(accountPlugin);
 
         log.info("Generated API Key for account plugin: id={}, key={}",
-                accountPluginId, apiKey); // toString() returns masked key
+                accountPlugin.getId(), apiKey); // toString() returns masked key
 
         return apiKey;
     }
@@ -92,7 +117,7 @@ public class PluginApiKeyService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No active Bit BI plugin for account: " + accountId));
 
-        return generateApiKey(accountPlugin.getId());
+        return generateApiKeyFor(accountPlugin);
     }
 
     /**
