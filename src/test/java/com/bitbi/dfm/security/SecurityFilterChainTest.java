@@ -350,4 +350,101 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
                             "download route must be anonymous, got HTTP " + status);
                 });
     }
+
+    /**
+     * TC13: The removed legacy admin prefix falls through to the catch-all deny.
+     * <p>
+     * <b>Given</b>: A valid Auth0 token with ROLE_ADMIN<br>
+     * <b>When</b>: Requesting /api/admin/** (no controller has ever served this prefix)<br>
+     * <b>Then</b>: 403 Forbidden from the default chain's denyAll — and never 200
+     * </p>
+     * <p>
+     * Before the cleanup a dedicated Order 6 chain matched this prefix and let admin tokens
+     * through to a 404. The prefix is not part of the API surface, so it must be denied outright.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC13: Legacy /api/admin/** should be denied even with an admin token")
+    void legacyAdminPrefixShouldBeDenied() throws Exception {
+        mockMvc.perform(get("/api/admin/accounts")
+                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * TC14: The removed legacy user prefixes fall through to the catch-all deny.
+     * <p>
+     * <b>Given</b>: A valid Auth0 user token<br>
+     * <b>When</b>: Requesting /api/sites/**, /api/account/** or /api/user/**<br>
+     * <b>Then</b>: 403 Forbidden — these prefixes have no controllers and no filter chain
+     * </p>
+     */
+    @Test
+    @DisplayName("TC14: Legacy user prefixes should be denied even with a user token")
+    void legacyUserPrefixesShouldBeDenied() throws Exception {
+        for (String path : new String[]{"/api/sites/list", "/api/account/profile", "/api/user/me"}) {
+            mockMvc.perform(get(path)
+                            .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    /**
+     * TC15: The live /api/v1/admin/** endpoints still require and honour ROLE_ADMIN.
+     * <p>
+     * <b>Given</b>: A valid Auth0 token with ROLE_ADMIN<br>
+     * <b>When</b>: Requesting the plugin admin listing and the retention schedule settings<br>
+     * <b>Then</b>: 200 OK — these share the "admin" word but live under /api/v1/** (Order 5) and
+     * must be untouched by the legacy-prefix removal
+     * </p>
+     */
+    @Test
+    @DisplayName("TC15: /api/v1/admin/** should still work with ROLE_ADMIN")
+    void liveAdminApiShouldStillWorkForAdmin() throws Exception {
+        mockMvc.perform(get(ApiRoutes.PLUGINS_ADMIN)
+                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get(ApiRoutes.SETTINGS_BATCH_RETENTION_SCHEDULE)
+                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    /**
+     * TC16: The live /api/v1/admin/** endpoints still reject non-admins.
+     * <p>
+     * <b>Given</b>: A valid Auth0 token with ROLE_USER only<br>
+     * <b>When</b>: Requesting /api/v1/admin/plugins<br>
+     * <b>Then</b>: 403 Forbidden — unchanged by the cleanup
+     * </p>
+     */
+    @Test
+    @DisplayName("TC16: /api/v1/admin/plugins should still reject ROLE_USER")
+    void liveAdminApiShouldStillRejectNonAdmin() throws Exception {
+        mockMvc.perform(get(ApiRoutes.PLUGINS_ADMIN)
+                        .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * TC17: The live owner-facing /api/v1/account/** surface is unaffected.
+     * <p>
+     * <b>Given</b>: A valid Auth0 user token<br>
+     * <b>When</b>: Requesting /api/v1/account/errors/unread-count<br>
+     * <b>Then</b>: 200 OK — only the legacy {@code /api/account/**} prefix (no {@code /v1}) is gone
+     * </p>
+     */
+    @Test
+    @DisplayName("TC17: /api/v1/account/** should be unaffected by the legacy prefix removal")
+    void liveAccountApiShouldBeUnaffected() throws Exception {
+        mockMvc.perform(get(ApiRoutes.GLOBAL_ERRORS_UNREAD_COUNT)
+                        .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
 }

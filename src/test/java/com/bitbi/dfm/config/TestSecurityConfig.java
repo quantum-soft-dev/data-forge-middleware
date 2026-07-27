@@ -39,15 +39,19 @@ import java.util.stream.Collectors;
  * unified API structure, but uses mocked authentication for testing without requiring
  * a running Auth0 instance.</p>
  *
- * <p><b>Unified Filter Chain Architecture:</b></p>
+ * <p><b>Unified Filter Chain Architecture</b> (mirrors production orders):</p>
  * <ul>
  *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication (Device API)</li>
  *   <li><b>Order 2:</b> /api/dfc/** → Custom JWT (legacy, deprecated)</li>
- *   <li><b>Order 3:</b> /api/v1/** → Mocked OAuth2 Resource Server (UI/Admin API)</li>
- *   <li><b>Order 4:</b> /api/admin/** → Mocked OAuth2 (legacy, deprecated)</li>
- *   <li><b>Order 5:</b> /api/sites**, /api/account/**, /api/user/** → Mocked OAuth2 (legacy, deprecated)</li>
- *   <li><b>Order 6:</b> Default → Public endpoints (token generation, actuator, swagger)</li>
+ *   <li><b>Order 3:</b> /api/v1/plugins/bit-bi/** → Plugin API key</li>
+ *   <li><b>Order 4:</b> /api/v1/plugins/parquet-export/** → Basic Auth + anonymous download</li>
+ *   <li><b>Order 5:</b> /api/v1/** → Mocked OAuth2 Resource Server (UI/Admin API)</li>
+ *   <li><b>Order 8:</b> Default → Public endpoints (actuator, swagger) + denyAll</li>
  * </ul>
+ * <p>The legacy {@code /api/admin/**} and {@code /api/sites/**}, {@code /api/account/**},
+ * {@code /api/user/**} chains (Orders 6 and 7) were removed along with their production
+ * counterparts — no controller ever mapped those prefixes. Orders are intentionally left with a
+ * gap so the surviving chains keep their production numbering.</p>
  *
  * <p><b>Mock Token Behavior:</b></p>
  * <ul>
@@ -378,58 +382,6 @@ public class TestSecurityConfig {
                 .requestMatchers("/api/v1/account/plugins/**").authenticated() // Account plugins list
                 .requestMatchers("/api/v1/history/**").authenticated() // Any authenticated user
                 .requestMatchers("/api/v1/comparisons/**").authenticated() // Any authenticated user
-                .anyRequest().authenticated()
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2
-                .jwt(jwt -> jwt
-                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
-                )
-            );
-
-        return http.build();
-    }
-
-    /**
-     * Legacy Auth0 filter chain for old admin endpoints.
-     * <p>
-     * Order 5: Fifth priority - matches /api/admin/** (deprecated).
-     * Auth0 OAuth2 Resource Server only - ROLE_ADMIN required.
-     * </p>
-     */
-    @Bean
-    @org.springframework.core.annotation.Order(6)
-    public SecurityFilterChain legacyAuth0FilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/admin/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .anyRequest().hasRole("ADMIN")
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2
-                .jwt(jwt -> jwt
-                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
-                )
-            );
-
-        return http.build();
-    }
-
-    /**
-     * Legacy user filter chain for authenticated user endpoints.
-     * <p>
-     * Order 6: Sixth priority - matches /api/sites**, /api/account/**, /api/user/** (deprecated).
-     * OAuth2 Resource Server - any authenticated user allowed.
-     * </p>
-     */
-    @Bean
-    @org.springframework.core.annotation.Order(7)
-    public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
