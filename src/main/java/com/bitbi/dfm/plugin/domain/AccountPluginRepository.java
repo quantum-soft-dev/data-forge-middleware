@@ -60,6 +60,27 @@ public interface AccountPluginRepository {
     Optional<AccountPlugin> findActiveByPluginIdAndLogin(String pluginId, String login);
 
     /**
+     * Direct lookup of an active activation by its API key lookup handle
+     * (Bit BI Plugin API, 031): one indexed point query — the hex SHA-256 of the raw key —
+     * instead of a BCrypt scan over every activation. Backed by the V42 unique partial index.
+     *
+     * @param pluginId the plugin identifier
+     * @param apiKeyLookup hex SHA-256 of the raw API key
+     * @return the active activation holding that key, if any
+     */
+    Optional<AccountPlugin> findActiveByPluginIdAndApiKeyLookup(String pluginId, String apiKeyLookup);
+
+    /**
+     * Active activations whose API key predates the lookup column (031) and therefore cannot be
+     * resolved by point query. Only these rows need the legacy fallback scan; the set drains to
+     * empty as keys are rotated, at which point the fallback can be deleted.
+     *
+     * @param pluginId the plugin identifier
+     * @return active activations with a null api_key_lookup
+     */
+    List<AccountPlugin> findActiveByPluginIdWithoutApiKeyLookup(String pluginId);
+
+    /**
      * Checks if an active activation exists for the account-plugin pair.
      * @param accountId the account identifier
      * @param pluginId the plugin identifier
@@ -86,16 +107,6 @@ public interface AccountPluginRepository {
      * @return the activation record if found
      */
     Optional<AccountPlugin> findById(Long id);
-
-    /**
-     * Finds an active account plugin by plugin ID and API key.
-     * Uses JSONB containment query for performance.
-     *
-     * @param pluginId the plugin identifier
-     * @param apiKey the API key value
-     * @return the activation record if found and active
-     */
-    Optional<AccountPlugin> findByPluginIdAndApiKey(String pluginId, String apiKey);
 
     /**
      * Finds all account-plugin activations with pagination.
