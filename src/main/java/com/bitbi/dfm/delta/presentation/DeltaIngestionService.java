@@ -367,7 +367,27 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (start.getMode() == SessionMode.DELTA) {
                     StagedSession resume = stagedSessions.remove(siteId);
                     if (resume != null) {
-                        batchId = resume.batchId();
+                        // 030: a staged session can outlive its batch — the timeout sweeper reaps
+                        // an IN_PROGRESS batch after batch.timeout.minutes, while the staged entry
+                        // survives until its own TTL. Re-attaching blindly to a reaped batch only
+                        // blew up much later, at the final commit, after the client had replayed.
+                        // Detect it here and run the resumed session under a fresh batch instead,
+                        // carrying the staged buffer across so nothing staged before the drop is
+                        // lost and the client still replays only from the staged watermark.
+                        UUID resumeBatchId = resume.batchId();
+                        if (!batchLifecycleService.isBatchInProgress(resumeBatchId)) {
+                            Batch replacement;
+                            try {
+                                replacement = batchLifecycleService.startBatch(accountId, siteId);
+                            } catch (BatchLifecycleService.ActiveBatchExistsException e) {
+                                // Same rule as a fresh session start: one active session per site.
+                                emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(),
+                                        RecoveryAction.PROCEED);
+                                return;
+                            }
+                            resumeBatchId = replacement.getId();
+                        }
+                        batchId = resumeBatchId;
                         buffer = resume.buffer();
                         sessionMode = resume.mode();
                         firstSeq = resume.firstSeq();
