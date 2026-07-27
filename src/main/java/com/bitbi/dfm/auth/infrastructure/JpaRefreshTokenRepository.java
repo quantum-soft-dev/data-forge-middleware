@@ -34,6 +34,11 @@ public interface JpaRefreshTokenRepository extends JpaRepository<RefreshToken, U
 
     @Override
     @Modifying
+    @Query("UPDATE RefreshToken rt SET rt.revokedAt = CURRENT_TIMESTAMP WHERE rt.familyId = :familyId AND rt.revokedAt IS NULL")
+    int revokeAllByFamilyId(UUID familyId);
+
+    @Override
+    @Modifying
     @Query("DELETE FROM RefreshToken rt WHERE rt.expiresAt < :cutoffTime OR (rt.revokedAt IS NOT NULL AND rt.revokedAt < :cutoffTime)")
     int deleteExpiredBefore(Instant cutoffTime);
 }

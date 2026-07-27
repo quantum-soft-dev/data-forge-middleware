@@ -107,6 +107,39 @@ class RefreshTokenServiceTest {
     class IssueRefreshToken {
 
         @Test
+        @DisplayName("Should start a fresh rotation family on every primary issuance")
+        void shouldStartNewFamilyPerIssuance() {
+            when(refreshTokenRepository.save(any(RefreshToken.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            refreshTokenService.issueRefreshToken(siteId);
+            refreshTokenService.issueRefreshToken(siteId);
+
+            ArgumentCaptor<RefreshToken> captor = ArgumentCaptor.forClass(RefreshToken.class);
+            verify(refreshTokenRepository, times(2)).save(captor.capture());
+
+            RefreshToken first = captor.getAllValues().get(0);
+            RefreshToken second = captor.getAllValues().get(1);
+
+            assertThat(first.getFamilyId()).isNotNull();
+            assertThat(second.getFamilyId()).isNotNull();
+            // Each device flow run is an independent session on the same site
+            assertThat(first.getFamilyId()).isNotEqualTo(second.getFamilyId());
+        }
+
+        @Test
+        @DisplayName("Should not revoke anything when issuing a primary token")
+        void shouldNotRevokeOnPrimaryIssuance() {
+            when(refreshTokenRepository.save(any(RefreshToken.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            refreshTokenService.issueRefreshToken(siteId);
+
+            verify(refreshTokenRepository, never()).revokeAllByFamilyId(any());
+            verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
+        }
+
+        @Test
         @DisplayName("Should return the opaque token together with the stored expiry")
         void shouldReturnTokenWithStoredExpiry() {
             when(refreshTokenRepository.save(any(RefreshToken.class)))
@@ -132,7 +165,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "test-opaque-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken existingToken = RefreshToken.create(siteId, tokenHash);
+            RefreshToken existingToken = RefreshToken.createNewFamily(siteId, tokenHash);
             Site mockSite = mock(Site.class);
             Account mockAccount = mock(Account.class);
             JwtToken mockJwt = mock(JwtToken.class);
@@ -168,7 +201,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "rotating-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken existingToken = RefreshToken.create(siteId, tokenHash);
+            RefreshToken existingToken = RefreshToken.createNewFamily(siteId, tokenHash);
             Site mockSite = mock(Site.class);
             Account mockAccount = mock(Account.class);
 
@@ -214,7 +247,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "revoked-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken revokedToken = RefreshToken.create(siteId, tokenHash);
+            RefreshToken revokedToken = RefreshToken.createNewFamily(siteId, tokenHash);
             revokedToken.revoke();
 
             when(refreshTokenRepository.findByTokenHash(tokenHash))
@@ -226,12 +259,12 @@ class RefreshTokenServiceTest {
         }
 
         @Test
-        @DisplayName("Should revoke the whole token family when a revoked token is reused (reuse detection)")
-        void shouldRevokeWholeFamilyOnReuse() {
+        @DisplayName("Should revoke only the reused token's own rotation family (reuse detection)")
+        void shouldRevokeOnlyOwnFamilyOnReuse() {
             String opaqueToken = "stolen-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken rotatedToken = RefreshToken.create(siteId, tokenHash);
+            RefreshToken rotatedToken = RefreshToken.createNewFamily(siteId, tokenHash);
             rotatedToken.revoke();
 
             when(refreshTokenRepository.findByTokenHash(tokenHash))
@@ -240,8 +273,10 @@ class RefreshTokenServiceTest {
             assertThatThrownBy(() -> refreshTokenService.refreshAccessToken(opaqueToken))
                     .isInstanceOf(RefreshTokenService.RefreshTokenRevokedException.class);
 
-            // RFC 6819 / OAuth 2.0 Security BCP: reuse of a rotated token means the family is compromised
-            verify(refreshTokenRepository).revokeAllBySiteId(siteId);
+            // RFC 6819 / OAuth 2.0 Security BCP: the compromised rotation chain dies...
+            verify(refreshTokenRepository).revokeAllByFamilyId(rotatedToken.getFamilyId());
+            // ...but never the whole site: other chains are independent sessions
+            verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
         }
 
         @Test
@@ -250,7 +285,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "healthy-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken existingToken = RefreshToken.create(siteId, tokenHash);
+            RefreshToken existingToken = RefreshToken.createNewFamily(siteId, tokenHash);
             Site mockSite = mock(Site.class);
             Account mockAccount = mock(Account.class);
 
@@ -267,7 +302,39 @@ class RefreshTokenServiceTest {
 
             refreshTokenService.refreshAccessToken(opaqueToken);
 
+            verify(refreshTokenRepository, never()).revokeAllByFamilyId(any());
             verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
+        }
+
+        @Test
+        @DisplayName("Should keep the family id across a rotation")
+        void shouldPreserveFamilyIdAcrossRotation() {
+            String opaqueToken = "chain-token";
+            String tokenHash = RefreshTokenService.sha256(opaqueToken);
+
+            RefreshToken parent = RefreshToken.createNewFamily(siteId, tokenHash);
+            Site mockSite = mock(Site.class);
+            Account mockAccount = mock(Account.class);
+
+            when(refreshTokenRepository.findByTokenHash(tokenHash))
+                    .thenReturn(Optional.of(parent));
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
+            when(mockSite.getIsActive()).thenReturn(true);
+            when(mockSite.getAccountId()).thenReturn(accountId);
+            when(accountRepository.findById(accountId)).thenReturn(Optional.of(mockAccount));
+            when(mockAccount.getIsActive()).thenReturn(true);
+            when(jwtTokenProvider.generateToken(siteId, accountId)).thenReturn(mock(JwtToken.class));
+            when(refreshTokenRepository.save(any(RefreshToken.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            refreshTokenService.refreshAccessToken(opaqueToken);
+
+            ArgumentCaptor<RefreshToken> captor = ArgumentCaptor.forClass(RefreshToken.class);
+            verify(refreshTokenRepository, times(2)).save(captor.capture());
+            RefreshToken issued = captor.getAllValues().get(1);
+
+            assertThat(issued.getFamilyId()).isEqualTo(parent.getFamilyId());
+            assertThat(issued.getSiteId()).isEqualTo(siteId);
         }
 
         @Test
@@ -280,6 +347,7 @@ class RefreshTokenServiceTest {
             assertThatThrownBy(() -> refreshTokenService.refreshAccessToken(unknownToken))
                     .isInstanceOf(RefreshTokenService.InvalidRefreshTokenException.class);
 
+            verify(refreshTokenRepository, never()).revokeAllByFamilyId(any());
             verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
         }
 
@@ -290,7 +358,7 @@ class RefreshTokenServiceTest {
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
             // Create token then make it expired via reflection
-            RefreshToken expiredToken = RefreshToken.create(siteId, tokenHash);
+            RefreshToken expiredToken = RefreshToken.createNewFamily(siteId, tokenHash);
             java.lang.reflect.Field expiresAtField = RefreshToken.class.getDeclaredField("expiresAt");
             expiresAtField.setAccessible(true);
             expiresAtField.set(expiredToken, Instant.now().minus(1, ChronoUnit.DAYS));
@@ -303,6 +371,7 @@ class RefreshTokenServiceTest {
                     .hasMessageContaining("expired");
 
             // Expiration is not compromise: the rest of the family must survive
+            verify(refreshTokenRepository, never()).revokeAllByFamilyId(any());
             verify(refreshTokenRepository, never()).revokeAllBySiteId(any());
         }
 
@@ -312,7 +381,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "orphan-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken token = RefreshToken.create(siteId, tokenHash);
+            RefreshToken token = RefreshToken.createNewFamily(siteId, tokenHash);
 
             when(refreshTokenRepository.findByTokenHash(tokenHash))
                     .thenReturn(Optional.of(token));
@@ -329,7 +398,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "inactive-site-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken token = RefreshToken.create(siteId, tokenHash);
+            RefreshToken token = RefreshToken.createNewFamily(siteId, tokenHash);
             Site mockSite = mock(Site.class);
 
             when(refreshTokenRepository.findByTokenHash(tokenHash))
@@ -348,7 +417,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "inactive-account-token";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken token = RefreshToken.create(siteId, tokenHash);
+            RefreshToken token = RefreshToken.createNewFamily(siteId, tokenHash);
             Site mockSite = mock(Site.class);
             Account mockAccount = mock(Account.class);
 
@@ -376,7 +445,7 @@ class RefreshTokenServiceTest {
             String opaqueToken = "to-revoke";
             String tokenHash = RefreshTokenService.sha256(opaqueToken);
 
-            RefreshToken token = RefreshToken.create(siteId, tokenHash);
+            RefreshToken token = RefreshToken.createNewFamily(siteId, tokenHash);
             when(refreshTokenRepository.findByTokenHash(tokenHash))
                     .thenReturn(Optional.of(token));
 
