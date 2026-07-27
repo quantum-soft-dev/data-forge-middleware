@@ -48,5 +48,17 @@ public enum PluginActionType {
     REINIT,
 
     /** Single SQL generation deleted by admin */
-    SQL_GENERATION_DELETED
+    SQL_GENERATION_DELETED,
+
+    /** Parquet Export: file listing served, one-time links registered (028) */
+    FILES_LISTED,
+
+    /** Parquet Export: one-time download link consumed, presigned redirect issued (028) */
+    LINK_CONSUMED,
+
+    /** Parquet Export: download attempt rejected (consumed/expired/unknown/inactive) (028) */
+    LINK_REJECTED,
+
+    /** Parquet Export: Basic Auth password rotated by the account owner (028) */
+    PASSWORD_ROTATED
 }

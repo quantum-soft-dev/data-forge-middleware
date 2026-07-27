@@ -105,12 +105,26 @@ class PluginActionTypeTest {
         }
     }
 
+    @Nested
+    @DisplayName("Parquet Export Action Types - Feature 028")
+    class ParquetExportActionTypes {
+
+        @Test
+        @DisplayName("Should have types for file listing, link consumption and password rotation")
+        void shouldHaveParquetExportTypes() {
+            assertThat(PluginActionType.FILES_LISTED).isNotNull();
+            assertThat(PluginActionType.LINK_CONSUMED).isNotNull();
+            assertThat(PluginActionType.LINK_REJECTED).isNotNull();
+            assertThat(PluginActionType.PASSWORD_ROTATED).isNotNull();
+        }
+    }
+
     @Test
-    @DisplayName("Should have exactly 15 action types")
-    void shouldHaveFifteenActionTypes() {
+    @DisplayName("Should have exactly 19 action types")
+    void shouldHaveNineteenActionTypes() {
         // 6 existing + 3 SQL generation types + 4 history management types + 1 reinit type (Feature 015)
         // + 1 SQL_GENERATION_DELETED (manual admin tools)
-        // (PLUGIN_HISTORY_CLEARED, SQL_REGENERATION_STARTED, SQL_REGENERATION_COMPLETED, SQL_REGENERATION_FAILED, REINIT, SQL_GENERATION_DELETED)
-        assertThat(PluginActionType.values()).hasSize(15);
+        // + 4 Parquet Export types (Feature 028: FILES_LISTED, LINK_CONSUMED, LINK_REJECTED, PASSWORD_ROTATED)
+        assertThat(PluginActionType.values()).hasSize(19);
     }
 }
