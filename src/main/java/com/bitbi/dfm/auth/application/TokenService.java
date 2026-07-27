@@ -3,6 +3,8 @@ package com.bitbi.dfm.auth.application;
 import com.bitbi.dfm.account.domain.Account;
 import com.bitbi.dfm.account.domain.AccountRepository;
 import com.bitbi.dfm.auth.domain.JwtToken;
+import com.bitbi.dfm.auth.domain.SiteAuthenticationRepository;
+import com.bitbi.dfm.auth.domain.SiteAuthenticationStatus;
 import com.bitbi.dfm.auth.infrastructure.JwtTokenProvider;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
@@ -30,11 +32,16 @@ public class TokenService {
 
     private final SiteRepository siteRepository;
     private final AccountRepository accountRepository;
+    private final SiteAuthenticationRepository siteAuthenticationRepository;
     private final JwtTokenProvider jwtTokenProvider;
 
-    public TokenService(SiteRepository siteRepository, AccountRepository accountRepository, JwtTokenProvider jwtTokenProvider) {
+    public TokenService(SiteRepository siteRepository,
+                        AccountRepository accountRepository,
+                        SiteAuthenticationRepository siteAuthenticationRepository,
+                        JwtTokenProvider jwtTokenProvider) {
         this.siteRepository = siteRepository;
         this.accountRepository = accountRepository;
+        this.siteAuthenticationRepository = siteAuthenticationRepository;
         this.jwtTokenProvider = jwtTokenProvider;
     }
 
@@ -117,22 +124,32 @@ public class TokenService {
 
     /**
      * Validate JWT token.
+     * <p>
+     * Re-checks the current state of the site <em>and</em> its parent account on every call:
+     * a JWT only states what was true when it was issued, so deactivating an account or a site
+     * must take effect immediately rather than when the access token happens to expire.
+     * Both flags come from a single joined query - this runs on every client API request.
+     * </p>
      *
      * @param tokenString JWT token string
      * @return site ID from token
-     * @throws InvalidTokenException if token is invalid or expired
+     * @throws InvalidTokenException if token is invalid or expired, or the site/account is not active
      */
     @Transactional(readOnly = true)
     public UUID validateToken(String tokenString) {
         try {
             UUID siteId = jwtTokenProvider.extractSiteId(tokenString);
 
-            // Verify site still exists and is active
-            Site site = siteRepository.findById(siteId)
+            SiteAuthenticationStatus status = siteAuthenticationRepository.findAuthenticationStatus(siteId)
                     .orElseThrow(() -> new InvalidTokenException("Site not found"));
 
-            if (!site.getIsActive()) {
+            if (!status.siteActive()) {
                 throw new InvalidTokenException("Site is not active");
+            }
+
+            if (!status.accountActive()) {
+                logger.warn("Parent account is not active: accountId={}, siteId={}", status.accountId(), siteId);
+                throw new InvalidTokenException("Account is not active");
             }
 
             return siteId;
