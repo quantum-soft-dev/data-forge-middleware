@@ -62,6 +62,13 @@ public class Batch {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    /**
+     * Last ingestion activity of a Delta v2 streaming session (029). Always {@code null} for
+     * v1 file-upload batches; the timeout sweeper falls back to {@code startedAt} when null.
+     */
+    @Column(name = "last_activity_at")
+    private LocalDateTime lastActivityAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
@@ -162,6 +169,15 @@ public class Batch {
 
     public void markAsHavingErrors() {
         this.hasErrors = true;
+    }
+
+    /**
+     * Record live session activity on a Delta v2 streaming batch (029). The ingestion path calls
+     * this at a bounded cadence (session start/resume, Ack watermark, segment seal) so the timeout
+     * sweeper can distinguish a long-lived live session from a silently abandoned one.
+     */
+    public void touchActivity() {
+        this.lastActivityAt = LocalDateTime.now();
     }
 
     public boolean isExpired(int timeoutMinutes) {
