@@ -121,3 +121,50 @@ lock-free touch, the resume guard and the TTL ordering invariant; mark both 029 
 as closed with a pointer to this feature.
 
 Commit: `docs(delta): document session liveness and resume hardening (T04)`
+
+---
+
+## T05 — rebaseline intent must survive a staged resume
+
+Added after review of T01–T04 (owner-approved scope extension). **The bug predates this feature —
+it comes from the 022 resume path meeting the 029 commit split, not from the 029 follow-ups.**
+
+**The bug.** `rebaseline` is set only on the fresh-start path, when `mode == FULL_SNAPSHOT`. A
+`FULL_SNAPSHOT` is not `CONTINUOUS`, so a mid-stream drop routes it to `stageForResume()`; the
+resume branch then `return`s before that assignment. At `SessionEnd` the commit therefore gets
+`rebaseline = false`: **a dropped-and-resumed re-baseline silently commits as an ordinary delta.**
+`DeltaSessionCommitService.commit` skips `DeltaRebaselineService.reset`, the old segments and
+checkpoints are never wiped, and the new full snapshot folds *on top of* stale data. That is data
+corruption, and it lands on the longest, most drop-prone session type there is — the one clients
+run precisely to repair a sequence gap.
+
+**Not a bug: `continuous`.** `onError` routes continuous sessions to `sealOnContinuousDrop()`; only
+non-continuous sessions reach `stageForResume()`. A staged session was never continuous, so
+`continuous = false` after resume is the correct value — restoring it would at best be a no-op and
+at worst enable seals where they must not happen. Documented in place, code unchanged.
+
+**Design.** Carry `rebaseline` explicitly in `StagedSession` rather than re-deriving it from the
+restored `sessionMode`. The staged entry should record what the session *decided*, not a proxy we
+re-infer — re-deriving a flag from a stand-in is the exact failure mode being fixed here, and it
+would silently drop any future re-baseline not implied by the mode string. The invariant: a resumed
+session commits with the same re-baseline semantics it would have had without the drop — across
+repeated drops, and across T02's fresh-batch swap.
+
+`firstSeq` already survives the drop (it is part of `StagedSession`), so `reset(siteId, firstSeq)`
+receives the original snapshot's first sequence and the commit contract needs no change.
+
+**Tests (red first)**
+- `DeltaIngestionStreamChangesContractTest`:
+  - **regression sentinel, written first**: a plain `DELTA` session that drops, resumes and ends
+    must **never** call `reset` — an inverted condition would start wiping baselines on ordinary
+    delta sessions;
+  - a `FULL_SNAPSHOT` that drops, resumes and ends resets the baseline at the original `firstSeq`;
+  - the intent survives two drops and two resumes;
+  - it survives T02's swap onto a fresh batch (staged batch reaped by the sweeper).
+- `DeltaSessionLivenessIntegrationTest` (Testcontainers): the observable result — old segments and
+  checkpoints are actually gone after a dropped-and-resumed `FULL_SNAPSHOT` commits, while a
+  dropped-and-resumed `DELTA` session leaves them intact.
+
+**Files.** `delta/presentation/DeltaIngestionService.java`.
+
+Commit: `fix(delta): preserve rebaseline intent across staged resume (T05)`

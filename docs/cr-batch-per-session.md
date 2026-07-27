@@ -89,6 +89,35 @@ asserted against the shipped `application.yml` defaults by `DeltaIngestionStaged
 which also pins the `@Value` fallback to the yml default. **Raising `BATCH_TIMEOUT_MINUTES` or
 `DELTA_STAGED_TTL_MILLIS` per environment must keep that ordering.**
 
+### Re-baseline intent across a resume (030/T05)
+
+**Provenance: this one is not a 029 follow-up.** It is older — it comes from the 022 staged-resume
+path meeting the FULL_SNAPSHOT commit split, and it shipped in both. It was found while reviewing
+030 and fixed there.
+
+`rebaseline` was set only on the fresh-start path (`mode == FULL_SNAPSHOT`). A `FULL_SNAPSHOT` is
+not `CONTINUOUS`, so a mid-stream drop stages it for resume, and the resume branch returns before
+that assignment ever runs. The session then committed with `rebaseline = false`: **a
+dropped-and-resumed re-baseline was silently committed as an ordinary delta.**
+`DeltaSessionCommitService.commit` skipped `DeltaRebaselineService.reset`, so the prior segments and
+checkpoints were never wiped and the new full snapshot folded *on top of* stale data — rows that had
+disappeared survived, tables absent from the snapshot kept being served. That is data corruption,
+and it lands on the longest and most drop-prone session type there is: the one clients run precisely
+to repair a sequence gap.
+
+The intent now travels with the staged session (`StagedSession.rebaseline`), carried explicitly
+rather than re-derived from the restored mode string — the staged entry records what the session
+decided, and re-deriving a flag from a proxy is the exact failure mode being fixed. `firstSeq`
+already survived the drop, so `reset(siteId, firstSeq)` gets the original snapshot's first sequence
+and the commit contract is unchanged. The invariant: **a resumed session commits with the same
+re-baseline semantics it would have had without the drop** — across repeated drops, and across the
+fresh-batch swap above.
+
+By contrast `continuous` is deliberately *not* restored: `onError` routes continuous sessions to
+`sealOnContinuousDrop()`, so only non-continuous sessions ever reach `stageForResume()`. A staged
+session was never continuous, and setting the flag on resume would enable mid-stream seals that must
+not happen. Noted in code so the asymmetry is not "fixed" later.
+
 ## Design decisions
 
 See `specs/029-batch-per-session/research.md` (D1–D7) and
