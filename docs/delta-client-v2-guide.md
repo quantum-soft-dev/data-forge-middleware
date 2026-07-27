@@ -405,8 +405,16 @@ change records as they occur and keep the stream open.
   segments), or a time since the last seal (`delta.ingestion.continuous-seal-millis`, default 5 min),
   emitting a `SessionCommitted{committed_seq, segment_s3_key}` for each sealed segment, and continues
   accumulating the next.
-- When you close the stream gracefully, the server flushes the final segment (even an empty one) and
-  completes its batch, so a clean close never leaves the site blocked.
+- **Batch = session (029)**: every segment sealed during the session commits under the session's
+  single batch — sealing is a durability event, not a batch boundary. Upload History shows one row
+  per session with the aggregated totals (sum of records, union of tables), however many segments
+  the stream sealed. The batch's timeout is measured from **last session activity**, so a live
+  stream can legitimately run for hours while a silent one is reclaimed after
+  `batch.timeout-minutes`.
+- When you close the stream gracefully, the server flushes the final segment (skipped when the tail
+  buffer is empty — no degenerate segment is written) and completes the session's batch, so a clean
+  close never leaves the site blocked and never produces an empty extra history row. A session that
+  streamed nothing at all still completes its one batch with 0 changes.
 - Gap detection applies as for DELTA.
 - **No reconciliation** (there is no `SessionEnd`). If the stream **drops** mid-segment, the server
   **durably seals the unsealed tail** and advances the watermark, then closes the batch — the tail is

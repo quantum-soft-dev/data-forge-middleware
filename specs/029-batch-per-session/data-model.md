@@ -29,12 +29,13 @@ transport drop ── stays IN_PROGRESS (staged resume re-attaches)
 
 ```sql
 ALTER TABLE batches ADD COLUMN last_activity_at TIMESTAMP;
-CREATE INDEX idx_changelog_segments_batch_id ON changelog_segments(batch_id);
 COMMENT ON COLUMN batches.last_activity_at IS
   'Last ingestion activity of a Delta v2 streaming session (NULL for v1 batches); batch timeout uses COALESCE(last_activity_at, started_at)';
 ```
 
-Backward compatible: nullable column, additive index; forward-only.
+Backward compatible: nullable column; forward-only. The `changelog_segments.batch_id` index
+already exists (V37 `idx_segment_batch_id`). V39 is reserved by the in-flight 028 branch — if 029
+merges first, 028 renumbers.
 
 ## Query changes
 
