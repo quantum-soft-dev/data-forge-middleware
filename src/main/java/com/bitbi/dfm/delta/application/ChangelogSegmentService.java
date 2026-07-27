@@ -47,13 +47,16 @@ public class ChangelogSegmentService {
     public ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq, List<ChangeRecord> records) {
         byte[] content = ChangelogCodec.serialize(records);
         String contentHash = sha256Hex(content);
-        String s3Key = storage.uploadSegment(siteId, batchId, content);
+        // Segment id is minted before the upload so the storage key carries the segment's own
+        // identity — a session's batch owns many segments (029), a batch-derived key would collide.
+        UUID segmentId = UUID.randomUUID();
+        String s3Key = storage.uploadSegment(siteId, segmentId, content);
 
         long lastSeq = records.isEmpty() ? firstSeq - 1 : records.get(records.size() - 1).getSeq();
         Map<String, TableChangeStats> stats = ChangeRecordStats.computeByTable(records);
 
         ChangelogSegment segment = ChangelogSegment.create(
-                siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, stats);
+                segmentId, siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, stats);
         return repository.save(segment);
     }
 

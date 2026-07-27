@@ -8,6 +8,7 @@ import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.batch.presentation.dto.CursorPageResponseDto;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.SegmentBatchAggregate;
 import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
@@ -103,7 +104,9 @@ class BatchHistoryServiceTest {
     }
 
     @Test
-    void listBatchHistoryIncludesDeltaTotalsFromBulkFetchedSegments() {
+    void listBatchHistoryIncludesDeltaTotalsAggregatedAcrossSegments() {
+        // 029: a session batch owns N segments; the list row shows the batch-level aggregate
+        // (SUM of record counts, DISTINCT table count) computed SQL-side per page.
         UUID accountId = UUID.randomUUID();
         Site site = Site.createForTesting(accountId, "delta.test", "Delta Test");
         when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
@@ -120,26 +123,25 @@ class BatchHistoryServiceTest {
         when(projection.getTotalSize()).thenReturn(0L);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
 
-        ChangelogSegment segment = mock(ChangelogSegment.class);
-        when(segment.getBatchId()).thenReturn(batchId);
-        when(segment.getRecordCount()).thenReturn(34L);
-        when(segment.getStats()).thenReturn(Map.of(
-                "a", new TableChangeStats(1, 0, 0), "b", new TableChangeStats(0, 1, 0)));
-        when(changelogSegmentRepository.findByBatchIdIn(anyList())).thenReturn(List.of(segment));
+        SegmentBatchAggregate aggregate = mock(SegmentBatchAggregate.class);
+        when(aggregate.getBatchId()).thenReturn(batchId);
+        when(aggregate.getTotalRecords()).thenReturn(250L);
+        when(aggregate.getTableCount()).thenReturn(2L);
+        when(changelogSegmentRepository.aggregateByBatchIds(anyList())).thenReturn(List.of(aggregate));
 
         CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
 
         BatchSummaryDto dto = page.items().get(0);
-        assertEquals(34L, dto.deltaRecordCount());
+        assertEquals(250L, dto.deltaRecordCount());
         assertEquals(2, dto.deltaTableCount());
     }
 
     @Test
-    void listBatchHistoryDoesNotThrowWhenABatchHasTwoSegmentRows() {
-        // No UNIQUE(batch_id) enforces one segment per batch; the toMap must merge duplicates so
-        // the whole list endpoint cannot 500 if a batch ever acquires two segment rows (review r4).
+    void listBatchHistoryMapsZeroTableCountToNull() {
+        // Segments persisted before per-table stats existed aggregate to a 0 distinct-table count;
+        // the DTO keeps the pre-029 rendering (no table badge) by mapping 0 to null.
         UUID accountId = UUID.randomUUID();
-        Site site = Site.createForTesting(accountId, "delta.dup", "Delta Dup");
+        Site site = Site.createForTesting(accountId, "delta.old", "Delta Old");
         when(siteRepository.findByAccountId(accountId)).thenReturn(List.of(site));
 
         UUID batchId = UUID.randomUUID();
@@ -154,16 +156,17 @@ class BatchHistoryServiceTest {
         when(projection.getTotalSize()).thenReturn(0L);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
 
-        ChangelogSegment first = mock(ChangelogSegment.class);
-        when(first.getBatchId()).thenReturn(batchId);
-        when(first.getFirstSeq()).thenReturn(1L);
-        ChangelogSegment second = mock(ChangelogSegment.class);
-        when(second.getBatchId()).thenReturn(batchId);
-        when(second.getFirstSeq()).thenReturn(101L);
-        when(changelogSegmentRepository.findByBatchIdIn(anyList())).thenReturn(List.of(first, second));
+        SegmentBatchAggregate aggregate = mock(SegmentBatchAggregate.class);
+        when(aggregate.getBatchId()).thenReturn(batchId);
+        when(aggregate.getTotalRecords()).thenReturn(34L);
+        when(aggregate.getTableCount()).thenReturn(0L);
+        when(changelogSegmentRepository.aggregateByBatchIds(anyList())).thenReturn(List.of(aggregate));
 
         CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
-        assertEquals(1, page.items().size(), "one row per batch despite two segments");
+
+        BatchSummaryDto dto = page.items().get(0);
+        assertEquals(34L, dto.deltaRecordCount());
+        assertNull(dto.deltaTableCount());
     }
 
     @Test
@@ -183,7 +186,7 @@ class BatchHistoryServiceTest {
         when(projection.getFileCount()).thenReturn(2);
         when(projection.getTotalSize()).thenReturn(2048L);
         when(batchRepository.findBySiteIdsFirstPage(anyList(), anyInt())).thenReturn(List.of(projection));
-        when(changelogSegmentRepository.findByBatchIdIn(anyList())).thenReturn(List.of());
+        when(changelogSegmentRepository.aggregateByBatchIds(anyList())).thenReturn(List.of());
 
         CursorPageResponseDto<BatchSummaryDto> page = service.listBatchHistory(accountId, null, 20);
 

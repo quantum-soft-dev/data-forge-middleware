@@ -32,8 +32,19 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findByBatchId(UUID batchId);
 
     @Override
-    @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId IN :batchIds")
-    java.util.List<ChangelogSegment> findByBatchIdIn(java.util.List<UUID> batchIds);
+    @Query(value = """
+            SELECT s.batch_id AS batchId,
+                   SUM(s.record_count) AS totalRecords,
+                   (SELECT COUNT(DISTINCT k)
+                    FROM changelog_segments s2,
+                         jsonb_object_keys(COALESCE(s2.stats, '{}'::jsonb)) AS k
+                    WHERE s2.batch_id = s.batch_id) AS tableCount
+            FROM changelog_segments s
+            WHERE s.batch_id IN (:batchIds)
+            GROUP BY s.batch_id
+            """, nativeQuery = true)
+    java.util.List<com.bitbi.dfm.delta.domain.SegmentBatchAggregate> aggregateByBatchIds(
+            java.util.List<UUID> batchIds);
 
     @Override
     @Query("SELECT DISTINCT s.siteId FROM ChangelogSegment s")

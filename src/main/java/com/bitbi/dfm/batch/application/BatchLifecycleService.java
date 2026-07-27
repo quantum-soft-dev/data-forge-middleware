@@ -130,6 +130,26 @@ public class BatchLifecycleService {
     }
 
     /**
+     * Record live session activity on a streaming batch (029). Called by the Delta v2 ingest path
+     * at a bounded cadence (session start/resume, Ack watermark, segment seal) so the timeout
+     * sweeper can tell a long-lived live session from a silently abandoned one.
+     * <p>
+     * Best-effort: the liveness signal must never fail the ingest stream, so a missing/terminal
+     * batch is logged and swallowed.
+     * </p>
+     *
+     * @param batchId batch identifier
+     */
+    public void touchActivity(UUID batchId) {
+        batchRepository.findById(batchId).ifPresentOrElse(
+                batch -> {
+                    batch.touchActivity();
+                    batchRepository.save(batch);
+                },
+                () -> logger.warn("touchActivity: batch not found, skipping: batchId={}", batchId));
+    }
+
+    /**
      * Complete batch successfully.
      * <p>
      * Validates batch is IN_PROGRESS before completion.

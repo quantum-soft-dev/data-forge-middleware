@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.mockito.Mockito.*;
 
 /**
@@ -64,7 +65,7 @@ class ChangelogSegmentServiceTest {
         UUID batch = UUID.randomUUID();
         List<ChangeRecord> records = List.of(
                 rec("orders", Op.INSERT, 1), rec("orders", Op.INSERT, 2), rec("customers", Op.DELETE, 3));
-        when(storage.uploadSegment(eq(site), eq(batch), any())).thenReturn("delta/site/segments/x.pb.gz");
+        when(storage.uploadSegment(eq(site), any(UUID.class), any())).thenReturn("delta/site/segments/x.pb.gz");
         ArgumentCaptor<ChangelogSegment> captor = ArgumentCaptor.forClass(ChangelogSegment.class);
         when(repository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -73,6 +74,43 @@ class ChangelogSegmentServiceTest {
         Map<String, TableChangeStats> stats = captor.getValue().getStats();
         assertEquals(new TableChangeStats(2, 0, 0), stats.get("orders"));
         assertEquals(new TableChangeStats(0, 0, 1), stats.get("customers"));
+    }
+
+    @Test
+    void persistKeysStorageBySegmentIdNotBatchId() {
+        UUID site = UUID.randomUUID();
+        UUID batch = UUID.randomUUID();
+        ArgumentCaptor<UUID> keyIdCaptor = ArgumentCaptor.forClass(UUID.class);
+        when(storage.uploadSegment(eq(site), keyIdCaptor.capture(), any()))
+                .thenAnswer(inv -> "delta/" + site + "/segments/" + inv.getArgument(1) + ".pb.gz");
+        ArgumentCaptor<ChangelogSegment> captor = ArgumentCaptor.forClass(ChangelogSegment.class);
+        when(repository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        ChangelogSegment saved = service.persist(site, batch, "CONTINUOUS", 1L,
+                List.of(rec("orders", Op.INSERT, 1)));
+
+        // The storage key is derived from the segment's own id (and thus matches the row),
+        // never from the batch id — N segments of one batch must not collide.
+        assertEquals(saved.getId(), keyIdCaptor.getValue());
+        assertNotEquals(batch, keyIdCaptor.getValue());
+        assertEquals("delta/" + site + "/segments/" + saved.getId() + ".pb.gz", saved.getS3Key());
+    }
+
+    @Test
+    void persistTwiceForSameBatchUsesDistinctStorageKeys() {
+        UUID site = UUID.randomUUID();
+        UUID batch = UUID.randomUUID();
+        ArgumentCaptor<UUID> keyIdCaptor = ArgumentCaptor.forClass(UUID.class);
+        when(storage.uploadSegment(eq(site), keyIdCaptor.capture(), any()))
+                .thenAnswer(inv -> "delta/" + site + "/segments/" + inv.getArgument(1) + ".pb.gz");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.persist(site, batch, "CONTINUOUS", 1L, List.of(rec("orders", Op.INSERT, 1)));
+        service.persist(site, batch, "CONTINUOUS", 2L, List.of(rec("orders", Op.INSERT, 2)));
+
+        List<UUID> keyIds = keyIdCaptor.getAllValues();
+        assertEquals(2, keyIds.size());
+        assertNotEquals(keyIds.get(0), keyIds.get(1));
     }
 
     private static ChangeRecord rec(String table, Op op, long seq) {

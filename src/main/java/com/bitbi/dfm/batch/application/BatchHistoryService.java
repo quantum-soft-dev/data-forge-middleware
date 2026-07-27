@@ -12,6 +12,7 @@ import com.bitbi.dfm.batch.presentation.dto.DeltaSeqRangeDto;
 import com.bitbi.dfm.batch.presentation.dto.DeltaTableStatsDto;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.SegmentBatchAggregate;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.slf4j.Logger;
@@ -114,22 +115,19 @@ public class BatchHistoryService {
                 ? projections.subList(0, pageSize)
                 : projections;
 
-        // Bulk-fetch each page batch's changelog segment (Delta v2 signal), one query for the
-        // whole page instead of one per batch.
-        Map<UUID, ChangelogSegment> segmentsByBatchId = pageItems.isEmpty()
+        // Per-batch delta totals for the page, aggregated SQL-side (029): a session batch owns N
+        // segments, so the list shows SUM(record_count) and the distinct-table count — one grouped
+        // query for the whole page, never the raw segment rows.
+        Map<UUID, SegmentBatchAggregate> aggregatesByBatchId = pageItems.isEmpty()
                 ? Map.of()
                 : changelogSegmentRepository
-                        .findByBatchIdIn(pageItems.stream().map(BatchWithFileCountProjection::getId).toList())
+                        .aggregateByBatchIds(pageItems.stream().map(BatchWithFileCountProjection::getId).toList())
                         .stream()
-                        // Merge on duplicate batch_id (no UNIQUE constraint enforces one segment per
-                        // batch): keep the lowest first_seq so the list never 500s if a batch ever
-                        // has two segment rows (review r4). The list DTO only needs a delta signal.
-                        .collect(Collectors.toMap(ChangelogSegment::getBatchId, s -> s,
-                                (a, b) -> a.getFirstSeq() <= b.getFirstSeq() ? a : b));
+                        .collect(Collectors.toMap(SegmentBatchAggregate::getBatchId, a -> a));
 
         // Convert projections to DTOs
         List<BatchSummaryDto> dtos = pageItems.stream()
-                .map(p -> BatchSummaryDto.fromProjection(p, segmentsByBatchId.get(p.getId())))
+                .map(p -> BatchSummaryDto.fromProjection(p, aggregatesByBatchId.get(p.getId())))
                 .collect(Collectors.toList());
 
         // Generate cursor for next page

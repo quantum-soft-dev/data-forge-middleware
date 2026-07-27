@@ -23,10 +23,11 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findByBatchId(UUID batchId);
 
     /**
-     * Bulk-fetch segments for a page of batches (batch history list view), avoiding one
-     * query per batch.
+     * Per-batch delta totals for a page of batches (batch history list view, 029): sum of record
+     * counts and distinct-table count across each batch's segments, aggregated SQL-side. Batches
+     * without segments (v1) simply have no row in the result.
      */
-    List<ChangelogSegment> findByBatchIdIn(List<UUID> batchIds);
+    List<SegmentBatchAggregate> aggregateByBatchIds(List<UUID> batchIds);
 
     List<UUID> findDistinctSiteIds();
 

@@ -2,7 +2,7 @@ package com.bitbi.dfm.batch.presentation.dto;
 
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.infrastructure.BatchWithFileCountProjection;
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
+import com.bitbi.dfm.delta.domain.SegmentBatchAggregate;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
@@ -105,18 +105,22 @@ public record BatchSummaryDto(
     }
 
     /**
-     * T6.5: Create DTO from BatchWithFileCountProjection and its (bulk-fetched) changelog
-     * segment, surfacing the Delta v2 signal in the list view.
+     * T6.5 / 029: Create DTO from BatchWithFileCountProjection and the batch's segment aggregate
+     * (session totals across N segments), surfacing the Delta v2 signal in the list view.
      * <p>
      * Used by cursor-based pagination queries to avoid N+1 queries.
-     * S3Path is set to empty string as it's not needed for list view.
+     * S3Path is set to empty string as it's not needed for list view. A 0 distinct-table count
+     * (segments persisted before per-table stats existed) maps to {@code null} so those batches
+     * keep their pre-stats rendering.
      * </p>
      *
      * @param projection Batch projection with file count
-     * @param segment    the batch's changelog segment, or {@code null} for a v1 batch
+     * @param aggregate  the batch's segment aggregate, or {@code null} for a v1 batch
      * @return BatchSummaryDto
      */
-    public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection, ChangelogSegment segment) {
+    public static BatchSummaryDto fromProjection(BatchWithFileCountProjection projection,
+                                                 SegmentBatchAggregate aggregate) {
+        Long tableCount = aggregate != null ? aggregate.getTableCount() : null;
         return new BatchSummaryDto(
                 projection.getId(),
                 projection.getSiteId(),
@@ -128,8 +132,8 @@ public record BatchSummaryDto(
                 projection.getStartedAt().toInstant(ZoneOffset.UTC),
                 projection.getCompletedAt() != null ? projection.getCompletedAt().toInstant(ZoneOffset.UTC) : null,
                 projection.getStartedAt().toInstant(ZoneOffset.UTC),  // Use startedAt as createdAt approximation
-                segment != null ? segment.getRecordCount() : null,
-                segment != null && segment.getStats() != null ? segment.getStats().size() : null
+                aggregate != null ? aggregate.getTotalRecords() : null,
+                tableCount != null && tableCount > 0 ? tableCount.intValue() : null
         );
     }
 }

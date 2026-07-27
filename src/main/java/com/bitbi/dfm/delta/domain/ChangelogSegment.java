@@ -82,8 +82,19 @@ public class ChangelogSegment {
     public static ChangelogSegment create(UUID siteId, UUID batchId, long firstSeq, long lastSeq,
                                           long recordCount, String contentHash, String s3Key, String mode,
                                           Map<String, TableChangeStats> stats) {
+        return create(UUID.randomUUID(), siteId, batchId, firstSeq, lastSeq, recordCount,
+                contentHash, s3Key, mode, stats);
+    }
+
+    /**
+     * Create a changelog segment record with a pre-generated id (029: the id is minted before the
+     * S3 upload so the storage key and the row share the segment's identity).
+     */
+    public static ChangelogSegment create(UUID id, UUID siteId, UUID batchId, long firstSeq, long lastSeq,
+                                          long recordCount, String contentHash, String s3Key, String mode,
+                                          Map<String, TableChangeStats> stats) {
         ChangelogSegment segment = new ChangelogSegment();
-        segment.id = UUID.randomUUID();
+        segment.id = id;
         segment.siteId = siteId;
         segment.batchId = batchId;
         segment.firstSeq = firstSeq;

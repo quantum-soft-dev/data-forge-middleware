@@ -91,6 +91,32 @@ public class DeltaSessionCommitService {
     }
 
     /**
+     * Persist a mid-session segment and advance the watermark <em>without touching the batch</em>
+     * (029: batch = one session; a continuous-mode seal is a durability event, not a batch
+     * boundary). The session's batch stays {@code IN_PROGRESS} until {@code SessionEnd} runs the
+     * completing {@link #commit(UUID, UUID, String, long, long, List)}.
+     *
+     * @param siteId       site identifier
+     * @param batchId      the session's batch (stays open)
+     * @param mode         session mode
+     * @param firstSeq     first sequence of the segment
+     * @param committedSeq highest sequence now durably applied
+     * @param records      accepted change records
+     * @return the persisted segment's S3 key, or {@code ""} when {@code records} is empty (no-op)
+     */
+    @Transactional
+    public String commitSegment(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
+                                List<ChangeRecord> records) {
+        if (records.isEmpty()) {
+            return "";
+        }
+        ChangelogSegment segment = changelogSegmentService.persist(siteId, batchId, mode, firstSeq, records);
+        wakeEgressAfterCommit();
+        syncStateService.advanceWatermark(siteId, committedSeq);
+        return segment.getS3Key();
+    }
+
+    /**
      * Wake the delta egress worker once this transaction commits (T8.4) — the worker must see the
      * committed segment row. Outside a transaction (unit tests) the wake is immediate.
      */
