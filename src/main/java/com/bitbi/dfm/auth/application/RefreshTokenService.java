@@ -86,9 +86,10 @@ public class RefreshTokenService {
      * @param refreshTokenString the opaque refresh token
      * @return refresh result containing new access token and rotated refresh token
      * @throws RefreshTokenExpiredException if token is expired
-     * @throws RefreshTokenRevokedException if token was already revoked
+     * @throws RefreshTokenRevokedException if token was already revoked (triggers family revocation)
      * @throws InvalidRefreshTokenException if token is not found
      */
+    @Transactional(noRollbackFor = RefreshTokenRevokedException.class)
     public RefreshResult refreshAccessToken(String refreshTokenString) {
         String tokenHash = sha256(refreshTokenString);
 
@@ -96,7 +97,17 @@ public class RefreshTokenService {
                 .orElseThrow(() -> new InvalidRefreshTokenException("Invalid refresh token"));
 
         if (refreshToken.isRevoked()) {
-            logger.warn("Attempted to use revoked refresh token: siteId={}", refreshToken.getSiteId());
+            // Refresh token reuse detection (RFC 6819 §5.2.2.3, OAuth 2.0 Security BCP §4.14.2):
+            // rotation already consumed this token, so a second presentation means the token leaked.
+            // We cannot tell the attacker from the legitimate device, so the entire family dies and
+            // the device must re-run the Device Authorization Flow.
+            //
+            // NOTE: the revocation must survive the exception, hence noRollbackFor on this method -
+            // otherwise the surrounding transaction would roll the family revocation back.
+            UUID compromisedSiteId = refreshToken.getSiteId();
+            logger.warn("Refresh token reuse detected - revoking all refresh tokens for site: siteId={}",
+                    compromisedSiteId);
+            revokeAllForSite(compromisedSiteId);
             throw new RefreshTokenRevokedException("Refresh token has been revoked");
         }
 
