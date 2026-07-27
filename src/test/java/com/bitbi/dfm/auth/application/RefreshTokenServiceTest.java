@@ -103,6 +103,26 @@ class RefreshTokenServiceTest {
     }
 
     @Nested
+    @DisplayName("issueRefreshToken")
+    class IssueRefreshToken {
+
+        @Test
+        @DisplayName("Should return the opaque token together with the stored expiry")
+        void shouldReturnTokenWithStoredExpiry() {
+            when(refreshTokenRepository.save(any(RefreshToken.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            RefreshTokenService.IssuedRefreshToken issued = refreshTokenService.issueRefreshToken(siteId);
+
+            ArgumentCaptor<RefreshToken> captor = ArgumentCaptor.forClass(RefreshToken.class);
+            verify(refreshTokenRepository).save(captor.capture());
+
+            assertThat(issued.token()).isNotBlank();
+            assertThat(issued.expiresAt()).isEqualTo(captor.getValue().getExpiresAt());
+        }
+    }
+
+    @Nested
     @DisplayName("refreshAccessToken")
     class RefreshAccessToken {
 
@@ -140,6 +160,38 @@ class RefreshTokenServiceTest {
 
             // Verify new token saved (revoked old + new)
             verify(refreshTokenRepository, times(2)).save(any(RefreshToken.class));
+        }
+
+        @Test
+        @DisplayName("Should report the expiry stored on the persisted refresh token")
+        void shouldReportPersistedExpiry() {
+            String opaqueToken = "rotating-token";
+            String tokenHash = RefreshTokenService.sha256(opaqueToken);
+
+            RefreshToken existingToken = RefreshToken.create(siteId, tokenHash);
+            Site mockSite = mock(Site.class);
+            Account mockAccount = mock(Account.class);
+
+            when(refreshTokenRepository.findByTokenHash(tokenHash))
+                    .thenReturn(Optional.of(existingToken));
+            when(siteRepository.findById(siteId)).thenReturn(Optional.of(mockSite));
+            when(mockSite.getIsActive()).thenReturn(true);
+            when(mockSite.getAccountId()).thenReturn(accountId);
+            when(accountRepository.findById(accountId)).thenReturn(Optional.of(mockAccount));
+            when(mockAccount.getIsActive()).thenReturn(true);
+            when(jwtTokenProvider.generateToken(siteId, accountId)).thenReturn(mock(JwtToken.class));
+            when(refreshTokenRepository.save(any(RefreshToken.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            RefreshTokenService.RefreshResult result =
+                    refreshTokenService.refreshAccessToken(opaqueToken);
+
+            ArgumentCaptor<RefreshToken> captor = ArgumentCaptor.forClass(RefreshToken.class);
+            verify(refreshTokenRepository, times(2)).save(captor.capture());
+            RefreshToken issuedToken = captor.getAllValues().get(1);
+
+            // Must be the stored value, not an independently recomputed "now + TTL"
+            assertThat(result.refreshTokenExpiresAt()).isEqualTo(issuedToken.getExpiresAt());
         }
 
         @Test

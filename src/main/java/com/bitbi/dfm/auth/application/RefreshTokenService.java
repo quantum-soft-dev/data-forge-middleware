@@ -66,14 +66,28 @@ public class RefreshTokenService {
      * @return the opaque refresh token string (to be returned to client once)
      */
     public String generateRefreshToken(UUID siteId) {
+        return issueRefreshToken(siteId).token();
+    }
+
+    /**
+     * Issue a new refresh token for a site, returning the opaque token and its stored expiry.
+     * <p>
+     * Callers that report the expiry to clients must use this method: the TTL belongs to the
+     * persisted token, and recomputing it from the current clock silently drifts apart from
+     * the stored value the moment the two are derived differently.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return the opaque refresh token together with the expiry that was persisted
+     */
+    public IssuedRefreshToken issueRefreshToken(UUID siteId) {
         String opaqueToken = generateOpaqueToken();
         String tokenHash = sha256(opaqueToken);
 
-        RefreshToken refreshToken = RefreshToken.create(siteId, tokenHash);
-        refreshTokenRepository.save(refreshToken);
+        RefreshToken saved = refreshTokenRepository.save(RefreshToken.create(siteId, tokenHash));
 
         logger.info("Generated refresh token for site: siteId={}", siteId);
-        return opaqueToken;
+        return new IssuedRefreshToken(opaqueToken, saved.getExpiresAt());
     }
 
     /**
@@ -142,14 +156,14 @@ public class RefreshTokenService {
         JwtToken accessToken = jwtTokenProvider.generateToken(siteId, site.getAccountId());
 
         // Generate new refresh token (rotation)
-        String newRefreshTokenString = generateRefreshToken(siteId);
+        IssuedRefreshToken newRefreshToken = issueRefreshToken(siteId);
 
         logger.info("Access token refreshed successfully: siteId={}", siteId);
 
         return new RefreshResult(
                 accessToken,
-                newRefreshTokenString,
-                Instant.now().plus(90, ChronoUnit.DAYS)
+                newRefreshToken.token(),
+                newRefreshToken.expiresAt()
         );
     }
 
@@ -212,6 +226,15 @@ public class RefreshTokenService {
     }
 
     // --- Result types ---
+
+    /**
+     * A freshly issued refresh token and the expiry persisted with it.
+     *
+     * @param token     opaque refresh token (returned to the client once)
+     * @param expiresAt expiry as stored on the token entity
+     */
+    public record IssuedRefreshToken(String token, Instant expiresAt) {
+    }
 
     /**
      * Result of a successful token refresh.
