@@ -190,60 +190,80 @@ Access interactive API documentation:
 http://localhost:8080/swagger-ui.html
 ```
 
-### Authentication Flow
+### Client Authentication Flow (Device Authorization Flow)
 
-#### 1. Generate JWT Token (Client API)
+This is the only way a client obtains a token. There is no secret-based token endpoint —
+the legacy `POST /api/v1/auth/token` was removed along with the rest of the v1 client surface.
+
+#### 1. Device requests authorization
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/auth/token \
-  -H "Authorization: Basic $(echo -n 'example.com:client-secret' | base64)" \
-  -H "Content-Type: application/json"
+curl -X POST http://localhost:8080/api/v1/device/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteName": "warehouse-01",
+    "siteDescription": "Warehouse 01",
+    "siteType": "DBF"
+  }'
 ```
 
 Response:
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIs...",
-  "expiresAt": "2024-01-01T13:00:00",
-  "tokenType": "Bearer"
+  "deviceCode": "GmRhmhcxhwAzkoEqiMEg_DnyEysNkuNhszIySk9eS",
+  "userCode": "WDJB-MJHT",
+  "verificationUri": "https://app.dataforge.com/device-verify",
+  "verificationUriComplete": "https://app.dataforge.com/device-verify?code=WDJB-MJHT",
+  "expiresIn": 900,
+  "interval": 5
 }
 ```
 
-#### 2. Start Batch Upload
+#### 2. User approves in the web UI
+
+The account owner opens `verificationUriComplete`, authenticates via Auth0, and approves the
+pending device. Auth0 authenticates the **approver**, not the device.
+
+#### 3. Device polls for tokens
+
+Poll no faster than `interval` seconds. Before approval the endpoint answers
+`authorization_pending`.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/batch/start \
-  -H "Authorization: Bearer <jwt-token>" \
-  -H "Content-Type: application/json"
+curl -X POST http://localhost:8080/api/v1/device/token \
+  -H "Content-Type: application/json" \
+  -d '{"deviceCode": "GmRhmhcxhwAzkoEqiMEg_DnyEysNkuNhszIySk9eS"}'
 ```
 
 Response:
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "siteId": "123e4567-e89b-12d3-a456-426614174000",
-  "status": "IN_PROGRESS",
-  "s3Path": "account-id/example.com/2024-01-01/12-00/",
-  "uploadedFilesCount": 0,
-  "totalSize": 0,
-  "hasErrors": false,
-  "startedAt": "2024-01-01T12:00:00"
+  "siteId": "550e8400-e29b-41d4-a716-446655440000",
+  "siteName": "warehouse-01",
+  "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+  "refreshToken": "kA9v...",
+  "accessTokenExpiresAt": "2026-01-01T13:00:00Z",
+  "refreshTokenExpiresAt": "2026-04-01T12:00:00Z",
+  "apiBaseUrl": "https://api.dataforge.com"
 }
 ```
 
-#### 3. Upload Files
+#### 4. Send data over gRPC
+
+Data does not go over REST. The client streams changes to the Delta v2 gRPC service
+(default port `9090`, contract in `src/main/proto/delta-ingestion.proto`), passing the access
+token as a Bearer credential in gRPC metadata. See
+[docs/delta-client-v2-guide.md](docs/delta-client-v2-guide.md).
+
+#### 5. Refresh the access token
+
+Refresh tokens rotate on every use: the presented token is revoked and a new one is returned.
+Presenting an already-rotated token is treated as a leak and revokes that rotation family.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/batch/{batchId}/upload \
-  -H "Authorization: Bearer <jwt-token>" \
-  -F "file=@/path/to/file.csv"
-```
-
-#### 4. Complete Batch
-
-```bash
-curl -X POST http://localhost:8080/api/v1/batch/{batchId}/complete \
-  -H "Authorization: Bearer <jwt-token>"
+curl -X POST http://localhost:8080/api/v1/device/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "kA9v..."}'
 ```
 
 ### Admin API (Auth0 Access Token Required)
@@ -251,7 +271,7 @@ curl -X POST http://localhost:8080/api/v1/batch/{batchId}/complete \
 #### Create Account
 
 ```bash
-curl -X POST http://localhost:8080/admin/accounts \
+curl -X POST http://localhost:8080/api/v1/accounts \
   -H "Authorization: Bearer <auth0-access-token>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -263,12 +283,12 @@ curl -X POST http://localhost:8080/admin/accounts \
 #### Create Site
 
 ```bash
-curl -X POST http://localhost:8080/admin/accounts/{accountId}/sites \
+curl -X POST http://localhost:8080/api/v1/accounts/{accountId}/sites \
   -H "Authorization: Bearer <auth0-access-token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "domain": "example.com",
-    "displayName": "Example Site"
+    "siteName": "warehouse-01",
+    "displayName": "Warehouse 01"
   }'
 ```
 

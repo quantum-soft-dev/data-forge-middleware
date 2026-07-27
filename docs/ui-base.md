@@ -1,5 +1,11 @@
 # Technical Specifications: Implementation of the first version of the UI
 
+> **Historical document.** This is the original design spec for the first UI version and predates
+> the Auth0 migration. It describes Keycloak roles, `/oauth2/authorization/keycloak`, and
+> `POST /api/v1/auth/token` as a live public endpoint — none of which hold any more: the provider
+> is Auth0, and that token endpoint has been removed. Kept for design context only; for the current
+> picture see `CLAUDE.md` (Authentication) and `README.md`.
+
 ## 1. Initialization of the UI project
 
 **Goal:** Create a React 19 application with Feature-Sliced Design architecture
