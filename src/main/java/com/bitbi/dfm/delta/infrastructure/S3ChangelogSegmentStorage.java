@@ -21,7 +21,9 @@ import java.util.UUID;
 /**
  * Stores raw changelog segment bytes (bronze) in object storage (Delta Client v2 — 022).
  *
- * <p>Layout: {@code delta/{siteId}/segments/{batchId}.pb.gz} (gzipped length-delimited protobuf).</p>
+ * <p>Layout: {@code delta/{siteId}/segments/{segmentId}.pb.gz} (gzipped length-delimited protobuf).
+ * Keyed by the segment's own id — a session's batch owns many segments (029), so a batch-derived
+ * key would collide. Rows written before 029 keep their stored batch-derived keys.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -42,13 +44,13 @@ public class S3ChangelogSegmentStorage {
     /**
      * Upload a changelog segment.
      *
-     * @param siteId  site identifier
-     * @param batchId batch (session) identifier
-     * @param content gzipped length-delimited protobuf bytes
+     * @param siteId    site identifier
+     * @param segmentId segment identifier (matches the changelog_segments row)
+     * @param content   gzipped length-delimited protobuf bytes
      * @return the S3 key the segment was stored at
      */
-    public String uploadSegment(UUID siteId, UUID batchId, byte[] content) {
-        String s3Key = String.format("delta/%s/segments/%s.pb.gz", siteId, batchId);
+    public String uploadSegment(UUID siteId, UUID segmentId, byte[] content) {
+        String s3Key = String.format("delta/%s/segments/%s.pb.gz", siteId, segmentId);
         try {
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(bucketName)
