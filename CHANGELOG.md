@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **⚠️ This file is out of date.** It has not been updated since the v3.0.0 work below and
+> does **not** cover features 014–029 (plugin history/filtering, global error handling,
+> site types & POSTGRES_CDC, Auth V2 device flow, Delta Client v2 gRPC ingestion, the
+> Delta Sync UI and visual-language migration, the Parquet Export plugin, and
+> batch-per-session semantics). For the current state see `CLAUDE.md` ("Recent Changes"),
+> `docs/` and `specs/NNN-*/`.
+
 ### Added
 
-- **Admin UI with Keycloak Authentication** - Complete React-based admin interface for account management
+- **Admin UI with Auth0 Authentication** - Complete React-based admin interface for account management
   - Feature-Sliced Design architecture (entities, features, widgets, pages)
   - React Query for server state management
   - TanStack Router with route guards for protected routes
-  - Keycloak SSO integration via react-oidc-context
+  - Auth0 SSO integration via `@auth0/auth0-react`
   - Environment-aware logging utility to prevent token leakage in production
   - Account CRUD operations with form validation
   - Responsive UI with Tailwind CSS and shadcn/ui components
@@ -79,8 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Security Configuration** - Separate authentication filter chains
   - Client API (/api/dfc/**) now accepts only custom JWT tokens
-  - Admin API (/api/admin/**) now accepts only Keycloak OAuth2 tokens
-  - Keycloak role mapping ensures ROLE_ prefix compatibility with Spring Security
+  - Admin API (/api/admin/**) now accepts only Auth0 OAuth2 tokens
+  - Role mapping from the `https://api.dataforge.com/roles` custom claim ensures ROLE_
+    prefix compatibility with Spring Security (with a legacy `realm_access.roles` fallback)
   - Authentication audit logging with token type detection
 
 - **Account Entity** - Explicit JPA converter annotations
@@ -97,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Keycloak role authorization now works with roles sent without ROLE_ prefix
+- Role authorization now works with roles sent without ROLE_ prefix
 - Frontend token data no longer leaks to production console logs
 - Account phone and company fields now properly validated at all layers
 - Environment variable naming inconsistency between .env.example and .env.development
@@ -177,13 +185,12 @@ If deploying v3.0.0, update your environment configuration:
 # application.yml or environment variables
 account:
   max-concurrent-batches: 5  # ACCOUNT_MAX_CONCURRENT_BATCHES
-
-# Keycloak (updated defaults)
-keycloak:
-  realm: dfm                    # KEYCLOAK_REALM
-  auth-server-url: http://localhost:8081  # KEYCLOAK_AUTH_SERVER_URL
-  resource: dfm-backend         # KEYCLOAK_RESOURCE
 ```
+
+**Authentication:** Keycloak has been replaced by Auth0 as the OAuth2 provider. Configure
+via the `AUTH0_*` environment variables — `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_ISSUER`,
+`AUTH0_CLAIMS_NAMESPACE`, plus the management-API client credentials. See `.env.example`
+and `docs/local-auth0.md`. The `KEYCLOAK_*` variables are no longer read by the application.
 
 ---
 
