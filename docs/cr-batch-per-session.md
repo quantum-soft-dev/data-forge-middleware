@@ -42,7 +42,7 @@ into the UI or the plugin event stream.
 
 `batches.last_activity_at` (nullable) is touched by the ingest path at a bounded cadence: session
 start/resume, each Ack watermark (≥100 accepted records), each seal. The timeout sweeper's cutoff
-is now `COALESCE(last_activity_at, started_at) < now - batch.timeout-minutes`:
+is now `COALESCE(last_activity_at, started_at) < now - batch.timeout.minutes`:
 
 - a live streaming session older than 60 minutes keeps running (its activity is fresh);
 - a session silent for the whole window is failed (NOT_COMPLETED), freeing the site;

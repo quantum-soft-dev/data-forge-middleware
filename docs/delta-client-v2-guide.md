@@ -421,7 +421,7 @@ change records as they occur and keep the stream open.
   per session with the aggregated totals (sum of records, union of tables), however many segments
   the stream sealed. The batch's timeout is measured from **last session activity**, so a live
   stream can legitimately run for hours while a silent one is reclaimed after
-  `batch.timeout-minutes`.
+  `batch.timeout.minutes` (env `BATCH_TIMEOUT_MINUTES`, default 60).
 - When you close the stream gracefully, the server flushes the final segment (skipped when the tail
   buffer is empty — no degenerate segment is written) and completes the session's batch, so a clean
   close never leaves the site blocked and never produces an empty extra history row. A session that
