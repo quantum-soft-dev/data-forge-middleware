@@ -79,7 +79,9 @@ public class DownloadLinkService {
         if (updated == 0) {
             DownloadLink existing = downloadLinkRepository.findByToken(token).orElse(null);
             if (existing == null) {
-                pluginAuditService.logLinkRejected(ParquetExportCredentialsService.PLUGIN_ID, null, "unknown");
+                // No audit row for unknown tokens: the route is anonymous, so a garbage-token
+                // flood would otherwise write-amplify into the partitioned audit table.
+                log.warn("Unknown download link token rejected");
                 throw new LinkNotFoundException();
             }
             UUID accountId = resolveAccountId(existing.getAccountPluginId());

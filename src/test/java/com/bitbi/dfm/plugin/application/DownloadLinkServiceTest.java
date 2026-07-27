@@ -134,7 +134,7 @@ class DownloadLinkServiceTest {
         }
 
         @Test
-        @DisplayName("Should throw LinkNotFoundException for unknown token")
+        @DisplayName("Should throw LinkNotFoundException for unknown token without touching the audit log")
         void shouldThrowNotFoundForUnknownToken() {
             when(downloadLinkRepository.consume(eq("unknown"), any())).thenReturn(0);
             when(downloadLinkRepository.findByToken("unknown")).thenReturn(Optional.empty());
@@ -142,7 +142,9 @@ class DownloadLinkServiceTest {
             assertThrows(DownloadLinkService.LinkNotFoundException.class, () -> service.consume("unknown"));
 
             verify(presignedUrlService, never()).generatePresignedUrl(any(), any(), any());
-            verify(pluginAuditService).logLinkRejected("parquet-export", null, "unknown");
+            // The route is anonymous: auditing unknown tokens would let garbage requests flood
+            // the partitioned audit table (write amplification) — log-only instead.
+            verifyNoInteractions(pluginAuditService);
         }
     }
 
