@@ -13,13 +13,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Integration test for Scenario 1: Client Authentication and Token Acquisition.
  * <p>
- * CRITICAL: This test MUST FAIL before implementation.
- * Tests end-to-end authentication flow with database and JWT generation.
+ * Retargeted from {@code /api/v1/device/auth/token} — a path with no controller — to
+ * {@link ApiRoutes#AUTH_TOKEN}, the deprecated {@code AuthController} mapping that implements
+ * Basic Auth token acquisition.
+ * </p>
+ * <p>
+ * Still disabled: that mapping is unreachable behind the Order 5 {@code /api/v1/**} OAuth2 filter
+ * chain (see {@code AuthContractTest} for the full note). Auth V2 acquires tokens via the Device
+ * Authorization Flow.
  * </p>
  *
  * @see <a href="specs/001-technical-specification-data/quickstart.md">Quickstart Scenario 1</a>
  */
-@Disabled("Auth V2: Basic Auth endpoint removed. See auth-v2-migration-guide.md")
+@Disabled("Unreachable: /api/v1/auth/token is shadowed by the Order 5 /api/v1/** OAuth2 chain")
 @DisplayName("Scenario 1: Client Authentication Integration Test")
 class AuthenticationIntegrationTest extends BaseIntegrationTest {
 
@@ -41,7 +47,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: POST /api/v1/auth/token with Basic Auth
-        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
+        mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
 
                 // Then: 200 OK with valid JWT token
@@ -67,7 +73,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: Authenticate and receive token
-        String response = mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
+        String response = mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
                 .andExpect(status().isOk())
                 .andReturn()
@@ -91,7 +97,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: Attempt authentication
-        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
+        mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
 
                 // Then: 401 Unauthorized
@@ -112,7 +118,7 @@ class AuthenticationIntegrationTest extends BaseIntegrationTest {
                 .encodeToString((domain + ":" + clientSecret).getBytes());
 
         // When: Attempt authentication
-        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
+        mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
                         .header("Authorization", "Basic " + credentials))
 
                 // Then: 401 Unauthorized

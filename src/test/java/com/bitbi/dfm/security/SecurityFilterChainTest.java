@@ -177,30 +177,74 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     }
 
     /**
-     * TC07: Device Auth Token endpoint with Basic Auth → 200 OK (public endpoint)
+     * TC07: /api/v1/device/auth/token is not part of the API surface.
      * <p>
      * <b>Given</b>: Valid Basic Auth credentials (domain:clientSecret)<br>
-     * <b>When</b>: Requesting Device auth token endpoint (/api/v1/device/auth/token)<br>
-     * <b>Then</b>: Request is accepted and JWT token is issued
+     * <b>When</b>: POSTing to the removed device token path (/api/v1/device/auth/token)<br>
+     * <b>Then</b>: Request is rejected by the Device API chain with 401 and no token is issued
      * </p>
      * <p>
-     * <b>Note</b>: This endpoint should allow Basic Auth (not Bearer) for initial token generation.
+     * The path never had a controller: Basic Auth token generation lives at
+     * {@link ApiRoutes#AUTH_TOKEN}. It used to be permitAll in two filter chains, which made a
+     * non-existent route publicly reachable. Guards against the permitAll rules coming back.
      * </p>
      */
-    @Disabled("Auth V2: Basic Auth endpoint removed")
     @Test
-    @DisplayName("TC07: Device auth token endpoint with Basic Auth should return 200 OK")
-    void deviceAuthTokenEndpointWithBasicAuthShouldBeAuthorized() throws Exception {
+    @DisplayName("TC07: Removed device token path should not issue a token")
+    void removedDeviceAuthTokenPathShouldNotIssueToken() throws Exception {
         String credentials = java.util.Base64.getEncoder()
                 .encodeToString("store-01.example.com:valid-secret-uuid".getBytes());
 
-        mockMvc.perform(post(ApiRoutes.DEVICE_AUTH_TOKEN)
+        mockMvc.perform(post("/api/v1/device/auth/token")
                         .header("Authorization", "Basic " + credentials)
                         .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk()) // Expecting 200 OK
-                .andExpect(jsonPath("$.token").exists())
-                .andExpect(jsonPath("$.expiresAt").exists())
-                .andExpect(jsonPath("$.siteId").exists());
+                .andExpect(status().isUnauthorized()) // Device API chain: authenticated() → 401
+                .andExpect(jsonPath("$.token").doesNotExist());
+    }
+
+    /**
+     * TC07a: The removed device token path is not anonymously reachable either.
+     * <p>
+     * <b>Given</b>: No credentials at all<br>
+     * <b>When</b>: POSTing to /api/v1/device/auth/token<br>
+     * <b>Then</b>: 401 Unauthorized — the path must not be permitAll
+     * </p>
+     */
+    @Test
+    @DisplayName("TC07a: Removed device token path should not be public")
+    void removedDeviceAuthTokenPathShouldNotBePublic() throws Exception {
+        mockMvc.perform(post("/api/v1/device/auth/token")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * TC07c: No path issues a Custom JWT for Basic Auth credentials.
+     * <p>
+     * <b>Given</b>: Valid Basic Auth credentials (domain:clientSecret)<br>
+     * <b>When</b>: POST /api/v1/auth/token (the deprecated {@code AuthController} mapping)<br>
+     * <b>Then</b>: 401 Unauthorized and no token — the Order 5 {@code /api/v1/**} OAuth2 chain
+     * matches this path before the default chain, so its permitAll rule there is unreachable and
+     * the controller is never invoked
+     * </p>
+     * <p>
+     * This pins the Auth V2 posture: the only anonymous token issuance is the Device Authorization
+     * Flow ({@code /api/v1/device/authorize} + {@code /api/v1/device/token}). Whether the shadowed
+     * {@code AuthController} should be re-opened or deleted is an owner decision; either way this
+     * test must be revisited deliberately rather than drift silently.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC07c: Basic Auth token issuance should not be anonymously reachable")
+    void basicAuthTokenIssuanceShouldNotBeReachable() throws Exception {
+        String credentials = java.util.Base64.getEncoder()
+                .encodeToString("store-01.example.com:valid-secret-uuid".getBytes());
+
+        mockMvc.perform(post(ApiRoutes.AUTH_TOKEN)
+                        .header("Authorization", "Basic " + credentials)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.token").doesNotExist());
     }
 
     /**
