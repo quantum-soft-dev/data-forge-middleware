@@ -42,6 +42,43 @@ class AccountPluginTest {
     }
 
     @Nested
+    @DisplayName("apiKeyLookup (031)")
+    class ApiKeyLookupField {
+
+        @Test
+        @DisplayName("newly activated plugin should have no api key lookup")
+        void shouldHaveNullLookupWhenActivated() {
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+
+            assertThat(plugin.getApiKeyLookup()).isNull();
+        }
+
+        @Test
+        @DisplayName("updateApiKeyLookup should store the lookup and bump updatedAt")
+        void shouldStoreLookup() throws InterruptedException {
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            Instant initialUpdatedAt = plugin.getUpdatedAt();
+            Thread.sleep(5);
+
+            plugin.updateApiKeyLookup("a".repeat(64));
+
+            assertThat(plugin.getApiKeyLookup()).isEqualTo("a".repeat(64));
+            assertThat(plugin.getUpdatedAt()).isAfter(initialUpdatedAt);
+        }
+
+        @Test
+        @DisplayName("updateApiKeyLookup should accept null to clear the lookup")
+        void shouldClearLookup() {
+            AccountPlugin plugin = AccountPlugin.activate(accountId, pluginId, pluginData);
+            plugin.updateApiKeyLookup("b".repeat(64));
+
+            plugin.updateApiKeyLookup(null);
+
+            assertThat(plugin.getApiKeyLookup()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("activate() static factory")
     class ActivateStaticFactory {
 

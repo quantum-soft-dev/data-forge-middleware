@@ -1,6 +1,10 @@
 package com.bitbi.dfm.plugin.domain;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.util.HexFormat;
 import java.util.Objects;
 
 /**
@@ -57,6 +61,40 @@ public record PluginApiKey(String value) {
      */
     public static boolean isValid(String value) {
         return value != null && value.matches(PATTERN);
+    }
+
+    /**
+     * Computes the indexed lookup handle for a raw API key: the lowercase hex SHA-256 digest (031).
+     * <p>
+     * Stored in {@code account_plugins.api_key_lookup} (V42) so that validation can resolve the
+     * activation with one indexed point query instead of scanning every activation. This digest is
+     * <strong>not</strong> the verification secret — the BCrypt hash remains the source of truth.
+     * An unsalted digest is adequate as an index key because the key carries ~190 bits of
+     * {@link SecureRandom} entropy, which puts precomputation and rainbow tables out of reach.
+     * </p>
+     *
+     * @param rawValue the raw API key
+     * @return 64-character lowercase hex SHA-256 digest
+     */
+    public static String lookupOf(String rawValue) {
+        Objects.requireNonNull(rawValue, "API key value cannot be null");
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(rawValue.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is mandated by the JLS platform requirements; unreachable in practice.
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    /**
+     * Returns the indexed lookup handle for this key.
+     *
+     * @see #lookupOf(String)
+     */
+    public String lookup() {
+        return lookupOf(value);
     }
 
     /**
