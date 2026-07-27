@@ -76,9 +76,10 @@ public class RefreshTokenService {
      * persisted token, and recomputing it from the current clock silently drifts apart from
      * the stored value the moment the two are derived differently.
      * </p>
-     *
-     * Starts a new rotation family: this is primary issuance (one Device Authorization Flow
-     * run). Other families of the same site are independent sessions and stay untouched.
+     * <p>
+     * Starts a new rotation family - this is primary issuance (one Device Authorization Flow
+     * run). Issuing does not revoke anything by itself; the device flow separately revokes the
+     * site's previous tokens, so in practice the new family replaces the old one.
      * </p>
      *
      * @param siteId site identifier
@@ -134,10 +135,11 @@ public class RefreshTokenService {
             // We cannot tell the attacker from the legitimate device, so the compromised chain dies
             // and that device must re-run the Device Authorization Flow.
             //
-            // Scope is the rotation family, NOT the site: a site legitimately holds several
-            // independent sessions at once (one per Device Authorization Flow run). Revoking
-            // site-wide would turn any stale revoked token into a repeatable denial-of-service
-            // against whatever session is currently live.
+            // Scope is the rotation family, NOT the site. A site accumulates the revoked tokens of
+            // all its past sessions - every rotation revokes one, and re-authorization revokes the
+            // previous session wholesale - so revoking site-wide here would turn any of those long
+            // dead tokens into a repeatable denial-of-service against the session that is live now.
+            // (This scopes reuse detection only; it does not make sessions run in parallel.)
             //
             // NOTE: the revocation must survive the exception, hence noRollbackFor on this method -
             // otherwise the surrounding transaction would roll the family revocation back.

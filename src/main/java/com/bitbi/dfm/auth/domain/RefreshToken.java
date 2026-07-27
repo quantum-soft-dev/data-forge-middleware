@@ -36,9 +36,17 @@ public class RefreshToken {
     /**
      * Identifies the rotation chain this token belongs to.
      * <p>
-     * A chain starts at primary issuance (one Device Authorization Flow run) and every
-     * rotation inherits it. Reuse detection revokes exactly one family, so the independent
-     * sessions a site may hold at the same time cannot take each other down.
+     * A chain starts at primary issuance (one Device Authorization Flow run) and every rotation
+     * inherits it. Its purpose is to scope <b>reuse detection</b>: replaying a consumed token
+     * revokes that chain rather than every token the site ever had, so tokens left over from
+     * earlier sessions cannot be replayed to kill the current one.
+     * </p>
+     * <p>
+     * It does <b>not</b> mean a site runs several sessions in parallel. One site is one client
+     * installation: re-running the device flow with the same site name reattaches to the same
+     * site and revokes its tokens site-wide, so at most one family is live at a time.
+     * </p>
+     * <p>
      * Never null: {@code NOT NULL} with a database-side default since V43.
      * </p>
      */
