@@ -71,6 +71,16 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
     }
 
     /**
+     * Read the rotation family of a stored token.
+     */
+    private UUID familyIdOf(String opaqueToken) throws Exception {
+        return jdbcTemplate.queryForObject(
+                "SELECT family_id FROM refresh_tokens WHERE token_hash = ?",
+                UUID.class,
+                sha256Hex(opaqueToken));
+    }
+
+    /**
      * Mirror of the storage hashing used by RefreshTokenService (tokens are stored as SHA-256 hex).
      */
     private static String sha256Hex(String input) throws Exception {
@@ -225,6 +235,82 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
         mockMvc.perform(refreshRequest(tokenB))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+    }
+
+    @Test
+    @DisplayName("Should revoke only the reused chain, leaving other sessions of the same site alive")
+    void shouldRevokeOnlyTheReusedChain() throws Exception {
+        // Given: two independent sessions of the SAME site (two device flow runs)
+        String a1 = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        String a2 = refreshFor(a1);
+        String b1 = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        String b2 = refreshFor(b1);
+
+        // When: the long-dead token A1 is replayed
+        mockMvc.perform(refreshRequest(a1))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+
+        // Then: chain A is dead...
+        mockMvc.perform(refreshRequest(a2))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+
+        // ...but the unrelated live session B is untouched. Otherwise any stale revoked token
+        // would be a repeatable denial-of-service against the site's current session.
+        mockMvc.perform(refreshRequest(b2))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Should carry the family id through every rotation hop")
+    void shouldCarryFamilyIdThroughRotations() throws Exception {
+        String first = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        UUID familyId = familyIdOf(first);
+        org.assertj.core.api.Assertions.assertThat(familyId).isNotNull();
+
+        String token = first;
+        for (int i = 0; i < 3; i++) {
+            token = refreshFor(token);
+            org.assertj.core.api.Assertions.assertThat(familyIdOf(token))
+                    .as("family id must survive rotation hop %d", i + 1)
+                    .isEqualTo(familyId);
+        }
+    }
+
+    @Test
+    @DisplayName("Should treat a pre-existing token row as a family of its own (backfill scenario)")
+    void shouldTreatBackfilledTokenAsSingletonFamily() throws Exception {
+        // Given: a live session, plus a legacy revoked row written without an explicit family -
+        // exactly what V43 backfills: one own family per existing row
+        String live = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+        String liveRotated = refreshFor(live);
+
+        // Opaque tokens are 43-char base64url (the endpoint rejects anything else as malformed)
+        String legacyToken = "legacyA".repeat(7).substring(0, 43);
+        String otherLegacyToken = "legacyB".repeat(7).substring(0, 43);
+        for (String legacy : java.util.List.of(legacyToken, otherLegacyToken)) {
+            jdbcTemplate.update("""
+                    INSERT INTO refresh_tokens (id, site_id, token_hash, expires_at, created_at, revoked_at)
+                    VALUES (gen_random_uuid(), ?, ?, now() + interval '90 days', now(), now())
+                    """, STORE_03_SITE_ID, sha256Hex(legacy));
+        }
+
+        // Backfill gives every such row a family of exactly one: distinct from the live chain
+        // and from each other (the volatile default is evaluated per row, not once)
+        org.assertj.core.api.Assertions.assertThat(familyIdOf(legacyToken)).isNotNull();
+        org.assertj.core.api.Assertions.assertThat(familyIdOf(legacyToken))
+                .isNotEqualTo(familyIdOf(liveRotated))
+                .isNotEqualTo(familyIdOf(otherLegacyToken));
+
+        // When: the legacy revoked token is replayed
+        mockMvc.perform(refreshRequest(legacyToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
+
+        // Then: it can only kill itself - the current session survives
+        mockMvc.perform(refreshRequest(liveRotated))
+                .andExpect(status().isOk());
     }
 
     @Test

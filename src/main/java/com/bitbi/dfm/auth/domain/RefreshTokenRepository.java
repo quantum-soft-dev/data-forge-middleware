@@ -30,11 +30,23 @@ public interface RefreshTokenRepository {
 
     /**
      * Revoke all active refresh tokens for a site.
+     * <p>
+     * Site-wide operation: use for site/account lifecycle events (deactivation, re-authorization),
+     * <em>not</em> for reuse detection - see {@link #revokeAllByFamilyId(UUID)}.
+     * </p>
      *
      * @param siteId site identifier
      * @return number of revoked tokens
      */
     int revokeAllBySiteId(UUID siteId);
+
+    /**
+     * Revoke all active refresh tokens of a single rotation family.
+     *
+     * @param familyId rotation family identifier
+     * @return number of revoked tokens
+     */
+    int revokeAllByFamilyId(UUID familyId);
 
     /**
      * Delete expired and revoked tokens older than cutoff.

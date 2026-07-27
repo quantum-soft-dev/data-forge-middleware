@@ -34,6 +34,18 @@ public class RefreshToken {
     private UUID siteId;
 
     /**
+     * Identifies the rotation chain this token belongs to.
+     * <p>
+     * A chain starts at primary issuance (one Device Authorization Flow run) and every
+     * rotation inherits it. Reuse detection revokes exactly one family, so the independent
+     * sessions a site may hold at the same time cannot take each other down.
+     * Never null: {@code NOT NULL} with a database-side default since V43.
+     * </p>
+     */
+    @Column(name = "family_id", nullable = false, updatable = false)
+    private UUID familyId;
+
+    /**
      * SHA-256 hash of the opaque refresh token string.
      */
     @Column(name = "token_hash", nullable = false, unique = true, length = 64)
@@ -51,25 +63,46 @@ public class RefreshToken {
     @Column(name = "revoked_at")
     private Instant revokedAt;
 
-    private RefreshToken(UUID id, UUID siteId, String tokenHash, Instant expiresAt, Instant createdAt) {
+    private RefreshToken(UUID id, UUID siteId, UUID familyId, String tokenHash, Instant expiresAt, Instant createdAt) {
         this.id = id;
         this.siteId = siteId;
+        this.familyId = familyId;
         this.tokenHash = tokenHash;
         this.expiresAt = expiresAt;
         this.createdAt = createdAt;
     }
 
     /**
-     * Create a new refresh token with default 90-day TTL.
+     * Create a refresh token that starts a new rotation family, with default 90-day TTL.
+     * <p>
+     * This is primary issuance - one authenticated session, e.g. a completed Device
+     * Authorization Flow. Existing families of the same site are left untouched.
+     * </p>
      *
      * @param siteId    site identifier
      * @param tokenHash SHA-256 hash of the opaque token
-     * @return new RefreshToken entity
+     * @return new RefreshToken entity heading a fresh family
      */
-    public static RefreshToken create(UUID siteId, String tokenHash) {
+    public static RefreshToken createNewFamily(UUID siteId, String tokenHash) {
+        return newToken(siteId, UUID.randomUUID(), tokenHash);
+    }
+
+    /**
+     * Create the successor of {@code parent} within the same rotation family.
+     *
+     * @param parent    the token being rotated out
+     * @param tokenHash SHA-256 hash of the new opaque token
+     * @return new RefreshToken entity inheriting the parent's site and family
+     */
+    public static RefreshToken rotateFrom(RefreshToken parent, String tokenHash) {
+        return newToken(parent.siteId, parent.familyId, tokenHash);
+    }
+
+    private static RefreshToken newToken(UUID siteId, UUID familyId, String tokenHash) {
         return new RefreshToken(
                 UUID.randomUUID(),
                 siteId,
+                familyId,
                 tokenHash,
                 Instant.now().plusSeconds(DEFAULT_TTL_DAYS * 24 * 60 * 60),
                 Instant.now()

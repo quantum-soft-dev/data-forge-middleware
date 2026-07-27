@@ -77,16 +77,34 @@ public class RefreshTokenService {
      * the stored value the moment the two are derived differently.
      * </p>
      *
+     * Starts a new rotation family: this is primary issuance (one Device Authorization Flow
+     * run). Other families of the same site are independent sessions and stay untouched.
+     * </p>
+     *
      * @param siteId site identifier
      * @return the opaque refresh token together with the expiry that was persisted
      */
     public IssuedRefreshToken issueRefreshToken(UUID siteId) {
         String opaqueToken = generateOpaqueToken();
-        String tokenHash = sha256(opaqueToken);
+        RefreshToken saved = refreshTokenRepository.save(
+                RefreshToken.createNewFamily(siteId, sha256(opaqueToken)));
 
-        RefreshToken saved = refreshTokenRepository.save(RefreshToken.create(siteId, tokenHash));
+        logger.info("Generated refresh token for site: siteId={}, familyId={}", siteId, saved.getFamilyId());
+        return new IssuedRefreshToken(opaqueToken, saved.getExpiresAt());
+    }
 
-        logger.info("Generated refresh token for site: siteId={}", siteId);
+    /**
+     * Issue the successor of a refresh token inside the same rotation family.
+     *
+     * @param parent the token being rotated out
+     * @return the new opaque token together with the expiry that was persisted
+     */
+    private IssuedRefreshToken rotateRefreshToken(RefreshToken parent) {
+        String opaqueToken = generateOpaqueToken();
+        RefreshToken saved = refreshTokenRepository.save(
+                RefreshToken.rotateFrom(parent, sha256(opaqueToken)));
+
+        logger.debug("Rotated refresh token: siteId={}, familyId={}", saved.getSiteId(), saved.getFamilyId());
         return new IssuedRefreshToken(opaqueToken, saved.getExpiresAt());
     }
 
@@ -113,15 +131,20 @@ public class RefreshTokenService {
         if (refreshToken.isRevoked()) {
             // Refresh token reuse detection (RFC 6819 §5.2.2.3, OAuth 2.0 Security BCP §4.14.2):
             // rotation already consumed this token, so a second presentation means the token leaked.
-            // We cannot tell the attacker from the legitimate device, so the entire family dies and
-            // the device must re-run the Device Authorization Flow.
+            // We cannot tell the attacker from the legitimate device, so the compromised chain dies
+            // and that device must re-run the Device Authorization Flow.
+            //
+            // Scope is the rotation family, NOT the site: a site legitimately holds several
+            // independent sessions at once (one per Device Authorization Flow run). Revoking
+            // site-wide would turn any stale revoked token into a repeatable denial-of-service
+            // against whatever session is currently live.
             //
             // NOTE: the revocation must survive the exception, hence noRollbackFor on this method -
             // otherwise the surrounding transaction would roll the family revocation back.
-            UUID compromisedSiteId = refreshToken.getSiteId();
-            logger.warn("Refresh token reuse detected - revoking all refresh tokens for site: siteId={}",
-                    compromisedSiteId);
-            revokeAllForSite(compromisedSiteId);
+            UUID compromisedFamilyId = refreshToken.getFamilyId();
+            int revoked = refreshTokenRepository.revokeAllByFamilyId(compromisedFamilyId);
+            logger.warn("Refresh token reuse detected - revoked {} token(s) of rotation family: siteId={}, familyId={}",
+                    revoked, refreshToken.getSiteId(), compromisedFamilyId);
             throw new RefreshTokenRevokedException("Refresh token has been revoked");
         }
 
@@ -155,8 +178,8 @@ public class RefreshTokenService {
         // Generate new JWT access token
         JwtToken accessToken = jwtTokenProvider.generateToken(siteId, site.getAccountId());
 
-        // Generate new refresh token (rotation)
-        IssuedRefreshToken newRefreshToken = issueRefreshToken(siteId);
+        // Generate new refresh token (rotation) - stays in the presented token's family
+        IssuedRefreshToken newRefreshToken = rotateRefreshToken(refreshToken);
 
         logger.info("Access token refreshed successfully: siteId={}", siteId);
 
