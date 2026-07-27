@@ -41,6 +41,7 @@ class PluginApiKeyServiceTest {
 
     private AccountPluginRepository repository;
     private CountingPasswordEncoder encoder;
+    private SimpleMeterRegistry meterRegistry;
     private PluginApiKeyService service;
     private UUID accountId;
 
@@ -48,9 +49,15 @@ class PluginApiKeyServiceTest {
     void setUp() {
         repository = mock(AccountPluginRepository.class);
         encoder = new CountingPasswordEncoder();
-        service = new PluginApiKeyService(repository, new SimpleMeterRegistry(), encoder);
+        meterRegistry = new SimpleMeterRegistry();
+        service = new PluginApiKeyService(repository, meterRegistry, encoder);
         accountId = UUID.randomUUID();
         when(repository.save(any(AccountPlugin.class))).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private double counter(String name) {
+        io.micrometer.core.instrument.Counter counter = meterRegistry.find(name).counter();
+        return counter == null ? 0d : counter.count();
     }
 
     private AccountPlugin activation(Map<String, Object> pluginData) {
@@ -341,6 +348,74 @@ class PluginApiKeyServiceTest {
                     .thenReturn(List.of(legacy));
 
             assertThat(service.validateApiKey(rawKey)).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("validateApiKey() — legacy fallback metrics")
+    class LegacyFallbackMetrics {
+
+        private static final String SCAN = "plugin.api.key.validation.legacy.scan";
+        private static final String HIT = "plugin.api.key.validation.legacy.hit";
+
+        private final String rawKey = PluginApiKey.generate().value();
+
+        @Test
+        @DisplayName("indexed hit should not touch the legacy counters")
+        void indexedHitShouldNotCount() {
+            AccountPlugin activation = activation(Map.of("apiKeyHash", encoder.encode(rawKey)));
+            activation.updateApiKeyLookup(PluginApiKey.lookupOf(rawKey));
+            when(repository.findActiveByPluginIdAndApiKeyLookup(PLUGIN_ID, PluginApiKey.lookupOf(rawKey)))
+                    .thenReturn(Optional.of(activation));
+
+            assertThat(service.validateApiKey(rawKey)).isPresent();
+
+            assertThat(counter(SCAN)).isZero();
+            assertThat(counter(HIT)).isZero();
+        }
+
+        @Test
+        @DisplayName("should not count a scan when no legacy activations remain")
+        void shouldNotCountScanWhenNoLegacyRows() {
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of());
+
+            assertThat(service.validateApiKey(rawKey)).isEmpty();
+
+            assertThat(counter(SCAN)).isZero();
+            assertThat(counter(HIT)).isZero();
+        }
+
+        @Test
+        @DisplayName("should count a scan when legacy activations are searched")
+        void shouldCountScan() {
+            AccountPlugin legacy = activation(Map.of("apiKeyHash", encoder.encode("plk_" + "x".repeat(32))));
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of(legacy));
+
+            assertThat(service.validateApiKey(rawKey)).isEmpty();
+
+            assertThat(counter(SCAN)).isEqualTo(1d);
+            assertThat(counter(HIT)).as("no legacy activation authenticated").isZero();
+        }
+
+        @Test
+        @DisplayName("should count a hit when a legacy activation authenticates")
+        void shouldCountHit() {
+            AccountPlugin legacy = activation(Map.of("apiKeyHash", encoder.encode(rawKey)));
+            when(repository.findActiveByPluginIdAndApiKeyLookup(eq(PLUGIN_ID), any()))
+                    .thenReturn(Optional.empty());
+            when(repository.findActiveByPluginIdWithoutApiKeyLookup(PLUGIN_ID))
+                    .thenReturn(List.of(legacy));
+
+            assertThat(service.validateApiKey(rawKey)).contains(legacy);
+
+            assertThat(counter(SCAN)).isEqualTo(1d);
+            assertThat(counter(HIT)).isEqualTo(1d);
         }
     }
 }

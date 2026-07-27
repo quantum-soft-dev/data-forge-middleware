@@ -20,12 +20,21 @@ import java.util.*;
 /**
  * Service for managing Plugin API Keys for Bit BI Plugin API authentication.
  * <p>
- * API Keys are stored as BCrypt hashes in account_plugins.plugin_data JSONB field.
- * The raw key is returned only once during generation - it cannot be retrieved later.
+ * API Keys are stored twice, as two derivations of the same secret: the BCrypt hash in
+ * {@code account_plugins.plugin_data -> 'apiKeyHash'} (verification) and the hex SHA-256 in
+ * {@code account_plugins.api_key_lookup} (index handle, V42). The raw key is returned only once
+ * during generation - it cannot be retrieved later.
  * </p>
  * <p>
- * Security: Uses BCrypt hashing to protect API keys at rest. Even if the database
- * is compromised, the actual API keys cannot be recovered.
+ * Security: BCrypt protects the keys at rest — even with the database, the actual API keys cannot
+ * be recovered. The SHA-256 lookup selects a candidate row and is never trusted on its own; it is
+ * safe unsalted because the key carries ~190 bits of {@link java.security.SecureRandom} entropy.
+ * </p>
+ * <p>
+ * Cost: one indexed query plus one BCrypt comparison per validated request, regardless of how many
+ * accounts have the plugin active. Activations issued before V42 have no lookup handle and are
+ * resolved by a fallback scan, tracked by {@code plugin.api.key.validation.legacy.scan} and
+ * {@code plugin.api.key.validation.legacy.hit}.
  * </p>
  */
 @Service
@@ -35,6 +44,18 @@ public class PluginApiKeyService {
     private static final String API_KEY_HASH_FIELD = "apiKeyHash";
     private static final String LEGACY_API_KEY_FIELD = "apiKey";
     private static final String PLUGIN_ID = "bit-bi";
+
+    /**
+     * Requests that fell through to the pre-V42 scan because the indexed lookup missed.
+     * Non-zero means unindexed activations still exist (or someone is probing with bad keys).
+     */
+    private static final String LEGACY_SCAN_METRIC = "plugin.api.key.validation.legacy.scan";
+
+    /**
+     * Requests actually authenticated by the pre-V42 scan. Once this stays at zero for longer
+     * than the longest plausible client key lifetime, the fallback path can be deleted.
+     */
+    private static final String LEGACY_HIT_METRIC = "plugin.api.key.validation.legacy.hit";
 
     private final AccountPluginRepository accountPluginRepository;
     private final MeterRegistry meterRegistry;
@@ -195,8 +216,13 @@ public class PluginApiKeyService {
             return Optional.empty();
         }
 
+        // Counts requests that still pay for a scan (n = legacy rows), i.e. the residual cost.
+        meterRegistry.counter(LEGACY_SCAN_METRIC).increment();
+
         for (AccountPlugin accountPlugin : legacyActivations) {
             if (legacyKeyMatches(accountPlugin, apiKeyValue)) {
+                // Counts keys that would break if this fallback were removed today.
+                meterRegistry.counter(LEGACY_HIT_METRIC).increment();
                 log.info("API key validated through the pre-V42 fallback for accountId={}; "
                         + "rotate the key to move it onto the indexed path", accountPlugin.getAccountId());
                 return Optional.of(accountPlugin);
