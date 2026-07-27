@@ -67,12 +67,10 @@ s3:
 batch:
   timeout:
     minutes: ${BATCH_TIMEOUT_MINUTES:60}
-  max:
-    active:
-      per-account: ${BATCH_MAX_ACTIVE_PER_ACCOUNT:10}
 
 # Account Configuration
 account:
+  # Effective per-account concurrent batch limit, enforced by BatchLifecycleService via AccountProperties.
   max-concurrent-batches: ${ACCOUNT_MAX_CONCURRENT_BATCHES:5}
 
 # Upload Configuration
