@@ -22,6 +22,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import com.bitbi.dfm.plugin.presentation.ParquetExportBasicAuthFilter;
 import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 
 import java.time.Instant;
@@ -77,6 +78,9 @@ public class TestSecurityConfig {
 
     @Autowired(required = false)
     private PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter;
+
+    @Autowired(required = false)
+    private ParquetExportBasicAuthFilter parquetExportBasicAuthFilter;
 
     /**
      * Mock Auth0 ManagementAPI bean for tests.
@@ -308,14 +312,43 @@ public class TestSecurityConfig {
     }
 
     /**
-     * UI/Admin API filter chain (NEW unified structure).
+     * Parquet Export Plugin API filter chain (028-parquet-export-plugin).
      * <p>
-     * Order 4: Fourth priority - matches /api/v1/** (excluding /api/v1/device/** and /api/v1/plugins/bit-bi/**).
-     * Auth0 OAuth2 Resource Server only.
+     * Order 4: mirrors production — Basic Auth on /files via ParquetExportBasicAuthFilter,
+     * anonymous /download/** (the one-time token is the credential).
      * </p>
      */
     @Bean
     @org.springframework.core.annotation.Order(4)
+    public SecurityFilterChain parquetExportPluginApiFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/plugins/parquet-export/files", "/api/v1/plugins/parquet-export/download/**")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/v1/plugins/parquet-export/download/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .addFilterBefore(parquetExportBasicAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setHeader("WWW-Authenticate", "Basic realm=\"parquet-export\"");
+                    response.sendError(401, "Unauthorized - Basic authentication required");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
+     * UI/Admin API filter chain (NEW unified structure).
+     * <p>
+     * Order 5: matches /api/v1/** (excluding /api/v1/device/**, /api/v1/plugins/bit-bi/** and /api/v1/plugins/parquet-export/**).
+     * Auth0 OAuth2 Resource Server only.
+     * </p>
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(5)
     public SecurityFilterChain adminApiFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/v1/**")
@@ -324,6 +357,7 @@ public class TestSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/device/**").denyAll() // Explicitly deny (handled by Order 1)
                 .requestMatchers("/api/v1/plugins/bit-bi/sql-changes", "/api/v1/plugins/bit-bi/sites", "/api/v1/plugins/bit-bi/sites/**", "/api/v1/plugins/bit-bi/tables").denyAll() // Explicitly deny (handled by Order 3)
+                .requestMatchers("/api/v1/plugins/parquet-export/files", "/api/v1/plugins/parquet-export/download/**").denyAll() // Explicitly deny (handled by Order 4, 028)
                 .requestMatchers("/api/v1/accounts/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/sites/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/batches/**").hasRole("ADMIN")
@@ -352,7 +386,7 @@ public class TestSecurityConfig {
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(5)
+    @org.springframework.core.annotation.Order(6)
     public SecurityFilterChain legacyAuth0FilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/admin/**")
@@ -378,7 +412,7 @@ public class TestSecurityConfig {
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(6)
+    @org.springframework.core.annotation.Order(7)
     public SecurityFilterChain legacyUserFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/sites/**", "/api/account/**", "/api/user/**")
@@ -404,7 +438,7 @@ public class TestSecurityConfig {
      * </p>
      */
     @Bean
-    @org.springframework.core.annotation.Order(7)
+    @org.springframework.core.annotation.Order(8)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
