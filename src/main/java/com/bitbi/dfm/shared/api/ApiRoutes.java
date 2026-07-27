@@ -849,6 +849,38 @@ public final class ApiRoutes {
      */
     public static final String BITBI_TABLES = BITBI_PLUGIN_API + "/tables";
 
+    // ==================== Parquet Export Plugin API (028) ====================
+
+    /**
+     * Base path for Parquet Export Plugin API endpoints.
+     * <p>
+     * /files uses HTTP Basic authentication (credentials issued at plugin activation);
+     * /download/{token} is anonymous — the one-time token is the credential.
+     * </p>
+     */
+    public static final String PARQUET_EXPORT_PLUGIN_API = ADMIN_API_BASE + "/plugins/parquet-export";
+
+    /**
+     * List Parquet files (delta segments + checkpoint snapshots) endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: HTTP Basic<br>
+     * Query Params: since (ISO8601), siteId, table, type (delta|checkpoint), page, size<br>
+     * Returns: file metadata plus a registered one-time download URL per file
+     * </p>
+     */
+    public static final String PARQUET_EXPORT_FILES = PARQUET_EXPORT_PLUGIN_API + "/files";
+
+    /**
+     * One-time download endpoint.
+     * <p>
+     * Method: GET<br>
+     * Authentication: none (single-use token in path)<br>
+     * Returns: 302 redirect to a short-lived S3 presigned URL; 410 when consumed/expired; 404 unknown
+     * </p>
+     */
+    public static final String PARQUET_EXPORT_DOWNLOAD = PARQUET_EXPORT_PLUGIN_API + "/download/{token}";
+
     // Private constructor to prevent instantiation
     private ApiRoutes() {
         throw new UnsupportedOperationException("Utility class - do not instantiate");

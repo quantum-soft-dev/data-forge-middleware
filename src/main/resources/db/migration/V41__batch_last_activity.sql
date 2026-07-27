@@ -1,6 +1,4 @@
 -- 029-batch-per-session: batch = one ingestion session.
--- (V39 is reserved by the in-flight 028-parquet-export-plugin branch.)
---
 -- Activity timestamp for Delta v2 streaming batches: the timeout sweeper evaluates
 -- COALESCE(last_activity_at, started_at) so legacy v1 batches (always NULL) keep the
 -- started_at-based timeout unchanged. Touched by the ingest path at a bounded cadence

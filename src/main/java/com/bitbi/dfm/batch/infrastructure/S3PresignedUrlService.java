@@ -100,6 +100,19 @@ public class S3PresignedUrlService {
      * @throws IllegalArgumentException if s3Key or fileName is null/empty
      */
     public PresignedUrlResult generatePresignedUrl(String s3Key, String fileName) {
+        return generatePresignedUrl(s3Key, fileName, PRESIGNED_URL_EXPIRY);
+    }
+
+    /**
+     * Generate presigned URL with a caller-chosen expiry (e.g. the ~60 s window used by
+     * one-time download links, 028-parquet-export-plugin).
+     *
+     * @param s3Key    S3 object key
+     * @param fileName Suggested filename for Content-Disposition header
+     * @param expiry   signature validity duration
+     * @return Presigned URL and expiration time
+     */
+    public PresignedUrlResult generatePresignedUrl(String s3Key, String fileName, Duration expiry) {
         if (s3Key == null || s3Key.isBlank()) {
             throw new IllegalArgumentException("S3 key cannot be null or empty");
         }
@@ -120,16 +133,15 @@ public class S3PresignedUrlService {
                     .responseContentDisposition("attachment; filename=\"" + safeFileName + "\"")
                     .build();
 
-            // Create presign request with 15-minute expiry
             GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
-                    .signatureDuration(PRESIGNED_URL_EXPIRY)
+                    .signatureDuration(expiry)
                     .getObjectRequest(getObjectRequest)
                     .build();
 
             // Generate presigned URL
             PresignedGetObjectRequest presignedRequest = s3Presigner.presignGetObject(presignRequest);
             URL presignedUrl = presignedRequest.url();
-            Instant expiresAt = Instant.now().plus(PRESIGNED_URL_EXPIRY);
+            Instant expiresAt = Instant.now().plus(expiry);
 
             logger.info("Generated presigned URL for file={} (sanitized: {}), expiresAt={}",
                     fileName, safeFileName, expiresAt);

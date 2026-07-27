@@ -6,7 +6,7 @@
 
 | Field | Type | Change | Notes |
 |---|---|---|---|
-| `last_activity_at` | `TIMESTAMP` NULL | **new (V40)** | Touched by V2 ingestion at session start/resume, at each Ack watermark (≥100 accepted records), and at each segment seal. Always NULL for v1 file-upload batches. |
+| `last_activity_at` | `TIMESTAMP` NULL | **new (V41)** | Touched by V2 ingestion at session start/resume, at each Ack watermark (≥100 accepted records), and at each segment seal. Always NULL for v1 file-upload batches. |
 
 Semantics change (no schema impact): one batch per ingestion session. Lifecycle:
 
@@ -23,9 +23,9 @@ transport drop ── stays IN_PROGRESS (staged resume re-attaches)
 
 - `batch_id`: now genuinely **many-to-one** to `batches` (schema always allowed it; code stops assuming 1:1).
 - `s3_key`: new rows written as `delta/{siteId}/segments/{segmentId}.pb.gz`; existing rows keep their stored `{batchId}`-based keys (column is authoritative, no backfill).
-- New index **`idx_changelog_segments_batch_id (batch_id)`** (V40) — history detail and list aggregation query by batch id.
+- Supporting index `idx_segment_batch_id (batch_id)` exists since V37 — history detail and list aggregation query by batch id.
 
-## Migration V40
+## Migration V41
 
 ```sql
 ALTER TABLE batches ADD COLUMN last_activity_at TIMESTAMP;

@@ -7,8 +7,8 @@
 
 ## Phase 1: Foundation (blocking)
 
-- [x] **T001** Migration V40 + Batch activity field.
-  Files: `src/main/resources/db/migration/V40__batch_last_activity_and_segment_batch_index.sql` (DDL per data-model.md: nullable `batches.last_activity_at`, `idx_changelog_segments_batch_id`, column comment); `src/main/java/com/bitbi/dfm/batch/domain/Batch.java` (`lastActivityAt` field + `touchActivity()` domain method setting it to now).
+- [x] **T001** Migration V41 + Batch activity field.
+  Files: `src/main/resources/db/migration/V41__batch_last_activity.sql` (DDL per data-model.md: nullable `batches.last_activity_at`, `idx_changelog_segments_batch_id`, column comment); `src/main/java/com/bitbi/dfm/batch/domain/Batch.java` (`lastActivityAt` field + `touchActivity()` domain method setting it to now).
   Tests first: extend `src/test/java/com/bitbi/dfm/batch/domain/BatchTest.java` — `shouldTouchActivityUpdateLastActivityAt`, `shouldHaveNullLastActivityAtOnCreation`.
   Commit: `feat(batch): add last_activity_at to batches + segment batch_id index (T001)`
 
@@ -57,7 +57,7 @@
   (e) abort mid-stream → 1 FAILED batch, earlier segments durable.
   Commit: `test(delta): batch-per-session end-to-end integration suite (T008)`
 
-- [x] **T009** Docs: `docs/cr-batch-per-session.md` (motivation incl. the fyt-new incident, semantics, D1–D7, migration V40, ops notes: rollback behavior, timeout semantics); update `docs/delta-client-v2-guide.md` (batch = session; continuous slicing invisible in history) and `CLAUDE.md` (Recent Changes entry, migration pointer V40 → next V41).
+- [x] **T009** Docs: `docs/cr-batch-per-session.md` (motivation incl. the fyt-new incident, semantics, D1–D7, migration V41, ops notes: rollback behavior, timeout semantics); update `docs/delta-client-v2-guide.md` (batch = session; continuous slicing invisible in history) and `CLAUDE.md` (Recent Changes entry, migration pointer V41 → next V42).
   Commit: `docs(delta): batch-per-session change request and guide updates (T009)`
 
 ## Dependencies

@@ -140,6 +140,17 @@ plugin:
   execution:
     # Plugin execution timeout in seconds (default: 30s per FR-008)
     timeout-seconds: ${PLUGIN_TIMEOUT_SECONDS:30}
+  parquet-export:
+    # One-time download link validity before first use (028)
+    link-ttl-seconds: ${PLUGIN_PARQUET_EXPORT_LINK_TTL_SECONDS:3600}
+    # S3 presigned URL validity after a link is consumed
+    presign-ttl-seconds: ${PLUGIN_PARQUET_EXPORT_PRESIGN_TTL_SECONDS:60}
+    # Keep consumed/expired download_links rows this long before purging
+    purge-retention-days: ${PLUGIN_PARQUET_EXPORT_PURGE_RETENTION_DAYS:7}
+    # Purge sweep cadence
+    purge-interval-ms: ${PLUGIN_PARQUET_EXPORT_PURGE_INTERVAL_MS:3600000}
+    # Absolute URL prefix for one-time download links; empty = derive from the request
+    base-url: ${PLUGIN_PARQUET_EXPORT_BASE_URL:}
   sql-generation:
     # Maximum concurrent SQL generation operations (semaphore permits)
     max-concurrent: ${PLUGIN_SQL_GENERATION_MAX_CONCURRENT:2}

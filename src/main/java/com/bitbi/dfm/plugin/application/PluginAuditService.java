@@ -680,4 +680,103 @@ public class PluginAuditService {
                     pluginId, accountId, e.getMessage());
         }
     }
+
+    /**
+     * Logs a Parquet Export password rotation (028).
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account that rotated its password
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logPasswordRotated(String pluginId, UUID accountId) {
+        try {
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                    PluginActionType.PASSWORD_ROTATED);
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: PASSWORD_ROTATED plugin={} account={}", pluginId, accountId);
+        } catch (Exception e) {
+            log.error("Failed to log password rotation audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs a served Parquet Export file listing (028).
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the authenticated account
+     * @param filters   applied listing filters (since/siteId/table/type/page/size)
+     * @param fileCount number of files (one-time links) returned
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logFilesListed(String pluginId, UUID accountId, Map<String, Object> filters, int fileCount) {
+        try {
+            Map<String, Object> metadata = new HashMap<>(filters);
+            metadata.put("fileCount", fileCount);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.FILES_LISTED)
+                    .withMetadata(metadata);
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: FILES_LISTED plugin={} account={} files={}", pluginId, accountId, fileCount);
+        } catch (Exception e) {
+            log.error("Failed to log files listing audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs a consumed one-time download link (028).
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the owning account
+     * @param fileName  downloaded file name
+     * @param s3Key     downloaded object key
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logLinkConsumed(String pluginId, UUID accountId, String fileName, String s3Key) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("fileName", fileName);
+            metadata.put("s3Key", s3Key);
+
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                            PluginActionType.LINK_CONSUMED)
+                    .withMetadata(metadata);
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: LINK_CONSUMED plugin={} account={} file={}", pluginId, accountId, fileName);
+        } catch (Exception e) {
+            log.error("Failed to log link consumption audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
+
+    /**
+     * Logs a rejected one-time download attempt (028). accountId may be null when the token is
+     * unknown (there is no activation to attribute it to).
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the owning account, or null for unknown tokens
+     * @param reason    rejection reason: consumed | expired | unknown | inactive
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logLinkRejected(String pluginId, UUID accountId, String reason) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("reason", reason);
+
+            PluginAuditLog auditLog = PluginAuditLog.failure(pluginId, accountId,
+                            PluginActionType.LINK_REJECTED, "Download link rejected: " + reason)
+                    .withMetadata(metadata);
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: LINK_REJECTED plugin={} account={} reason={}", pluginId, accountId, reason);
+        } catch (Exception e) {
+            log.error("Failed to log link rejection audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
 }

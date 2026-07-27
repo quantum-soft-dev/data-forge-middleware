@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.presentation;
 
+import com.bitbi.dfm.plugin.application.ParquetExportCredentialsService;
 import com.bitbi.dfm.plugin.application.PluginAdminQueryService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
@@ -7,6 +8,7 @@ import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
+import com.bitbi.dfm.plugin.domain.ParquetExportCredentials;
 import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
@@ -81,6 +83,7 @@ public class AccountPluginsController {
     private final AccountPluginRepository accountPluginRepository;
     private final AuthorizationHelper authorizationHelper;
     private final SiteRepository siteRepository;
+    private final ParquetExportCredentialsService parquetExportCredentialsService;
 
     public AccountPluginsController(
             PluginQueryService pluginQueryService,
@@ -91,7 +94,8 @@ public class AccountPluginsController {
             SqlGenerationService sqlGenerationService,
             AccountPluginRepository accountPluginRepository,
             AuthorizationHelper authorizationHelper,
-            SiteRepository siteRepository) {
+            SiteRepository siteRepository,
+            ParquetExportCredentialsService parquetExportCredentialsService) {
         this.pluginQueryService = pluginQueryService;
         this.pluginAdminQueryService = pluginAdminQueryService;
         this.auditLogRepository = auditLogRepository;
@@ -101,6 +105,7 @@ public class AccountPluginsController {
         this.accountPluginRepository = accountPluginRepository;
         this.authorizationHelper = authorizationHelper;
         this.siteRepository = siteRepository;
+        this.parquetExportCredentialsService = parquetExportCredentialsService;
     }
 
     /**
@@ -445,6 +450,40 @@ public class AccountPluginsController {
         // Return 202 Accepted - SQL generation continues asynchronously in background
         // Client can poll /sql-changes to check when generation completes
         return ResponseEntity.accepted().body(result);
+    }
+
+    /**
+     * Rotates the Parquet Export plugin's Basic Auth password (028).
+     *
+     * <p>The login stays stable; the old password stops authenticating immediately. The new raw
+     * password appears in this response exactly once.</p>
+     *
+     * @return login + new raw password
+     */
+    @PostMapping("/parquet-export/rotate-password")
+    @Operation(
+        summary = "Rotate Parquet Export Basic Auth password",
+        description = """
+            Generates a new password for the Parquet Export plugin's Basic Auth credentials.
+            The login stays the same; the old password is invalidated immediately.
+
+            **Important:** The new password is shown only in this response and cannot be
+            retrieved later — store it securely.
+            """
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "New credentials issued",
+            content = @Content(mediaType = "application/json",
+                schema = @Schema(implementation = RotatePasswordResponseDto.class))),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "403", description = "Plugin not activated for this account")
+    })
+    public ResponseEntity<RotatePasswordResponseDto> rotateParquetExportPassword() {
+        UUID accountId = authorizationHelper.getOptionalAuthenticatedAccountId()
+                .orElseThrow(() -> new IllegalArgumentException("Account not found for authenticated user"));
+
+        ParquetExportCredentials credentials = parquetExportCredentialsService.rotatePassword(accountId);
+        return ResponseEntity.ok(RotatePasswordResponseDto.fromCredentials(credentials));
     }
 
     // ==================== Batch SQL Management (User-facing) ====================

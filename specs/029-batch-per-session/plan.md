@@ -5,7 +5,7 @@
 
 ## Summary
 
-Redefine a Batch as one client upload attempt (one Delta v2 gRPC session) instead of one ~100-record storage slice. Continuous-mode segment sealing stays as the storage-durability mechanism but no longer completes/opens batches: N segments commit under the session's single batch, S3 keys become per-segment, `SessionEnd` completes the batch once (empty tail batches disappear), and `BATCH_COMPLETED` fires once per session. The 60-minute batch timeout for V2 streaming batches switches to last-activity-based (new nullable `batches.last_activity_at`, V40) so a live long session survives while a silent one still frees the site. Upload History list view aggregates per-batch totals across segments via a grouped query; detail view already aggregates. Per-segment egress and plugin queues are untouched.
+Redefine a Batch as one client upload attempt (one Delta v2 gRPC session) instead of one ~100-record storage slice. Continuous-mode segment sealing stays as the storage-durability mechanism but no longer completes/opens batches: N segments commit under the session's single batch, S3 keys become per-segment, `SessionEnd` completes the batch once (empty tail batches disappear), and `BATCH_COMPLETED` fires once per session. The 60-minute batch timeout for V2 streaming batches switches to last-activity-based (new nullable `batches.last_activity_at`, V41) so a live long session survives while a silent one still frees the site. Upload History list view aggregates per-batch totals across segments via a grouped query; detail view already aggregates. Per-segment egress and plugin queues are untouched.
 
 ## Technical Context
 
@@ -16,7 +16,7 @@ Redefine a Batch as one client upload attempt (one Delta v2 gRPC session) instea
 **Target Platform**: Linux server (GKE), local dev via docker-compose
 **Project Type**: single backend project (no frontend changes — DTO shape unchanged)
 **Performance Goals**: ingest hot path unchanged or cheaper (removes per-100 `completeBatch`+`startBatch` pair; adds 1 UPDATE per ≥100 records for activity touch)
-**Constraints**: forward-only migration V40 (additive, nullable); no gRPC proto change; no REST DTO shape change; staged-resume mechanism preserved as-is
+**Constraints**: forward-only migration V41 (additive, nullable); no gRPC proto change; no REST DTO shape change; staged-resume mechanism preserved as-is
 **Scale/Scope**: sessions up to millions of records → thousands of segments per batch; list aggregation must be SQL-side, not in-memory
 
 ## Constitution Check
@@ -25,7 +25,7 @@ Constitution intentionally empty; CLAUDE.md Development Policy applies (verified
 - [x] Feature branch `029-batch-per-session` off `develop`
 - [x] Spec-driven: spec.md with Clarifications (product decisions from design discussion)
 - [x] TDD task-by-task, WIP=1, per-task gate `./gradlew test -PexcludeIntegration`, before-PR gate `integrationTest`
-- [x] Migration numbering: current V39 → this feature is **V40**
+- [x] Migration numbering: V39/V40 taken by 028 (merged) → this feature is **V41**
 - [x] Docs required before merge: `docs/cr-batch-per-session.md`
 - [x] No API forking: behavior change inside existing v2 surface (strangler rule N/A)
 
@@ -37,7 +37,7 @@ Constitution intentionally empty; CLAUDE.md Development Policy applies (verified
 specs/029-batch-per-session/
 ├── plan.md              # This file
 ├── research.md          # Phase 0: verified current behavior + decisions D1–D7
-├── data-model.md        # Phase 1: V40, query changes, invariants
+├── data-model.md        # Phase 1: V41, query changes, invariants
 ├── quickstart.md        # Phase 1: verification recipe
 ├── contracts/
 │   └── session-batch-contract.md   # Phase 1: session↔batch behavioral contract
@@ -62,7 +62,7 @@ src/main/java/com/bitbi/dfm/
 │   └── application/BatchHistoryService.java         # list view: grouped per-batch segment aggregation
 │   └── presentation/dto/BatchSummaryDto.java        # fromProjection(+aggregate) instead of (+single segment)
 ├── delta/domain/ChangelogSegmentRepository.java     # aggregate projection query (SUM, DISTINCT tables)
-└── resources/db/migration/V40__batch_last_activity_and_segment_batch_index.sql
+└── resources/db/migration/V41__batch_last_activity.sql
 
 src/test/java/
 ├── delta/        # ingestion unit tests + BatchPerSessionIngestionTest (integration)
@@ -75,7 +75,7 @@ src/test/java/
 ## Phase 0 → 1 outputs
 
 - research.md: current-behavior verification (code + production logs) and decisions D1–D7 (seal/lifecycle split, per-segment S3 keys, `last_activity_at` + COALESCE sweeper, SQL-side list aggregation, no rollover for perpetual sessions).
-- data-model.md: V40 DDL, sweeper and aggregation queries, invariants.
+- data-model.md: V41 DDL, sweeper and aggregation queries, invariants.
 - contracts/session-batch-contract.md: observable session↔batch obligations (gRPC behavior, REST DTO semantics, plugin events).
 - quickstart.md: automated + manual verification, rollback notes.
 

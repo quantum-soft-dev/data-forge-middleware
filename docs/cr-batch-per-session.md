@@ -2,7 +2,7 @@
 
 **Status**: Implemented (branch `029-batch-per-session`)
 **Spec**: `specs/029-batch-per-session/`
-**Migration**: V40
+**Migration**: V41
 
 ## Motivation
 
@@ -36,7 +36,7 @@ into the UI or the plugin event stream.
   Per-segment pipelines are untouched: delta Parquet egress and the Bit BI delta-SQL queue still
   trigger at seal time, without waiting for the session to end.
 
-## Activity-based timeout (V40)
+## Activity-based timeout (V41)
 
 `batches.last_activity_at` (nullable) is touched by the ingest path at a bounded cadence: session
 start/resume, each Ack watermark (≥100 accepted records), each seal. The timeout sweeper's cutoff
@@ -60,7 +60,7 @@ sweeper with bounded-cadence touches (D4), SQL-side list aggregation (D5).
 
 ## Compatibility / ops
 
-- Migration V40 is additive (nullable column + `idx_changelog_segments_batch_id`); forward-only.
+- Migration V41 is additive (nullable column; the `changelog_segments.batch_id` index exists since V37); forward-only.
 - No gRPC proto change; clients see the same protocol (per-seal `SessionCommitted` events
   included). No REST DTO shape change; the frontend is untouched.
 - Rollback: old app code reads mixed data fine (stored `s3_key` values, single- and

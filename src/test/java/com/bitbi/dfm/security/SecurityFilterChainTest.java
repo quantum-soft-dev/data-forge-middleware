@@ -258,4 +258,52 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (cannot decode Custom JWT)
                 .andExpect(jsonPath("$.status").doesNotExist()); // 401 doesn't return JSON body
     }
+
+    /**
+     * TC10: Parquet Export listing without Basic Auth → 401 with Basic challenge (028).
+     * <p>
+     * <b>Filter Chain</b>: parquetExportPluginApiFilterChain — never the OAuth2 catch-all.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC10: Parquet Export files without credentials should return 401 with Basic challenge")
+    void parquetExportFilesWithoutCredentialsShouldBeUnauthorized() throws Exception {
+        mockMvc.perform(get("/api/v1/plugins/parquet-export/files"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("WWW-Authenticate", "Basic realm=\"parquet-export\""));
+    }
+
+    /**
+     * TC11: Parquet Export listing with an Auth0 bearer token → 401 (028).
+     * <p>
+     * The route is carved out of the OAuth2 catch-all: an admin JWT that works on /api/v1/**
+     * must NOT authenticate here.
+     * </p>
+     */
+    @Test
+    @DisplayName("TC11: Parquet Export files with Auth0 token should return 401 Unauthorized")
+    void parquetExportFilesWithAuth0TokenShouldBeUnauthorized() throws Exception {
+        mockMvc.perform(get("/api/v1/plugins/parquet-export/files")
+                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * TC12: Parquet Export download route is anonymous at the chain level (028).
+     * <p>
+     * The one-time token is the credential, so the chain must let the request through to the
+     * application — security must never answer 401/403 here. (The application-level 404/410
+     * contract is covered by ParquetExportDownloadContractTest.)
+     * </p>
+     */
+    @Test
+    @DisplayName("TC12: Parquet Export download should be anonymous (never 401/403 from security)")
+    void parquetExportDownloadShouldBeAnonymous() throws Exception {
+        mockMvc.perform(get("/api/v1/plugins/parquet-export/download/unknown-token-value"))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    org.junit.jupiter.api.Assertions.assertTrue(status != 401 && status != 403,
+                            "download route must be anonymous, got HTTP " + status);
+                });
+    }
 }

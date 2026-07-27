@@ -25,4 +25,4 @@ Key suites (added by this feature):
 
 ## Rollback
 
-Behavioral change only + additive V40 (nullable column, index) — safe to roll the app image back; old code ignores `last_activity_at` and reads segments' stored `s3_key` values, so mixed data (old and new key formats, multi-segment batches) stays readable. Multi-segment batches created by 029 will render in old code's list view with one segment's count (the pre-029 undercount bug) — acceptable for rollback windows.
+Behavioral change only + additive V41 (nullable column, index) — safe to roll the app image back; old code ignores `last_activity_at` and reads segments' stored `s3_key` values, so mixed data (old and new key formats, multi-segment batches) stays readable. Multi-segment batches created by 029 will render in old code's list view with one segment's count (the pre-029 undercount bug) — acceptable for rollback windows.
