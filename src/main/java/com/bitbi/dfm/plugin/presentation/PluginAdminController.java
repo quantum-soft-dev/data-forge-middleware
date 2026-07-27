@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginActionType;
 import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
+import com.bitbi.dfm.shared.api.ApiRoutes;
 import jakarta.validation.Valid;
 import com.bitbi.dfm.plugin.presentation.dto.*;
 import io.swagger.v3.oas.annotations.Operation;
@@ -48,7 +49,7 @@ import java.util.UUID;
  * <p>User Story 6 (Phase 8) - Admin Views Plugin Audit Trail</p>
  */
 @RestController
-@RequestMapping("/api/v1/admin/plugins")
+@RequestMapping(ApiRoutes.PLUGINS_ADMIN)
 @PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Plugin Administration", description = "Admin endpoints for plugin management and audit")
 @SecurityRequirement(name = "oauth2")
