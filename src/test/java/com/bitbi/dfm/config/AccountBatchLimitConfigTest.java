@@ -5,7 +5,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
-import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.env.StandardEnvironment;
@@ -13,6 +12,7 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -69,17 +69,30 @@ class AccountBatchLimitConfigTest {
                 "batch.timeout.minutes is read by the timeout scheduler and must stay");
     }
 
+    private static AccountProperties bind(StandardEnvironment environment) {
+        return Binder.get(environment)
+                .bind("account", Bindable.of(AccountProperties.class))
+                .orElseThrow(() -> new AssertionError("account.* properties must bind to AccountProperties"));
+    }
+
     @Test
     @DisplayName("AccountProperties bound from application.yml yields a limit of 5")
     void shouldBindConcurrentBatchLimitOfFive() {
-        StandardEnvironment environment = new StandardEnvironment();
-        ConfigDataEnvironmentPostProcessor.applyTo(environment);
-
-        AccountProperties properties = Binder.get(environment)
-                .bind("account", Bindable.of(AccountProperties.class))
-                .orElseThrow(() -> new AssertionError("account.* properties must bind to AccountProperties"));
+        // Isolated from the process environment: a runner exporting ACCOUNT_MAX_CONCURRENT_BATCHES
+        // must not decide whether the documented default is 5.
+        AccountProperties properties = bind(IsolatedEnvironments.loadConfig());
 
         assertEquals(5, properties.getMaxConcurrentBatches(),
                 "effective per-account concurrent batch limit must remain 5");
+    }
+
+    @Test
+    @DisplayName("ACCOUNT_MAX_CONCURRENT_BATCHES still overrides the default")
+    void shouldHonourConcurrentBatchLimitOverride() {
+        AccountProperties properties = bind(
+                IsolatedEnvironments.loadConfig(Map.of("ACCOUNT_MAX_CONCURRENT_BATCHES", "9")));
+
+        assertEquals(9, properties.getMaxConcurrentBatches(),
+                "the documented override knob must keep working — the default is a default, not a constant");
     }
 }
