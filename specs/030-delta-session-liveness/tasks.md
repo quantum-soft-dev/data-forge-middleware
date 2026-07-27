@@ -1,5 +1,8 @@
 # 030 — Delta session liveness: tasks
 
+**Status**: T01–T04 implemented. Both 029/PR #60 follow-ups closed; documented in
+`docs/cr-batch-per-session.md` → "Session liveness and resume (030)".
+
 Closes the two follow-ups left open by review of feature 029 (batch-per-session, PR #60).
 Both are ways a **live** Delta v2 gRPC session gets killed by server-side bookkeeping.
 
