@@ -50,4 +50,29 @@ class BatchTest {
 
         assertThat(batch.getLastActivityAt()).isAfterOrEqualTo(first);
     }
+
+    @Test
+    @DisplayName("Should expire by startedAt when there was never any session activity")
+    void shouldExpireByStartedAtWithoutActivity() {
+        Batch batch = startedMinutesAgo(90);
+
+        assertThat(batch.isExpired(60)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should stay alive past the timeout while session activity is fresh (029)")
+    void shouldNotExpireWhenActivityIsFresh() {
+        Batch batch = startedMinutesAgo(90);
+
+        batch.touchActivity();
+
+        assertThat(batch.isExpired(60)).isFalse();
+    }
+
+    /** Old-started IN_PROGRESS batch via the protected all-args constructor (same package). */
+    private static Batch startedMinutesAgo(int minutes) {
+        LocalDateTime startedAt = LocalDateTime.now().minusMinutes(minutes);
+        return new Batch(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                BatchStatus.IN_PROGRESS, "path/", 0, 0L, false, startedAt, null, startedAt);
+    }
 }

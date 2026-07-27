@@ -184,8 +184,11 @@ public class Batch {
         if (status != BatchStatus.IN_PROGRESS) {
             return false;
         }
-        LocalDateTime expirationTime = startedAt.plusMinutes(timeoutMinutes);
-        return LocalDateTime.now().isAfter(expirationTime);
+        // 029: a streaming batch is measured from its last session activity, so a long-lived live
+        // session survives while a silent one still expires. v1 batches never touch activity, so
+        // they keep the started_at-based timeout.
+        LocalDateTime baseline = lastActivityAt != null ? lastActivityAt : startedAt;
+        return LocalDateTime.now().isAfter(baseline.plusMinutes(timeoutMinutes));
     }
 
     @PrePersist
