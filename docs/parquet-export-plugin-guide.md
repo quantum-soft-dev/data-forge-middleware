@@ -134,6 +134,9 @@ A scheduled job deletes consumed/expired `download_links` rows older than the re
   deactivate its plugin (or rotate the password).
 - **Login is a public identifier**: lookup happens before the BCrypt check, so response timing
   distinguishes known from unknown logins. This is by design — the secret is the password.
+- **Tokens appear in URL paths**: `/download/{token}` shows up in ingress/proxy access logs.
+  Single use + the 1 h TTL bound the exposure, but treat those logs accordingly (a logged
+  token is dead after the first download and after expiry).
 
 ## Configuration (`application.yml`)
 
@@ -144,7 +147,9 @@ plugin:
     presign-ttl-seconds: 60     # S3 presigned URL validity after consume
     purge-retention-days: 7     # keep consumed/expired rows this long
     purge-interval-ms: 3600000  # purge sweep cadence
-    base-url: ""                # absolute prefix for download URLs; empty = derive from request
+    base-url: ""                # absolute prefix for download URLs; empty = derive from request.
+                                # REQUIRED behind a proxy/ingress: without forwarded-headers
+                                # handling the derived URL is the pod-local scheme/host.
 plugins:
   parquet-export:
     enabled: true               # component toggle (matchIfMissing = true)

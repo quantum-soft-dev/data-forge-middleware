@@ -5,7 +5,6 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -97,9 +96,11 @@ public class ParquetExportCatalogDao {
     }
 
     private static MapSqlParameterSource baseParams(UUID accountId, LocalDateTime since, int limit) {
+        // LocalDateTime binds directly via JDBC 4.2 — no Timestamp.valueOf, which would
+        // interpret the wall-clock value in the JVM default zone.
         return new MapSqlParameterSource()
                 .addValue("accountId", accountId)
-                .addValue("since", Timestamp.valueOf(since))
+                .addValue("since", since)
                 .addValue("limit", limit);
     }
 
@@ -123,7 +124,7 @@ public class ParquetExportCatalogDao {
             sql.append("                WHERE (").append(atColumn).append(" > :cursorAt OR (")
                     .append(atColumn).append(" = :cursorAt AND ").append(keyColumn)
                     .append(" > :cursorKey))\n");
-            params.addValue("cursorAt", Timestamp.valueOf(cursorAt));
+            params.addValue("cursorAt", cursorAt);
             params.addValue("cursorKey", cursorKey == null ? "" : cursorKey);
         }
         sql.append("                ORDER BY ").append(atColumn).append(", ").append(keyColumn)

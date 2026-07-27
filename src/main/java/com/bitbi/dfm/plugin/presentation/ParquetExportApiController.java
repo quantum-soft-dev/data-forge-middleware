@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.DownloadLinkService;
+import com.bitbi.dfm.plugin.application.ParquetExportCredentialsService;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.FileListing;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.FileType;
@@ -8,15 +9,21 @@ import com.bitbi.dfm.plugin.application.ParquetExportFileService.ParquetFileItem
 import com.bitbi.dfm.plugin.application.PluginAuditService;
 import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.domain.DownloadLink;
+import com.bitbi.dfm.plugin.infrastructure.ParquetExportProperties;
 import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter.PluginApiKeyAuthenticationToken;
+import com.bitbi.dfm.plugin.presentation.dto.ParquetFileListResponseDto;
+import com.bitbi.dfm.plugin.presentation.dto.ParquetFileResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -49,13 +56,13 @@ public class ParquetExportApiController {
     private final DownloadLinkService downloadLinkService;
     private final PluginRateLimiterService rateLimiterService;
     private final PluginAuditService pluginAuditService;
-    private final com.bitbi.dfm.plugin.infrastructure.ParquetExportProperties properties;
+    private final ParquetExportProperties properties;
 
     public ParquetExportApiController(ParquetExportFileService fileService,
                                       DownloadLinkService downloadLinkService,
                                       PluginRateLimiterService rateLimiterService,
                                       PluginAuditService pluginAuditService,
-                                      com.bitbi.dfm.plugin.infrastructure.ParquetExportProperties properties) {
+                                      ParquetExportProperties properties) {
         this.fileService = fileService;
         this.downloadLinkService = downloadLinkService;
         this.rateLimiterService = rateLimiterService;
@@ -74,7 +81,7 @@ public class ParquetExportApiController {
                     + "response's nextCursor to continue; iterate until hasMore=false (a page may "
                     + "hold fewer than size entries). Every listed file gets a freshly registered "
                     + "single-use download URL (TTL 1 hour by default).")
-    public ResponseEntity<com.bitbi.dfm.plugin.presentation.dto.ParquetFileListResponseDto> listFiles(
+    public ResponseEntity<ParquetFileListResponseDto> listFiles(
             @RequestParam(required = false) String since,
             @RequestParam(required = false) UUID siteId,
             @RequestParam(required = false) String table,
@@ -105,13 +112,11 @@ public class ParquetExportApiController {
         List<DownloadLink> links = downloadLinkService.registerLinks(accountPluginId, listing.files());
 
         String urlPrefix = downloadUrlPrefix();
-        List<com.bitbi.dfm.plugin.presentation.dto.ParquetFileResponseDto> files =
-                new ArrayList<>(listing.files().size());
+        List<ParquetFileResponseDto> files = new ArrayList<>(listing.files().size());
         for (int i = 0; i < listing.files().size(); i++) {
             ParquetFileItem item = listing.files().get(i);
             DownloadLink link = links.get(i);
-            files.add(com.bitbi.dfm.plugin.presentation.dto.ParquetFileResponseDto.of(
-                    item, link, urlPrefix + link.getToken()));
+            files.add(ParquetFileResponseDto.of(item, link, urlPrefix + link.getToken()));
         }
 
         Map<String, Object> filters = new HashMap<>();
@@ -121,11 +126,11 @@ public class ParquetExportApiController {
         if (typeValue != null) filters.put("type", typeValue.name());
         if (cursor != null) filters.put("cursor", true);
         filters.put("size", size);
-        pluginAuditService.logFilesListed(com.bitbi.dfm.plugin.application.ParquetExportCredentialsService.PLUGIN_ID,
+        pluginAuditService.logFilesListed(ParquetExportCredentialsService.PLUGIN_ID,
                 accountId, filters, files.size());
 
         log.debug("parquet-export listing served: accountId={}, files={}", accountId, files.size());
-        return ResponseEntity.ok(new com.bitbi.dfm.plugin.presentation.dto.ParquetFileListResponseDto(
+        return ResponseEntity.ok(new ParquetFileListResponseDto(
                 files, listing.size(), listing.hasMore(), listing.nextCursor()));
     }
 
@@ -137,10 +142,10 @@ public class ParquetExportApiController {
     @Operation(summary = "One-time download redirect",
             description = "Anonymous. First use: 302 redirect to a ~60s S3 presigned URL and the "
                     + "link is atomically consumed. Consumed/expired link: 410 Gone. Unknown token: 404.")
-    public ResponseEntity<Void> download(@org.springframework.web.bind.annotation.PathVariable String token) {
+    public ResponseEntity<Void> download(@PathVariable String token) {
         String presignedUrl = downloadLinkService.consume(token);
-        return ResponseEntity.status(org.springframework.http.HttpStatus.FOUND)
-                .header(org.springframework.http.HttpHeaders.LOCATION, presignedUrl)
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .header(HttpHeaders.LOCATION, presignedUrl)
                 .build();
     }
 
