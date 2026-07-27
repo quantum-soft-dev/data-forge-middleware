@@ -1,33 +1,30 @@
 package com.bitbi.dfm.plugin.application;
 
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
-import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
-import com.bitbi.dfm.delta.domain.Checkpoint;
-import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.FileListing;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.FileType;
 import com.bitbi.dfm.plugin.application.ParquetExportFileService.ParquetFileItem;
-import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao;
+import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao.CatalogRow;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for {@link ParquetExportFileService} (028-parquet-export-plugin, T009).
+ * Unit tests for {@link ParquetExportFileService} (028-parquet-export-plugin, T009 + review:
+ * keyset cursor over (producedAt, s3Key), SQL-side pagination via {@link ParquetExportCatalogDao}).
  */
 @ExtendWith(MockitoExtension.class)
 class ParquetExportFileServiceTest {
@@ -39,13 +36,7 @@ class ParquetExportFileServiceTest {
     private static final LocalDateTime T2 = LocalDateTime.of(2026, 7, 21, 10, 0);
 
     @Mock
-    private SiteRepository siteRepository;
-
-    @Mock
-    private ChangelogSegmentRepository segmentRepository;
-
-    @Mock
-    private CheckpointRepository checkpointRepository;
+    private ParquetExportCatalogDao catalogDao;
 
     @Mock
     private S3CheckpointStorage checkpointStorage;
@@ -54,207 +45,177 @@ class ParquetExportFileServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ParquetExportFileService(siteRepository, segmentRepository,
-                checkpointRepository, checkpointStorage);
+        service = new ParquetExportFileService(catalogDao, checkpointStorage);
     }
 
-    private Site site(UUID id, String domain) {
-        Site site = mock(Site.class);
-        lenient().when(site.getId()).thenReturn(id);
-        lenient().when(site.getDomain()).thenReturn(domain);
-        return site;
+    private CatalogRow deltaRow(String table, long firstSeq, long lastSeq, LocalDateTime producedAt) {
+        return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.DELTA,
+                firstSeq, lastSeq, null, producedAt,
+                S3CheckpointStorage.deltaKey(SITE_ID, table, firstSeq, lastSeq));
     }
 
-    private ChangelogSegment segment(UUID siteId, long firstSeq, long lastSeq,
-                                     LocalDateTime egressAt, Map<String, com.bitbi.dfm.delta.domain.TableChangeStats> stats) {
-        ChangelogSegment segment = mock(ChangelogSegment.class);
-        lenient().when(segment.getSiteId()).thenReturn(siteId);
-        lenient().when(segment.getFirstSeq()).thenReturn(firstSeq);
-        lenient().when(segment.getLastSeq()).thenReturn(lastSeq);
-        lenient().when(segment.getEgressAt()).thenReturn(egressAt);
-        lenient().when(segment.getStats()).thenReturn(stats);
-        return segment;
-    }
-
-    private Checkpoint checkpoint(UUID siteId, String table, long seq, String s3KeyParquet,
-                                  LocalDateTime updatedAt) {
-        Checkpoint checkpoint = mock(Checkpoint.class);
-        lenient().when(checkpoint.getSiteId()).thenReturn(siteId);
-        lenient().when(checkpoint.getTableName()).thenReturn(table);
-        lenient().when(checkpoint.getSeq()).thenReturn(seq);
-        lenient().when(checkpoint.getS3KeyParquet()).thenReturn(s3KeyParquet);
-        lenient().when(checkpoint.getUpdatedAt()).thenReturn(updatedAt);
-        return checkpoint;
-    }
-
-    private Map<String, com.bitbi.dfm.delta.domain.TableChangeStats> statsFor(String... tables) {
-        java.util.LinkedHashMap<String, com.bitbi.dfm.delta.domain.TableChangeStats> map =
-                new java.util.LinkedHashMap<>();
-        for (String table : tables) {
-            map.put(table, mock(com.bitbi.dfm.delta.domain.TableChangeStats.class));
-        }
-        return map;
+    private CatalogRow checkpointRow(String table, long seq, LocalDateTime producedAt) {
+        return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.CHECKPOINT,
+                null, null, seq, producedAt, "checkpoints/" + SITE_ID + "/" + table + "/seq=" + seq
+                + "/snapshot.parquet");
     }
 
     @Test
-    @DisplayName("Should list delta files per table with derived key and filename")
-    void shouldListDeltaFiles() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        ChangelogSegment testSegment = segment(SITE_ID, 100, 250, T1, statsFor("orders", "items"));
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, EPOCH)).thenReturn(List.of(testSegment));
-        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of());
-        when(checkpointStorage.deltaExists(eq(SITE_ID), any(), eq(100L), eq(250L))).thenReturn(true);
+    @DisplayName("Should map delta and checkpoint rows to items with filenames")
+    void shouldMapRowsToItems() {
+        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(51)))
+                .thenReturn(List.of(deltaRow("orders", 100, 250, T1)));
+        when(catalogDao.findCheckpointFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(51)))
+                .thenReturn(List.of(checkpointRow("orders", 250, T2)));
+        when(checkpointStorage.deltaExists(SITE_ID, "orders", 100, 250)).thenReturn(true);
 
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 0, 50);
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 50);
 
         assertEquals(2, listing.files().size());
-        ParquetFileItem ordersItem = listing.files().stream()
-                .filter(f -> f.table().equals("orders")).findFirst().orElseThrow();
-        assertEquals(FileType.DELTA, ordersItem.type());
-        assertEquals("shop.example.com", ordersItem.siteDomain());
-        assertEquals(100L, ordersItem.firstSeq());
-        assertEquals(250L, ordersItem.lastSeq());
-        assertNull(ordersItem.seq());
-        assertEquals(T1, ordersItem.producedAt());
-        assertEquals("orders_seq100-250.parquet", ordersItem.fileName());
-        assertEquals(S3CheckpointStorage.deltaKey(SITE_ID, "orders", 100, 250), ordersItem.s3Key());
+        ParquetFileItem delta = listing.files().get(0);
+        assertEquals(FileType.DELTA, delta.type());
+        assertEquals("orders_seq100-250.parquet", delta.fileName());
+        assertEquals(100L, delta.firstSeq());
+        assertNull(delta.seq());
+        ParquetFileItem checkpoint = listing.files().get(1);
+        assertEquals(FileType.CHECKPOINT, checkpoint.type());
+        assertEquals("orders_seq250.parquet", checkpoint.fileName());
+        assertEquals(250L, checkpoint.seq());
         assertFalse(listing.hasMore());
+        assertNull(listing.nextCursor());
     }
 
     @Test
-    @DisplayName("Should drop delta tables whose Parquet does not exist")
-    void shouldDropMissingDeltaParquet() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        ChangelogSegment testSegment = segment(SITE_ID, 100, 250, T1, statsFor("orders", "poison"));
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, EPOCH)).thenReturn(List.of(testSegment));
-        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of());
-        when(checkpointStorage.deltaExists(SITE_ID, "orders", 100, 250)).thenReturn(true);
-        when(checkpointStorage.deltaExists(SITE_ID, "poison", 100, 250)).thenReturn(false);
-
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 0, 50);
-
-        assertEquals(1, listing.files().size());
-        assertEquals("orders", listing.files().get(0).table());
-    }
-
-    @Test
-    @DisplayName("Should list checkpoint files with parquet key only")
-    void shouldListCheckpointFiles() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        Checkpoint withParquet = checkpoint(SITE_ID, "orders", 250, "checkpoints/x/orders/seq=250/snapshot.parquet", T2);
-        Checkpoint withoutParquet = checkpoint(SITE_ID, "no-parquet", 100, null, T2);
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, EPOCH)).thenReturn(List.of());
-        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of(withParquet, withoutParquet));
-
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 0, 50);
-
-        assertEquals(1, listing.files().size());
-        ParquetFileItem item = listing.files().get(0);
-        assertEquals(FileType.CHECKPOINT, item.type());
-        assertEquals(250L, item.seq());
-        assertNull(item.firstSeq());
-        assertEquals(T2, item.producedAt());
-        assertEquals("orders_seq250.parquet", item.fileName());
-        assertEquals("checkpoints/x/orders/seq=250/snapshot.parquet", item.s3Key());
-    }
-
-    @Test
-    @DisplayName("Should filter checkpoints by since strictly greater")
-    void shouldFilterCheckpointsBySince() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        Checkpoint atSince = checkpoint(SITE_ID, "orders", 250, "k1", T2); // == since → excluded
-        Checkpoint afterSince = checkpoint(SITE_ID, "items", 300, "k2", T2.plusMinutes(1));
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, T2)).thenReturn(List.of());
-        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of(atSince, afterSince));
-
-        FileListing listing = service.listFiles(ACCOUNT_ID, T2, null, null, null, 0, 50);
-
-        assertEquals(1, listing.files().size());
-        assertEquals("items", listing.files().get(0).table());
-    }
-
-    @Test
-    @DisplayName("Should scope to account sites and ignore foreign siteId filter")
-    void shouldScopeToAccountSites() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, UUID.randomUUID(), null, null, 0, 50);
-
-        assertTrue(listing.files().isEmpty());
-        verifyNoInteractions(segmentRepository, checkpointRepository, checkpointStorage);
-    }
-
-    @Test
-    @DisplayName("Should filter by siteId, table and type composably")
-    void shouldComposeFilters() {
-        UUID otherSiteId = UUID.randomUUID();
-        Site ownSite = site(SITE_ID, "shop.example.com");
-        Site otherSite = site(otherSiteId, "other.example.com");
-        ChangelogSegment testSegment = segment(SITE_ID, 1, 2, T1, statsFor("orders", "items"));
-        Checkpoint testCheckpoint = checkpoint(SITE_ID, "orders", 2, "k", T2);
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(ownSite, otherSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, EPOCH)).thenReturn(List.of(testSegment));
-        lenient().when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of(testCheckpoint));
-        when(checkpointStorage.deltaExists(SITE_ID, "orders", 1, 2)).thenReturn(true);
-
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, SITE_ID, "orders", FileType.DELTA, 0, 50);
-
-        assertEquals(1, listing.files().size());
-        ParquetFileItem item = listing.files().get(0);
-        assertEquals("orders", item.table());
-        assertEquals(FileType.DELTA, item.type());
-        // only the requested site was queried
-        verify(segmentRepository, never()).findEgressedSince(eq(otherSiteId), any());
-    }
-
-    @Test
-    @DisplayName("Should order by producedAt and paginate deterministically")
-    void shouldPaginate() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        ChangelogSegment newer = segment(SITE_ID, 3, 4, T2, statsFor("orders"));
-        ChangelogSegment older = segment(SITE_ID, 1, 2, T1, statsFor("orders"));
-        Checkpoint testCheckpoint = checkpoint(SITE_ID, "orders", 4, "k", T2.plusHours(1));
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, EPOCH)).thenReturn(List.of(newer, older));
-        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of(testCheckpoint));
+    @DisplayName("Should not lose files sharing one producedAt across a page boundary (review P0)")
+    void shouldWalkEqualProducedAtViaCursor() {
+        // One segment fans out to 3 tables — all with the same producedAt. Page size 2.
+        CatalogRow a = deltaRow("a_table", 1, 2, T1);
+        CatalogRow b = deltaRow("b_table", 1, 2, T1);
+        CatalogRow c = deltaRow("c_table", 1, 2, T1);
+        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(3)))
+                .thenReturn(List.of(a, b, c));
+        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of());
         when(checkpointStorage.deltaExists(eq(SITE_ID), any(), anyLong(), anyLong())).thenReturn(true);
 
-        FileListing pageZero = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 0, 2);
-        FileListing pageOne = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 1, 2);
+        FileListing pageOne = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 2);
 
-        assertEquals(2, pageZero.files().size());
-        assertEquals(T1, pageZero.files().get(0).producedAt());
-        assertEquals(T2, pageZero.files().get(1).producedAt());
-        assertTrue(pageZero.hasMore());
-        assertEquals(1, pageOne.files().size());
-        assertEquals(FileType.CHECKPOINT, pageOne.files().get(0).type());
-        assertFalse(pageOne.hasMore());
+        assertEquals(2, pageOne.files().size());
+        assertTrue(pageOne.hasMore());
+        assertNotNull(pageOne.nextCursor());
+
+        // The cursor must resume strictly after (T1, b_table-key) — same producedAt, key tiebreak.
+        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(),
+                eq(T1), eq(b.s3Key()), eq(3)))
+                .thenReturn(List.of(c));
+
+        FileListing pageTwo = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, pageOne.nextCursor(), 2);
+
+        assertEquals(1, pageTwo.files().size());
+        assertEquals("c_table", pageTwo.files().get(0).table());
+        assertFalse(pageTwo.hasMore());
     }
 
     @Test
-    @DisplayName("Should skip segments without stats")
-    void shouldSkipSegmentsWithoutStats() {
-        Site testSite = site(SITE_ID, "shop.example.com");
-        ChangelogSegment statlessSegment = segment(SITE_ID, 1, 2, T1, null);
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(testSite));
-        when(segmentRepository.findEgressedSince(SITE_ID, EPOCH)).thenReturn(List.of(statlessSegment));
-        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of());
+    @DisplayName("Should advance cursor over candidates dropped by the existence probe")
+    void shouldAdvanceCursorOverDroppedCandidates() {
+        CatalogRow present = deltaRow("orders", 1, 2, T1);
+        CatalogRow missing = deltaRow("poison", 1, 2, T1.plusMinutes(1));
+        CatalogRow later = deltaRow("orders", 3, 4, T2);
+        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(3)))
+                .thenReturn(List.of(present, missing, later));
+        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of());
+        when(checkpointStorage.deltaExists(SITE_ID, "orders", 1, 2)).thenReturn(true);
+        when(checkpointStorage.deltaExists(SITE_ID, "poison", 1, 2)).thenReturn(false);
 
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 0, 50);
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 2);
+
+        // Page shorter than size while hasMore stays true — cursor points at the dropped candidate.
+        assertEquals(1, listing.files().size());
+        assertEquals("orders", listing.files().get(0).table());
+        assertTrue(listing.hasMore());
+        assertNotNull(listing.nextCursor());
+
+        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(),
+                eq(missing.producedAt()), eq(missing.s3Key()), eq(3)))
+                .thenReturn(List.of(later));
+        when(checkpointStorage.deltaExists(SITE_ID, "orders", 3, 4)).thenReturn(true);
+
+        FileListing next = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, listing.nextCursor(), 2);
+        assertEquals(1, next.files().size());
+        assertEquals(3L, next.files().get(0).firstSeq());
+    }
+
+    @Test
+    @DisplayName("Should merge delta and checkpoint sources by (producedAt, s3Key)")
+    void shouldMergeSourcesInOrder() {
+        when(catalogDao.findDeltaFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(deltaRow("orders", 1, 2, T1), deltaRow("orders", 3, 4, T2.plusHours(2))));
+        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(checkpointRow("orders", 2, T2)));
+        when(checkpointStorage.deltaExists(eq(SITE_ID), any(), anyLong(), anyLong())).thenReturn(true);
+
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 50);
+
+        assertEquals(List.of(T1, T2, T2.plusHours(2)),
+                listing.files().stream().map(ParquetFileItem::producedAt).toList());
+    }
+
+    @Test
+    @DisplayName("Should query only the requested source for a type filter")
+    void shouldQueryOnlyRequestedType() {
+        when(catalogDao.findDeltaFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of());
+
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, null, 50);
 
         assertTrue(listing.files().isEmpty());
-        verifyNoInteractions(checkpointStorage);
+        verify(catalogDao, never()).findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt());
     }
 
     @Test
-    @DisplayName("Should cap page size at 100")
-    void shouldCapPageSize() {
+    @DisplayName("Should pass site and table filters through to the DAO")
+    void shouldPassFiltersToDao() {
+        when(catalogDao.findCheckpointFiles(eq(ACCOUNT_ID), eq(T1), eq(SITE_ID), eq("orders"),
+                isNull(), isNull(), eq(11)))
+                .thenReturn(List.of());
+
+        service.listFiles(ACCOUNT_ID, T1, SITE_ID, "orders", FileType.CHECKPOINT, null, 10);
+
+        verify(catalogDao).findCheckpointFiles(eq(ACCOUNT_ID), eq(T1), eq(SITE_ID), eq("orders"),
+                isNull(), isNull(), eq(11));
+    }
+
+    @Test
+    @DisplayName("Should reject invalid cursor values")
+    void shouldRejectInvalidCursor() {
         assertThrows(IllegalArgumentException.class,
-                () -> service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, 0, 101));
+                () -> service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, "not-a-cursor!!!", 10));
+    }
+
+    @Test
+    @DisplayName("Should reject page size outside 1..100")
+    void shouldRejectInvalidPageSize() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 101));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 0));
+        verifyNoInteractions(catalogDao);
+    }
+
+    @Test
+    @DisplayName("Should request at most size+1 rows per source (bounded window)")
+    void shouldRequestBoundedWindow() {
+        when(catalogDao.findDeltaFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of());
+        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of());
+
+        service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 50);
+
+        ArgumentCaptor<Integer> limitCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(catalogDao).findDeltaFiles(any(), any(), any(), any(), any(), any(), limitCaptor.capture());
+        assertEquals(51, limitCaptor.getValue());
     }
 }

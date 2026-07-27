@@ -88,8 +88,8 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
         ParquetFileItem item = deltaItem();
         DownloadLink link = DownloadLink.register(ACCOUNT_PLUGIN_ID, item.s3Key(), item.fileName(),
                 Duration.ofHours(1));
-        when(fileService.listFiles(eq(ACCOUNT_ID), any(), any(), any(), any(), anyInt(), anyInt()))
-                .thenReturn(new FileListing(List.of(item), 0, 50, false));
+        when(fileService.listFiles(eq(ACCOUNT_ID), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(new FileListing(List.of(item), 50, false, null));
         when(downloadLinkService.registerLinks(ACCOUNT_PLUGIN_ID, List.of(item)))
                 .thenReturn(List.of(link));
 
@@ -108,19 +108,19 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.files[0].downloadUrl",
                         containsString("/api/v1/plugins/parquet-export/download/" + link.getToken())))
                 .andExpect(jsonPath("$.files[0].linkExpiresAt").exists())
-                .andExpect(jsonPath("$.page").value(0))
                 .andExpect(jsonPath("$.size").value(50))
-                .andExpect(jsonPath("$.hasMore").value(false));
+                .andExpect(jsonPath("$.hasMore").value(false))
+                .andExpect(jsonPath("$.nextCursor").value(nullValue()));
 
         verify(pluginAuditService).logFilesListed(eq("parquet-export"), eq(ACCOUNT_ID), any(), eq(1));
     }
 
     @Test
-    @DisplayName("Should pass filters through to the file service")
+    @DisplayName("Should pass filters and cursor through to the file service")
     void shouldPassFilters() throws Exception {
         when(fileService.listFiles(eq(ACCOUNT_ID), eq(LocalDateTime.of(2026, 7, 1, 0, 0)),
-                eq(SITE_ID), eq("orders"), eq(FileType.CHECKPOINT), eq(2), eq(10)))
-                .thenReturn(new FileListing(List.of(), 2, 10, false));
+                eq(SITE_ID), eq("orders"), eq(FileType.CHECKPOINT), eq("someCursor"), eq(10)))
+                .thenReturn(new FileListing(List.of(), 10, true, "followUpCursor"));
         when(downloadLinkService.registerLinks(eq(ACCOUNT_PLUGIN_ID), eq(List.of())))
                 .thenReturn(List.of());
 
@@ -130,18 +130,20 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
                         .param("siteId", SITE_ID.toString())
                         .param("table", "orders")
                         .param("type", "checkpoint")
-                        .param("page", "2")
+                        .param("cursor", "someCursor")
                         .param("size", "10"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.files", hasSize(0)));
+                .andExpect(jsonPath("$.files", hasSize(0)))
+                .andExpect(jsonPath("$.hasMore").value(true))
+                .andExpect(jsonPath("$.nextCursor").value("followUpCursor"));
     }
 
     @Test
     @DisplayName("Should accept since with UTC offset (Z) and normalize to UTC")
     void shouldAcceptSinceWithOffset() throws Exception {
         when(fileService.listFiles(eq(ACCOUNT_ID), eq(LocalDateTime.of(2026, 7, 1, 0, 0)),
-                any(), any(), any(), anyInt(), anyInt()))
-                .thenReturn(new FileListing(List.of(), 0, 50, false));
+                any(), any(), any(), any(), anyInt()))
+                .thenReturn(new FileListing(List.of(), 50, false, null));
         when(downloadLinkService.registerLinks(eq(ACCOUNT_PLUGIN_ID), eq(List.of())))
                 .thenReturn(List.of());
 

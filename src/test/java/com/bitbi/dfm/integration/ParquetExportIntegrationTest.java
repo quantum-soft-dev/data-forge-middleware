@@ -135,6 +135,48 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("Should walk files sharing one producedAt via nextCursor without loss (review P0)")
+    void shouldWalkEqualProducedAtViaCursor() throws Exception {
+        // One more segment fanning out to 3 tables — all files share its egress_at.
+        jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", SITE_STORE_01);
+        jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE_STORE_01);
+        jdbc.update("""
+                INSERT INTO changelog_segments
+                    (id, site_id, batch_id, first_seq, last_seq, record_count, content_hash, s3_key,
+                     mode, created_at, egress_at, plugin_sql_at, stats)
+                VALUES (?, ?, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 300, 400, 3, 'hash', 'delta/seg2.pb.gz', 'DELTA',
+                        now(), '2026-07-27 12:00:00', now(),
+                        '{"t_alpha": {"inserts": 1}, "t_beta": {"inserts": 1}, "t_gamma": {"inserts": 1}}'::jsonb)
+                """, UUID.randomUUID(), SITE_STORE_01);
+        for (String table : new String[]{"t_alpha", "t_beta", "t_gamma"}) {
+            storage.uploadDelta(SITE_STORE_01, table, 300, 400, "bytes".getBytes(StandardCharsets.UTF_8));
+        }
+
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        String cursor = null;
+        int pages = 0;
+        boolean hasMore = true;
+        while (hasMore && pages < 10) {
+            var request = get(FILES_PATH).header("Authorization", basicAuth()).param("size", "2");
+            if (cursor != null) {
+                request = request.param("cursor", cursor);
+            }
+            MvcResult result = mockMvc.perform(request).andExpect(status().isOk()).andReturn();
+            JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+            for (JsonNode file : body.get("files")) {
+                assertTrue(seen.add(file.get("fileName").asText()), "file listed twice: " + file);
+            }
+            hasMore = body.get("hasMore").asBoolean();
+            cursor = body.hasNonNull("nextCursor") ? body.get("nextCursor").asText() : null;
+            pages++;
+        }
+
+        assertEquals(java.util.Set.of("t_alpha_seq300-400.parquet", "t_beta_seq300-400.parquet",
+                "t_gamma_seq300-400.parquet"), seen, "cursor walk must retrieve every file exactly once");
+        assertEquals(2, pages, "3 files at size=2 must take exactly 2 pages");
+    }
+
+    @Test
     @DisplayName("Should redirect once and answer 410 on the second attempt")
     void shouldServeOneTimeDownload() throws Exception {
         String downloadUrl = firstDownloadUrl();

@@ -70,14 +70,16 @@ public class ParquetExportApiController {
     @GetMapping("/files")
     @Operation(summary = "List Parquet files with one-time download links",
             description = "Basic Auth. Filters: since (ISO 8601, strictly greater), siteId, table, "
-                    + "type (delta|checkpoint). Every listed file gets a freshly registered "
+                    + "type (delta|checkpoint). Pagination is a keyset cursor: pass the previous "
+                    + "response's nextCursor to continue; iterate until hasMore=false (a page may "
+                    + "hold fewer than size entries). Every listed file gets a freshly registered "
                     + "single-use download URL (TTL 1 hour by default).")
     public ResponseEntity<com.bitbi.dfm.plugin.presentation.dto.ParquetFileListResponseDto> listFiles(
             @RequestParam(required = false) String since,
             @RequestParam(required = false) UUID siteId,
             @RequestParam(required = false) String table,
             @RequestParam(required = false) String type,
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "50") int size) {
 
         PluginApiKeyAuthenticationToken authentication =
@@ -92,14 +94,14 @@ public class ParquetExportApiController {
                     .build();
         }
 
-        if (page < 0 || size < 1 || size > ParquetExportFileService.MAX_PAGE_SIZE) {
-            throw new IllegalArgumentException("Invalid pagination: page >= 0, 1 <= size <= "
+        if (size < 1 || size > ParquetExportFileService.MAX_PAGE_SIZE) {
+            throw new IllegalArgumentException("Invalid page size: 1 <= size <= "
                     + ParquetExportFileService.MAX_PAGE_SIZE);
         }
         LocalDateTime sinceValue = parseSince(since);
         FileType typeValue = parseType(type);
 
-        FileListing listing = fileService.listFiles(accountId, sinceValue, siteId, table, typeValue, page, size);
+        FileListing listing = fileService.listFiles(accountId, sinceValue, siteId, table, typeValue, cursor, size);
         List<DownloadLink> links = downloadLinkService.registerLinks(accountPluginId, listing.files());
 
         String urlPrefix = downloadUrlPrefix();
@@ -117,14 +119,14 @@ public class ParquetExportApiController {
         if (siteId != null) filters.put("siteId", siteId.toString());
         if (table != null) filters.put("table", table);
         if (typeValue != null) filters.put("type", typeValue.name());
-        filters.put("page", page);
+        if (cursor != null) filters.put("cursor", true);
         filters.put("size", size);
         pluginAuditService.logFilesListed(com.bitbi.dfm.plugin.application.ParquetExportCredentialsService.PLUGIN_ID,
                 accountId, filters, files.size());
 
         log.debug("parquet-export listing served: accountId={}, files={}", accountId, files.size());
         return ResponseEntity.ok(new com.bitbi.dfm.plugin.presentation.dto.ParquetFileListResponseDto(
-                files, listing.page(), listing.size(), listing.hasMore()));
+                files, listing.size(), listing.hasMore(), listing.nextCursor()));
     }
 
     /**

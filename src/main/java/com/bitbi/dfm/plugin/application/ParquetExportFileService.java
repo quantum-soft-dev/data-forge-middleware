@@ -1,28 +1,35 @@
 package com.bitbi.dfm.plugin.application;
 
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
-import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
-import com.bitbi.dfm.delta.domain.Checkpoint;
-import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
-import com.bitbi.dfm.site.domain.Site;
-import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao;
+import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao.CatalogRow;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Derives the Parquet file catalog served by the Parquet Export plugin (028).
+ * Serves the Parquet file catalog of the Parquet Export plugin (028).
  * <p>
- * No file bookkeeping table exists: delta files are derived from egressed changelog segments
- * (key = {@link S3CheckpointStorage#deltaKey}), checkpoint files from {@link Checkpoint} rows
- * with a Parquet key — exactly the same derivation the owner UI download endpoints use (025),
- * so there is a single source of truth. Only sites of the given account are ever visible.
+ * Filtering and pagination are pushed into SQL ({@link ParquetExportCatalogDao}): a request
+ * reads at most {@code size + 1} rows per source no matter how large the account history is.
+ * Pagination is a <b>keyset cursor</b> over {@code (producedAt, s3Key)} — offset paging plus a
+ * {@code since = max(producedAt)} client pattern silently skips files that share one
+ * {@code producedAt} across a page boundary (one segment fans out to many tables with the same
+ * {@code egress_at}), so the cursor is the only lossless way to walk the catalog.
+ * </p>
+ * <p>
+ * The cursor also advances over candidates whose delta Parquet turned out not to exist
+ * (schema-skipped/poison tables): {@code nextCursor} is taken from the last <i>candidate</i> of
+ * the page window, not the last surviving file — a page may therefore contain fewer than
+ * {@code size} entries (even zero) while {@code hasMore} is still {@code true}.
  * </p>
  */
 @Service
@@ -38,113 +45,114 @@ public class ParquetExportFileService {
                                   LocalDateTime producedAt, String fileName, String s3Key) {
     }
 
-    public record FileListing(List<ParquetFileItem> files, int page, int size, boolean hasMore) {
+    public record FileListing(List<ParquetFileItem> files, int size, boolean hasMore, String nextCursor) {
     }
 
-    private final SiteRepository siteRepository;
-    private final ChangelogSegmentRepository segmentRepository;
-    private final CheckpointRepository checkpointRepository;
+    private final ParquetExportCatalogDao catalogDao;
     private final S3CheckpointStorage checkpointStorage;
 
-    public ParquetExportFileService(SiteRepository siteRepository,
-                                    ChangelogSegmentRepository segmentRepository,
-                                    CheckpointRepository checkpointRepository,
+    public ParquetExportFileService(ParquetExportCatalogDao catalogDao,
                                     S3CheckpointStorage checkpointStorage) {
-        this.siteRepository = siteRepository;
-        this.segmentRepository = segmentRepository;
-        this.checkpointRepository = checkpointRepository;
+        this.catalogDao = catalogDao;
         this.checkpointStorage = checkpointStorage;
     }
 
     /**
      * List Parquet files produced after {@code since} for the account's sites.
      *
-     * @param accountId  authenticated account (scoping boundary)
-     * @param since      strictly-greater producedAt bound (delta: egress_at, checkpoint: updated_at)
-     * @param siteId     optional site filter; a site not owned by the account yields an empty result
-     * @param table      optional table-name filter
-     * @param type       optional file-type filter; null = both
-     * @param page       0-based page index
-     * @param size       page size, capped at {@value #MAX_PAGE_SIZE}
+     * @param accountId authenticated account (scoping happens in SQL via the sites join)
+     * @param since     strictly-greater producedAt bound (delta: egress_at, checkpoint: updated_at)
+     * @param siteId    optional site filter; a site not owned by the account yields an empty result
+     * @param table     optional table-name filter
+     * @param type      optional file-type filter; null = both
+     * @param cursor    opaque keyset cursor from a previous response's {@code nextCursor}; null = start
+     * @param size      page size, capped at {@value #MAX_PAGE_SIZE}
      */
     @Transactional(readOnly = true)
     public FileListing listFiles(UUID accountId, LocalDateTime since, UUID siteId, String table,
-                                 FileType type, int page, int size) {
-        if (page < 0 || size < 1 || size > MAX_PAGE_SIZE) {
-            throw new IllegalArgumentException(
-                    "Invalid pagination: page >= 0, 1 <= size <= " + MAX_PAGE_SIZE);
+                                 FileType type, String cursor, int size) {
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new IllegalArgumentException("Invalid page size: 1 <= size <= " + MAX_PAGE_SIZE);
         }
+        Cursor position = Cursor.decode(cursor);
+        LocalDateTime cursorAt = position == null ? null : position.producedAt();
+        String cursorKey = position == null ? null : position.s3Key();
+        int fetch = size + 1;
 
-        List<Site> sites = siteRepository.findByAccountId(accountId).stream()
-                .filter(site -> siteId == null || site.getId().equals(siteId))
-                .toList();
-        if (sites.isEmpty()) {
-            return new FileListing(List.of(), page, size, false);
-        }
+        List<CatalogRow> delta = type == FileType.CHECKPOINT ? List.of()
+                : catalogDao.findDeltaFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch);
+        List<CatalogRow> checkpoints = type == FileType.DELTA ? List.of()
+                : catalogDao.findCheckpointFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch);
 
-        List<ParquetFileItem> candidates = new ArrayList<>();
-        for (Site site : sites) {
-            if (type != FileType.CHECKPOINT) {
-                collectDeltaCandidates(site, since, table, candidates);
-            }
-            if (type != FileType.DELTA) {
-                collectCheckpointCandidates(site, since, table, candidates);
-            }
-        }
+        List<CatalogRow> merged = mergeSorted(delta, checkpoints, fetch);
+        boolean hasMore = merged.size() > size;
+        List<CatalogRow> pageCandidates = merged.subList(0, Math.min(size, merged.size()));
+        String nextCursor = hasMore
+                ? Cursor.encode(pageCandidates.get(pageCandidates.size() - 1))
+                : null;
 
-        candidates.sort(Comparator.comparing(ParquetFileItem::producedAt)
-                .thenComparing(ParquetFileItem::s3Key));
-
-        int from = Math.min(page * size, candidates.size());
-        int to = Math.min(from + size, candidates.size());
-        boolean hasMore = candidates.size() > to;
-
-        // Existence is probed only for the served page (<= size S3 HEADs per call): tables the
-        // egress skipped (no declared schema / poison) have no Parquet and must not yield links.
-        List<ParquetFileItem> files = candidates.subList(from, to).stream()
-                .filter(item -> item.type() != FileType.DELTA
-                        || checkpointStorage.deltaExists(item.siteId(), item.table(),
-                                item.firstSeq(), item.lastSeq()))
-                .toList();
-
-        return new FileListing(files, page, size, hasMore);
-    }
-
-    private void collectDeltaCandidates(Site site, LocalDateTime since, String table,
-                                        List<ParquetFileItem> candidates) {
-        for (ChangelogSegment segment : segmentRepository.findEgressedSince(site.getId(), since)) {
-            if (segment.getStats() == null) {
-                continue; // pre-stats segments predate Parquet egress — no per-table info
-            }
-            for (String segmentTable : segment.getStats().keySet()) {
-                if (table != null && !table.equals(segmentTable)) {
-                    continue;
-                }
-                candidates.add(new ParquetFileItem(
-                        site.getId(), site.getDomain(), segmentTable, FileType.DELTA,
-                        segment.getFirstSeq(), segment.getLastSeq(), null,
-                        segment.getEgressAt(),
-                        "%s_seq%d-%d.parquet".formatted(segmentTable, segment.getFirstSeq(), segment.getLastSeq()),
-                        S3CheckpointStorage.deltaKey(site.getId(), segmentTable,
-                                segment.getFirstSeq(), segment.getLastSeq())));
-            }
-        }
-    }
-
-    private void collectCheckpointCandidates(Site site, LocalDateTime since, String table,
-                                             List<ParquetFileItem> candidates) {
-        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(site.getId())) {
-            if (checkpoint.getS3KeyParquet() == null
-                    || !checkpoint.getUpdatedAt().isAfter(since)
-                    || (table != null && !table.equals(checkpoint.getTableName()))) {
+        // Existence is probed only for the served page (<= size S3 HEADs). Dropped candidates
+        // (egress skipped the table) still advanced the cursor above — no dead links, no loss.
+        List<ParquetFileItem> files = new ArrayList<>(pageCandidates.size());
+        for (CatalogRow row : pageCandidates) {
+            if (row.type() == FileType.DELTA
+                    && !checkpointStorage.deltaExists(row.siteId(), row.table(),
+                            row.firstSeq(), row.lastSeq())) {
                 continue;
             }
-            candidates.add(new ParquetFileItem(
-                    site.getId(), site.getDomain(), checkpoint.getTableName(), FileType.CHECKPOINT,
-                    null, null, checkpoint.getSeq(),
-                    checkpoint.getUpdatedAt(),
-                    "%s_seq%d.parquet".formatted(checkpoint.getTableName(), checkpoint.getSeq()),
-                    checkpoint.getS3KeyParquet()));
+            files.add(toItem(row));
+        }
+        return new FileListing(files, size, hasMore, nextCursor);
+    }
+
+    private static List<CatalogRow> mergeSorted(List<CatalogRow> left, List<CatalogRow> right, int limit) {
+        Comparator<CatalogRow> order = Comparator.comparing(CatalogRow::producedAt)
+                .thenComparing(CatalogRow::s3Key);
+        List<CatalogRow> merged = new ArrayList<>(Math.min(limit, left.size() + right.size()));
+        int i = 0;
+        int j = 0;
+        while (merged.size() < limit && (i < left.size() || j < right.size())) {
+            if (j >= right.size() || (i < left.size() && order.compare(left.get(i), right.get(j)) <= 0)) {
+                merged.add(left.get(i++));
+            } else {
+                merged.add(right.get(j++));
+            }
+        }
+        return merged;
+    }
+
+    private static ParquetFileItem toItem(CatalogRow row) {
+        String fileName = row.type() == FileType.DELTA
+                ? "%s_seq%d-%d.parquet".formatted(row.table(), row.firstSeq(), row.lastSeq())
+                : "%s_seq%d.parquet".formatted(row.table(), row.seq());
+        return new ParquetFileItem(row.siteId(), row.siteDomain(), row.table(), row.type(),
+                row.firstSeq(), row.lastSeq(), row.seq(), row.producedAt(), fileName, row.s3Key());
+    }
+
+    /** Opaque keyset position: base64url of {@code producedAt|s3Key}. */
+    private record Cursor(LocalDateTime producedAt, String s3Key) {
+
+        static String encode(CatalogRow row) {
+            String raw = row.producedAt() + "|" + row.s3Key();
+            return Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+        }
+
+        static Cursor decode(String cursor) {
+            if (cursor == null || cursor.isBlank()) {
+                return null;
+            }
+            try {
+                String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+                int separator = raw.indexOf('|');
+                if (separator < 1) {
+                    throw new IllegalArgumentException("missing separator");
+                }
+                return new Cursor(LocalDateTime.parse(raw.substring(0, separator)),
+                        raw.substring(separator + 1));
+            } catch (IllegalArgumentException | DateTimeParseException e) {
+                throw new IllegalArgumentException("Invalid 'cursor' value — use nextCursor from a previous response");
+            }
         }
     }
 }
