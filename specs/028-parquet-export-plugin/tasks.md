@@ -11,17 +11,17 @@
 
 ## Phase 1: Foundation (blocking prerequisites)
 
-- [ ] **T001** [US1] Migration V39 + `DownloadLink` entity/repository skeleton
+- [X] **T001** [US1] Migration V39 + `DownloadLink` entity/repository skeleton
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/domain/DownloadLinkTest.java` — factory `register(...)` generates UUID id, 43-char URL-safe token (from 32 `SecureRandom` bytes, no padding), stamps `createdAt`/`expiresAt = createdAt + ttl`, null `consumedAt`; token uniqueness across generations (statistical: 1000 tokens distinct).
   - Implement: `src/main/resources/db/migration/V39__create_download_links_table.sql` (table + unique token index + purge/account indexes + `plugin_configs` seed row for `parquet-export`, per data-model.md); `src/main/java/com/bitbi/dfm/plugin/domain/DownloadLink.java` (JPA entity, Lombok `@Getter @NoArgsConstructor`, static factory); `src/main/java/com/bitbi/dfm/plugin/domain/DownloadLinkRepository.java` (interface: `save`, `saveAll`, `findByToken`, `consume(token, now)`, `purge(cutoff)`); `src/main/java/com/bitbi/dfm/plugin/infrastructure/JpaDownloadLinkRepository.java` (Spring Data + `@Modifying` native `consume` UPDATE with the `account_plugins.is_active` EXISTS guard + `purge` DELETE, per data-model.md).
   - Commit: `feat(plugin): download_links table + DownloadLink entity (T001)`
 
-- [ ] **T002** [US1] `ParquetExportCredentials` value object
+- [X] **T002** [US1] `ParquetExportCredentials` value object
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/domain/ParquetExportCredentialsTest.java` — `generate()` produces login matching `^pex_[a-zA-Z0-9]{12}$` and password matching `^[a-zA-Z0-9]{32}$`; `basicAuthValue()` returns `login:password`; `toString()` masks the password.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/domain/ParquetExportCredentials.java` (record, `SecureRandom`, pattern: `PluginApiKey`).
   - Commit: `feat(plugin): ParquetExportCredentials value object (T002)`
 
-- [ ] **T003** [US1] Extend `PluginActionType` + presigner expiry overload
+- [X] **T003** [US1] Extend `PluginActionType` + presigner expiry overload
   - Tests first: extend `src/test/java/com/bitbi/dfm/batch/infrastructure/S3PresignedUrlServiceTest.java` (or create if absent) — overload `generatePresignedUrl(s3Key, fileName, Duration)` passes the custom duration to the presigner; existing 2-arg method keeps 15 min.
   - Implement: add `FILES_LISTED`, `LINK_CONSUMED`, `LINK_REJECTED`, `PASSWORD_ROTATED` to `src/main/java/com/bitbi/dfm/plugin/domain/PluginActionType.java`; add `Duration` overload in `src/main/java/com/bitbi/dfm/batch/infrastructure/S3PresignedUrlService.java` (2-arg delegates).
   - Commit: `feat(plugin): audit action types + presign expiry overload (T003)`
@@ -30,17 +30,17 @@
 
 ## Phase 2: User Story 1 — Activation & credentials (P1)
 
-- [ ] **T004** [US1] `ParquetExportCredentialsService` (mint / rotate / validate)
+- [X] **T004** [US1] `ParquetExportCredentialsService` (mint / rotate / validate)
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/application/ParquetExportCredentialsServiceTest.java` (Mockito) — `mintCredentials(accountPlugin)` stores `login` plaintext + BCrypt `passwordHash` in plugin_data and returns raw credentials; minting is skipped when login already exists (idempotent re-activation); `rotatePassword(accountId)` keeps login, replaces hash, returns new raw password, 404-style exception when inactive/absent; `validate(login, rawPassword)` finds the active `parquet-export` activation by login (via `AccountPluginRepository.findActiveByPluginId`), exactly one BCrypt match, returns accountId+accountPluginId; wrong password / unknown login / inactive activation → empty.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/application/ParquetExportCredentialsService.java` (pattern: `PluginApiKeyService`; audit `PASSWORD_ROTATED` via `PluginAuditService`).
   - Commit: `feat(plugin): parquet-export credentials service (T004)`
 
-- [ ] **T005** [US1] `ParquetExportPlugin` SPI implementation
+- [X] **T005** [US1] `ParquetExportPlugin` SPI implementation
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/application/ParquetExportPluginTest.java` — `getId()` = `parquet-export`; `getSchemaJson()` accepts `{}`; `onActivate` mints credentials and returns `login:password` string (once), returns null when credentials already exist; `getSupportedEvents()` empty (no batch-event processing); registers in `PluginRegistry` (constructor-injection smoke test).
   - Implement: `src/main/java/com/bitbi/dfm/plugin/application/ParquetExportPlugin.java` (`@Component`, `@ConditionalOnProperty("plugins.parquet-export.enabled", matchIfMissing = true)`, pattern: `BitBiPlugin` minus SQL machinery).
   - Commit: `feat(plugin): ParquetExportPlugin SPI implementation (T005)`
 
-- [ ] **T006** [US1] Rotation endpoint (owner API)
+- [X] **T006** [US1] Rotation endpoint (owner API)
   - Tests first: contract test `src/test/java/contract/ParquetExportRotationContractTest.java` (MockMvc, pattern of existing contract tests with test security) — `POST /api/v1/account/plugins/parquet-export/rotate-password` → 200 `{login, password}`; 404 when plugin not active; 401 unauthenticated.
   - Implement: handler in `src/main/java/com/bitbi/dfm/plugin/presentation/AccountPluginsController.java` (or a small dedicated controller if cleaner) delegating to `ParquetExportCredentialsService.rotatePassword`; DTO `src/main/java/com/bitbi/dfm/plugin/presentation/dto/RotatePasswordResponseDto.java`.
   - Commit: `feat(plugin): parquet-export password rotation endpoint (T006)`
