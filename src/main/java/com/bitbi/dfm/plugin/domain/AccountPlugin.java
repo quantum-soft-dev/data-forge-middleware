@@ -78,6 +78,21 @@ public class AccountPlugin {
     @Column(name = "baseline_batch_id")
     private UUID baselineBatchId;
 
+    /**
+     * Indexed lookup handle for the plugin API key: hex SHA-256 of the raw key (031, V42).
+     * <p>
+     * Lets API key validation resolve the activation with a single indexed point query instead of
+     * scanning every activation. Verification still runs against the BCrypt hash in
+     * {@code plugin_data -> 'apiKeyHash'} — this column is only an index key.
+     * </p>
+     * <p>
+     * Null for activations whose key was issued before V42: the plaintext is not stored, so it
+     * cannot be backfilled. Those rows fall back to the legacy scan until the key is rotated.
+     * </p>
+     */
+    @Column(name = "api_key_lookup", length = 64)
+    private String apiKeyLookup;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -179,6 +194,17 @@ public class AccountPlugin {
             return Map.of();
         }
         return Map.copyOf(this.pluginData);
+    }
+
+    /**
+     * Sets the indexed API key lookup handle (031).
+     * Written whenever the API key is generated or rotated, alongside the BCrypt hash.
+     *
+     * @param apiKeyLookup hex SHA-256 of the raw API key, or null to clear it
+     */
+    public void updateApiKeyLookup(String apiKeyLookup) {
+        this.apiKeyLookup = apiKeyLookup;
+        this.updatedAt = Instant.now();
     }
 
     /**

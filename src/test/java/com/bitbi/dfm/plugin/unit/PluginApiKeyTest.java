@@ -211,6 +211,71 @@ class PluginApiKeyTest {
     }
 
     @Nested
+    @DisplayName("Lookup hash (031)")
+    class LookupHash {
+
+        @Test
+        @DisplayName("should return the lowercase hex SHA-256 of the raw key")
+        void shouldReturnSha256Hex() {
+            // Given
+            String key = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
+
+            // When
+            String lookup = PluginApiKey.lookupOf(key);
+
+            // Then
+            assertThat(lookup).hasSize(64).matches("[0-9a-f]{64}");
+            assertThat(lookup).isEqualTo(sha256Hex(key));
+        }
+
+        @Test
+        @DisplayName("should be deterministic for the same key")
+        void shouldBeDeterministic() {
+            PluginApiKey key = PluginApiKey.generate();
+
+            assertThat(PluginApiKey.lookupOf(key.value()))
+                    .isEqualTo(PluginApiKey.lookupOf(key.value()));
+        }
+
+        @Test
+        @DisplayName("should differ for different keys")
+        void shouldDifferForDifferentKeys() {
+            assertThat(PluginApiKey.lookupOf(PluginApiKey.generate().value()))
+                    .isNotEqualTo(PluginApiKey.lookupOf(PluginApiKey.generate().value()));
+        }
+
+        @Test
+        @DisplayName("instance lookup() should match the static helper")
+        void instanceLookupShouldMatchStatic() {
+            PluginApiKey key = PluginApiKey.generate();
+
+            assertThat(key.lookup()).isEqualTo(PluginApiKey.lookupOf(key.value()));
+        }
+
+        @Test
+        @DisplayName("should reject a null key")
+        void shouldRejectNull() {
+            assertThatThrownBy(() -> PluginApiKey.lookupOf(null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        private String sha256Hex(String value) {
+            try {
+                byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder hex = new StringBuilder(digest.length * 2);
+                for (byte b : digest) {
+                    hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                    hex.append(Character.forDigit(b & 0xF, 16));
+                }
+                return hex.toString();
+            } catch (java.security.NoSuchAlgorithmException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+    }
+
+    @Nested
     @DisplayName("Security Features")
     class SecurityFeatures {
 
