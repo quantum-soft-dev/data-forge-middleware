@@ -34,6 +34,15 @@ public class SecurityConfigValidator {
     @Value("${spring.profiles.active:default}")
     private String activeProfile;
 
+    @Value("${delta.grpc.enabled:true}")
+    private boolean grpcEnabled;
+
+    @Value("${delta.grpc.tls.enabled:false}")
+    private boolean grpcTlsEnabled;
+
+    @Value("${delta.grpc.port:9090}")
+    private int grpcPort;
+
     /**
      * Validate JWT secret configuration on application startup.
      * <p>
@@ -81,5 +90,34 @@ public class SecurityConfigValidator {
         }
 
         logger.info("JWT secret validation passed: {} characters", jwtSecret.length());
+    }
+
+    /**
+     * Warn when the Delta v2 gRPC ingestion server is bound without TLS.
+     * <p>
+     * The site Bearer token travels in gRPC metadata (see {@code DeltaAuthInterceptor}), so a
+     * plaintext transport puts the credential on the wire in the clear. That is a legitimate
+     * topology when TLS is terminated in front of the server (GKE Gateway, ingress or sidecar) —
+     * which is exactly why {@code delta.grpc.tls.enabled} defaults to {@code false} and why this
+     * stays a warning: failing fast would break every correctly-deployed environment, and turning
+     * TLS on by default would break local development.
+     * </p>
+     * <p>
+     * The point is that the assumption "something in front terminates TLS" becomes visible at
+     * startup instead of being silently trusted.
+     * </p>
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void warnIfGrpcTransportIsPlaintext() {
+        if (!grpcEnabled || grpcTlsEnabled) {
+            return;
+        }
+
+        logger.warn("Delta gRPC server is listening on port {} without TLS (delta.grpc.tls.enabled=false): "
+                        + "site Bearer tokens travel in gRPC metadata as cleartext. "
+                        + "This is safe only if TLS is terminated in front of the server (ingress, gateway or sidecar). "
+                        + "If nothing terminates TLS, set delta.grpc.tls.enabled=true and provide "
+                        + "delta.grpc.tls.cert-path and delta.grpc.tls.key-path.",
+                grpcPort);
     }
 }
