@@ -407,11 +407,11 @@ change runtime behaviour — read the compatibility notes below before upgrading
 ### 1. Refresh token reuse detection
 
 Refresh tokens are rotated: each successful refresh revokes the presented token and issues a new
-one. Presenting an **already-rotated** token now revokes **every refresh token of that site**, not
-just the replayed one (RFC 6819 §5.2.2.3, OAuth 2.0 Security BCP §4.14.2).
+one. Presenting an **already-rotated** token now revokes the **whole rotation chain that token
+belongs to**, not just the replayed token (RFC 6819 §5.2.2.3, OAuth 2.0 Security BCP §4.14.2).
 
 A rotated token can only be replayed if it leaked, and the server cannot distinguish the attacker
-from the legitimate device — so the whole family is dropped and the device must re-authorize.
+from the legitimate device — so the compromised chain is dropped and that device must re-authorize.
 
 ```
 refresh(A) -> B          200, A revoked
@@ -419,10 +419,29 @@ refresh(A) -> reuse!     401 refresh_token_revoked, B revoked as well
 refresh(B)               401 refresh_token_revoked
 ```
 
-Not treated as reuse (the family survives):
+**Scope is the rotation chain, not the site.** Every run of the Device Authorization Flow starts an
+independent chain (a "token family", tracked internally by `family_id`); each rotation inherits it.
+Reuse revokes one chain:
+
+```
+session A:  A1 -> A2        session B:  B1 -> B2       (same site, independent chains)
+refresh(A1) -> reuse!       401, chain A dead (A1 and A2)
+refresh(B2)                 200, session B unaffected
+```
+
+This is a security property, not tidiness. A site accumulates the revoked tokens of every past
+session — approving a new Device Authorization deliberately revokes the previous session
+(see the FAQ), and rotation revokes a token on every refresh. If reuse revoked site-wide, any one of
+those historical tokens — long dead and otherwise useless — would become a repeatable way to log out
+whichever session is currently live, by anyone who kept a copy.
+
+Not treated as reuse (the chain survives):
 
 - **expired** tokens — expiry is not compromise, `401 refresh_token_expired`
 - **unknown** tokens — never issued or already purged, `400 invalid_refresh_token`
+
+Refresh tokens issued before this change each form a chain of their own, so an old token can only
+ever revoke itself.
 
 **Client impact:** a client that refreshes correctly (always storing the newest refresh token,
 never refreshing twice with the same one) is unaffected. Clients that retry a refresh with the
@@ -430,8 +449,9 @@ never refreshing twice with the same one) is unaffected. Clients that retry a re
 no usable response, **do not replay the old token** — treat it as a lost session and re-run the
 Device Authorization Flow, or persist the new token before acknowledging the response.
 
-Concurrency note: parallel refreshes from several threads/processes with the same token count as
-reuse. Serialize refreshes per site.
+Concurrency note: parallel refreshes from several threads/processes with the **same** token count as
+reuse and kill that chain. Serialize refreshes within a session. Separate sessions of the same site
+refresh independently and never interfere.
 
 ### 2. Site and parent account status enforced on every request
 
@@ -461,12 +481,13 @@ token itself, so a future TTL change cannot make the response drift from reality
 
 | Change | Compatible? | What breaks |
 |---|---|---|
-| Reuse detection revokes the token family | **Behaviour change (intended)** | A device replaying an already-rotated refresh token is fully logged out and must re-run the Device Authorization Flow. Previously the replay just failed and other tokens kept working. |
+| Reuse detection revokes the reused token's **rotation chain** | **Behaviour change (intended)** | A device replaying an already-rotated refresh token is fully logged out and must re-run the Device Authorization Flow. Previously the replay just failed and every token kept working. Other sessions of the same site are **not** affected. |
 | Parent account status checked on validation | **Behaviour change (intended)** | Sites of a deactivated account start returning `401` immediately instead of continuing until their JWT expires (up to 1 hour). |
 | `refreshTokenExpiresAt` read from the entity | Fully compatible | Nothing — same value, same format. |
+| `family_id` on `refresh_tokens` (migration **V43**) | Fully compatible | Nothing. Additive column, `NOT NULL` with a database-side default; existing tokens stay valid and each becomes a chain of one. Safe for rolling deploys — an instance running the previous version inserts without the column and the default assigns an isolated family. |
 
-No API shapes, endpoints, status codes or error identifiers changed, and no database migration is
-required. Both behaviour changes only ever turn a previously-accepted request into a `401`.
+No API shapes, endpoints, status codes or error identifiers changed. Both behaviour changes only
+ever turn a previously-accepted request into a `401`.
 
 ---
 
@@ -514,7 +535,10 @@ A: Re-run the Device Authorization Flow. The user will need to approve again.
 A: No. When a new Device Authorization is approved for the same site, all previous refresh tokens are revoked.
 
 **Q: What happens if I refresh twice with the same refresh token?**
-A: The second attempt is treated as token reuse: every refresh token of that site is revoked and the device must re-run the Device Authorization Flow. Always store the rotated token from the response, and never retry a refresh with the old token. See "Token Security Hardening".
+A: The second attempt is treated as token reuse: that token's whole rotation chain is revoked and the device must re-run the Device Authorization Flow. Always store the rotated token from the response, and never retry a refresh with the old token. See "Token Security Hardening".
+
+**Q: Can an old, already-revoked refresh token be used to disrupt my current session?**
+A: No. Reuse revokes only the rotation chain the replayed token belongs to, so a token left over from an earlier session can only revoke tokens that are already dead. Site-wide revocation remains reserved for site deactivation and for approving a new Device Authorization.
 
 **Q: My account was deactivated — how long do existing tokens keep working?**
 A: They stop working immediately. Site and parent account status are re-checked on every API call, so deactivation no longer waits for the access token to expire.
@@ -540,5 +564,5 @@ A: Yes. Site names support unicode characters (letters, numbers, dots, hyphens, 
 | JWT TTL | 24 hours | 1 hour |
 | JWT claims | `siteId`, `accountId`, `domain` | `siteId`, `accountId` (no `domain`) |
 | S3 paths (new batches) | `{accountId}/{compositeDomain}/{date}/{time}/` | `{accountId}/{siteId}/{date}/{time}/` |
-| Refresh token reuse | Replay rejected, other tokens survived | Replay revokes the site's whole token family (re-authorization required) |
+| Refresh token reuse | Replay rejected, every token survived | Replay revokes that token's rotation chain (re-authorization required); other sessions of the site are untouched |
 | Account deactivation | Effective when the access token expires (up to 1h) | Effective immediately on the next request |
