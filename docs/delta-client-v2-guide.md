@@ -225,7 +225,7 @@ message SessionStart {
 **Protocol:**
 
 1. Send exactly one `SessionStart` first.
-2. The server replies `SessionOpened{server_session_id, server_last_seq, action, resume_from_seq}`. `server_session_id` is the batch id. If `action != PROCEED`, follow [recovery](#recovery-gaps-resume-re-baseline).
+2. The server replies `SessionOpened{server_session_id, server_last_seq, action, resume_from_seq}`. `server_session_id` is the batch id — read it from each `SessionOpened` rather than caching it, since a [resume](#resume-after-a-mid-session-drop) may hand you a different batch. If `action != PROCEED`, follow [recovery](#recovery-gaps-resume-re-baseline).
 3. Send `ChangeRecord`s with strictly-increasing `seq`. The server emits periodic `Ack(acked_seq)`.
 4. Send exactly one `SessionEnd{last_seq, per_table, content_hash}` (omit in [continuous mode](#continuous-mode)).
 5. The server replies `SessionCommitted{committed_seq, segment_s3_key}` and closes its side, or `ServerError` if it refuses to commit.
@@ -372,17 +372,28 @@ the server retains what it had staged and keeps the batch open. On your next DEL
 replies:
 
 ```
-SessionOpened{ action = RESUME_FROM, resume_from_seq = <highest staged seq + 1>, server_session_id = <same batch> }
+SessionOpened{ action = RESUME_FROM, resume_from_seq = <highest staged seq + 1>, server_session_id = <batch id> }
 ```
 
 Replay your records starting at `resume_from_seq` (records ≤ the staged watermark are de-duplicated if you
 re-send them), then `SessionEnd` with **cumulative** per-table counts. The session commits one segment
 spanning the staged + replayed records.
 
+> **`server_session_id` may change on resume — do not assume it is the same batch.** Usually the resume
+> re-attaches to the batch the dropped session opened. But if that batch was already reclaimed while you
+> were away (the timeout sweeper marks a silent batch `NOT_COMPLETED`), the server opens a **fresh** batch
+> and carries your staged records into it. Your staged data and `resume_from_seq` are unaffected — only the
+> id changes. Always take `server_session_id` from the `SessionOpened` you just received: never cache the
+> id from before the drop, and never treat a changed id as an error.
+>
+> If the site has meanwhile acquired another active session, the resume is rejected with
+> `ServerError{code = ACTIVE_SESSION_EXISTS}` instead.
+
 > Resume staging is **in-memory** on the server and is evicted after a TTL (server config
-> `delta.ingestion.staged-ttl-millis`, default just over the 60-minute batch timeout). If the server
-> restarts, or you do not reconnect within the TTL, the staged data is gone and you'll get a
-> `SEQUENCE_GAP` / `NEED_REBASELINE` — fall back to a `FULL_SNAPSHOT`.
+> `delta.ingestion.staged-ttl-millis`, default **50 minutes**, deliberately below the 60-minute batch
+> timeout so a staged session cannot outlive its own batch). If the server restarts, or you do not
+> reconnect within the TTL, the staged data is gone and you'll get a `SEQUENCE_GAP` /
+> `NEED_REBASELINE` — fall back to a `FULL_SNAPSHOT`.
 >
 > **Acks are progress, not durability.** `Ack(acked_seq)` means the server has *received and buffered*
 > up to that seq, not that it is durably committed — durability is `SessionCommitted`/the watermark.
