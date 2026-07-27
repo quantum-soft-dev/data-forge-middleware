@@ -589,6 +589,158 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void resumedDeltaSessionNeverResetsTheBaseline() throws Exception {
+        // 030/T05 REGRESSION SENTINEL. Re-baseline wipes every prior segment and checkpoint for the
+        // site. If the resume path ever restores that intent on the wrong condition, ordinary delta
+        // sessions — the overwhelming majority — would start destroying live baselines. This must
+        // fail on any inversion of the rebaseline condition.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
+                collect(new CopyOnWriteArrayList<>(), new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.DELTA, 121L));
+        s1.onNext(change("t", Op.INSERT, 121L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 121L));
+        s2.onNext(change("t", Op.INSERT, 122L));
+        s2.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(122L)
+                .putPerTable("t", TableStats.newBuilder().setInserts(2).build()).build()).build());
+        s2.onCompleted();
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "resumed stream did not complete");
+        assertTrue(second.get(second.size() - 1).hasCommitted(), "resumed delta session commits");
+        verify(rebaselineService, never()).reset(any(), anyLong());
+    }
+
+    @Test
+    void resumedFullSnapshotStillResetsTheBaseline() throws Exception {
+        // 030/T05: a FULL_SNAPSHOT is not CONTINUOUS, so a mid-stream drop stages it for resume —
+        // and the resume path used to return before the rebaseline flag was ever set, committing a
+        // re-baseline as an ordinary delta and folding the new snapshot on top of stale data.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
+                collect(new CopyOnWriteArrayList<>(), new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.FULL_SNAPSHOT, 200L));
+        s1.onNext(change("t", Op.INSERT, 200L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 200L)); // the resume handshake is always DELTA
+        s2.onNext(change("t", Op.INSERT, 201L));
+        s2.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(201L)
+                .putPerTable("t", TableStats.newBuilder().setInserts(2).build()).build()).build());
+        s2.onCompleted();
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "resumed snapshot did not complete");
+        assertTrue(second.get(second.size() - 1).hasCommitted(), "resumed snapshot commits");
+        // Same reset the session would have performed had it never dropped: at the snapshot's own
+        // first_seq, which survives the drop inside the staged session.
+        verify(rebaselineService).reset(SITE, 200L);
+        // ...and the segment carries the snapshot's mode and range, not a delta's.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
+        verify(changelogSegmentService)
+                .persist(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"), eq(200L), records.capture());
+        assertEquals(2, records.getValue().size(), "staged + replayed snapshot records");
+    }
+
+    @Test
+    void rebaselineIntentSurvivesRepeatedDrops() throws Exception {
+        // 030/T05: a re-baseline is the longest, most drop-prone session there is — one drop must
+        // not be the only case that works.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID batchId = UUID.randomUUID();
+        Batch batch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
+                collect(new CopyOnWriteArrayList<>(), new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.FULL_SNAPSHOT, 200L));
+        s1.onNext(change("t", Op.INSERT, 200L));
+        s1.onError(new RuntimeException("first drop"));
+
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(
+                collect(new CopyOnWriteArrayList<>(), new CountDownLatch(1)));
+        s2.onNext(start(SessionMode.DELTA, 200L));
+        s2.onNext(change("t", Op.INSERT, 201L));
+        s2.onError(new RuntimeException("second drop"));
+
+        List<ServerEvent> third = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s3 = asyncStub.streamChanges(collect(third, done));
+        s3.onNext(start(SessionMode.DELTA, 200L));
+        s3.onNext(change("t", Op.INSERT, 202L));
+        s3.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(202L)
+                .putPerTable("t", TableStats.newBuilder().setInserts(3).build()).build()).build());
+        s3.onCompleted();
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "twice-resumed snapshot did not complete");
+        verify(rebaselineService).reset(SITE, 200L);
+        verify(changelogSegmentService)
+                .persist(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"), eq(200L), any());
+    }
+
+    @Test
+    void resumedFullSnapshotOntoReapedBatchStillResetsTheBaseline() throws Exception {
+        // 030/T05 x T02: the two resume repairs must compose — a snapshot whose batch the sweeper
+        // reaped while it was parked still re-baselines, now under the fresh batch.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID reapedBatchId = UUID.randomUUID();
+        UUID freshBatchId = UUID.randomUUID();
+        Batch reapedBatch = mockBatch(reapedBatchId);
+        Batch freshBatch = mockBatch(freshBatchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(reapedBatch, freshBatch);
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
+                collect(new CopyOnWriteArrayList<>(), new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.FULL_SNAPSHOT, 200L));
+        s1.onNext(change("t", Op.INSERT, 200L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        when(batchLifecycle.isBatchInProgress(reapedBatchId)).thenReturn(false);
+
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 200L));
+        s2.onNext(change("t", Op.INSERT, 201L));
+        s2.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(201L)
+                .putPerTable("t", TableStats.newBuilder().setInserts(2).build()).build()).build());
+        s2.onCompleted();
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "resumed snapshot did not complete");
+        verify(rebaselineService).reset(SITE, 200L);
+        verify(batchLifecycle).completeBatch(freshBatchId);
+        verify(changelogSegmentService)
+                .persist(eq(SITE), eq(freshBatchId), eq("FULL_SNAPSHOT"), eq(200L), any());
+    }
+
+    @Test
     void emitsProgressiveAcksOverLargeSession() throws Exception {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
         Batch batch = mock(Batch.class);

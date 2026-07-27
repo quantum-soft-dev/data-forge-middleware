@@ -397,6 +397,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         buffer = resume.buffer();
                         sessionMode = resume.mode();
                         firstSeq = resume.firstSeq();
+                        // 030/T05: restore the re-baseline intent. A FULL_SNAPSHOT is not CONTINUOUS,
+                        // so a mid-stream drop stages it here — and this branch returns before the
+                        // fresh-start path would set the flag. Losing it committed a re-baseline as
+                        // an ordinary delta: the old segments/checkpoints were never wiped and the
+                        // new snapshot folded on top of stale data. Carried explicitly rather than
+                        // re-derived from the mode, so the staged session records what it decided.
+                        rebaseline = resume.rebaseline();
+                        // `continuous` is deliberately NOT restored: onError routes continuous
+                        // sessions to sealOnContinuousDrop(), so only non-continuous sessions ever
+                        // reach stageForResume(). A staged session was never continuous, and
+                        // setting the flag here would enable mid-stream seals that must not happen.
                         // The re-attached batch is live again — refresh its activity (029).
                         batchLifecycleService.touchActivity(batchId);
                         responseObserver.onNext(ServerEvent.newBuilder()
@@ -573,8 +584,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void stageForResume() {
                 if (!closed && !committed && batchId != null && buffer != null) {
+                    // 030/T05: the re-baseline intent is staged with the session — it decides
+                    // whether the eventual commit wipes the prior baseline, and a drop must not
+                    // silently downgrade a FULL_SNAPSHOT to an ordinary delta commit.
                     stagedSessions.put(siteId, new StagedSession(
-                            batchId, sessionMode, firstSeq, buffer, System.currentTimeMillis()));
+                            batchId, sessionMode, firstSeq, buffer, rebaseline, System.currentTimeMillis()));
                     closed = true;
                 }
             }
@@ -679,10 +693,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
     /**
      * A session retained for resume after a mid-session drop (T5.1): the active batch it opened, its
-     * mode and first sequence, the buffer of records staged so far, and when it was staged (for TTL
-     * eviction).
+     * mode and first sequence, the buffer of records staged so far, whether it is a re-baseline
+     * (030 — a FULL_SNAPSHOT must still wipe the prior baseline when it commits after a resume), and
+     * when it was staged (for TTL eviction).
      */
     private record StagedSession(UUID batchId, String mode, long firstSeq, SessionChangeBuffer buffer,
-                                 long stagedAtMillis) {
+                                 boolean rebaseline, long stagedAtMillis) {
     }
 }
