@@ -595,6 +595,47 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void streamingTouchesBatchActivityAtStartAckAndSeal() throws Exception {
+        // 029/T006: the activity-based timeout needs a liveness signal — the session touches its
+        // batch at start, at each Ack watermark (>=100 accepted records), and at each seal.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.CONTINUOUS, 1L));
+            for (long seq = 1; seq <= 100L; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+        });
+
+        // At least: one touch at session start, one at the 100-record ack, one at the seal.
+        verify(batchLifecycle, atLeast(3)).touchActivity(batchId);
+    }
+
+    @Test
+    void shortDeltaSessionTouchesActivityOnlyAtStart() throws Exception {
+        // Below the ack watermark no per-record touching happens — the touch cadence is bounded,
+        // not per record.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(
+                    SessionEnd.newBuilder().setLastSeq(1L)
+                            .putPerTable("t", TableStats.newBuilder().setInserts(1).build())
+                            .build()).build());
+        });
+
+        verify(batchLifecycle, times(1)).touchActivity(batchId);
+    }
+
+    @Test
     void continuousZeroRecordSessionCompletesItsBatchWithNoSegment() throws Exception {
         // A session that opens and closes without records is still one honest upload attempt:
         // its single batch completes with zero changes and no segment row (029, FR-004/FR-005).

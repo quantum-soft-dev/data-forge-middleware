@@ -335,6 +335,34 @@ class BatchLifecycleServiceTest {
     }
 
     @Nested
+    @DisplayName("touchActivity()")
+    class TouchActivity {
+
+        @Test
+        @DisplayName("should touch the batch's activity timestamp and save")
+        void shouldTouchActivityAndSave() {
+            Batch batch = mock(Batch.class);
+            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+            when(batchRepository.save(batch)).thenReturn(batch);
+
+            service.touchActivity(batchId);
+
+            verify(batch).touchActivity();
+            verify(batchRepository).save(batch);
+        }
+
+        @Test
+        @DisplayName("should be best-effort: a missing batch must not throw into the ingest path")
+        void shouldNotThrowWhenBatchMissing() {
+            when(batchRepository.findById(batchId)).thenReturn(Optional.empty());
+
+            service.touchActivity(batchId);
+
+            verify(batchRepository, never()).save(any());
+        }
+    }
+
+    @Nested
     @DisplayName("markBatchHasErrors()")
     class MarkBatchHasErrors {
 

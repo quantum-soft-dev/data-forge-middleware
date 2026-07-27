@@ -324,6 +324,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 }
                 if (++sinceAck >= ACK_INTERVAL) {
                     sinceAck = 0;
+                    // Liveness signal for the activity-based timeout (029/T006): touch at the same
+                    // bounded cadence as the ack watermark, never per record.
+                    batchLifecycleService.touchActivity(batchId);
                     responseObserver.onNext(ServerEvent.newBuilder()
                             .setAck(Ack.newBuilder().setAckedSeq(buffer.lastSeq()).build())
                             .build());
@@ -368,6 +371,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         buffer = resume.buffer();
                         sessionMode = resume.mode();
                         firstSeq = resume.firstSeq();
+                        // The re-attached batch is live again — refresh its activity (029).
+                        batchLifecycleService.touchActivity(batchId);
                         responseObserver.onNext(ServerEvent.newBuilder()
                                 .setOpened(SessionOpened.newBuilder()
                                         .setServerSessionId(batchId.toString())
@@ -421,6 +426,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return;
                 }
                 batchId = batch.getId();
+                // First liveness touch: the activity-based timeout (029) measures from last session
+                // activity, and a session that opens and stalls must still be reclaimable.
+                batchLifecycleService.touchActivity(batchId);
                 if (start.getMode() == SessionMode.FULL_SNAPSHOT) {
                     // Re-baseline: the prior changelog and checkpoints are discarded so the snapshot
                     // becomes the new baseline. The destruction is DEFERRED to commit (done in the
@@ -518,6 +526,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
                 String segmentKey = commitService.commitSegment(
                         siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
+                batchLifecycleService.touchActivity(batchId);
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
