@@ -127,6 +127,21 @@ public class ParquetExportApiController {
                 files, listing.page(), listing.size(), listing.hasMore()));
     }
 
+    /**
+     * Consume a one-time download link (no authentication — the token is the credential) and
+     * redirect to the short-lived S3 presigned URL.
+     */
+    @GetMapping("/download/{token}")
+    @Operation(summary = "One-time download redirect",
+            description = "Anonymous. First use: 302 redirect to a ~60s S3 presigned URL and the "
+                    + "link is atomically consumed. Consumed/expired link: 410 Gone. Unknown token: 404.")
+    public ResponseEntity<Void> download(@org.springframework.web.bind.annotation.PathVariable String token) {
+        String presignedUrl = downloadLinkService.consume(token);
+        return ResponseEntity.status(org.springframework.http.HttpStatus.FOUND)
+                .header(org.springframework.http.HttpHeaders.LOCATION, presignedUrl)
+                .build();
+    }
+
     private LocalDateTime parseSince(String since) {
         if (since == null || since.isBlank()) {
             return EPOCH;

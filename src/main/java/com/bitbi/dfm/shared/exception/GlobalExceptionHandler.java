@@ -1266,6 +1266,47 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle DownloadLinkService.LinkGoneException (410 Gone, 028-parquet-export-plugin).
+     * <p>
+     * The one-time link exists but is consumed, expired, or its activation is inactive.
+     * </p>
+     */
+    @ExceptionHandler(com.bitbi.dfm.plugin.application.DownloadLinkService.LinkGoneException.class)
+    public ResponseEntity<ErrorResponseDto> handleDownloadLinkGone(
+            com.bitbi.dfm.plugin.application.DownloadLinkService.LinkGoneException ex,
+            HttpServletRequest request) {
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.GONE.value(),
+                "Gone",
+                "Download link is no longer valid",
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.GONE).body(error);
+    }
+
+    /**
+     * Handle DownloadLinkService.LinkNotFoundException (404 Not Found, 028-parquet-export-plugin).
+     */
+    @ExceptionHandler(com.bitbi.dfm.plugin.application.DownloadLinkService.LinkNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleDownloadLinkNotFound(
+            com.bitbi.dfm.plugin.application.DownloadLinkService.LinkNotFoundException ex,
+            HttpServletRequest request) {
+
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(),
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+
+    /**
      * Handle CsvFileQueryService.FileNotFoundException (404 Not Found).
      * <p>
      * Thrown when a CSV file is not found for a site.
