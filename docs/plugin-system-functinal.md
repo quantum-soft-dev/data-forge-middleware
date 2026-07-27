@@ -213,6 +213,12 @@ Authorization: Bearer plk_xxxxxxxxxxxxx
 }
 ```
 
+> **Superseded (031, V42).** Ключ больше не хранится в открытом виде: в `plugin_data` лежит
+> только BCrypt-хеш (`apiKeyHash`), а поиск активации идёт по отдельной колонке
+> `account_plugins.api_key_lookup` = hex SHA-256 ключа (уникальный частичный индекс).
+> Валидация = один индексный точечный запрос + одно BCrypt-сравнение.
+> См. `docs/cr-plugin-api-key-lookup.md`.
+
 **Обновление JSON Schema (BitBiPlugin):**
 ```json
 {
@@ -361,9 +367,16 @@ CREATE INDEX idx_plugin_sql_generations_account_plugin
 
 ### Index for API Key Lookup
 
+> **Superseded (031, V42).** Индекс по plaintext-ключу в JSONB не создавался. Фактическая
+> реализация — колонка `account_plugins.api_key_lookup` (hex SHA-256 ключа) с уникальным
+> частичным индексом; см. `docs/cr-plugin-api-key-lookup.md`.
+
 ```sql
-CREATE INDEX idx_account_plugins_api_key
-    ON account_plugins USING GIN ((plugin_data->'apiKey'));
+ALTER TABLE account_plugins ADD COLUMN api_key_lookup VARCHAR(64);
+
+CREATE UNIQUE INDEX idx_account_plugins_api_key_lookup
+    ON account_plugins (api_key_lookup)
+    WHERE api_key_lookup IS NOT NULL;
 ```
 
 ---
@@ -407,7 +420,10 @@ s3://dataforge-uploads/
 - **SC-009**: SQL генерация завершается в течение 60 секунд для батча с 100 файлами
 - **SC-010**: GET /sql-changes возвращает ответ в течение 2 секунд
 - **SC-011**: 100% точность SQL генерации (все добавления/изменения/удаления отражены)
-- **SC-012**: API Key валидация выполняется за <50ms
+- **SC-012**: ~~API Key валидация выполняется за <50ms~~ — недостижимо: одно BCrypt-сравнение
+  стоит ~100 мс by design. Актуальная гарантия (031): стоимость валидации постоянна и не зависит
+  от числа активаций — один индексный запрос + одно BCrypt-сравнение; неизвестный ключ верного
+  формата не стоит ни одного BCrypt. См. `docs/cr-plugin-api-key-lookup.md`.
 - **SC-013**: Audit trail сохраняет все API вызовы и генерации
 
 ---
