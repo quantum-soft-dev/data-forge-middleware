@@ -13,19 +13,28 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Contract tests for Authentication API (POST /api/v1/auth/token).
+ * Contract tests for the legacy Authentication API (POST /api/v1/auth/token).
  * <p>
- * CRITICAL: These tests MUST FAIL before implementation.
- * Purpose: Validate API contract compliance before building the actual endpoint.
+ * Retargeted from {@code /api/v1/device/auth/token} — a path that never had a controller — to
+ * {@link ApiRoutes#AUTH_TOKEN}, the only mapping that implements this Basic Auth contract
+ * (deprecated {@code AuthController}).
+ * </p>
+ * <p>
+ * Still disabled: the mapping exists but is unreachable. The Order 5 {@code /api/v1/**} OAuth2
+ * filter chain matches {@code /api/v1/auth/token} before the default chain, so every request is
+ * answered with 401 by Spring Security and {@code AuthController} is never invoked. Auth V2 issues
+ * tokens through the Device Authorization Flow instead. Re-enable once the owner decides whether to
+ * re-open the endpoint (permitAll in the Order 5 chain) or delete the controller;
+ * {@code SecurityFilterChainTest#basicAuthTokenIssuanceShouldNotBeReachable} pins today's behavior.
  * </p>
  *
  * @see <a href="specs/001-technical-specification-data/contracts/auth-api.md">Authentication API Contract</a>
  */
-@Disabled("Auth V2: Basic Auth endpoint removed. See auth-v2-migration-guide.md")
+@Disabled("Unreachable: /api/v1/auth/token is shadowed by the Order 5 /api/v1/** OAuth2 chain")
 @DisplayName("Authentication API Contract Tests")
 class AuthContractTest extends BaseIntegrationTest {
 
-    private static final String AUTH_TOKEN_ENDPOINT = ApiRoutes.DEVICE_AUTH_TOKEN;
+    private static final String AUTH_TOKEN_ENDPOINT = ApiRoutes.AUTH_TOKEN;
 
     /**
      * Test Case 1: Valid credentials should issue JWT token.

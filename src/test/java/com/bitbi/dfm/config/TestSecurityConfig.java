@@ -248,7 +248,6 @@ public class TestSecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint
                 .requestMatchers("/api/v1/device/auth/refresh").permitAll() // Auth V2: refresh token endpoint
                 .requestMatchers("/api/v1/device/authorize").permitAll() // Device authorization
                 .requestMatchers("/api/v1/device/token").permitAll() // Device token polling
@@ -458,8 +457,7 @@ public class TestSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/device/auth/token").permitAll() // NEW Device API token endpoint
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint (shadowed by the Order 5 /api/v1/** chain)
                 .anyRequest().denyAll()
             );
 

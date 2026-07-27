@@ -38,16 +38,6 @@ public final class ApiRoutes {
     public static final String DEVICE_AUTH = DEVICE_API_BASE + "/auth";
 
     /**
-     * Device token generation endpoint.
-     * <p>
-     * Method: POST<br>
-     * Authentication: Basic Auth (site domain + client secret)<br>
-     * Returns: JWT token for subsequent Device API calls
-     * </p>
-     */
-    public static final String DEVICE_AUTH_TOKEN = DEVICE_AUTH + "/token";
-
-    /**
      * Device token refresh endpoint (Auth V2).
      * <p>
      * POST /api/v1/device/auth/refresh<br>
@@ -251,6 +241,22 @@ public final class ApiRoutes {
      * </p>
      */
     public static final String ADMIN_API_BASE = "/api/v1";
+
+    // Legacy client authentication
+    /**
+     * Legacy client token endpoint (Basic Auth).
+     * <p>
+     * Method: POST<br>
+     * Authentication: Basic Auth (site domain + client secret)<br>
+     * Returns: Custom JWT token for client API calls
+     * </p>
+     *
+     * @deprecated Auth V2: clients obtain tokens via the Device Authorization Flow
+     * ({@link #DEVICE_AUTHORIZATION_AUTHORIZE} / {@link #DEVICE_AUTHORIZATION_TOKEN}) and renew them
+     * via {@link #DEVICE_AUTH_REFRESH}. Served by the deprecated {@code AuthController}.
+     */
+    @Deprecated
+    public static final String AUTH_TOKEN = ADMIN_API_BASE + "/auth/token";
 
     // Accounts
     /**

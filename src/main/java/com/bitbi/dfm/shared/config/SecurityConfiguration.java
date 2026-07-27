@@ -136,7 +136,7 @@ public class SecurityConfiguration {
      * <b>Public endpoints</b>:
      * </p>
      * <ul>
-     *   <li>/api/v1/device/auth/token - Basic Auth token generation</li>
+     *   <li>/api/v1/device/auth/refresh - Auth V2 refresh token rotation</li>
      *   <li>/api/v1/device/authorize - Device Authorization Flow initiation</li>
      *   <li>/api/v1/device/token - Device Authorization Flow polling</li>
      * </ul>
@@ -151,7 +151,6 @@ public class SecurityConfiguration {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/device/auth/token").permitAll() // Public token endpoint with Basic Auth (deprecated)
                 .requestMatchers("/api/v1/device/auth/refresh").permitAll() // Auth V2: refresh token endpoint
                 .requestMatchers(HttpMethod.POST, "/api/v1/device/authorize").permitAll() // Device Authorization Flow - initiate
                 .requestMatchers(HttpMethod.POST, "/api/v1/device/token").permitAll() // Device Authorization Flow - poll
@@ -434,8 +433,8 @@ public class SecurityConfiguration {
      * <b>Public access</b>:
      * </p>
      * <ul>
-     *   <li>/api/v1/device/auth/token (POST) - NEW Device API token endpoint</li>
-     *   <li>/api/v1/auth/token (POST) - Legacy token endpoint (deprecated)</li>
+     *   <li>/api/v1/auth/token (POST) - Legacy token endpoint (deprecated; in practice shadowed by
+     *       the Order 5 /api/v1/** chain, so this rule never matches)</li>
      *   <li>/actuator/health, /actuator/health/** (liveness/readiness probes), /actuator/info - Health checks</li>
      *   <li>/swagger-ui/**, /v3/api-docs/** - API documentation</li>
      * </ul>
@@ -450,8 +449,7 @@ public class SecurityConfiguration {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.POST, "/api/v1/device/auth/token").permitAll() // NEW Device API token endpoint
-                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll() // Legacy token endpoint (shadowed by the Order 5 /api/v1/** chain)
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()
