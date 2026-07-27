@@ -87,7 +87,7 @@ docker-compose up postgres localstack     # Start dependencies
 - Max 5 concurrent batches per account
 - 60-minute batch timeout (scheduled task)
 - Retention cleanup schedule is configurable by admins (cron via `/api/v1/admin/settings/batch-retention-schedule`)
-- 500MB file size limit
+- 128MB file size limit (`spring.servlet.multipart.max-file-size` = 128MB, `max-request-size` = 130MB; `upload.max.file-size-mb` = `${UPLOAD_MAX_FILE_SIZE_MB:128}`)
 
 ## Code Style
 
