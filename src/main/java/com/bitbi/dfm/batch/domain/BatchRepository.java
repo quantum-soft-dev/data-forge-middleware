@@ -28,6 +28,23 @@ public interface BatchRepository {
 
     Batch save(Batch batch);
 
+    /**
+     * Stamp a batch's last session activity (029/030) with a targeted update.
+     * <p>
+     * Deliberately not a load-modify-{@link #save(Batch)}: {@code Batch} carries a {@code @Version},
+     * so a read-modify-write liveness signal takes part in optimistic locking and loses races
+     * against real transitions (the timeout sweeper, a segment commit) — throwing
+     * {@code OptimisticLockingFailureException} into the Delta v2 gRPC ingest path and killing a
+     * healthy live session. A single-column update carries no version check, so the liveness write
+     * cannot conflict with anything.
+     * </p>
+     *
+     * @param batchId batch identifier
+     * @param now     activity timestamp
+     * @return number of rows updated (0 when the batch no longer exists)
+     */
+    int touchActivity(UUID batchId, LocalDateTime now);
+
     long countByAccountId(UUID accountId);
 
     long countBySiteId(UUID siteId);
