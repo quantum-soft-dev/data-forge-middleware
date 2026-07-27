@@ -35,7 +35,10 @@ public class BatchTimeoutScheduler {
     public BatchTimeoutScheduler(
             BatchRepository batchRepository,
             BatchLifecycleService batchLifecycleService,
-            @Value("${batch.timeout-minutes:60}") int timeoutMinutes) {
+            // 030/T07: the key is nested in application.yml (batch: timeout: minutes) and @Value does
+            // no relaxed binding, so the old "batch.timeout-minutes" never resolved — the sweeper
+            // silently ran on the hard-coded 60 and BATCH_TIMEOUT_MINUTES did nothing.
+            @Value("${batch.timeout.minutes:60}") int timeoutMinutes) {
         this.batchRepository = batchRepository;
         this.batchLifecycleService = batchLifecycleService;
         this.timeoutMinutes = timeoutMinutes;

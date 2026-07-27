@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.presentation;
 
+import com.bitbi.dfm.batch.application.BatchTimeoutScheduler;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
@@ -30,12 +31,30 @@ class DeltaIngestionStagedTtlConfigTest {
     /** {@code ${ENV_VAR:default}} — the shipped default is what runs when no env var is set. */
     private static final Pattern PLACEHOLDER = Pattern.compile("^\\$\\{[^:}]+:(.*)}$");
 
+    /** {@code ${some.key:default}} — captures the key rather than the default. */
+    private static final Pattern PLACEHOLDER_KEY = Pattern.compile("^\\$\\{([^:}]+):.*}$");
+
+    @Test
+    void theSweeperTimeoutPropertyActuallyExistsInTheShippedConfig() {
+        // 030/T07: BatchTimeoutScheduler read ${batch.timeout-minutes}, but application.yml declares
+        // the nested key batch.timeout.minutes. @Value does no relaxed binding, so the placeholder
+        // never resolved and the sweeper silently used its hard-coded 60 — BATCH_TIMEOUT_MINUTES had
+        // no effect on it at all. A default that can never be overridden is not a default.
+        String key = sweeperTimeoutKey();
+
+        assertNotNull(shippedDefaults().getProperty(key),
+                "BatchTimeoutScheduler reads ${" + key + "}, which application.yml does not declare — "
+                        + "the placeholder can never resolve and the env override is dead");
+    }
+
     @Test
     void stagedSessionIsEvictedBeforeTheSweeperCanReapItsBatch() {
         Properties yaml = shippedDefaults();
         long stagedTtl = longDefault(yaml, "delta.ingestion.staged-ttl-millis");
         long sweepInterval = longDefault(yaml, "delta.ingestion.staged-sweep-millis");
-        long batchTimeout = longDefault(yaml, "batch.timeout.minutes") * 60_000L;
+        // Read the timeout from the property the sweeper actually reads, not from whichever key
+        // looks right: an invariant checked against a key the runtime ignores is theatre.
+        long batchTimeout = longDefault(yaml, sweeperTimeoutKey()) * 60_000L;
 
         assertTrue(stagedTtl < batchTimeout,
                 "staged-ttl-millis (" + stagedTtl + ") must be below the batch timeout ("
@@ -57,6 +76,21 @@ class DeltaIngestionStagedTtlConfigTest {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** The property key {@code BatchTimeoutScheduler} actually resolves its timeout from. */
+    private static String sweeperTimeoutKey() {
+        for (Constructor<?> constructor : BatchTimeoutScheduler.class.getDeclaredConstructors()) {
+            for (Parameter parameter : constructor.getParameters()) {
+                Value value = parameter.getAnnotation(Value.class);
+                if (value != null && value.value().contains("batch.")) {
+                    Matcher matcher = PLACEHOLDER_KEY.matcher(value.value().trim());
+                    assertTrue(matcher.matches(), "expected a ${key:default} placeholder, got " + value.value());
+                    return matcher.group(1);
+                }
+            }
+        }
+        throw new AssertionError("BatchTimeoutScheduler has no @Value timeout parameter");
+    }
 
     private static Properties shippedDefaults() {
         YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
