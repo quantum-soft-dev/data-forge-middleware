@@ -238,9 +238,43 @@ public class TestSecurityConfig {
     }
 
     /**
+     * Device Authorization Flow verification chain.
+     * <p>
+     * Order 0: mirrors production - /api/v1/device/verify is the one Device API endpoint driven by
+     * the site owner in a browser, so it authenticates with Auth0 OAuth2 rather than a device JWT.
+     * Without this chain the Order 1 device chain would swallow it and demand a site token.
+     * </p>
+     *
+     * @see com.bitbi.dfm.shared.config.SecurityConfiguration#deviceAuthorizationVerifyFilterChain
+     */
+    @Bean
+    @org.springframework.core.annotation.Order(0)
+    public SecurityFilterChain deviceAuthorizationVerifyFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/api/v1/device/verify")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .jwt(jwt -> jwt
+                    .jwtAuthenticationConverter(jwtAuthenticationConverter())
+                )
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.sendError(401, "Unauthorized - Auth0 OAuth2 authentication required for device verification");
+                })
+            );
+
+        return http.build();
+    }
+
+    /**
      * Device API filter chain (NEW unified structure).
      * <p>
-     * Order 1: Highest priority - matches /api/v1/device/** first.
+     * Order 1: matches the remaining /api/v1/device/** endpoints.
      * Custom JWT tokens only via JwtAuthenticationFilter.
      * </p>
      */
