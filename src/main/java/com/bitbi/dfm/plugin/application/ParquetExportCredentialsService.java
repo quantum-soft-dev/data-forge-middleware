@@ -11,7 +11,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -102,7 +101,9 @@ public class ParquetExportCredentialsService {
     }
 
     /**
-     * Validate Basic Auth credentials against active parquet-export activations.
+     * Validate Basic Auth credentials: one indexed point query by login (unique expression
+     * index, V40) followed by exactly one BCrypt comparison — request cost stays O(1) in the
+     * number of activations, so unauthenticated garbage logins cannot force full scans.
      *
      * @return the matching active activation, or empty on any mismatch
      */
@@ -112,17 +113,9 @@ public class ParquetExportCredentialsService {
             return Optional.empty();
         }
 
-        List<AccountPlugin> activeActivations = accountPluginRepository.findActiveByPluginId(PLUGIN_ID);
-        for (AccountPlugin accountPlugin : activeActivations) {
-            if (!login.equals(accountPlugin.getPluginData().get(LOGIN_FIELD))) {
-                continue;
-            }
-            Object storedHash = accountPlugin.getPluginData().get(PASSWORD_HASH_FIELD);
-            if (storedHash instanceof String hash && passwordEncoder.matches(rawPassword, hash)) {
-                return Optional.of(accountPlugin);
-            }
-            return Optional.empty(); // login matched, password did not — no other activation can match
-        }
-        return Optional.empty();
+        return accountPluginRepository.findActiveByPluginIdAndLogin(PLUGIN_ID, login)
+                .filter(accountPlugin ->
+                        accountPlugin.getPluginData().get(PASSWORD_HASH_FIELD) instanceof String hash
+                                && passwordEncoder.matches(rawPassword, hash));
     }
 }

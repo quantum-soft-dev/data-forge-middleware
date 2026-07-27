@@ -136,23 +136,26 @@ class ParquetExportCredentialsServiceTest {
         }
 
         @Test
-        @DisplayName("Should return activation for correct login and password")
+        @DisplayName("Should return activation via direct login lookup")
         void shouldValidateCorrectCredentials() {
             AccountPlugin accountPlugin = activeWith("pex_someLogin001", "correctPassword");
-            when(accountPluginRepository.findActiveByPluginId("parquet-export"))
-                    .thenReturn(List.of(accountPlugin));
+            when(accountPluginRepository.findActiveByPluginIdAndLogin("parquet-export", "pex_someLogin001"))
+                    .thenReturn(Optional.of(accountPlugin));
 
             Optional<AccountPlugin> result = service.validate("pex_someLogin001", "correctPassword");
 
             assertTrue(result.isPresent());
             assertSame(accountPlugin, result.get());
+            // review P1: one point query, never a scan of all activations
+            verify(accountPluginRepository, never()).findActiveByPluginId(any());
         }
 
         @Test
         @DisplayName("Should reject wrong password")
         void shouldRejectWrongPassword() {
-            when(accountPluginRepository.findActiveByPluginId("parquet-export"))
-                    .thenReturn(List.of(activeWith("pex_someLogin001", "correctPassword")));
+            AccountPlugin accountPlugin = activeWith("pex_someLogin001", "correctPassword");
+            when(accountPluginRepository.findActiveByPluginIdAndLogin("parquet-export", "pex_someLogin001"))
+                    .thenReturn(Optional.of(accountPlugin));
 
             assertTrue(service.validate("pex_someLogin001", "wrongPassword").isEmpty());
         }
@@ -160,8 +163,8 @@ class ParquetExportCredentialsServiceTest {
         @Test
         @DisplayName("Should reject unknown login without BCrypt check")
         void shouldRejectUnknownLogin() {
-            when(accountPluginRepository.findActiveByPluginId("parquet-export"))
-                    .thenReturn(List.of(activeWith("pex_someLogin001", "correctPassword")));
+            when(accountPluginRepository.findActiveByPluginIdAndLogin("parquet-export", "pex_otherLogin99"))
+                    .thenReturn(Optional.empty());
 
             assertTrue(service.validate("pex_otherLogin99", "correctPassword").isEmpty());
         }
@@ -177,8 +180,8 @@ class ParquetExportCredentialsServiceTest {
         @Test
         @DisplayName("Should reject activation without stored hash")
         void shouldRejectMissingHash() {
-            when(accountPluginRepository.findActiveByPluginId("parquet-export"))
-                    .thenReturn(List.of(activation(Map.of("login", "pex_someLogin001"))));
+            when(accountPluginRepository.findActiveByPluginIdAndLogin("parquet-export", "pex_someLogin001"))
+                    .thenReturn(Optional.of(activation(Map.of("login", "pex_someLogin001"))));
 
             assertTrue(service.validate("pex_someLogin001", "anyPassword").isEmpty());
         }
