@@ -187,6 +187,29 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("Should report the refresh token expiry that is actually stored in the database")
+    void shouldReportStoredRefreshTokenExpiry() throws Exception {
+        String token = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
+
+        String responseBody = mockMvc.perform(refreshRequest(token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        com.fasterxml.jackson.databind.JsonNode json = objectMapper.readTree(responseBody);
+        java.time.Instant reported = java.time.Instant.parse(json.get("refreshTokenExpiresAt").asText());
+
+        // Read as OffsetDateTime: java.sql.Timestamp would re-interpret timestamptz in the JVM zone
+        java.time.OffsetDateTime stored = jdbcTemplate.queryForObject(
+                "SELECT expires_at FROM refresh_tokens WHERE token_hash = ?",
+                java.time.OffsetDateTime.class,
+                sha256Hex(json.get("refreshToken").asText()));
+
+        org.assertj.core.api.Assertions.assertThat(reported)
+                .isCloseTo(stored.toInstant(),
+                        org.assertj.core.api.Assertions.within(1, java.time.temporal.ChronoUnit.MILLIS));
+    }
+
+    @Test
     @DisplayName("Should revoke the whole token family when a rotated refresh token is reused")
     void shouldRevokeWholeFamilyOnReuse() throws Exception {
         // Given: token A rotated into token B

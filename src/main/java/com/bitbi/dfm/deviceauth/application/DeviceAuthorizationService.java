@@ -17,7 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.UUID;
 
@@ -162,17 +161,17 @@ public class DeviceAuthorizationService {
                 // Generate JWT access token
                 JwtToken accessToken = jwtTokenProvider.generateToken(siteId, accountId);
 
-                // Generate refresh token
-                String refreshToken = refreshTokenService.generateRefreshToken(siteId);
-                Instant refreshTokenExpiresAt = Instant.now().plus(90, ChronoUnit.DAYS);
+                // Generate refresh token - the expiry is read back from the persisted token
+                RefreshTokenService.IssuedRefreshToken refreshToken =
+                        refreshTokenService.issueRefreshToken(siteId);
 
                 yield TokenResult.success(
                         siteId,
                         siteName,
                         accessToken.token(),
-                        refreshToken,
+                        refreshToken.token(),
                         accessToken.expiresAt(),
-                        refreshTokenExpiresAt,
+                        refreshToken.expiresAt(),
                         apiBaseUrl
                 );
             }
