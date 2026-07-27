@@ -238,9 +238,11 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should revoke only the reused chain, leaving other sessions of the same site alive")
+    @DisplayName("Should revoke only the reused chain, leaving the site's other tokens alive")
     void shouldRevokeOnlyTheReusedChain() throws Exception {
-        // Given: two independent sessions of the SAME site (two device flow runs)
+        // Given: two rotation chains on the SAME site - chain A stands for a past session whose
+        // tokens still linger, chain B for the session in use. (Sessions do not run in parallel:
+        // re-authorization supersedes the previous one - see DeviceFlowSessionSupersedeContractTest.)
         String a1 = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
         String a2 = refreshFor(a1);
         String b1 = refreshTokenService.generateRefreshToken(STORE_03_SITE_ID);
@@ -256,8 +258,8 @@ class DeviceAuthRefreshContractTest extends BaseIntegrationTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("refresh_token_revoked"));
 
-        // ...but the unrelated live session B is untouched. Otherwise any stale revoked token
-        // would be a repeatable denial-of-service against the site's current session.
+        // ...but chain B is untouched. Otherwise any stale revoked token left over from an earlier
+        // session would be a repeatable denial-of-service against the site's current session.
         mockMvc.perform(refreshRequest(b2))
                 .andExpect(status().isOk());
     }
