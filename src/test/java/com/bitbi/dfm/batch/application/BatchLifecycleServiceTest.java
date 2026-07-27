@@ -339,6 +339,55 @@ class BatchLifecycleServiceTest {
     }
 
     @Nested
+    @DisplayName("markBatchNotCompletedIfStillExpired()")
+    class MarkBatchNotCompletedIfStillExpired {
+
+        private final LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+
+        @Test
+        @DisplayName("should reap a still-expired batch and publish the expiry event")
+        void shouldReapAndPublish() {
+            Batch batch = mock(Batch.class);
+            when(batch.getAccountId()).thenReturn(accountId);
+            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+            when(batchRepository.markNotCompletedIfStillExpired(eq(batchId), eq(cutoff), any(LocalDateTime.class)))
+                    .thenReturn(1);
+
+            assertThat(service.markBatchNotCompletedIfStillExpired(batchId, cutoff)).isTrue();
+
+            verify(eventPublisher).publishEvent(any(Object.class));
+        }
+
+        @Test
+        @DisplayName("should skip and publish nothing when the batch was revived after the sweeper's SELECT")
+        void shouldSkipWhenRevived() {
+            // 030/T06: 0 rows updated means the conditional UPDATE found the batch no longer
+            // expired (a live session touched it) or no longer IN_PROGRESS. Killing it anyway is
+            // what used to murder live streaming sessions.
+            Batch batch = mock(Batch.class);
+            when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+            when(batchRepository.markNotCompletedIfStillExpired(eq(batchId), eq(cutoff), any(LocalDateTime.class)))
+                    .thenReturn(0);
+
+            assertThat(service.markBatchNotCompletedIfStillExpired(batchId, cutoff)).isFalse();
+
+            verify(eventPublisher, never()).publishEvent(any(Object.class));
+            verify(batchRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should be false for a batch that vanished, without touching the row")
+        void shouldBeFalseWhenMissing() {
+            when(batchRepository.findById(batchId)).thenReturn(Optional.empty());
+
+            assertThat(service.markBatchNotCompletedIfStillExpired(batchId, cutoff)).isFalse();
+
+            verify(batchRepository, never()).markNotCompletedIfStillExpired(any(), any(), any());
+            verify(eventPublisher, never()).publishEvent(any(Object.class));
+        }
+    }
+
+    @Nested
     @DisplayName("touchActivity()")
     class TouchActivity {
 

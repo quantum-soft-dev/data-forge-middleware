@@ -17,10 +17,13 @@ import io.grpc.*;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.stub.StreamObserver;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -78,6 +81,10 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private DeltaSyncStateService syncStateService;
 
+    /** Sites/accounts seeded by a test, torn down in {@link #cleanUpSeededData()}. */
+    private final List<UUID> createdSites = new ArrayList<>();
+    private final List<UUID> createdAccounts = new ArrayList<>();
+
     @Test
     void concurrentTouchesDoNotBreakBatchCompletion() throws Exception {
         assertTerminalTransitionSurvivesTouchStorm(
@@ -91,10 +98,136 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void concurrentTouchesDoNotBreakTimeoutSweep() throws Exception {
-        // The sweeper is the transition that actually races a live session in production.
-        assertTerminalTransitionSurvivesTouchStorm(
-                batchLifecycleService::markBatchNotCompleted, BatchStatus.NOT_COMPLETED, "sweep");
+    void timeoutSweepSkipsABatchRevivedAfterItsSelect() {
+        // 030/T06 — THE regression this whole feature exists to prevent. The sweeper SELECTs expired
+        // batches, then transitions them one by one. A live session that touches in between must
+        // survive: its transition is evaluated against the same cutoff the SELECT used, so a fresh
+        // last_activity_at makes the conditional UPDATE match nothing.
+        //
+        // Deterministic by construction rather than by thread timing: seed an expired batch, take
+        // the cutoff the sweeper's SELECT would have used, THEN touch (the session woke up), then
+        // run the transition with that stale cutoff.
+        UUID accountId = freshAccount("revived");
+        UUID siteId = freshV2Site(accountId, "revived");
+        LocalDateTime dbNow = LocalDateTime.now(ZoneOffset.UTC);
+        UUID batchId = insertInProgressBatch(accountId, siteId,
+                dbNow.minusMinutes(90), dbNow.minusMinutes(70));
+
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+        assertTrue(batchRepository.findExpiredBatches(cutoff).stream()
+                        .anyMatch(b -> b.getId().equals(batchId)),
+                "precondition: the sweeper's SELECT sees this batch as expired");
+
+        batchLifecycleService.touchActivity(batchId); // the live session speaks up
+
+        boolean reaped = batchLifecycleService.markBatchNotCompletedIfStillExpired(batchId, cutoff);
+
+        assertFalse(reaped, "the sweeper must skip a batch that came back to life after its SELECT");
+        assertEquals(BatchStatus.IN_PROGRESS, batchRepository.findById(batchId).orElseThrow().getStatus(),
+                "a live streaming session must not be killed by the timeout sweeper");
+    }
+
+    @Test
+    void timeoutSweepStillReapsASilentBatch() {
+        // The guard in the other direction: the T06 fix must not make the sweeper impotent. A batch
+        // whose last activity predates the cutoff is genuinely abandoned and must be reclaimed,
+        // otherwise it blocks its site with ACTIVE_SESSION_EXISTS forever.
+        UUID accountId = freshAccount("silent");
+        UUID siteId = freshV2Site(accountId, "silent");
+        LocalDateTime dbNow = LocalDateTime.now(ZoneOffset.UTC);
+        UUID batchId = insertInProgressBatch(accountId, siteId,
+                dbNow.minusMinutes(90), dbNow.minusMinutes(70));
+
+        boolean reaped = batchLifecycleService.markBatchNotCompletedIfStillExpired(
+                batchId, LocalDateTime.now().minusMinutes(60));
+
+        assertTrue(reaped, "a silent session is still reclaimed");
+        assertEquals(BatchStatus.NOT_COMPLETED,
+                batchRepository.findById(batchId).orElseThrow().getStatus());
+    }
+
+    @Test
+    void timeoutSweepReapsLegacyBatchByStartedAt() {
+        // v1 batches never touch activity: last_activity_at is NULL and expiry falls back to
+        // started_at, exactly as before 029/030.
+        UUID accountId = freshAccount("legacy");
+        UUID siteId = freshV2Site(accountId, "legacy");
+        LocalDateTime dbNow = LocalDateTime.now(ZoneOffset.UTC);
+        UUID expired = insertInProgressBatch(accountId, siteId, dbNow.minusMinutes(90), null);
+        UUID fresh = insertInProgressBatch(accountId, freshV2Site(accountId, "legacy-b"),
+                dbNow.minusMinutes(30), null);
+
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+
+        assertTrue(batchLifecycleService.markBatchNotCompletedIfStillExpired(expired, cutoff),
+                "legacy batch older than the timeout is reaped by started_at");
+        assertFalse(batchLifecycleService.markBatchNotCompletedIfStillExpired(fresh, cutoff),
+                "legacy batch inside the timeout is left alone");
+        assertEquals(BatchStatus.NOT_COMPLETED,
+                batchRepository.findById(expired).orElseThrow().getStatus());
+        assertEquals(BatchStatus.IN_PROGRESS,
+                batchRepository.findById(fresh).orElseThrow().getStatus());
+    }
+
+    @Test
+    void liveSessionSurvivesAConcurrentTimeoutSweep() throws Exception {
+        // The same regression under real thread contention: a touch storm against the sweeper's
+        // conditional transition. In READ COMMITTED the UPDATE that blocks on a touch re-evaluates
+        // its WHERE clause against the committed row, so a live session always wins.
+        UUID accountId = freshAccount("sweeprace");
+        UUID siteId = freshV2Site(accountId, "sweeprace");
+        LocalDateTime dbNow = LocalDateTime.now(ZoneOffset.UTC);
+        UUID batchId = insertInProgressBatch(accountId, siteId,
+                dbNow.minusMinutes(90), dbNow.minusMinutes(70));
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(60);
+
+        int touchers = 6;
+        ExecutorService pool = Executors.newFixedThreadPool(touchers + 1);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Throwable> escaped = new CopyOnWriteArrayList<>();
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int t = 0; t < touchers; t++) {
+                futures.add(pool.submit(() -> {
+                    go.await();
+                    for (int n = 0; n < 25; n++) {
+                        batchLifecycleService.touchActivity(batchId);
+                    }
+                    return null;
+                }));
+            }
+            futures.add(pool.submit(() -> {
+                go.await();
+                Thread.sleep(10);
+                batchLifecycleService.markBatchNotCompletedIfStillExpired(batchId, cutoff);
+                return null;
+            }));
+            go.countDown();
+            for (Future<?> future : futures) {
+                try {
+                    future.get(60, TimeUnit.SECONDS);
+                } catch (ExecutionException e) {
+                    escaped.add(e.getCause());
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertTrue(escaped.isEmpty(), "nothing may throw: " + escaped);
+        assertEquals(BatchStatus.IN_PROGRESS, batchRepository.findById(batchId).orElseThrow().getStatus(),
+                "the live session outlives the sweeper");
+    }
+
+    private UUID insertInProgressBatch(UUID accountId, UUID siteId,
+                                       LocalDateTime startedAt, LocalDateTime lastActivityAt) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO batches (id, account_id, site_id, status, s3_path, uploaded_files_count,
+                                     total_size, has_errors, started_at, created_at, last_activity_at)
+                VALUES (?, ?, ?, 'IN_PROGRESS', 'p/', 0, 0, false, ?, ?, ?)
+                """, id, accountId, siteId, startedAt, startedAt, lastActivityAt);
+        return id;
     }
 
     private void assertTerminalTransitionSurvivesTouchStorm(
@@ -260,6 +393,29 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
         void accept(DeltaIngestionGrpc.DeltaIngestionStub stub) throws Exception;
     }
 
+    /**
+     * Remove everything this class created. The suite shares one database, and some queries are
+     * genuinely global — {@code findNextPendingPluginSql} claims one pending head <em>per site</em>
+     * across all sites, so leaking committed segments here makes an unrelated test see extra rows.
+     * Tests that seed their own sites must take them away again.
+     */
+    @AfterEach
+    void cleanUpSeededData() {
+        for (UUID siteId : createdSites) {
+            jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", siteId);
+            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", siteId);
+            jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", siteId);
+            jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", siteId);
+            jdbc.update("DELETE FROM batches WHERE site_id = ?", siteId);
+            jdbc.update("DELETE FROM sites WHERE id = ?", siteId);
+        }
+        for (UUID accountId : createdAccounts) {
+            jdbc.update("DELETE FROM accounts WHERE id = ?", accountId);
+        }
+        createdSites.clear();
+        createdAccounts.clear();
+    }
+
     private static StreamObserver<ServerEvent> sink(CountDownLatch done) {
         return new StreamObserver<>() {
             @Override
@@ -311,6 +467,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
                 INSERT INTO accounts (id, email, name, is_active, created_at, updated_at)
                 VALUES (?, ?, ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """, id, "030-" + tag + "-" + id + "@test.local", "030 " + tag);
+        createdAccounts.add(id);
         return id;
     }
 
@@ -322,6 +479,7 @@ class DeltaSessionLivenessIntegrationTest extends BaseIntegrationTest {
                 VALUES (?, ?, ?, 'x', ?, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 'V2')
                 """, id, accountId, "030-" + tag + "-" + id + ".test.local", "030 " + tag,
                 "030-" + tag + "-" + id);
+        createdSites.add(id);
         return id;
     }
 }

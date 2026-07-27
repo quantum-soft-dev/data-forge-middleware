@@ -45,6 +45,25 @@ public interface BatchRepository {
      */
     int touchActivity(UUID batchId, LocalDateTime now);
 
+    /**
+     * Atomically reap a batch that is <em>still</em> expired (030/T06).
+     * <p>
+     * The timeout sweeper SELECTs expired batches and then transitions them one at a time. A live
+     * Delta v2 session can touch its batch in that gap, and an unconditional transition kills it —
+     * the exact incident feature 029 exists to prevent. (Before 030 the optimistic-lock bump in the
+     * old liveness write accidentally blocked this; removing that bump to stop it from crashing the
+     * ingest path also removed the accidental protection.) Re-checking status and cutoff inside the
+     * UPDATE closes the gap properly: under READ COMMITTED a statement that blocks on a concurrent
+     * touch re-evaluates its WHERE clause against the committed row, so a revived session wins.
+     * </p>
+     *
+     * @param batchId    batch identifier
+     * @param cutoffTime the cutoff the sweeper's SELECT used — must not be recomputed per batch
+     * @param now        completion timestamp
+     * @return 1 when the batch was reaped, 0 when it was revived or is no longer IN_PROGRESS
+     */
+    int markNotCompletedIfStillExpired(UUID batchId, LocalDateTime cutoffTime, LocalDateTime now);
+
     long countByAccountId(UUID accountId);
 
     long countBySiteId(UUID siteId);
