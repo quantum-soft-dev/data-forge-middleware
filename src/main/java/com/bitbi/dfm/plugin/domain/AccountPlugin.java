@@ -167,6 +167,24 @@ public class AccountPlugin {
     }
 
     /**
+     * Removes a single key from plugin data.
+     * <p>
+     * {@link #updatePluginData(Map)} deliberately merges, so it can add and overwrite but never
+     * delete — retiring a secret (e.g. the legacy plaintext {@code apiKey} superseded by
+     * {@code apiKeyHash}) needs this explicit removal.
+     * </p>
+     *
+     * @param key the plugin data key to drop
+     */
+    public void removePluginData(String key) {
+        if (this.pluginData == null || !this.pluginData.containsKey(key)) {
+            return;
+        }
+        this.pluginData.remove(key);
+        this.updatedAt = Instant.now();
+    }
+
+    /**
      * Merges new plugin data into existing data.
      * Preserves existing keys not present in the new data.
      *
