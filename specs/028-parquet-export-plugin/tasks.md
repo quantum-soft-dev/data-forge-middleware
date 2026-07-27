@@ -49,12 +49,12 @@
 
 ## Phase 3: Security wiring (blocking for US2/US3)
 
-- [ ] **T007** [US2] `ParquetExportBasicAuthFilter`
+- [X] **T007** [US2] `ParquetExportBasicAuthFilter`
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/presentation/ParquetExportBasicAuthFilterTest.java` — valid `Authorization: Basic` header → SecurityContext holds token with `ROLE_PLUGIN_CLIENT`, principal accountId, detail accountPluginId; missing header / bad base64 / no colon / wrong password → 401 JSON with `WWW-Authenticate: Basic realm="parquet-export"`, context untouched; `shouldNotFilter` for `/download/**` path.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/presentation/ParquetExportBasicAuthFilter.java` (pattern: `PluginApiKeyAuthenticationFilter`, delegates to `ParquetExportCredentialsService.validate`).
   - Commit: `feat(plugin): Basic Auth filter for parquet-export API (T007)`
 
-- [ ] **T008** [US2] Security filter chains (prod + test mirror)
+- [X] **T008** [US2] Security filter chains (prod + test mirror)
   - Tests first: extend `src/test/java/com/bitbi/dfm/security/SecurityFilterChainTest.java` — `/api/v1/plugins/parquet-export/files` routes to the new chain (401 without Basic, never Auth0); `/api/v1/plugins/parquet-export/download/x` is permitAll at chain level (reaches controller → 404 for unknown token); admin catch-all denies the prefix.
   - Implement: new ordered chain in `src/main/java/com/bitbi/dfm/shared/config/SecurityConfiguration.java` (matcher `/api/v1/plugins/parquet-export/**`; `/files` authenticated via filter, `/download/**` permitAll; stateless, CSRF off); `denyAll` carve-out in `adminApiFilterChain`; mirror in `src/test/java/com/bitbi/dfm/config/TestSecurityConfig.java`; route constant in `src/main/java/com/bitbi/dfm/shared/presentation/ApiRoutes.java`.
   - Commit: `feat(security): parquet-export filter chain (T008)`
@@ -63,17 +63,17 @@
 
 ## Phase 4: User Story 2 — Listing + link registration (P1)
 
-- [ ] **T009** [US2] `ParquetExportFileService` (catalog derivation)
+- [X] **T009** [US2] `ParquetExportFileService` (catalog derivation)
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/application/ParquetExportFileServiceTest.java` (Mockito over `ChangelogSegmentRepository`, `CheckpointRepository`/their finders, `SiteRepository`, `S3CheckpointStorage`) — delta files derived from egressed segments (`egress_at > since`, stats keys → per-table fan-out, `deltaExists` probe drops missing ones, filename `{table}_seq{first}-{last}.parquet`, producedAt = egressAt); checkpoint files from `s3_key_parquet != null AND updated_at > since` (filename `{table}_seq{seq}.parquet`); account scoping (foreign site never returned; `siteId` filter of a non-owned site → empty); `table`/`type` filters; ordering `(producedAt, id)`; pagination with `size ≤ 100` + `hasMore`.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/application/ParquetExportFileService.java`; add the needed read-only finders (e.g. `findEgressedSince(accountId, since, siteId)`) to `src/main/java/com/bitbi/dfm/delta/domain/ChangelogSegmentRepository.java` + `CheckpointRepository` and their Jpa implementations (JOIN `sites` for account scoping).
   - Commit: `feat(plugin): parquet-export file catalog service (T009)`
 
-- [ ] **T010** [US2] `DownloadLinkService` (registration + consume + presign)
+- [X] **T010** [US2] `DownloadLinkService` (registration + consume + presign)
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/application/DownloadLinkServiceTest.java` — `registerLinks(accountPluginId, files)` batch-saves one link per file with TTL from config and returns token→file mapping; `consume(token)`: repo `consume` returns 1 → presigned URL minted with 60 s duration + `LINK_CONSUMED` audit; returns 0 + row exists → `LinkGoneException` + `LINK_REJECTED` audit; row absent → `LinkNotFoundException`; presigner never called on failure paths.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/application/DownloadLinkService.java`; config binding `src/main/java/com/bitbi/dfm/plugin/infrastructure/ParquetExportProperties.java` (`plugin.parquet-export.*`: link-ttl-seconds 3600, presign-ttl-seconds 60, purge-retention-days 7, purge-interval-ms 3600000, base-url) + defaults in `src/main/resources/application.yml`.
   - Commit: `feat(plugin): one-time download link service (T010)`
 
-- [ ] **T011** [US2] `GET /files` endpoint (controller + rate limiting + audit)
+- [X] **T011** [US2] `GET /files` endpoint (controller + rate limiting + audit)
   - Tests first: contract test `src/test/java/contract/ParquetExportFilesContractTest.java` (MockMvc + mocked services, Basic Auth via test chain) — 200 shape per contracts/parquet-export-api.md (files with metadata + absolute `downloadUrl` + `linkExpiresAt`, page/size/hasMore); 400 malformed `since`/`type`/size>100; 401 without/with-bad Basic; 429 with `Retry-After` when rate limiter rejects; `FILES_LISTED` audit recorded with filters + count.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/presentation/ParquetExportApiController.java` (`GET /files`), DTOs `src/main/java/com/bitbi/dfm/plugin/presentation/dto/ParquetFileResponseDto.java` + `ParquetFileListResponseDto.java`; per-account rate limiting reusing `PluginRateLimiterService`; download URL built from `base-url` config or request context.
   - Commit: `feat(plugin): parquet-export file listing endpoint (T011)`
@@ -82,7 +82,7 @@
 
 ## Phase 5: User Story 3 — One-time download (P1)
 
-- [ ] **T012** [US3] `GET /download/{token}` endpoint
+- [X] **T012** [US3] `GET /download/{token}` endpoint
   - Tests first: contract test `src/test/java/contract/ParquetExportDownloadContractTest.java` — fresh link → 302 with `Location` = presigned URL, no auth required; consumed/expired/inactive-activation → 410; unknown token → 404; response bodies use the standard error DTO; no `WWW-Authenticate` on this route.
   - Implement: handler in `ParquetExportApiController` delegating to `DownloadLinkService.consume`; exception mapping (`LinkGoneException` → 410, `LinkNotFoundException` → 404) in the controller or `GlobalExceptionHandler`.
   - Commit: `feat(plugin): one-time download redirect endpoint (T012)`
@@ -91,7 +91,7 @@
 
 ## Phase 6: User Story 4 — Housekeeping (P2)
 
-- [ ] **T013** [US4] `DownloadLinkPurgeScheduler`
+- [X] **T013** [US4] `DownloadLinkPurgeScheduler`
   - Tests first: `src/test/java/com/bitbi/dfm/plugin/application/DownloadLinkPurgeSchedulerTest.java` — invokes `repository.purge(now - retentionDays)`; logs deleted count; respects configured retention.
   - Implement: `src/main/java/com/bitbi/dfm/plugin/application/DownloadLinkPurgeScheduler.java` (`@Scheduled(fixedDelayString = "${plugin.parquet-export.purge-interval-ms:3600000}")`).
   - Commit: `feat(plugin): download link purge scheduler (T013)`
@@ -100,12 +100,12 @@
 
 ## Phase 7: Integration & docs (before PR)
 
-- [ ] **T014** Integration test (Testcontainers PostgreSQL + LocalStack)
+- [X] **T014** Integration test (Testcontainers PostgreSQL + LocalStack)
   - `src/test/java/integration/ParquetExportIntegrationTest.java` — end-to-end per quickstart.md: activate (credentials once, hash stored) → seed site + egressed segment + checkpoint + real S3 objects in LocalStack → list with Basic Auth (rows in `download_links`) → follow link (302, S3 URL fetches bytes) → second follow 410 → **concurrency race**: N threads on one token, exactly one 302 → deactivate → listing 401 + unconsumed link 410 → purge deletes aged rows. Cross-account isolation: second account sees nothing.
   - Gate: `./gradlew integrationTest` green.
   - Commit: `test(plugin): parquet-export end-to-end integration suite (T014)`
 
-- [ ] **T015** Documentation
+- [X] **T015** Documentation
   - `docs/parquet-export-plugin-guide.md` — activation, credential handling (shown once, rotation), listing filters + incremental `since` pattern, one-time link semantics (302/410/404, TTLs), config properties, curl walkthrough from quickstart.md. Update `CLAUDE.md` (Recent Changes: 028; migration counter → V39 applied, next V40; plugin endpoints table).
   - Commit: `docs(plugin): parquet-export plugin guide (T015)`
 
