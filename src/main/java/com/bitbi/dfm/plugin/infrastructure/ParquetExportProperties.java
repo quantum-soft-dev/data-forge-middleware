@@ -1,7 +1,9 @@
 package com.bitbi.dfm.plugin.infrastructure;
 
+import jakarta.validation.constraints.Positive;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.validation.annotation.Validated;
 
 /**
  * Configuration for the Parquet Export plugin (028).
@@ -18,12 +20,21 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConfigurationProperties(prefix = "plugin.parquet-export")
+@Validated
 public class ParquetExportProperties {
 
+    @Positive
     private long linkTtlSeconds = 3600;
+
+    @Positive
     private long presignTtlSeconds = 60;
+
+    @Positive
     private int purgeRetentionDays = 7;
+
+    @Positive
     private long purgeIntervalMs = 3_600_000;
+
     private String baseUrl = "";
 
     public long getLinkTtlSeconds() {

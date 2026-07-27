@@ -6,6 +6,7 @@ import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.DownloadLink;
 import com.bitbi.dfm.plugin.domain.DownloadLinkRepository;
 import com.bitbi.dfm.plugin.infrastructure.ParquetExportProperties;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,17 +37,20 @@ public class DownloadLinkService {
     private final S3PresignedUrlService presignedUrlService;
     private final PluginAuditService pluginAuditService;
     private final ParquetExportProperties properties;
+    private final MeterRegistry meterRegistry;
 
     public DownloadLinkService(DownloadLinkRepository downloadLinkRepository,
                                AccountPluginRepository accountPluginRepository,
                                S3PresignedUrlService presignedUrlService,
                                PluginAuditService pluginAuditService,
-                               ParquetExportProperties properties) {
+                               ParquetExportProperties properties,
+                               MeterRegistry meterRegistry) {
         this.downloadLinkRepository = downloadLinkRepository;
         this.accountPluginRepository = accountPluginRepository;
         this.presignedUrlService = presignedUrlService;
         this.pluginAuditService = pluginAuditService;
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -81,6 +85,9 @@ public class DownloadLinkService {
             if (existing == null) {
                 // No audit row for unknown tokens: the route is anonymous, so a garbage-token
                 // flood would otherwise write-amplify into the partitioned audit table.
+                // Aggregated metric only; alerts belong on this counter or ingress rate limits.
+                meterRegistry.counter("plugin.parquet.export.download.rejected", "reason", "unknown")
+                        .increment();
                 log.warn("Unknown download link token rejected");
                 throw new LinkNotFoundException();
             }
@@ -88,6 +95,7 @@ public class DownloadLinkService {
             String reason = existing.getConsumedAt() != null ? "consumed"
                     : existing.getExpiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC)) ? "expired"
                     : "inactive";
+            meterRegistry.counter("plugin.parquet.export.download.rejected", "reason", reason).increment();
             pluginAuditService.logLinkRejected(ParquetExportCredentialsService.PLUGIN_ID, accountId, reason);
             throw new LinkGoneException(reason);
         }

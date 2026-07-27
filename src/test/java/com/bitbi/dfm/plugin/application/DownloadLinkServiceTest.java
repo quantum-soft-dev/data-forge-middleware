@@ -53,13 +53,15 @@ class DownloadLinkServiceTest {
     private PluginAuditService pluginAuditService;
 
     private ParquetExportProperties properties;
+    private io.micrometer.core.instrument.simple.SimpleMeterRegistry meterRegistry;
     private DownloadLinkService service;
 
     @BeforeEach
     void setUp() {
         properties = new ParquetExportProperties();
+        meterRegistry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
         service = new DownloadLinkService(downloadLinkRepository, accountPluginRepository,
-                presignedUrlService, pluginAuditService, properties);
+                presignedUrlService, pluginAuditService, properties, meterRegistry);
         lenient().when(downloadLinkRepository.save(any(DownloadLink.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
@@ -143,8 +145,10 @@ class DownloadLinkServiceTest {
 
             verify(presignedUrlService, never()).generatePresignedUrl(any(), any(), any());
             // The route is anonymous: auditing unknown tokens would let garbage requests flood
-            // the partitioned audit table (write amplification) — log-only instead.
+            // the partitioned audit table (write amplification) — a Micrometer counter instead.
             verifyNoInteractions(pluginAuditService);
+            assertEquals(1.0, meterRegistry.counter("plugin.parquet.export.download.rejected",
+                    "reason", "unknown").count());
         }
     }
 
@@ -159,6 +163,22 @@ class DownloadLinkServiceTest {
             assertEquals(60, properties.getPresignTtlSeconds());
             assertEquals(7, properties.getPurgeRetentionDays());
             assertEquals("", properties.getBaseUrl());
+        }
+
+        @Test
+        @DisplayName("Should reject non-positive durations via bean validation")
+        void shouldRejectNonPositiveValues() {
+            try (var factory = jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+                jakarta.validation.Validator validator = factory.getValidator();
+                assertTrue(validator.validate(properties).isEmpty(), "defaults must be valid");
+
+                ParquetExportProperties broken = new ParquetExportProperties();
+                broken.setLinkTtlSeconds(0);
+                broken.setPresignTtlSeconds(-1);
+                broken.setPurgeRetentionDays(0);
+                broken.setPurgeIntervalMs(0);
+                assertEquals(4, validator.validate(broken).size());
+            }
         }
     }
 }
