@@ -54,6 +54,13 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      * self-contained write whose failure rolls back cleanly, leaving nothing for the best-effort
      * caller to poison.
      * </p>
+     * <p>
+     * <b>Must stay version-free</b>, unlike {@link #markNotCompletedIfStillExpired}, which bumps it.
+     * A liveness stamp records that a session is alive; it does not change the batch's state, so it
+     * has no business in the optimistic-locking protocol. Adding a bump here restores the original
+     * 030 bug: the touch starts losing races against real transitions and throws
+     * {@code OptimisticLockingFailureException} into the gRPC ingest path, killing live sessions.
+     * </p>
      *
      * @param batchId batch identifier
      * @param now     activity timestamp
@@ -77,6 +84,24 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
      * Mirrors {@link #findExpiredBatches}' {@code COALESCE(lastActivityAt, startedAt)} so v1
      * batches (which never record activity) keep their started_at-based expiry.
      * </p>
+     * <p>
+     * <b>This one bumps {@code version}; {@link #touchActivity} deliberately does not. Do not
+     * "unify" the two queries.</b> A JPQL bulk update does not touch {@code @Version} by itself, and
+     * the difference is not an oversight:
+     * </p>
+     * <ul>
+     *   <li>This is a <em>state transition</em>. Every other transition
+     *       ({@code completeBatch}, {@code failBatch}, {@code cancelBatch}) is a read-modify-write
+     *       guarded by {@code @Version}. Without the bump here, a session that loaded the batch
+     *       before this UPDATE still matched on its stale version and flushed {@code COMPLETED} over
+     *       the reap — the batch ended COMPLETED after {@code BatchExpiredEvent} had already been
+     *       dispatched, two terminal events for one batch (031/T09). Bumping makes that stale flush
+     *       fail with {@code OptimisticLockingFailureException}, which is the correct outcome: the
+     *       batch was legitimately reclaimed.</li>
+     *   <li>{@link #touchActivity} is <em>not</em> a state transition — it records liveness. Giving
+     *       it a version bump is what made it collide with real transitions and throw into the gRPC
+     *       ingest path, killing live sessions (030/T01). It must stay version-free.</li>
+     * </ul>
      *
      * @param batchId    batch identifier
      * @param cutoffTime the cutoff the sweeper's SELECT used
@@ -86,7 +111,7 @@ public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRep
     @Modifying
     @Transactional
     @Query("UPDATE Batch b SET b.status = com.bitbi.dfm.batch.domain.BatchStatus.NOT_COMPLETED, "
-            + "b.completedAt = :now "
+            + "b.completedAt = :now, b.version = b.version + 1 "
             + "WHERE b.id = :batchId "
             + "AND b.status = com.bitbi.dfm.batch.domain.BatchStatus.IN_PROGRESS "
             + "AND COALESCE(b.lastActivityAt, b.startedAt) < :cutoffTime")
