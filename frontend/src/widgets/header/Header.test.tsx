@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Header } from '@/widgets/header/Header';
@@ -25,7 +26,12 @@ vi.mock('@tanstack/react-router', () => ({
 
 function asUser() {
   mockUseAuth.mockReturnValue({
-    user: { name: 'Boris Pliss' },
+    user: {
+      name: 'Boris Pliss',
+      email: 'boris@example.com',
+      picture: 'https://example.com/boris.png',
+      sub: 'auth0|sensitive-subject',
+    },
     hasRole: () => false,
     isRolesLoading: false,
   });
@@ -33,9 +39,30 @@ function asUser() {
 
 function asAdmin() {
   mockUseAuth.mockReturnValue({
-    user: { name: 'Boris Pliss' },
+    user: { name: 'Boris Pliss', email: 'boris@example.com' },
     hasRole: (r: string) => r === 'ROLE_ADMIN',
     isRolesLoading: false,
+  });
+}
+
+function withoutPersonalData() {
+  mockUseAuth.mockReturnValue({
+    user: {
+      name: '   ',
+      email: '\t',
+      picture: '   ',
+      sub: 'auth0|sensitive-subject',
+    },
+    hasRole: () => false,
+    isRolesLoading: false,
+  });
+}
+
+function whileRolesLoad() {
+  mockUseAuth.mockReturnValue({
+    user: { name: 'Boris Pliss', email: 'boris@example.com' },
+    hasRole: (r: string) => r === 'ROLE_ADMIN',
+    isRolesLoading: true,
   });
 }
 
@@ -81,13 +108,70 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
   it('renders the user avatar with initials on brand-50', () => {
     asUser();
     render(<Header />);
-    const avatar = screen.getByTitle('Boris Pliss');
+    const avatar = screen.getByRole('button', { name: 'Open profile for Boris Pliss' });
     expect(avatar.textContent).toBe('BP');
     expect(avatar.className).toContain('rounded-full');
+    expect(avatar).not.toHaveAttribute('title');
     expect(avatar).toHaveStyle({
       background: monitoringTokens.blue50,
       color: monitoringTokens.primary,
     });
+  });
+
+  it('opens the personal profile with safe Auth0 display fields', async () => {
+    const user = userEvent.setup();
+    asUser();
+    render(<Header />);
+
+    await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Your profile' });
+    const heading = screen.getByRole('heading', { name: 'Your profile' });
+    expect(dialog).toHaveAttribute('aria-labelledby', heading.id);
+    expect(heading.id).not.toBe('current-user-profile-title');
+    expect(within(dialog).queryByRole('region')).not.toBeInTheDocument();
+    expect(screen.getByText('Boris Pliss')).toBeInTheDocument();
+    expect(screen.getByText('boris@example.com')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Boris Pliss profile picture' })).toHaveAttribute(
+      'src',
+      'https://example.com/boris.png',
+    );
+    expect(screen.getByText('Member')).toBeInTheDocument();
+    expect(screen.queryByText('auth0|sensitive-subject')).not.toBeInTheDocument();
+  });
+
+  it('supports keyboard opening and Escape dismissal', async () => {
+    const user = userEvent.setup();
+    asUser();
+    render(<Header />);
+
+    const trigger = screen.getByRole('button', { name: 'Open profile for Boris Pliss' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    expect(screen.getByRole('heading', { name: 'Your profile' })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('heading', { name: 'Your profile' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('renders explicit profile fallbacks when optional personal data is missing', async () => {
+    const user = userEvent.setup();
+    withoutPersonalData();
+    render(<Header />);
+
+    const trigger = screen.getByRole('button', { name: 'Open profile for User' });
+    expect(trigger).toHaveTextContent('US');
+    await user.click(trigger);
+
+    expect(screen.getByText('Name not provided')).toBeInTheDocument();
+    expect(screen.getByText('Email not provided')).toBeInTheDocument();
+    const initials = within(screen.getByRole('dialog')).getByText('US');
+    expect(initials).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByRole('img', { name: /profile picture/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('auth0|sensitive-subject')).not.toBeInTheDocument();
   });
 
   it('renders the Admin chip as an info alpha pill for admins', () => {
@@ -96,6 +180,28 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
     const chip = screen.getByText('Admin');
     expect(chip.className).toContain('rounded-full');
     expect(chip).toHaveStyle({ background: monitoringTokens.blue50 });
+  });
+
+  it('identifies administrators inside the profile', async () => {
+    const user = userEvent.setup();
+    asAdmin();
+    render(<Header />);
+
+    await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
+
+    expect(screen.getByText('Administrator')).toBeInTheDocument();
+  });
+
+  it('does not claim Member access while roles are loading', async () => {
+    const user = userEvent.setup();
+    whileRolesLoad();
+    render(<Header />);
+
+    await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
+
+    expect(screen.getByText('Account type loading')).toBeInTheDocument();
+    expect(screen.queryByText('Member')).not.toBeInTheDocument();
+    expect(screen.queryByText('Administrator')).not.toBeInTheDocument();
   });
 
   it('keeps role-based navigation behavior unchanged', () => {

@@ -13,9 +13,16 @@
  */
 
 import { Link } from '@tanstack/react-router'
+import { useId } from 'react'
 import { LogoutButton } from '@/features/auth/logout/LogoutButton'
+import { UserProfile } from '@/features/auth/ui/UserProfile'
 import { useAuth } from '@/entities/user-session/api/useAuth'
 import { Badge } from '@/shared/ui/ui/badge'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/shared/ui/ui/popover'
 import { monitoringTokens } from '@/shared/ui/tokens'
 
 // Active state via aria-current (set by TanStack Router) — the attribute
@@ -34,10 +41,12 @@ function initialsOf(name: string): string {
 
 export function Header() {
   const { user, hasRole, isRolesLoading } = useAuth()
+  const profileTitleId = useId()
   const isAdmin = !isRolesLoading && hasRole('ROLE_ADMIN')
 
   // Get user name from token (prefer name, fallback to email)
-  const userName = user?.name || user?.email || 'User'
+  const userName = user?.name?.trim() || user?.email?.trim() || 'User'
+  const userInitials = initialsOf(userName)
 
   return (
     <header className="mx-auto mt-4 max-w-[1120px] px-6">
@@ -115,14 +124,34 @@ export function Header() {
                 Admin
               </Badge>
             )}
-            <span
-              title={userName}
-              aria-label={`Signed in as ${userName}`}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-medium"
-              style={{ background: monitoringTokens.blue50, color: monitoringTokens.primary }}
-            >
-              {initialsOf(userName)}
-            </span>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Open profile for ${userName}`}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-medium transition-shadow hover:shadow-panel-inner focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+                  style={{ background: monitoringTokens.blue50, color: monitoringTokens.primary }}
+                >
+                  {userInitials}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                sideOffset={8}
+                aria-labelledby={profileTitleId}
+                className="w-80 rounded-[10px] border border-hairline bg-white p-0 shadow-panel"
+              >
+                <UserProfile
+                  name={user?.name}
+                  email={user?.email}
+                  picture={user?.picture}
+                  initials={userInitials}
+                  isAdmin={isAdmin}
+                  isRolesLoading={isRolesLoading}
+                  titleId={profileTitleId}
+                />
+              </PopoverContent>
+            </Popover>
             <LogoutButton />
           </div>
         </nav>
