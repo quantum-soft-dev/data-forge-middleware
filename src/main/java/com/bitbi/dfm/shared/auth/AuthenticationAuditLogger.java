@@ -24,7 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * - endpoint: Request URI
  * - method: HTTP method
  * - status: HTTP status code (401 or 403)
- * - tokenType: "jwt" or "keycloak" (detected from header)
+ * - tokenType: "jwt" or "auth0" (derived from the token itself)
  * - message: "Authentication failed"
  *
  * FR-013: Authentication audit logging
@@ -74,23 +74,16 @@ public class AuthenticationAuditLogger implements AuthenticationFailureHandler {
     }
 
     /**
-     * Detect token type from request headers using structural JWT analysis.
+     * Detect token type by inspecting the bearer token itself.
      *
-     * Parses the JWT header to determine token type based on:
-     * - Algorithm (alg): "HS256" = custom JWT, "RS256" = Keycloak
-     * - Issuer (iss): Presence of Keycloak issuer URL
-     * - Type (typ): JWT type identifier
+     * Deliberately derived from the token and nothing else: detection used to short-circuit on an
+     * X-Keycloak-Token request header, which any caller can set, so the type recorded in the audit
+     * trail was caller-controlled.
      *
-     * Returns "jwt", "keycloak", or "unknown".
+     * Returns "jwt", "auth0", or "unknown". Visible for testing.
      */
-    private String detectTokenType(HttpServletRequest request) {
+    String detectTokenType(HttpServletRequest request) {
         String authorizationHeader = request.getHeader("Authorization");
-        String keycloakTokenHeader = request.getHeader("X-Keycloak-Token");
-
-        // Check X-Keycloak-Token header first (explicit Keycloak indicator)
-        if (keycloakTokenHeader != null) {
-            return "keycloak";
-        }
 
         // Parse Bearer token if present
         if (authorizationHeader != null && authorizationHeader.startsWith("Bearer ")) {
@@ -104,12 +97,11 @@ public class AuthenticationAuditLogger implements AuthenticationFailureHandler {
     /**
      * Analyze JWT token structure to determine its type.
      *
-     * Decodes the JWT header and inspects:
-     * - Algorithm (alg): HS256/HS384/HS512 = custom JWT, RS256/RS384/RS512 = Keycloak
-     * - Token type (typ): Should be "JWT"
+     * Decodes the JWT header and inspects the algorithm: the client API signs its own tokens with
+     * HMAC, while Auth0 signs with RSA.
      *
      * @param token JWT token string
-     * @return "jwt" for custom tokens, "keycloak" for Keycloak tokens, "unknown" if unable to parse
+     * @return "jwt" for custom tokens, "auth0" for Auth0 tokens, "unknown" if unable to parse
      */
     private String analyzeJwtStructure(String token) {
         try {
@@ -132,25 +124,13 @@ public class AuthenticationAuditLogger implements AuthenticationFailureHandler {
                 if (algorithm.startsWith("HS")) {
                     return "jwt";
                 }
-                // RSA algorithms (RS256, RS384, RS512) = Keycloak
+                // RSA algorithms (RS256, RS384, RS512) = Auth0
                 if (algorithm.startsWith("RS")) {
-                    return "keycloak";
+                    return "auth0";
                 }
             }
 
-            // Fallback: check payload for Keycloak-specific claims
-            String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]));
-            JsonNode payload = mapper.readTree(payloadJson);
-
-            // Keycloak tokens have "iss" (issuer) field pointing to Keycloak server
-            if (payload.has("iss")) {
-                String issuer = payload.get("iss").asText();
-                if (issuer.contains("keycloak") || issuer.contains("/realms/")) {
-                    return "keycloak";
-                }
-            }
-
-            // If we got here, it's likely a custom JWT with unknown algorithm
+            // Parsable JWT signed with something else — treat as the custom client token
             return "jwt";
 
         } catch (Exception e) {

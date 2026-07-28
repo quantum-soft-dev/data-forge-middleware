@@ -61,7 +61,7 @@ public interface JpaAccountRepository extends JpaRepository<Account, UUID>, Acco
     List<Account> findAllActive();
 
     /**
-     * Find account by identity provider user ID (Auth0 or legacy Keycloak).
+     * Find account by identity provider user ID (Auth0).
      *
      * @param identityProviderUserId Identity provider user ID (e.g., auth0|xxx or UUID)
      * @return Optional containing account if found

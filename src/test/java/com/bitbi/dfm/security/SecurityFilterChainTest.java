@@ -49,8 +49,8 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
         return token.token();
     }
 
-    private static final String KEYCLOAK_ADMIN_TOKEN = "mock.admin.jwt.token"; // Mock Auth0 token with ROLE_ADMIN
-    private static final String KEYCLOAK_USER_TOKEN = "mock.user.jwt.token"; // Mock Auth0 token with ROLE_USER
+    private static final String OAUTH2_ADMIN_TOKEN = "mock.admin.jwt.token"; // Mock Auth0 token with ROLE_ADMIN
+    private static final String OAUTH2_USER_TOKEN = "mock.user.jwt.token"; // Mock Auth0 token with ROLE_USER
 
     /**
      * TC01: Device API with Custom JWT → 200 OK (authorized)
@@ -90,7 +90,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC02: Device API with Auth0 token should return 401 Unauthorized")
     void deviceApiWithAuth0TokenShouldBeUnauthorized() throws Exception {
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (Auth0 token invalid for Custom JWT filter)
@@ -130,7 +130,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC04: Admin API with Auth0 token should return 200 OK (authorized)")
     void adminApiWithAuth0TokenShouldBeAuthorized() throws Exception {
         mockMvc.perform(get(ApiRoutes.ACCOUNTS)
-                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk()) // Expecting 200 OK
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -253,7 +253,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC08: User History API with Auth0 user token should return 200 OK (authorized)")
     void userHistoryApiWithAuth0UserTokenShouldBeAuthorized() throws Exception {
         mockMvc.perform(get(ApiRoutes.HISTORY_BATCHES)
-                        .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk()) // Expecting 200 OK
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON));
@@ -302,7 +302,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC11: Parquet Export files with Auth0 token should return 401 Unauthorized")
     void parquetExportFilesWithAuth0TokenShouldBeUnauthorized() throws Exception {
         mockMvc.perform(get("/api/v1/plugins/parquet-export/files")
-                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN))
+                        .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -341,7 +341,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC13: Legacy /api/admin/** should be denied even with an admin token")
     void legacyAdminPrefixShouldBeDenied() throws Exception {
         mockMvc.perform(get("/api/admin/accounts")
-                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isForbidden());
     }
@@ -359,7 +359,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     void legacyUserPrefixesShouldBeDenied() throws Exception {
         for (String path : new String[]{"/api/sites/list", "/api/account/profile", "/api/user/me"}) {
             mockMvc.perform(get(path)
-                            .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                            .header("Authorization", "Bearer " + OAUTH2_USER_TOKEN)
                             .contentType(MediaType.APPLICATION_JSON))
                     .andExpect(status().isForbidden());
         }
@@ -378,12 +378,12 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC15: /api/v1/admin/** should still work with ROLE_ADMIN")
     void liveAdminApiShouldStillWorkForAdmin() throws Exception {
         mockMvc.perform(get(ApiRoutes.PLUGINS_ADMIN)
-                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk());
 
         mockMvc.perform(get(ApiRoutes.SETTINGS_BATCH_RETENTION_SCHEDULE)
-                        .header("Authorization", "Bearer " + KEYCLOAK_ADMIN_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk());
     }
@@ -400,7 +400,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC16: /api/v1/admin/plugins should still reject ROLE_USER")
     void liveAdminApiShouldStillRejectNonAdmin() throws Exception {
         mockMvc.perform(get(ApiRoutes.PLUGINS_ADMIN)
-                        .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isForbidden());
     }
@@ -417,7 +417,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC17: /api/v1/account/** should be unaffected by the legacy prefix removal")
     void liveAccountApiShouldBeUnaffected() throws Exception {
         mockMvc.perform(get(ApiRoutes.GLOBAL_ERRORS_UNREAD_COUNT)
-                        .header("Authorization", "Bearer " + KEYCLOAK_USER_TOKEN)
+                        .header("Authorization", "Bearer " + OAUTH2_USER_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk());
     }

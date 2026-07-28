@@ -39,7 +39,7 @@ import java.util.UUID;
  * REST controller for batch administration (Admin UI API).
  * <p>
  * Provides admin endpoints for batch management operations.
- * Requires Keycloak authentication with ROLE_ADMIN.
+ * Requires Auth0 authentication with ROLE_ADMIN.
  * </p>
  * <p>
  * URL change from v2.x: /admin/batches → /api/v1/batches (breaking change)

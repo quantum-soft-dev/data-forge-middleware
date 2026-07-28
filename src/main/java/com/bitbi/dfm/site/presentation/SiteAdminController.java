@@ -46,7 +46,7 @@ import java.util.stream.Collectors;
  * REST controller for site administration (UI/Admin API).
  * <p>
  * Provides admin endpoints for site CRUD operations.
- * Requires Keycloak OAuth2 authentication with ROLE_ADMIN.
+ * Requires Auth0 OAuth2 authentication with ROLE_ADMIN.
  * </p>
  * <p>
  * API Path: /api/v1/sites and /api/v1/accounts/{accountId}/sites (per API Unification Spec 010)

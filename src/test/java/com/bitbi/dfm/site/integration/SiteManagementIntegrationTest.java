@@ -38,6 +38,8 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
 
     private static final String MOCK_ACCOUNT_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     private static final String MOCK_EMAIL = "admin-test@example.com";
+    /** Auth0 namespaced roles claim; matches auth0.api.claims-namespace on the test profile. */
+    private static final String ROLES_CLAIM = "https://api.test.com/roles";
 
     /**
      * US1: Admin creates site with manual password, site appears in list.
@@ -63,7 +65,7 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
                         .with(jwt().jwt(jwt -> jwt
                                 .claim("sub", MOCK_ACCOUNT_ID)
                                 .claim("email", MOCK_EMAIL)
-                                .claim("realm_access", java.util.Map.of("roles", java.util.List.of("ADMIN")))))
+                                .claim(ROLES_CLAIM, java.util.List.of("ADMIN"))))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 // Then: 201 Created with SiteCreationResponseDto
@@ -81,7 +83,7 @@ class SiteManagementIntegrationTest extends BaseIntegrationTest {
                         .with(jwt().jwt(jwt -> jwt
                                 .claim("sub", MOCK_ACCOUNT_ID)
                                 .claim("email", MOCK_EMAIL)
-                                .claim("realm_access", java.util.Map.of("roles", java.util.List.of("ADMIN"))))))
+                                .claim(ROLES_CLAIM, java.util.List.of("ADMIN")))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.id == '" + siteId + "')].domain").value("new-manual-site.example.com"));
     }

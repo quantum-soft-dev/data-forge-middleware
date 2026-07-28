@@ -37,7 +37,7 @@ import java.util.UUID;
  * REST controller for error log administration (Admin UI API).
  * <p>
  * Provides admin endpoints for error log viewing and export.
- * Requires Keycloak authentication with ROLE_ADMIN.
+ * Requires Auth0 authentication with ROLE_ADMIN.
  * </p>
  * <p>
  * URL change from v2.x: /admin/errors → /api/v1/errors (breaking change)

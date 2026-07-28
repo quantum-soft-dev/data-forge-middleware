@@ -4,6 +4,7 @@ import com.auth0.client.mgmt.ManagementAPI;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import com.bitbi.dfm.shared.config.SecurityConfiguration;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -16,7 +17,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
@@ -27,10 +27,8 @@ import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 
 import java.time.Instant;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Test security configuration that mocks OAuth2/Auth0 authentication.
@@ -76,6 +74,15 @@ import java.util.stream.Collectors;
 @EnableWebSecurity
 @EnableMethodSecurity
 public class TestSecurityConfig {
+
+    /** Mirrors auth0.api.claims-namespace, the same knob production derives its roles claim from. */
+    private final String claimsNamespace;
+
+    public TestSecurityConfig(
+            @org.springframework.beans.factory.annotation.Value("${auth0.api.claims-namespace}")
+            String claimsNamespace) {
+        this.claimsNamespace = claimsNamespace;
+    }
 
     @Autowired(required = false)
     private TokenService tokenService;
@@ -170,7 +177,6 @@ public class TestSecurityConfig {
                     .claim("preferred_username", username)
                     .claim("https://api.test.com/email", email) // Namespaced email claim
                     .claim("https://api.test.com/roles", roles) // Namespaced roles claim
-                    .claim("realm_access", Map.of("roles", roles))
                     .issuedAt(Instant.now())
                     .expiresAt(Instant.now().plusSeconds(3600));
 
@@ -184,35 +190,22 @@ public class TestSecurityConfig {
     }
 
     /**
-     * Custom JWT authorities converter for Auth0 realm roles.
+     * JWT authorities converter — the production one, not a copy.
      * <p>
-     * Extracts roles from nested "realm_access.roles" claim and converts them
-     * to Spring Security authorities with "ROLE_" prefix.
+     * This used to be a second implementation reading Keycloak's {@code realm_access.roles}. Two
+     * implementations meant the harness never exercised the real Auth0 path, which is how the
+     * Keycloak fallback in {@link SecurityConfiguration.Auth0RoleConverter} survived long past the
+     * migration. Reusing the production converter keeps them from drifting again.
      * </p>
      */
     private Converter<Jwt, Collection<GrantedAuthority>> jwtGrantedAuthoritiesConverter() {
-        return jwt -> {
-            Map<String, Object> realmAccess = jwt.getClaim("realm_access");
-            if (realmAccess == null) {
-                return Collections.emptyList();
-            }
-
-            @SuppressWarnings("unchecked")
-            List<String> roles = (List<String>) realmAccess.get("roles");
-            if (roles == null) {
-                return Collections.emptyList();
-            }
-
-            return roles.stream()
-                    .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
-                    .collect(Collectors.toList());
-        };
+        return new SecurityConfiguration.Auth0RoleConverter(claimsNamespace + "/roles");
     }
 
     /**
      * JWT authentication converter for tests.
      * <p>
-     * Converts JWT claims to Spring Security authorities using custom converter.
+     * Converts JWT claims to Spring Security authorities using the production converter.
      * </p>
      */
     @Bean

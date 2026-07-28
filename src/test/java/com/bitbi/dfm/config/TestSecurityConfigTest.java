@@ -9,9 +9,12 @@ import org.springframework.security.oauth2.jwt.Jwt;
  */
 class TestSecurityConfigTest {
 
+    /** Matches auth0.api.claims-namespace on the test profile. */
+    private static final String CLAIMS_NAMESPACE = "https://api.test.com";
+
     @Test
     void testAdminTokenDecoding() {
-        TestSecurityConfig config = new TestSecurityConfig();
+        TestSecurityConfig config = new TestSecurityConfig(CLAIMS_NAMESPACE);
 
         // Decode admin token
         Jwt jwt = config.jwtDecoder().decode("mock.admin.jwt.token");
@@ -32,7 +35,7 @@ class TestSecurityConfigTest {
 
     @Test
     void testUserTokenDecoding() {
-        TestSecurityConfig config = new TestSecurityConfig();
+        TestSecurityConfig config = new TestSecurityConfig(CLAIMS_NAMESPACE);
 
         // Decode user token
         Jwt jwt = config.jwtDecoder().decode("mock.user.jwt.token");
