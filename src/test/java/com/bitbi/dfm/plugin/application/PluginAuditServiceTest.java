@@ -31,6 +31,8 @@ class PluginAuditServiceTest {
     @Mock
     private PluginAuditLogRepository auditLogRepository;
 
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     @Captor
     private ArgumentCaptor<PluginAuditLog> auditLogCaptor;
 
@@ -43,7 +45,8 @@ class PluginAuditServiceTest {
 
     @BeforeEach
     void setUp() {
-        auditService = new PluginAuditService(auditLogRepository, mock(org.springframework.context.ApplicationEventPublisher.class));
+        eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+        auditService = new PluginAuditService(auditLogRepository, eventPublisher);
     }
 
     @Nested
@@ -86,9 +89,11 @@ class PluginAuditServiceTest {
             auditService.logSqlGenerationCompleted(
                     PLUGIN_ID, ACCOUNT_ID, BATCH_ID, SITE_ID, stats, s3Key, durationMs);
 
-            // Then
-            verify(auditLogRepository).save(auditLogCaptor.capture());
-            PluginAuditLog savedLog = auditLogCaptor.getValue();
+            // Then — deferred to AFTER_COMMIT, so the entry travels on the event, not to the repo
+            org.mockito.ArgumentCaptor<com.bitbi.dfm.plugin.domain.PluginAuditEntryReadyEvent> eventCaptor =
+                    org.mockito.ArgumentCaptor.forClass(com.bitbi.dfm.plugin.domain.PluginAuditEntryReadyEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+            PluginAuditLog savedLog = eventCaptor.getValue().entry();
 
             assertThat(savedLog.getActionType()).isEqualTo(PluginActionType.SQL_GENERATION_COMPLETED);
             assertThat(savedLog.isSuccess()).isTrue();
