@@ -652,7 +652,6 @@ Spring Security OAuth2 Resource Server автоматически определ
 ```yaml
 auth0:
   domain: dataforge-dev.us.auth0.com
-  database-connection: Username-Password-Authentication
   management:
     client-id: YOUR_M2M_CLIENT_ID
     client-secret: YOUR_M2M_CLIENT_SECRET
@@ -667,10 +666,6 @@ spring:
           # Auth0 использует audiences claim для валидации
           audiences:
             - https://api.dataforge.com
-
-# Отключить Keycloak
-keycloak:
-  enabled: false
 ```
 
 ### Шаг 7.2: Environment Variables
