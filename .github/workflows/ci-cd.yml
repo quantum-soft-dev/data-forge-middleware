@@ -257,11 +257,15 @@ jobs:
           name: dependency-report
           path: build/reports/dependencies.txt
 
-  # Job 5: Build Application (only for full pipeline)
+  # Job 5: Build Application — DISABLED along with the ghcr docker builds below.
+  # Its only consumers were the jar artifact and docker-build; the GKE pipeline
+  # (app-deploy.yml) builds images from source in Artifact Registry. Kept dormant
+  # for the AWS rollback path. To re-enable, restore:
+  #   if: needs.setup.outputs.run_full_pipeline == 'true'
   build:
     runs-on: ubuntu-latest
     needs: [setup, backend-test, frontend-test, code-quality, dependency-analysis]
-    if: needs.setup.outputs.run_full_pipeline == 'true'
+    if: false
 
     steps:
       - name: Checkout code
@@ -286,11 +290,15 @@ jobs:
           name: application-jar
           path: build/libs/*.jar
 
-  # Job 5: Build Backend Docker Image (only for full pipeline)
+  # Job 5: Build Backend Docker Image — DISABLED as of the GKE migration (022).
+  # ghcr images were only consumed by the dormant AWS deploy job below; GKE
+  # builds its own images in Artifact Registry (app-deploy.yml). Kept dormant
+  # so the AWS pipeline can be restored quickly. To re-enable, restore:
+  #   if: needs.setup.outputs.run_full_pipeline == 'true'
   docker-build:
     runs-on: ubuntu-latest
     needs: [setup, build]
-    if: needs.setup.outputs.run_full_pipeline == 'true'
+    if: false
     permissions:
       contents: read
       packages: write
@@ -333,11 +341,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Job 6b: Build Frontend Docker Image (only for full pipeline)
+  # Job 6b: Build Frontend Docker Image — DISABLED, same rationale as docker-build.
+  # To re-enable, restore:
+  #   if: needs.setup.outputs.run_full_pipeline == 'true'
   docker-build-frontend:
     runs-on: ubuntu-latest
     needs: [setup, backend-test, frontend-test]
-    if: needs.setup.outputs.run_full_pipeline == 'true'
+    if: false
     permissions:
       contents: read
       packages: write

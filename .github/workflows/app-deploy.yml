@@ -1,11 +1,17 @@
 name: App Deploy (GKE)
 
+# Dev deploys are tag-driven (NOT on every merge to develop): push a
+# `deploy-dev/*` tag on the commit you want deployed, e.g.
+#   TAG=deploy-dev/$(date +%Y%m%d-%H%M); git tag $TAG && git push origin $TAG
+# Merges to develop only run tests (ci-cd.yml). Stage/prod still deploy on
+# branch push; any environment can also be deployed via workflow_dispatch.
 on:
   push:
     branches:
-      - develop      # -> dev    (bitbi-dev / dev-bitbi-cluster)
       - stage        # -> stage  (bitbi-stage / stage-bitbi-cluster)
       - main         # -> prod   (bitbi-production / prod-bitbi-cluster)
+    tags:
+      - "deploy-dev/*"   # -> dev (bitbi-dev / dev-bitbi-cluster), deploys the tagged commit
     paths:
       - "src/**"
       - "frontend/**"
@@ -24,8 +30,10 @@ on:
           - stage
           - prod
 
+# Every deploy-dev/* tag must share one concurrency group, so map the ref to
+# its environment here instead of using the (unique) tag name directly.
 concurrency:
-  group: forge-app-${{ github.event.inputs.environment || github.ref_name }}
+  group: forge-app-${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/deploy-dev/') && 'dev') || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -53,10 +61,10 @@ jobs:
           ENV="${{ github.event.inputs.environment }}"
           if [ -z "$ENV" ]; then
             case "${{ github.ref_name }}" in
-              develop) ENV=dev ;;
-              stage)   ENV=stage ;;
-              main)    ENV=prod ;;
-              *)       echo "Unsupported branch ${{ github.ref_name }}"; exit 1 ;;
+              deploy-dev/*) ENV=dev ;;
+              stage)        ENV=stage ;;
+              main)         ENV=prod ;;
+              *)            echo "Unsupported ref ${{ github.ref_name }}"; exit 1 ;;
             esac
           fi
           case $ENV in

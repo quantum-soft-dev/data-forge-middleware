@@ -14,6 +14,12 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 
 ## Deployment
 
+### CI/CD (GitHub Actions → GKE)
+
+- **[Workflows overview](../.github/workflows/README.md)** - CI pipeline, GKE deploy triggers per environment
+- **[Tag-driven dev deploys](./cr-tag-driven-dev-deploy.md)** - Why merges to `develop` no longer deploy; how to deploy dev with a `deploy-dev/*` tag
+- **[GKE migration](./cr-gke-migration.md)** - AWS → GKE change request (022)
+
 ### Docker Deployment
 
 - **[Docker Deployment Guide](./deployment/docker-deployment.md)** - Complete guide for deploying backend and frontend Docker images
@@ -121,6 +127,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 | Document | Description | Audience |
 |----------|-------------|----------|
 | [docker-deployment.md](./deployment/docker-deployment.md) | Docker deployment guide | DevOps |
+| [cr-gke-migration.md](./cr-gke-migration.md) | AWS → GKE migration — change request (022) | DevOps |
+| [cr-tag-driven-dev-deploy.md](./cr-tag-driven-dev-deploy.md) | Tag-driven dev deploys (`deploy-dev/*`) | DevOps, Developers |
 | [environment-variables.md](./deployment/environment-variables.md) | Environment variables reference | DevOps, Developers |
 | [ui-base.md](./ui-base.md) | Frontend architecture | Frontend Developers |
 | [api-unification.md](./api-unification.md) | API design patterns | Backend Developers |
