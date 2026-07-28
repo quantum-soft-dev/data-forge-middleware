@@ -14,14 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T1.1 — V29 migration (site_sync_state + sites.client_api_version) and the SiteSyncState
- * JPA round-trip.
- *
- * <p>Note: existing-site backfill to {@code V1} is a property of the {@code ADD COLUMN ...
- * DEFAULT 'V1'} DDL and applies to rows present when the migration runs. The Testcontainers
- * schema is seeded by {@code test-data.sql} <em>after</em> migrations, so those rows take the
- * post-migration default ({@code V2}); the backfill itself is therefore asserted by
- * construction, while the verifiable schema effects are tested below.</p>
+ * Integration coverage for the V45 single-value client API constraint and the
+ * SiteSyncState JPA round-trip.
  */
 class DeltaSiteSyncStateIntegrationTest extends BaseIntegrationTest {
 
@@ -48,9 +42,9 @@ class DeltaSiteSyncStateIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void clientApiVersionRejectsValueOutsideV1V2() {
+    void clientApiVersionRejectsRetiredV1() {
         assertThrows(DataIntegrityViolationException.class, () ->
-                jdbc.update("UPDATE sites SET client_api_version = 'V3' " +
+                jdbc.update("UPDATE sites SET client_api_version = 'V1' " +
                         "WHERE id = (SELECT id FROM sites LIMIT 1)"));
     }
 

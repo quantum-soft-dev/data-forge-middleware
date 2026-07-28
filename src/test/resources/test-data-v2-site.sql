@@ -1,6 +1,6 @@
--- Delta Client v2 (022, Task 7) — V2 site fixture for HTTP file API rejection tests.
+-- Delta Client v2 site fixture for HTTP retirement/drain tests.
 -- Applied AFTER test-data.sql (which cleans up all %.example.com sites/batches).
--- The HTTP file-path write endpoints must reject this site with 409 CLIENT_API_V2_REQUIRED.
+-- The removed HTTP write endpoints must stay unavailable.
 
 -- Plaintext secret: valid-secret-uuid (same BCrypt hash as store-01)
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)

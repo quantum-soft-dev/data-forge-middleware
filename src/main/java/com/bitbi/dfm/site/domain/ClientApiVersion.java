@@ -1,22 +1,15 @@
 package com.bitbi.dfm.site.domain;
 
 /**
- * Which client ingestion API a site uses (Delta Client v2 — 022, OQ-3).
+ * Supported client ingestion API version.
  *
- * <ul>
- *   <li>{@link #V1} — legacy HTTP client API ({@code /api/dfc}); full CSV snapshots per batch.</li>
- *   <li>{@link #V2} — Delta gRPC client API; changelog ingest + reconstructed checkpoints.</li>
- * </ul>
- *
- * <p>New sites default to {@code V2}; sites that existed before V29 were backfilled to {@code V1}.</p>
+ * <p>Feature 032 retired the legacy HTTP client API. The enum remains in the persisted/API
+ * model for compatibility, with Delta gRPC as its sole valid value.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
  */
 public enum ClientApiVersion {
-
-    /** Legacy HTTP client API ({@code /api/dfc}). */
-    V1,
 
     /** Delta gRPC client API (changelog ingest + checkpoints). */
     V2

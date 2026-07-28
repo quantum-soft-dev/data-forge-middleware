@@ -22,7 +22,7 @@ import java.util.UUID;
  * @param retentionDays Retention period in days for batch cleanup
  * @param createdAt Creation timestamp
  * @param siteType Site type (DBF or POSTGRES_CDC)
- * @param clientApiVersion Client ingestion API version (V1 legacy HTTP or V2 Delta gRPC)
+ * @param clientApiVersion Client ingestion API version (Delta gRPC)
  */
 public record SiteResponseDto(
     UUID id,

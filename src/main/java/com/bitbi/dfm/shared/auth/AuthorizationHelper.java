@@ -16,8 +16,7 @@ import java.util.UUID;
  * Helper class for authorization checks.
  * <p>
  * Provides utility methods to verify that authenticated users can access
- * only their own resources. Supports both custom JWT tokens (/api/dfc endpoints)
- * and Auth0 OAuth2 JWT tokens (/api/user, /api/admin endpoints).
+ * only their own resources. Supports Device API JWT tokens and Auth0 OAuth2 JWT tokens.
  * </p>
  *
  * @author Data Forge Team
@@ -77,13 +76,13 @@ public class AuthorizationHelper {
             throw new UnauthorizedException("Not authenticated");
         }
 
-        // Custom JWT token (for /api/dfc endpoints)
+        // Custom JWT token (for /api/v1/device endpoints)
         if (authentication instanceof JwtAuthenticationToken) {
             JwtAuthenticationToken jwtAuth = (JwtAuthenticationToken) authentication;
             return jwtAuth.getAccountId();
         }
 
-        // OAuth2 JWT token (for /api/user, /api/admin endpoints)
+        // OAuth2 JWT token (for /api/v1 account/admin endpoints)
         if (authentication instanceof org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) {
             org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken oauth2JwtAuth =
                     (org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken) authentication;

@@ -369,9 +369,6 @@ public class BitBiPluginApiController {
         } catch (CsvFileQueryService.FileNotFoundException e) {
             log.warn("File not found: siteId={}, fileName={}", siteId, fileName);
             throw e;
-        } catch (CsvFileQueryService.FileDownloadException e) {
-            log.error("File download failed: siteId={}, fileName={}, error={}", siteId, fileName, e.getMessage());
-            throw e;
         } finally {
             MDC.clear();
         }

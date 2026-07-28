@@ -19,7 +19,6 @@ import java.util.UUID;
  * Generates and validates JWT tokens with custom claims:
  * - siteId: UUID of authenticated site
  * - accountId: UUID of account owning the site
- * - domain: site domain name
  * </p>
  *
  * @author Data Forge Team
@@ -56,30 +55,6 @@ public class JwtTokenProvider {
                 .compact();
 
         return JwtToken.create(tokenString, siteId, accountId, expirationSeconds);
-    }
-
-    /**
-     * Generate JWT token for site authentication (legacy with domain).
-     *
-     * @param siteId    site identifier
-     * @param accountId account identifier
-     * @param domain    site domain name
-     * @return JWT token with claims
-     * @deprecated Use {@link #generateToken(UUID, UUID)} instead
-     */
-    @Deprecated
-    public JwtToken generateTokenWithDomain(UUID siteId, UUID accountId, String domain) {
-        String tokenString = Jwts.builder()
-                .subject(siteId.toString())
-                .claim("siteId", siteId.toString())
-                .claim("accountId", accountId.toString())
-                .claim("domain", domain)
-                .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + expirationSeconds * 1000))
-                .signWith(secretKey, Jwts.SIG.HS256)
-                .compact();
-
-        return JwtToken.createWithDomain(tokenString, siteId, accountId, domain, expirationSeconds);
     }
 
     /**
@@ -125,18 +100,6 @@ public class JwtTokenProvider {
         Claims claims = validateToken(token);
         String accountIdStr = claims.get("accountId", String.class);
         return UUID.fromString(accountIdStr);
-    }
-
-    /**
-     * Extract domain from token.
-     *
-     * @param token JWT token string
-     * @return site domain
-     * @throws InvalidTokenException if token is invalid
-     */
-    public String extractDomain(String token) {
-        Claims claims = validateToken(token);
-        return claims.get("domain", String.class);
     }
 
     /**

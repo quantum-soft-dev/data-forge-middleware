@@ -64,4 +64,3 @@ The expected result is `0`. No site is deactivated by V45.
 Flyway migrations are forward-only. Application rollback to a build that still expects
 V1 is not supported after V45; restore the previous application and database snapshot
 together if an emergency rollback is required.
-

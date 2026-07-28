@@ -1,8 +1,6 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
-import com.bitbi.dfm.site.application.SiteService;
-import com.bitbi.dfm.site.domain.Site;
 import io.grpc.Metadata;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
@@ -27,14 +25,7 @@ class DeltaAuthInterceptorTest {
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
 
     private final TokenService tokenService = mock(TokenService.class);
-    private final SiteService siteService = mock(SiteService.class);
-    private final DeltaAuthInterceptor interceptor = new DeltaAuthInterceptor(tokenService, siteService);
-
-    private Site v2Site() {
-        Site site = mock(Site.class);
-        when(site.isDeltaV2()).thenReturn(true);
-        return site;
-    }
+    private final DeltaAuthInterceptor interceptor = new DeltaAuthInterceptor(tokenService);
 
     @SuppressWarnings("unchecked")
     private static ServerCall<Object, Object> mockCall() {
@@ -45,10 +36,8 @@ class DeltaAuthInterceptorTest {
     void validTokenBindsSiteAndAccountToContextAndProceeds() {
         UUID siteId = UUID.randomUUID();
         UUID accountId = UUID.randomUUID();
-        Site site = v2Site();
         when(tokenService.validateToken("good-token")).thenReturn(siteId);
         when(tokenService.extractAccountId("good-token")).thenReturn(accountId);
-        when(siteService.getSite(siteId)).thenReturn(site);
 
         Metadata headers = new Metadata();
         headers.put(AUTHORIZATION, "Bearer good-token");
@@ -107,29 +96,6 @@ class DeltaAuthInterceptorTest {
         interceptor.interceptCall(call, headers, next);
 
         assertClosedWith(call, Status.Code.UNAUTHENTICATED);
-        verifyNoInteractions(next);
-    }
-
-    @Test
-    void v1SiteTokenIsRejectedWithPermissionDenied() {
-        // A legacy v1 site's token authenticates (same claims as v2) but must not open a delta
-        // session — the surface is scoped to Delta v2 sites (review r4).
-        UUID siteId = UUID.randomUUID();
-        when(tokenService.validateToken("v1-token")).thenReturn(siteId);
-        when(tokenService.extractAccountId("v1-token")).thenReturn(UUID.randomUUID());
-        Site v1Site = mock(Site.class);
-        when(v1Site.isDeltaV2()).thenReturn(false);
-        when(siteService.getSite(siteId)).thenReturn(v1Site);
-
-        ServerCall<Object, Object> call = mockCall();
-        @SuppressWarnings("unchecked")
-        ServerCallHandler<Object, Object> next = mock(ServerCallHandler.class);
-        Metadata headers = new Metadata();
-        headers.put(AUTHORIZATION, "Bearer v1-token");
-
-        interceptor.interceptCall(call, headers, next);
-
-        assertClosedWith(call, Status.Code.PERMISSION_DENIED);
         verifyNoInteractions(next);
     }
 

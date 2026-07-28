@@ -5,7 +5,6 @@ import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -39,14 +38,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Security Filter Chain Contract Tests")
 class SecurityFilterChainTest extends BaseIntegrationTest {
 
-    @Autowired
-    private com.bitbi.dfm.auth.application.TokenService tokenService;
-
     // Test Tokens (generated dynamically to get real Custom JWT)
     // Using store-03.example.com because it has no IN_PROGRESS batches (only COMPLETED)
     private String getCustomJwtToken() {
-        com.bitbi.dfm.auth.domain.JwtToken token = tokenService.generateToken("store-03.example.com", "batch-test-secret");
-        return token.token();
+        return generateToken("store-03.example.com");
     }
 
     private static final String OAUTH2_ADMIN_TOKEN = "mock.admin.jwt.token"; // Mock Auth0 token with ROLE_ADMIN
@@ -56,7 +51,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
      * TC01: Device API with Custom JWT → 200 OK (authorized)
      * <p>
      * <b>Given</b>: A valid Custom JWT token<br>
-     * <b>When</b>: Requesting Device API endpoint (/api/v1/device/batches/start)<br>
+     * <b>When</b>: Requesting a Device API batch read endpoint<br>
      * <b>Then</b>: Request is accepted (200 OK or appropriate success status)
      * </p>
      * <p>
@@ -66,11 +61,11 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @Test
     @DisplayName("TC01: Device API with Custom JWT should return 200 OK (authorized)")
     void deviceApiWithCustomJwtShouldBeAuthorized() throws Exception {
-        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", "Bearer " + getCustomJwtToken())
+        mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES + "/0199bab2-dddd-dddd-dddd-dddddddddddd")
+                        .header("Authorization", getCustomJwtToken())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
-                .andExpect(status().isCreated()) // Expecting 201 Created for batch start
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").exists());
     }
 
@@ -78,7 +73,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
      * TC02: Device API with Auth0 token → 401 Unauthorized
      * <p>
      * <b>Given</b>: A valid Auth0 OAuth2 token (intended for UI/Admin API)<br>
-     * <b>When</b>: Requesting Device API endpoint (/api/v1/device/batches/start)<br>
+     * <b>When</b>: Requesting a Device API batch read endpoint<br>
      * <b>Then</b>: Request is rejected with 401 Unauthorized (invalid token for Custom JWT filter)
      * </p>
      * <p>
@@ -89,7 +84,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @Test
     @DisplayName("TC02: Device API with Auth0 token should return 401 Unauthorized")
     void deviceApiWithAuth0TokenShouldBeUnauthorized() throws Exception {
-        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
+        mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES + "/b1c2d3e4-f5a6-7890-bcde-f12345678903")
                         .header("Authorization", "Bearer " + OAUTH2_ADMIN_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
@@ -101,14 +96,14 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
      * TC03: Device API with no token → 401 Unauthorized
      * <p>
      * <b>Given</b>: No authentication token provided<br>
-     * <b>When</b>: Requesting Device API endpoint (/api/v1/device/batches/start)<br>
+     * <b>When</b>: Requesting a Device API batch read endpoint<br>
      * <b>Then</b>: Request is rejected with 401 Unauthorized
      * </p>
      */
     @Test
     @DisplayName("TC03: Device API with no token should return 401 Unauthorized")
     void deviceApiWithNoTokenShouldBeUnauthorized() throws Exception {
-        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
+        mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES + "/b1c2d3e4-f5a6-7890-bcde-f12345678903")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"siteId\":\"s1t2e3s4-5678-90ab-cdef-123456789012\"}"))
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized
@@ -153,7 +148,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC05: Admin API with Custom JWT should return 401 Unauthorized")
     void adminApiWithCustomJwtShouldBeUnauthorized() throws Exception {
         mockMvc.perform(get(ApiRoutes.ACCOUNTS)
-                        .header("Authorization", "Bearer " + getCustomJwtToken())
+                        .header("Authorization", getCustomJwtToken())
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (cannot decode Custom JWT)
                 .andExpect(jsonPath("$.status").doesNotExist()); // 401 doesn't return JSON body
@@ -271,7 +266,7 @@ class SecurityFilterChainTest extends BaseIntegrationTest {
     @DisplayName("TC09: User History API with Custom JWT should return 401 Unauthorized")
     void userHistoryApiWithCustomJwtShouldBeUnauthorized() throws Exception {
         mockMvc.perform(get(ApiRoutes.HISTORY_BATCHES)
-                        .header("Authorization", "Bearer " + getCustomJwtToken())
+                        .header("Authorization", getCustomJwtToken())
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isUnauthorized()) // Expecting 401 Unauthorized (cannot decode Custom JWT)
                 .andExpect(jsonPath("$.status").doesNotExist()); // 401 doesn't return JSON body

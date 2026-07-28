@@ -55,8 +55,8 @@ public class DeltaSyncHealthController {
     @GetMapping(ApiRoutes.SITES_USER + "/delta/health")
     @Operation(
             summary = "Bulk delta sync health (owner)",
-            description = "Returns watermark, checkpoint pointer and updatedAt for every Delta v2 site of the "
-                    + "authenticated account in one response. V1 sites are omitted; hasSyncState=false marks sites "
+            description = "Returns watermark, checkpoint pointer and updatedAt for every site of the "
+                    + "authenticated account in one response. hasSyncState=false marks sites "
                     + "whose client never connected."
     )
     @ApiResponses(value = {

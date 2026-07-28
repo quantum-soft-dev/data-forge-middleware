@@ -14,7 +14,7 @@ const baseSite: Site = {
   retentionDays: 45,
   createdAt: '2025-01-01T00:00:00Z',
   siteType: 'DBF',
-  clientApiVersion: 'V1',
+  clientApiVersion: 'V2',
 }
 
 describe('SiteListItem retention controls', () => {
@@ -54,17 +54,6 @@ describe('SiteListItem API version chip (F2)', () => {
     expect(chip).toHaveStyle({
       background: monitoringTokens.blue50,
       color: monitoringTokens.primary,
-    })
-  })
-
-  it('renders a grey "v1" chip for V1 sites', () => {
-    render(<SiteListItem site={{ ...baseSite, clientApiVersion: 'V1' }} />)
-
-    const chip = screen.getByText('v1')
-    expect(chip).toBeInTheDocument()
-    expect(chip).toHaveStyle({
-      background: monitoringTokens.subtleBg,
-      color: monitoringTokens.textSecondary,
     })
   })
 

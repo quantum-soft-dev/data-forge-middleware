@@ -60,7 +60,7 @@ public class PluginDeltaBaselineService {
      */
     @Transactional
     public void captureBaselines(AccountPlugin activation) {
-        deltaV2Sites(activation).forEach(site -> capture(activation, site));
+        accountSites(activation).forEach(site -> capture(activation, site));
     }
 
     /**
@@ -69,7 +69,7 @@ public class PluginDeltaBaselineService {
      */
     @Transactional
     public void recaptureForReinit(AccountPlugin activation) {
-        List<Site> sites = deltaV2Sites(activation).toList();
+        List<Site> sites = accountSites(activation).toList();
         for (Site site : sites) {
             capture(activation, site);
             int requeued = segmentRepository.clearPluginSqlBySiteId(site.getId());
@@ -80,9 +80,8 @@ public class PluginDeltaBaselineService {
         }
     }
 
-    private java.util.stream.Stream<Site> deltaV2Sites(AccountPlugin activation) {
-        return siteRepository.findByAccountId(activation.getAccountId()).stream()
-                .filter(Site::isDeltaV2);
+    private java.util.stream.Stream<Site> accountSites(AccountPlugin activation) {
+        return siteRepository.findByAccountId(activation.getAccountId()).stream();
     }
 
     private void capture(AccountPlugin activation, Site site) {

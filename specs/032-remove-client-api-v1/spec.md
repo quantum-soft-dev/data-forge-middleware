@@ -70,4 +70,3 @@ Acceptance criteria:
 - Dropping historical upload/file tables or legacy batch data.
 - Removing the Device Flow auth, refresh, drain/read, or error-reporting endpoints.
 - Removing the `client_api_version` response field in this change.
-

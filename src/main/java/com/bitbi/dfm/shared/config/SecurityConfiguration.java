@@ -32,17 +32,15 @@ import java.util.stream.Collectors;
 /**
  * Security configuration with unified API structure (API Unification - Spec 010).
  *
- * <p><b>Unified API Structure (Post-Migration):</b></p>
+ * <p><b>Unified API Structure:</b></p>
  * <ul>
- *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication only (Device API)</li>
- *   <li><b>Order 2:</b> /api/v1/** → Auth0 OAuth2 authentication only (UI/Admin API)</li>
- *   <li><b>Order 3:</b> Default → Public endpoints + deny all others</li>
+ *   <li><b>Order 0:</b> Device verification → Auth0 OAuth2</li>
+ *   <li><b>Order 1:</b> /api/v1/device/** → Data Forge access tokens</li>
+ *   <li><b>Orders 3–4:</b> Plugin API authentication</li>
+ *   <li><b>Order 5:</b> /api/v1/** → Auth0 OAuth2</li>
+ *   <li><b>Order 8:</b> Public endpoints + deny all others</li>
  * </ul>
  *
- * <p><b>Legacy API Support (Pre-Migration):</b></p>
- * <ul>
- *   <li>/api/dfc/** → Custom JWT (legacy Device API paths)</li>
- * </ul>
  * <p>The {@code /api/admin/**} and {@code /api/user/**}, {@code /api/sites/**},
  * {@code /api/account/**} chains were removed: no controller ever mapped those prefixes, so they
  * now fall through to the default chain's denyAll. Their {@code /api/v1/**} successors
@@ -171,45 +169,9 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Legacy JWT filter chain for old Data Forge Client endpoints.
-     * <p>
-     * <b>Order 2</b>: Second priority<br>
-     * <b>Matches</b>: /api/dfc/**<br>
-     * <b>Authentication</b>: JWT Bearer tokens only (custom JwtAuthenticationFilter)
-     * </p>
-     * <p>
-     * <b>DEPRECATED</b>: This filter chain supports legacy /api/dfc/** paths during
-     * migration period. Will return 410 Gone after migration via DeprecatedEndpointFilter.
-     * </p>
-     *
-     * @deprecated Use {@link #deviceApiFilterChain(HttpSecurity)} instead (Order 1)
-     */
-    @Bean
-    @Order(2)
-    @Deprecated(since = "4.0.0", forRemoval = true)
-    public SecurityFilterChain legacyJwtFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/dfc/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .anyRequest().authenticated()
-            )
-            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-            .exceptionHandling(ex -> ex
-                .authenticationEntryPoint((request, response, authException) -> {
-                    authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
-                    response.sendError(401, "Unauthorized - JWT authentication required");
-                })
-            );
-
-        return http.build();
-    }
-
-    /**
      * Bit BI Plugin API filter chain.
      * <p>
-     * <b>Order 3</b>: Third priority - evaluated AFTER legacy JWT filter chain<br>
+     * <b>Order 3</b>: Evaluated after the Device API chain<br>
      * <b>Matches</b>: /api/v1/plugins/bit-bi/sql-changes, /api/v1/plugins/bit-bi/sites, /api/v1/plugins/bit-bi/tables<br>
      * <b>Authentication</b>: Plugin API Key (X-Plugin-Api-Key header)
      * </p>

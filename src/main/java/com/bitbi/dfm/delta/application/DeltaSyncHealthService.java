@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
  *
  * <p>One call returns the raw health inputs (watermark, checkpoint pointer, updatedAt) for
  * every Delta v2 site of an account — the site-list badge polls this instead of issuing one
- * sync-state request per site. V1 sites are omitted entirely.</p>
+ * sync-state request per site.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -43,9 +43,7 @@ public class DeltaSyncHealthService {
      */
     @Transactional(readOnly = true)
     public List<SiteHealth> listHealthForAccount(UUID accountId) {
-        List<Site> v2Sites = siteRepository.findByAccountId(accountId).stream()
-                .filter(Site::isDeltaV2)
-                .toList();
+        List<Site> v2Sites = siteRepository.findByAccountId(accountId);
         if (v2Sites.isEmpty()) {
             return List.of();
         }

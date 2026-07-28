@@ -15,12 +15,9 @@
 export type SiteType = 'DBF' | 'POSTGRES_CDC';
 
 /**
- * Client ingestion API version — a separate axis from SiteType.
- *
- * V1 = legacy HTTP client API (full snapshot uploads)
- * V2 = Delta gRPC client API (changelog ingest + checkpoints)
+ * Client ingestion API version. Delta gRPC is the sole supported client path.
  */
-export type ClientApiVersion = 'V1' | 'V2';
+export type ClientApiVersion = 'V2';
 
 /**
  * Site entity representing a monitored domain/website.
@@ -33,7 +30,7 @@ export type ClientApiVersion = 'V1' | 'V2';
  * @property retentionDays - Retention period in days for batch cleanup
  * @property createdAt - Creation timestamp (ISO 8601 string)
  * @property siteType - Site type determining data ingestion method
- * @property clientApiVersion - Client ingestion API version (V1 legacy HTTP, V2 Delta gRPC)
+ * @property clientApiVersion - Client ingestion API version (Delta gRPC)
  */
 export interface Site {
   id: string;

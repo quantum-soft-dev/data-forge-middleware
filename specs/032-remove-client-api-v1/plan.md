@@ -46,4 +46,3 @@ must return zero.
 Clients must complete Device Flow authorization and use Delta gRPC before deployment.
 The repository and owner audit attached to issue #64 establishes that there are no
 remaining V1 consumers.
-

@@ -62,7 +62,7 @@ message SyncStateResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 
 message SchemaRequest {
-  // Full schema for ALL tables (replace-on-write, mirrors POST /api/dfc/schema).
+  // Full schema for ALL tables (replace-on-write).
   map<string, TableSchema> tables = 1;
 }
 

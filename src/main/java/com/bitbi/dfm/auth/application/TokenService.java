@@ -82,47 +82,6 @@ public class TokenService {
     }
 
     /**
-     * Generate JWT token for site using Basic Auth credentials (legacy).
-     *
-     * @param domain       site domain
-     * @param clientSecret site clientSecret
-     * @return JWT token with site claims
-     * @throws AuthenticationException if credentials are invalid
-     * @deprecated Use Device Flow with refresh tokens instead
-     */
-    @Deprecated
-    @Transactional(readOnly = true)
-    public JwtToken generateToken(String domain, String clientSecret) {
-        logger.debug("Generating token for domain: {}", domain);
-
-        Site site = siteRepository.findByDomain(domain)
-                .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
-
-        if (!site.getIsActive()) {
-            logger.warn("Site is not active: domain={}", domain);
-            throw new AuthenticationException("Invalid credentials");
-        }
-
-        Account account = accountRepository.findById(site.getAccountId())
-                .orElseThrow(() -> new AuthenticationException("Invalid credentials"));
-
-        if (!account.getIsActive()) {
-            logger.warn("Parent account is not active: accountId={}, domain={}", account.getId(), domain);
-            throw new AuthenticationException("Invalid credentials");
-        }
-
-        if (!site.verifySecret(clientSecret)) {
-            logger.warn("Invalid clientSecret for domain: {}", domain);
-            throw new AuthenticationException("Invalid credentials");
-        }
-
-        JwtToken token = jwtTokenProvider.generateToken(site.getId(), site.getAccountId());
-
-        logger.info("Token generated successfully: domain={}, siteId={}", domain, site.getId());
-        return token;
-    }
-
-    /**
      * Validate JWT token.
      * <p>
      * Re-checks the current state of the site <em>and</em> its parent account on every call:

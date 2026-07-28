@@ -20,14 +20,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.util.UUID;
 
 /**
  * Device API File Management Controller.
  * <p>
- * Provides file upload and metadata operations for device clients.
+ * Provides file metadata operations for device clients. Delta ingestion itself uses gRPC.
  * </p>
  * <p>
  * <b>Authentication</b>: Custom JWT (obtained from Device Auth endpoint)<br>
@@ -41,7 +40,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping(ApiRoutes.DEVICE_FILES)
-@Tag(name = "Device API - File Management", description = "File upload and metadata operations for device clients")
+@Tag(name = "Device API - File Management", description = "File metadata operations for device clients")
 @SecurityRequirement(name = "bearerAuth")
 public class DeviceFileController {
 
@@ -50,126 +49,21 @@ public class DeviceFileController {
     private final FileUploadService fileUploadService;
     private final BatchLifecycleService batchLifecycleService;
     private final AuthorizationHelper authorizationHelper;
-    private final com.bitbi.dfm.site.application.ClientApiVersionGuard clientApiVersionGuard;
 
     /**
      * Constructor injection for dependencies.
      *
-     * @param fileUploadService     Service for file upload operations
+     * @param fileUploadService     Service for file metadata operations
      * @param batchLifecycleService Service for batch operations
      * @param authorizationHelper   Helper for JWT-based authorization
-     * @param clientApiVersionGuard Per-site strangler guard for the HTTP file API
      */
     public DeviceFileController(
             FileUploadService fileUploadService,
             BatchLifecycleService batchLifecycleService,
-            AuthorizationHelper authorizationHelper,
-            com.bitbi.dfm.site.application.ClientApiVersionGuard clientApiVersionGuard) {
+            AuthorizationHelper authorizationHelper) {
         this.fileUploadService = fileUploadService;
         this.batchLifecycleService = batchLifecycleService;
         this.authorizationHelper = authorizationHelper;
-        this.clientApiVersionGuard = clientApiVersionGuard;
-    }
-
-    /**
-     * Upload file to batch.
-     * <p>
-     * Uploads one or more files to an IN_PROGRESS batch owned by the authenticated device client.
-     * Files are stored in S3 and metadata is saved to PostgreSQL.
-     * </p>
-     *
-     * @param batchId Batch identifier (path variable)
-     * @param files   Multipart files to upload (form parameter "files")
-     * @return 201 Created with FileUploadResponseDto, or error response
-     */
-    @PostMapping("/batches/{batchId}/upload")
-    @Operation(
-            summary = "Upload file to batch",
-            description = "Uploads files to an IN_PROGRESS batch. The authenticated site must own the batch."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(
-                    responseCode = "201",
-                    description = "File uploaded successfully",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = FileUploadResponseDto.class)
-                    )
-            ),
-            @ApiResponse(
-                    responseCode = "400",
-                    description = "Bad Request - Missing file or invalid file format",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "403",
-                    description = "Forbidden - Batch not owned by authenticated site",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "404",
-                    description = "Not Found - Batch does not exist",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "409",
-                    description = "Conflict - Batch not in IN_PROGRESS status",
-                    content = @Content(mediaType = "application/json")
-            )
-    })
-    public ResponseEntity<?> uploadFile(
-            @PathVariable("batchId") UUID batchId,
-            @RequestParam(value = "files", required = false) MultipartFile[] files) {
-        try {
-            // Validate file parameter
-            if (files == null || files.length == 0) {
-                logger.warn("Device API: File upload attempt with no files - batchId={}", batchId);
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(DeviceControllerHelper.createErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request",
-                                "No file provided. Please include 'files' parameter."));
-            }
-
-            logger.info("Device API: Uploading {} files - batchId={}", files.length, batchId);
-
-            // Get batch first to verify ownership and status
-            Batch batch = batchLifecycleService.getBatch(batchId);
-
-            // Verify site ownership via JWT claims
-            authorizationHelper.verifySiteOwnership(batch.getSiteId());
-
-            clientApiVersionGuard.assertHttpFileApiAllowed(batch.getSiteId());
-
-            // Verify batch is IN_PROGRESS
-            if (!batch.getStatus().equals(com.bitbi.dfm.batch.domain.BatchStatus.IN_PROGRESS)) {
-                logger.warn("Device API: Cannot upload to non-IN_PROGRESS batch - batchId={}, status={}",
-                        batchId, batch.getStatus());
-                return ResponseEntity.status(HttpStatus.CONFLICT)
-                        .body(DeviceControllerHelper.createErrorResponse(HttpStatus.CONFLICT, "Conflict",
-                                "Cannot upload files to batch with status: " + batch.getStatus()));
-            }
-
-            // Upload first file (matching legacy behavior)
-            UploadedFile uploadedFile = fileUploadService.uploadFile(batchId, files[0]);
-
-            FileUploadResponseDto response = FileUploadResponseDto.fromEntity(uploadedFile);
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-
-        } catch (AuthorizationHelper.UnauthorizedException e) {
-            logger.warn("Device API: Unauthorized file upload - batchId={}, {}", batchId, e.getMessage());
-            return DeviceControllerHelper.handleUnauthorizedException(e);
-
-        } catch (com.bitbi.dfm.site.application.ClientApiVersionGuard.HttpFileApiDisabledException e) {
-            logger.warn("Device API: HTTP file API disabled for V2 site - {}", e.getMessage());
-            return DeviceControllerHelper.handleHttpFileApiDisabledException(e);
-
-        } catch (BatchLifecycleService.BatchNotFoundException e) {
-            logger.warn("Device API: Batch not found - batchId={}", batchId);
-            return DeviceControllerHelper.handleBatchNotFoundException(e);
-
-        } catch (Exception e) {
-            logger.error("Device API: Error uploading file - batchId={}", batchId, e);
-            return DeviceControllerHelper.handleInternalServerError("Failed to upload file");
-        }
     }
 
     /**

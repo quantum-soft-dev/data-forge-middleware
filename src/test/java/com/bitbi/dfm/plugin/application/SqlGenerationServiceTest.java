@@ -393,12 +393,11 @@ class SqlGenerationServiceTest {
 
             site = mock(Site.class);
             when(site.getId()).thenReturn(siteId);
-            when(site.isDeltaV2()).thenReturn(true);
             when(site.getSiteType()).thenReturn(SiteType.DBF);
 
             accountPlugin = mock(AccountPlugin.class);
             when(accountPlugin.isBaselineBatch(any())).thenReturn(false);
-            when(accountPlugin.hasBaselineBatch()).thenReturn(false); // would trigger case 2 for V1
+            when(accountPlugin.hasBaselineBatch()).thenReturn(false);
 
             segment = com.bitbi.dfm.delta.domain.ChangelogSegment.create(
                     siteId, batchId, 11L, 20L, 10L, "hash", "delta/x", "DELTA", Map.of());
@@ -458,12 +457,12 @@ class SqlGenerationServiceTest {
         }
 
         @Test
-        @DisplayName("should reject regeneration for V2 sites")
-        void shouldRejectRegenerateForDeltaV2() {
+        @DisplayName("should reject regeneration for segment-backed batches")
+        void shouldRejectRegenerateForSegmentBackedBatch() {
             org.assertj.core.api.Assertions.assertThatThrownBy(
                             () -> deltaService.regenerateForBatch(batchId, accountPluginId))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Delta v2");
+                    .hasMessageContaining("segment-backed");
         }
     }
 }

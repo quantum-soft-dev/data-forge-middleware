@@ -1,13 +1,10 @@
 package com.bitbi.dfm.device.presentation;
 
-import com.bitbi.dfm.auth.application.TokenService;
-import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,7 +17,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <b>Purpose</b>: Validate the Device API batch lifecycle contract:
  * </p>
  * <ul>
- *   <li>POST /api/v1/device/batches/start - Start new batch</li>
  *   <li>POST /api/v1/device/batches/{id}/complete - Complete batch</li>
  *   <li>POST /api/v1/device/batches/{id}/complete-with-warnings - Complete batch with warnings</li>
  *   <li>POST /api/v1/device/batches/{id}/fail - Fail batch</li>
@@ -39,57 +35,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Device API - Batch Management Contract Tests")
 class DeviceBatchContractTest extends BaseIntegrationTest {
 
-    @Autowired
-    private TokenService tokenService;
-
     private String jwtToken;
 
     @BeforeEach
     void setUp() {
         // Generate real JWT token for store-01.example.com site (from test-data.sql)
-        JwtToken token = tokenService.generateToken("store-01.example.com", "valid-secret-uuid");
-        jwtToken = token.token();
-    }
-
-    /**
-     * TC13: Start new batch when active batch exists should return 409 Conflict.
-     * <p>
-     * <b>Given</b>: Authenticated device client with valid JWT, site already has IN_PROGRESS batch<br>
-     * <b>When</b>: POST /api/v1/device/batches/start<br>
-     * <b>Then</b>: 409 Conflict (business rule: one active batch per site)
-     * </p>
-     * <p>
-     * <b>Note</b>: This test verifies the business rule that prevents multiple concurrent batches
-     * for the same site. Test data includes batch b1c2d3e4-f5a6-7890-bcde-f12345678903 (IN_PROGRESS)
-     * for site 0199baac-f852-753f-6fc3-7c994fc38654.
-     * </p>
-     */
-    @Test
-    @DisplayName("TC13: Should return 409 when site already has active batch")
-    void shouldReturn409WhenSiteHasActiveBatch() throws Exception {
-        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .header("Authorization", "Bearer " + jwtToken)
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isConflict())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.error").value("Conflict"));
-    }
-
-    /**
-     * TC14: Start batch without JWT should return 401 Unauthorized.
-     * <p>
-     * <b>Given</b>: No authentication token<br>
-     * <b>When</b>: POST /api/v1/device/batches/start<br>
-     * <b>Then</b>: 401 Unauthorized
-     * </p>
-     */
-    @Test
-    @DisplayName("TC14: Should reject batch start without JWT")
-    void shouldRejectBatchStartWithoutJwt() throws Exception {
-        mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_START)
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isUnauthorized());
+        jwtToken = generateToken("store-01.example.com");
     }
 
     /**
@@ -107,7 +58,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test data
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, batchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -130,7 +81,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String nonExistentBatchId = "99999999-9999-9999-9999-999999999999";
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, nonExistentBatchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status").value(404))
@@ -152,7 +103,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String otherSiteBatchId = "b1c2d3e4-f5a6-7890-bcde-f12345678905"; // Batch for different site
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, otherSiteBatchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
@@ -173,7 +124,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_FAIL, batchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -196,7 +147,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_CANCEL, batchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -219,7 +170,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch
 
         mockMvc.perform(get(ApiRoutes.DEVICE_BATCHES_GET, batchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -263,7 +214,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String completedBatchId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // COMPLETED batch
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE, completedBatchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
@@ -284,7 +235,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String batchId = "b1c2d3e4-f5a6-7890-bcde-f12345678903"; // IN_PROGRESS batch from test data
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, batchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -308,7 +259,7 @@ class DeviceBatchContractTest extends BaseIntegrationTest {
         String completedBatchId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"; // COMPLETED batch
 
         mockMvc.perform(post(ApiRoutes.DEVICE_BATCHES_COMPLETE_WITH_WARNINGS, completedBatchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))

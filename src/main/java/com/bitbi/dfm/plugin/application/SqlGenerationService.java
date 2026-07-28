@@ -193,12 +193,13 @@ public class SqlGenerationService {
             AccountPlugin accountPlugin = accountPluginRepository.findById(accountPluginId)
                     .orElseThrow(() -> new IllegalArgumentException("AccountPlugin not found: " + accountPluginId));
 
-            // Delta v2 sites use per-table seq baselines (plugin_delta_baselines, 026) captured
-            // at activation/reinit — the batch-level baseline cases below do not apply to them.
-            boolean deltaV2 = isDeltaV2Batch(batchId);
+            // Segment-backed batches use per-table seq baselines (plugin_delta_baselines, 026)
+            // captured at activation/reinit. Historical file-backed batches keep their original
+            // batch-level baseline semantics without depending on a retired client API version.
+            boolean segmentBacked = hasChangelogSegments(batchId);
 
             // Case 1: This batch is the baseline - skip SQL generation
-            if (!deltaV2 && accountPlugin.isBaselineBatch(batchId)) {
+            if (!segmentBacked && accountPlugin.isBaselineBatch(batchId)) {
                 log.info("Skipping SQL generation for baseline batch {}. " +
                         "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
                         batchId);
@@ -206,7 +207,7 @@ public class SqlGenerationService {
             }
 
             // Case 2: No baseline set - this is the first batch, make it baseline
-            if (!deltaV2 && !accountPlugin.hasBaselineBatch()) {
+            if (!segmentBacked && !accountPlugin.hasBaselineBatch()) {
                 log.info("No baseline batch set. Setting batch {} as baseline. " +
                         "Client should download CSV files via /sites/{{siteId}}/files endpoint.",
                         batchId);
@@ -394,14 +395,9 @@ public class SqlGenerationService {
         Site site = siteRepository.findById(batch.getSiteId())
                 .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
 
-        // Delta v2 sites: the batch's data lives in changelog segments, not uploaded files (026)
-        if (site.isDeltaV2()) {
-            List<com.bitbi.dfm.delta.domain.ChangelogSegment> segments =
-                    changelogSegmentRepository.findByBatchId(batchId);
-            if (segments.isEmpty()) {
-                log.warn("No changelog segment for delta batch, skipping SQL generation: batchId={}", batchId);
-                return null;
-            }
+        List<com.bitbi.dfm.delta.domain.ChangelogSegment> segments =
+                changelogSegmentRepository.findByBatchId(batchId);
+        if (!segments.isEmpty()) {
             return new BatchData(batch, site, List.of(), Optional.empty(), Map.of(), segments);
         }
 
@@ -453,14 +449,8 @@ public class SqlGenerationService {
         return new BatchData(batch, site, relevantFiles, previousBatchOpt, previousFilesMap, List.of());
     }
 
-    /**
-     * Whether the batch belongs to a Delta v2 site (segment-sourced SQL, per-table baselines).
-     */
-    private boolean isDeltaV2Batch(UUID batchId) {
-        return batchRepository.findById(batchId)
-                .flatMap(batch -> siteRepository.findById(batch.getSiteId()))
-                .map(Site::isDeltaV2)
-                .orElse(false);
+    private boolean hasChangelogSegments(UUID batchId) {
+        return !changelogSegmentRepository.findByBatchId(batchId).isEmpty();
     }
 
     /**
@@ -477,8 +467,8 @@ public class SqlGenerationService {
             return null;
         }
 
-        // Delta v2: segment-sourced generation with per-table baseline filtering (026)
-        if (data.site().isDeltaV2()) {
+        // Segment-sourced generation with per-table baseline filtering (026).
+        if (!data.segments().isEmpty()) {
             return deltaStrategy.generate(
                     data.batch().getId(),
                     data.site().getId(),
@@ -780,9 +770,9 @@ public class SqlGenerationService {
         Site site = siteRepository.findById(batch.getSiteId())
                 .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
 
-        if (site.isDeltaV2()) {
+        if (!changelogSegmentRepository.findByBatchId(batchId).isEmpty()) {
             throw new IllegalArgumentException(
-                    "SQL regeneration is not supported for Delta v2 sites: siteId=" + site.getId());
+                    "SQL regeneration is not supported for segment-backed batches: siteId=" + site.getId());
         }
 
         List<UploadedFile> currentFiles = batch.getUploadedFiles();

@@ -26,15 +26,6 @@ const v2Site: Site = {
   clientApiVersion: 'V2',
 }
 
-const v1Site: Site = {
-  ...v2Site,
-  id: 'site-v1',
-  siteName: 'warehouse-legacy',
-  name: 'Warehouse Legacy',
-  siteType: 'DBF',
-  clientApiVersion: 'V1',
-}
-
 describe('SiteDetailShell (F3)', () => {
   it('renders breadcrumb, title, chips and subline', async () => {
     const onBack = vi.fn()
@@ -63,15 +54,6 @@ describe('SiteDetailShell (F3)', () => {
 
     const batchList = screen.getByTestId('batch-list')
     expect(batchList).toHaveAttribute('data-site-id', 'site-v2')
-  })
-
-  it('does not render a Delta Sync tab at all for a V1 site', () => {
-    render(<SiteDetailShell site={v1Site} canManage={false} onBack={() => {}} />)
-
-    expect(screen.getByRole('tab', { name: 'Upload history' })).toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: 'Delta Sync' })).not.toBeInTheDocument()
-    expect(screen.getByText('v1')).toBeInTheDocument()
-    expect(screen.getByText('Full snapshot uploads over HTTP (v1).')).toBeInTheDocument()
   })
 
   it('styles the active tab per the prototype (blue border pill)', () => {

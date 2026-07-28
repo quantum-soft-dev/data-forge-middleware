@@ -13,7 +13,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.io.ByteArrayInputStream;
@@ -27,7 +26,6 @@ import java.util.zip.GZIPInputStream;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
-import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -38,12 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * T3.4 — the Bit BI {@code /sites/{siteId}/files} endpoint serves the reconstructed checkpoint CSV
- * for V2 (Delta) sites, while V1 (legacy) sites keep returning their uploaded files unchanged.
- *
- * <p>{@code store-01} is a seeded site under the plugin account; fixtures pin seeded sites to
- * {@code V1} (022 Task 7), so setup flips it to {@code V2} explicitly. The V1 leg flips it back
- * to prove the legacy path is untouched.</p>
+ * T3.4 — the Bit BI {@code /sites/{siteId}/files} endpoint serves reconstructed
+ * checkpoint CSV snapshots for the sole supported Delta ingestion path.
  */
 @DisplayName("Bit BI Plugin API — checkpoint CSV files (T3.4)")
 class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
@@ -51,7 +45,7 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
     private static final String API_KEY_HEADER = "X-Plugin-Api-Key";
     private static final String VALID_API_KEY = "plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
     private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
-    /** store-01 — seeded site under ACCOUNT_ID; flipped to V2 in setup, owns a seeded COMPLETED batch. */
+    /** store-01 — seeded site under ACCOUNT_ID, owns a seeded COMPLETED batch. */
     private static final UUID SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
     private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
@@ -64,15 +58,10 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private ChangelogSegmentService changelogSegmentService;
 
-    @Autowired
-    private JdbcTemplate jdbc;
-
     private final String filesPath = ApiRoutes.BITBI_SITES + "/" + SITE_ID + "/files";
 
     @BeforeEach
     void setUp() {
-        jdbc.update("UPDATE sites SET client_api_version = 'V2' WHERE id = ?", SITE_ID);
-
         AccountPlugin plugin = mock(AccountPlugin.class);
         when(plugin.getId()).thenReturn(1L);
         when(plugin.getAccountId()).thenReturn(ACCOUNT_ID);
@@ -113,18 +102,6 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
         assertTrue(csv.contains("name"), "header present: " + csv);
         assertTrue(csv.contains("Ann"), "row Ann present: " + csv);
         assertTrue(csv.contains("Bob"), "row Bob present: " + csv);
-    }
-
-    @Test
-    @DisplayName("V1 site still lists its uploaded files and ignores checkpoints")
-    void v1SiteStillListsUploadedFiles() throws Exception {
-        buildCustomersCheckpoint();
-        jdbc.update("UPDATE sites SET client_api_version = 'V1' WHERE id = ?", SITE_ID);
-
-        mockMvc.perform(get(filesPath).header(API_KEY_HEADER, VALID_API_KEY))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.files[*].fileName", hasItem("mock-file1.csv")))
-                .andExpect(jsonPath("$.files[*].fileName", not(hasItem("customers.csv.gz"))));
     }
 
     // --- helpers (mirror CheckpointCsvIntegrationTest) ---

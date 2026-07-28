@@ -72,11 +72,6 @@ describe('SyncHealthPill (F11)', () => {
     expect(screen.getByTestId('sync-health-pill')).toHaveTextContent('No sync yet')
   })
 
-  it('renders muted "Snapshot uploads" text for V1 sites', () => {
-    render(<SyncHealthPill clientApiVersion="V1" isLoading={false} now={NOW} />)
-    expect(screen.getByTestId('sync-health-v1')).toHaveTextContent('Snapshot uploads')
-  })
-
   it('renders nothing for V2 sites while the bulk data is loading (no skeleton)', () => {
     const { container } = render(<SyncHealthPill clientApiVersion="V2" isLoading={true} now={NOW} />)
     expect(container).toBeEmptyDOMElement()
