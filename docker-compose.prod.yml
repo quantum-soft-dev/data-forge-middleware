@@ -58,27 +58,6 @@ services:
           cpus: '0.25'
           memory: 256M
 
-  keycloak:
-    restart: unless-stopped
-    environment:
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-changeme_in_production}
-      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-changeme_in_production}
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-keycloak.yourdomain.com}
-      KC_HOSTNAME_STRICT: true
-      KC_HOSTNAME_STRICT_HTTPS: true
-      KC_PROXY: edge
-      KC_HTTP_ENABLED: false
-      KC_HTTPS_PORT: 8443
-    command:
-      - start
-      - --optimized
-      - --import-realm
-    volumes:
-      - keycloak_data_prod:/opt/keycloak/data
-    # In production, use SSL certificates
-    # - ./certs/keycloak.crt:/opt/keycloak/conf/server.crt.pem:ro
-    # - ./certs/keycloak.key:/opt/keycloak/conf/server.key.pem:ro
-
   dfm-backend:
     restart: unless-stopped
     environment:
@@ -99,9 +78,15 @@ services:
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme_in_production}
 
-      # Keycloak with production hostname
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak.yourdomain.com/realms/dfm}
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-https://keycloak.yourdomain.com/realms/dfm/protocol/openid-connect/certs}
+      # Auth0 — the resource server validates Auth0-issued tokens. AUTH0_DOMAIN is required;
+      # the prod profile has no default for it and the application will not start without it.
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://api.dataforge.com}
+      AUTH0_ISSUER: ${AUTH0_ISSUER:-https://${AUTH0_DOMAIN}/}
+      AUTH0_CLAIMS_NAMESPACE: ${AUTH0_CLAIMS_NAMESPACE:-https://api.dataforge.com}
+      AUTH0_MGMT_CLIENT_ID: ${AUTH0_MGMT_CLIENT_ID}
+      AUTH0_MGMT_CLIENT_SECRET: ${AUTH0_MGMT_CLIENT_SECRET}
+      AUTH0_MGMT_AUDIENCE: ${AUTH0_MGMT_AUDIENCE:-https://${AUTH0_DOMAIN}/api/v2/}
 
       # Production logging
       LOGGING_LEVEL_ROOT: WARN
@@ -144,8 +129,6 @@ volumes:
   postgres_data_prod:
     driver: local
   redis_data_prod:
-    driver: local
-  keycloak_data_prod:
     driver: local
 
 networks:
