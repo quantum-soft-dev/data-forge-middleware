@@ -7,10 +7,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
@@ -90,21 +91,15 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("Should handle MaxUploadSizeExceededException with 413 Payload Too Large")
-    void shouldHandleMaxUploadSizeExceededException() {
-        // Given
-        MaxUploadSizeExceededException ex = new MaxUploadSizeExceededException(10_000_000);
+    @DisplayName("Should handle NoResourceFoundException with the shared 404 handler")
+    void shouldHandleNoResourceFoundException() {
+        NoResourceFoundException ex = new NoResourceFoundException(HttpMethod.GET, "/api/v1/test");
 
-        // When
-        ResponseEntity<ErrorResponseDto> response = handler.handleMaxUploadSizeExceeded(ex, request);
+        ResponseEntity<ErrorResponseDto> response = handler.handleNotFound(ex, request);
 
-        // Then
-        assertNotNull(response);
-        assertEquals(HttpStatus.PAYLOAD_TOO_LARGE, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(413, response.getBody().status());
-        assertEquals("Payload Too Large", response.getBody().error());
-        assertEquals("File upload size exceeds maximum allowed size", response.getBody().message());
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertEquals(404, response.getBody().status());
+        assertEquals("Not Found", response.getBody().error());
         assertEquals("/api/v1/test", response.getBody().path());
     }
 

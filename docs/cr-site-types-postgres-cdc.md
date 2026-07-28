@@ -1,5 +1,10 @@
 # Change Request: Site Types & Postgres CDC Support
 
+> **Historical change request (superseded).** Its `/api/dfc/**` REST/JSONL ingestion
+> surface was removed by [CR-032](./cr-remove-client-api-v1.md). `SiteType` and stored
+> schema concepts remain, while supported ingestion now uses Device Authorization and
+> [Delta v2 gRPC](./delta-client-v2-guide.md).
+
 ## Context
 
 Currently all sites in Data Forge Middleware are homogeneous — they upload full CSV snapshots each batch, and the server generates SQL deltas by comparing consecutive batches (CsvDiffService + Myers diff algorithm). There is no concept of site type, no table schema awareness, and no primary key knowledge — SQL UPDATE/DELETE statements use all columns in WHERE clauses.

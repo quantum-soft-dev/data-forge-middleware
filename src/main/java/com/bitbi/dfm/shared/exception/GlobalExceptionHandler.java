@@ -24,7 +24,6 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -414,9 +413,9 @@ public class GlobalExceptionHandler {
     /**
      * Handle NoHandlerFoundException (404 Not Found).
      */
-    @ExceptionHandler(NoHandlerFoundException.class)
+    @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ErrorResponseDto> handleNotFound(
-            NoHandlerFoundException ex,
+            Exception ex,
             HttpServletRequest request) {
 
         logger.warn("Endpoint not found: {}", request.getRequestURI());
@@ -429,24 +428,6 @@ public class GlobalExceptionHandler {
                 request.getRequestURI()
         );
 
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
-    }
-
-    /**
-     * Spring 6 reports an unmapped resource path as NoResourceFoundException.
-     */
-    @ExceptionHandler(NoResourceFoundException.class)
-    public ResponseEntity<ErrorResponseDto> handleNoResourceFound(
-            NoResourceFoundException ex,
-            HttpServletRequest request) {
-        logger.warn("Endpoint not found: {}", request.getRequestURI());
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.NOT_FOUND.value(),
-                "Not Found",
-                "Endpoint not found: " + request.getRequestURI(),
-                request.getRequestURI()
-        );
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
 
@@ -466,27 +447,6 @@ public class GlobalExceptionHandler {
                 request.getRequestURI()
         );
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(error);
-    }
-
-    /**
-     * Handle MaxUploadSizeExceededException (413 Payload Too Large).
-     */
-    @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ErrorResponseDto> handleMaxUploadSizeExceeded(
-            MaxUploadSizeExceededException ex,
-            HttpServletRequest request) {
-
-        logger.warn("Upload size exceeded: {}", ex.getMessage());
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.PAYLOAD_TOO_LARGE.value(),
-                "Payload Too Large",
-                "File upload size exceeds maximum allowed size",
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(error);
     }
 
     /**

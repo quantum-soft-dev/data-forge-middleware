@@ -8,7 +8,7 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [How it differs from CDC v1 (REST/JSONL)](#how-it-differs-from-cdc-v1)
+2. [Retired CDC v1 migration note](#retired-cdc-v1-migration-note)
 3. [The gRPC service](#the-grpc-service)
 4. [Authentication](#authentication)
 5. [Full lifecycle](#full-lifecycle)
@@ -57,9 +57,12 @@ A client integration is three RPCs:
 
 ---
 
-## How it differs from CDC v1
+## Retired CDC v1 migration note
 
-| | CDC v1 (`/api/dfc/**`, REST + JSONL) | Delta Client v2 (gRPC) |
+The REST/JSONL `/api/dfc/**` ingestion API is retired. It has no controllers or token
+issuance path and must not be used as a fallback. The historical differences are:
+
+| | Retired CDC v1 | Delta Client v2 (gRPC) |
 |---|---|---|
 | Transport | REST file uploads | gRPC bidirectional streaming + Protobuf |
 | Change format | JSONL text lines, types inferred from strings | Typed `Value` on the wire |
@@ -68,28 +71,10 @@ A client integration is three RPCs:
 | Reliability | best-effort (malformed lines skipped) | **hard-fail** reconciliation at `SessionEnd` |
 | Power BI | none | typed Parquet change feed + checkpoint floor |
 
-CDC v1 keeps working **only for sites still flagged `client_api_version = V1`**; v2 is the
-go-forward path, and new sites are created as `V2`.
-
-### HTTP file API is closed for V2 sites
-
-Once a site is flagged `V2`, the write endpoints of both HTTP client APIs reject it with
-**`409 Conflict`** and a machine-readable code:
-
-```json
-{"status": 409, "error": "Conflict", "code": "CLIENT_API_V2_REQUIRED", "message": "Site … uses Delta Client v2 (gRPC ingestion); the HTTP file API is disabled for this site"}
-```
-
-Rejected for V2 sites: `POST /api/dfc/batch/start`, `POST /api/dfc/batch/{batchId}/upload`,
-`POST /api/dfc/schema`, `POST /api/v1/device/batches/start`,
-`POST /api/v1/device/files/batches/{batchId}/upload`.
-
-Still available for V2 sites: batch drain (`…/complete`, `…/complete-with-warnings`, `…/fail`,
-`…/cancel`, `GET …/{id}`), file metadata reads, token issuance, and the client error log
-(`POST /api/dfc/error`, `POST /api/v1/device/errors`) — Delta v2 has no error-reporting RPC yet.
-
-If your client receives `CLIENT_API_V2_REQUIRED`, migrate the site to the gRPC flow described in
-this guide — do not retry the HTTP upload.
+V45 migrates every stored site marker to `V2`; `V1` is no longer an application enum
+value. Device Authorization and refresh remain available at `/api/v1/device/**`, as do
+surviving batch/file metadata reads and `POST /api/v1/device/errors`. All ingestion is
+performed through the gRPC service below.
 
 ---
 

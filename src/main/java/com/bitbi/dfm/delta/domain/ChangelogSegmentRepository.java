@@ -22,6 +22,8 @@ public interface ChangelogSegmentRepository {
 
     List<ChangelogSegment> findByBatchId(UUID batchId);
 
+    boolean existsByBatchId(UUID batchId);
+
     /**
      * Per-batch delta totals for a page of batches (batch history list view, 029): sum of record
      * counts and distinct-table count across each batch's segments, aggregated SQL-side. Batches

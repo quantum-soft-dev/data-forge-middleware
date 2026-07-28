@@ -450,7 +450,7 @@ public class SqlGenerationService {
     }
 
     private boolean hasChangelogSegments(UUID batchId) {
-        return !changelogSegmentRepository.findByBatchId(batchId).isEmpty();
+        return changelogSegmentRepository.existsByBatchId(batchId);
     }
 
     /**
@@ -770,7 +770,7 @@ public class SqlGenerationService {
         Site site = siteRepository.findById(batch.getSiteId())
                 .orElseThrow(() -> new IllegalArgumentException("Site not found: " + batch.getSiteId()));
 
-        if (!changelogSegmentRepository.findByBatchId(batchId).isEmpty()) {
+        if (hasChangelogSegments(batchId)) {
             throw new IllegalArgumentException(
                     "SQL regeneration is not supported for segment-backed batches: siteId=" + site.getId());
         }

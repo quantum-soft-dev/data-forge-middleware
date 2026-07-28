@@ -407,6 +407,7 @@ class SqlGenerationServiceTest {
             when(batchRepository.findByIdWithFiles(batchId)).thenReturn(Optional.of(batch));
             when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
             when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(false);
+            when(changelogSegmentRepository.existsByBatchId(batchId)).thenReturn(true);
             when(changelogSegmentRepository.findByBatchId(batchId)).thenReturn(List.of(segment));
             when(siteSchemaService.getTableSchemas(siteId)).thenReturn(Map.of());
             when(pluginDeltaBaselineRepository.baselineSeqsBySiteId(siteId)).thenReturn(Map.of());
@@ -432,6 +433,8 @@ class SqlGenerationServiceTest {
             assertThat(result.get().getFirstSeq()).isEqualTo(11L);
             assertThat(result.get().getLastSeq()).isEqualTo(20L);
             assertThat(result.get().getComparisonBatchId()).isNull();
+            verify(changelogSegmentRepository).existsByBatchId(batchId);
+            verify(changelogSegmentRepository).findByBatchId(batchId);
         }
 
         @Test
@@ -448,7 +451,7 @@ class SqlGenerationServiceTest {
         @Test
         @DisplayName("should skip when the V2 batch has no segments")
         void shouldSkipWhenNoSegments() throws Exception {
-            when(changelogSegmentRepository.findByBatchId(batchId)).thenReturn(List.of());
+            when(changelogSegmentRepository.existsByBatchId(batchId)).thenReturn(false);
 
             Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
 
@@ -463,6 +466,8 @@ class SqlGenerationServiceTest {
                             () -> deltaService.regenerateForBatch(batchId, accountPluginId))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("segment-backed");
+            verify(changelogSegmentRepository).existsByBatchId(batchId);
+            verify(changelogSegmentRepository, never()).findByBatchId(batchId);
         }
     }
 }

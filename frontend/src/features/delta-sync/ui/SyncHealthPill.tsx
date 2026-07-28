@@ -7,14 +7,12 @@
  * While the bulk data is loading nothing renders (no skeleton pill — D5).
  */
 
-import type { ClientApiVersion } from '@/entities/site';
 import type { DeltaSyncHealth } from '../model/types';
 import { formatLagShort, getSyncSeverity } from '../model/severity';
 import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface SyncHealthPillProps {
-  clientApiVersion: ClientApiVersion;
-  /** Bulk health entry for this site; undefined while V2 data is absent. */
+  /** Bulk health entry for this site; undefined while data is absent. */
   health?: DeltaSyncHealth;
   /** True while the bulk health query has not resolved yet — renders nothing. */
   isLoading: boolean;
