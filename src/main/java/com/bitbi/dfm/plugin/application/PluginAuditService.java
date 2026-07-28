@@ -1,11 +1,13 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.PluginActionType;
+import com.bitbi.dfm.plugin.domain.PluginAuditEntryReadyEvent;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
 import com.bitbi.dfm.plugin.domain.SqlGenerationStats;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,9 +34,25 @@ public class PluginAuditService {
     private static final Logger log = LoggerFactory.getLogger(PluginAuditService.class);
 
     private final PluginAuditLogRepository auditLogRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public PluginAuditService(PluginAuditLogRepository auditLogRepository) {
+    public PluginAuditService(PluginAuditLogRepository auditLogRepository,
+                              ApplicationEventPublisher eventPublisher) {
         this.auditLogRepository = auditLogRepository;
+        this.eventPublisher = eventPublisher;
+    }
+
+    /**
+     * Hands an entry to {@code PluginAuditEventListener}, which persists it once the caller's
+     * transaction commits.
+     * <p>
+     * Used only for entries describing a state change. Runs on the caller's thread inside their
+     * transaction, so it must stay cheap and must not be {@code @Async}: the transaction context
+     * that makes the deferral possible is thread-bound and would already be gone on another thread.
+     * </p>
+     */
+    private void publishAfterCommit(PluginAuditLog entry) {
+        eventPublisher.publishEvent(new PluginAuditEntryReadyEvent(entry));
     }
 
     /**
@@ -423,8 +441,6 @@ public class PluginAuditService {
      * @param deletedFilesCount number of S3 files deleted
      * @param deletedTotalBytes total bytes deleted
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logHistoryCleared(
             String pluginId,
             UUID accountId,
@@ -441,7 +457,7 @@ public class PluginAuditService {
                             PluginActionType.PLUGIN_HISTORY_CLEARED)
                     .withMetadata(metadata);
 
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: PLUGIN_HISTORY_CLEARED plugin={} account={} deleted={}",
                     pluginId, accountId, deletedCount);
         } catch (Exception e) {
@@ -583,8 +599,6 @@ public class PluginAuditService {
      * @param sqlGenerationTriggered whether SQL generation was triggered
      * @param batchId the batch used for regeneration (may be null if no batches exist)
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logReinit(
             String pluginId,
             UUID accountId,
@@ -605,7 +619,7 @@ public class PluginAuditService {
             PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId, PluginActionType.REINIT)
                     .withMetadata(metadata);
 
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: REINIT plugin={} account={} deleted={} triggered={}",
                     pluginId, accountId, deletedGenerations, sqlGenerationTriggered);
         } catch (Exception e) {
@@ -654,8 +668,6 @@ public class PluginAuditService {
      * @param batchId the batch ID associated with the generation
      * @param deletedBytes the size of the deleted file in bytes
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logGenerationDeleted(
             String pluginId,
             UUID accountId,
@@ -672,7 +684,7 @@ public class PluginAuditService {
                             PluginActionType.SQL_GENERATION_DELETED)
                     .withMetadata(metadata);
 
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: SQL_GENERATION_DELETED plugin={} account={} generation={}",
                     pluginId, accountId, generationId);
         } catch (Exception e) {
@@ -684,21 +696,17 @@ public class PluginAuditService {
     /**
      * Logs a credential rotation.
      * <p>
-     * Call this only from an AFTER_COMMIT listener — see
-     * {@code plugin.infrastructure.events.PluginCredentialEventListener}. This method opens its own
-     * transaction, so invoking it inline from a rotating service would let the audit row outlive a
-     * rolled-back rotation.
+     * Deferred: the entry is persisted only once the rotating transaction commits, so a rotation
+     * that rolls back leaves nothing claiming it happened.
      * </p>
      *
      * @param pluginId   the plugin identifier
      * @param accountId  the account whose credential was rotated
      * @param actionType API_KEY_ROTATED or PASSWORD_ROTATED
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logCredentialRotated(String pluginId, UUID accountId, PluginActionType actionType) {
         try {
-            auditLogRepository.save(PluginAuditLog.success(pluginId, accountId, actionType));
+            publishAfterCommit(PluginAuditLog.success(pluginId, accountId, actionType));
             log.debug("Audit logged: {} plugin={} account={}", actionType, pluginId, accountId);
         } catch (Exception e) {
             log.error("Failed to log credential rotation audit: plugin={} account={} action={} error={}",
@@ -740,8 +748,6 @@ public class PluginAuditService {
      * @param fileName  downloaded file name
      * @param s3Key     downloaded object key
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logLinkConsumed(String pluginId, UUID accountId, String fileName, String s3Key) {
         try {
             Map<String, Object> metadata = new HashMap<>();
@@ -751,7 +757,7 @@ public class PluginAuditService {
             PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
                             PluginActionType.LINK_CONSUMED)
                     .withMetadata(metadata);
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: LINK_CONSUMED plugin={} account={} file={}", pluginId, accountId, fileName);
         } catch (Exception e) {
             log.error("Failed to log link consumption audit: plugin={} account={} error={}",

@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -42,7 +43,7 @@ class PluginAuditServiceTest {
 
     @BeforeEach
     void setUp() {
-        auditService = new PluginAuditService(auditLogRepository);
+        auditService = new PluginAuditService(auditLogRepository, mock(org.springframework.context.ApplicationEventPublisher.class));
     }
 
     @Nested

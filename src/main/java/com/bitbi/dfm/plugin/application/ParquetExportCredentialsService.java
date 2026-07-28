@@ -2,7 +2,6 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
-import com.bitbi.dfm.plugin.domain.PluginCredentialRotatedEvent;
 import com.bitbi.dfm.plugin.domain.PluginActionType;
 import com.bitbi.dfm.plugin.domain.ParquetExportCredentials;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
@@ -10,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,12 +37,12 @@ public class ParquetExportCredentialsService {
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     private final AccountPluginRepository accountPluginRepository;
-    private final ApplicationEventPublisher eventPublisher;
+    private final PluginAuditService pluginAuditService;
 
     public ParquetExportCredentialsService(AccountPluginRepository accountPluginRepository,
-                                           ApplicationEventPublisher eventPublisher) {
+                                           PluginAuditService pluginAuditService) {
         this.accountPluginRepository = accountPluginRepository;
-        this.eventPublisher = eventPublisher;
+        this.pluginAuditService = pluginAuditService;
     }
 
     /**
@@ -98,9 +96,8 @@ public class ParquetExportCredentialsService {
                 PASSWORD_HASH_FIELD, passwordEncoder.encode(credentials.password())));
         accountPluginRepository.save(accountPlugin);
 
-        // Audited AFTER_COMMIT — see PluginCredentialRotatedEvent.
-        eventPublisher.publishEvent(
-                new PluginCredentialRotatedEvent(PLUGIN_ID, accountId, PluginActionType.PASSWORD_ROTATED));
+        // Deferred to AFTER_COMMIT inside PluginAuditService.
+        pluginAuditService.logCredentialRotated(PLUGIN_ID, accountId, PluginActionType.PASSWORD_ROTATED);
         log.info("Rotated parquet-export password for accountId={}", accountId);
         return credentials;
     }
