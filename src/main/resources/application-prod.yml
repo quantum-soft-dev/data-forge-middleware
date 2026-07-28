@@ -11,15 +11,16 @@ spring:
         show_sql: false
         format_sql: false
 
+# Auth0Properties is @ConfigurationProperties("auth0") with nested management/api groups, so only
+# the nested form binds. The flat keys that used to sit here (management-client-id,
+# management-client-secret, roles-namespace, password-reset-ttl-seconds) bound to nothing and were
+# read by nothing; the Management credentials already come from the same AUTH0_MGMT_* variables via
+# auth0.management.* in application.yml. Auth0PropertyBindingTest keeps orphans from reappearing.
+#
+# The resource-server audience comes from auth0.api.audience in application.yml, which reads the
+# same ${AUTH0_AUDIENCE} with the same default. api-audience existed only to feed that placeholder.
 auth0:
   domain: ${AUTH0_DOMAIN}
-  management-client-id: ${AUTH0_MGMT_CLIENT_ID}
-  management-client-secret: ${AUTH0_MGMT_CLIENT_SECRET}
-  # The resource-server audience comes from auth0.api.audience in application.yml, which reads the
-  # same ${AUTH0_AUDIENCE} with the same default. api-audience existed only to feed that placeholder.
-  database-connection: Username-Password-Authentication
-  password-reset-ttl-seconds: 86400
-  roles-namespace: https://api.dataforge.com/roles
 
 logging:
   level:
