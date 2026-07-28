@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.infrastructure.events;
 
 import com.bitbi.dfm.plugin.domain.PluginAuditEntryReadyEvent;
+import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * actually became durable. {@code fallbackExecution} keeps non-transactional publishers working,
  * matching {@link BatchEventListener}.</p>
  *
+ * <p>Where the change had side effects a rollback cannot take back, the event carries a second
+ * entry that is written on that path instead — see {@code PluginAuditEntryReadyEvent}.</p>
+ *
  * <p>As everywhere else in the audit path, a failure here is swallowed — auditing must never break
  * the operation it records.</p>
  */
@@ -32,20 +36,45 @@ public class PluginAuditEventListener {
         this.auditLogRepository = auditLogRepository;
     }
 
-    // REQUIRES_NEW is mandatory, not stylistic: by AFTER_COMMIT the publishing transaction has
-    // finished, so the listener must open its own. Spring rejects any other propagation here.
+    // REQUIRES_NEW keeps the write correct even if @Async is ever removed: a synchronous
+    // AFTER_COMMIT listener running with REQUIRED would join the publisher's already-completed
+    // transaction and lose the row. On the async path it is simply equivalent to REQUIRED.
     @Async("pluginExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onAuditEntryReady(PluginAuditEntryReadyEvent event) {
+        persist(event.entry(), "after commit");
+    }
+
+    /**
+     * Records what a rollback could not undo.
+     *
+     * <p>Most deferred entries have no rollback entry — the change is wholly transactional, so a
+     * rollback leaves nothing worth writing. Clear, reinit and delete-generation are different:
+     * their S3 objects are gone before the commit point, so a rollback restores the rows over
+     * files that no longer exist, and that divergence must not pass silently.</p>
+     *
+     * <p>No {@code fallbackExecution} here, unlike the commit phase: a non-transactional publisher
+     * never rolls back, and firing on it would write the failure entry for every such caller.</p>
+     */
+    @Async("pluginExecutor")
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
+    public void onAuditEntryRolledBack(PluginAuditEntryReadyEvent event) {
+        if (event.rollbackEntry() == null) {
+            return;
+        }
+        persist(event.rollbackEntry(), "after rollback");
+    }
+
+    private void persist(PluginAuditLog entry, String phase) {
         try {
-            auditLogRepository.save(event.entry());
-            log.debug("Audit logged after commit: {} plugin={} account={}",
-                    event.entry().getActionType(), event.entry().getPluginId(), event.entry().getAccountId());
+            auditLogRepository.save(entry);
+            log.debug("Audit logged {}: {} plugin={} account={}",
+                    phase, entry.getActionType(), entry.getPluginId(), entry.getAccountId());
         } catch (Exception e) {
-            log.error("Failed to persist deferred audit entry: {} plugin={} account={} error={}",
-                    event.entry().getActionType(), event.entry().getPluginId(),
-                    event.entry().getAccountId(), e.getMessage());
+            log.error("Failed to persist deferred audit entry {}: {} plugin={} account={} error={}",
+                    phase, entry.getActionType(), entry.getPluginId(), entry.getAccountId(), e.getMessage());
         }
     }
 }
