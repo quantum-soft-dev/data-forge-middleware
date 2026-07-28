@@ -313,8 +313,6 @@ public class PluginAuditService {
      * @param s3Key      the S3 key where the SQL file was stored
      * @param durationMs time taken to generate the SQL file
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logSqlGenerationCompleted(
             String pluginId,
             UUID accountId,
@@ -338,7 +336,7 @@ public class PluginAuditService {
                     .withMetadata(metadata)
                     .withDuration(durationMs);
 
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: SQL_GENERATION_COMPLETED plugin={} account={} batch={} " +
                             "inserts={} updates={} deletes={} duration={}ms",
                     pluginId, accountId, batchId, stats.inserts(), stats.updates(), stats.deletes(), durationMs);
@@ -360,8 +358,6 @@ public class PluginAuditService {
      * @param siteId     the site the batch belongs to
      * @param durationMs time taken to compare files
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logSqlGenerationCompletedNoChanges(
             String pluginId,
             UUID accountId,
@@ -383,7 +379,7 @@ public class PluginAuditService {
                     .withMetadata(metadata)
                     .withDuration(durationMs);
 
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: SQL_GENERATION_COMPLETED (no changes) plugin={} account={} batch={} duration={}ms",
                     pluginId, accountId, batchId, durationMs);
         } catch (Exception e) {
@@ -512,8 +508,6 @@ public class PluginAuditService {
      * @param stats the generation statistics
      * @param durationMs time taken to regenerate
      */
-    @Async("pluginExecutor")
-    @Transactional
     public void logSqlRegenerationCompleted(
             String pluginId,
             UUID accountId,
@@ -538,7 +532,7 @@ public class PluginAuditService {
                     .withMetadata(metadata)
                     .withDuration(durationMs);
 
-            auditLogRepository.save(auditLog);
+            publishAfterCommit(auditLog);
             log.debug("Audit logged: SQL_REGENERATION_COMPLETED plugin={} account={} batch={} duration={}ms",
                     pluginId, accountId, batchId, durationMs);
         } catch (Exception e) {

@@ -12,7 +12,12 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import com.bitbi.dfm.plugin.application.PluginHistoryService;
+import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
@@ -24,7 +29,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -67,6 +75,18 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private S3Client s3Client;
 
+    @Autowired
+    private PluginHistoryService pluginHistoryService;
+
+    @Autowired
+    private SqlGenerationService sqlGenerationService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     @Value("${aws.s3.bucket-name:data-forge-test-bucket}")
     private String bucketName;
 
@@ -83,6 +103,53 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
         testAccountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, PLUGIN_ID,
                 Map.of("tenantId", "test-tenant"));
         accountPluginRepository.save(testAccountPlugin);
+    }
+
+    @Test
+    @DisplayName("Should not audit a regeneration that rolled back")
+    void shouldNotAuditRolledBackRegeneration() {
+        // regenerateSql() owns the transaction and calls into SqlGenerationService inline, so
+        // the completion audit is written from inside it. If the caller then fails, the new
+        // generation and the superseded flag are undone — and the audit must go with them.
+        // Generated synchronously rather than through the BatchCompletedEvent path: the async
+        // fixture is why the neighbouring regeneration tests are @Disabled, and a rollback test
+        // that silently never runs is worse than no test.
+        // The first batch becomes the baseline and yields no SQL, so a second one is required
+        // before there is anything to regenerate.
+        Batch baseline = createBatchWithCsvFile("rollback-audit-baseline.csv",
+                "id,name,email\n1,Alice,alice@example.com");
+        sqlGenerationService.generateSqlForBatch(baseline.getId(), testAccountPlugin.getId());
+
+        Batch batch = createBatchWithCsvFile("rollback-audit.csv",
+                "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
+        UUID originalGenerationId = sqlGenerationService
+                .generateSqlForBatch(batch.getId(), testAccountPlugin.getId())
+                .orElseThrow(() -> new AssertionError("fixture did not produce a generation"))
+                .getId();
+
+        jdbcTemplate.update(
+                "DELETE FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
+                TEST_ACCOUNT_ID, PluginActionType.SQL_REGENERATION_COMPLETED.name());
+
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
+            pluginHistoryService.regenerateSql(PLUGIN_ID, TEST_ACCOUNT_ID, originalGenerationId);
+            throw new IllegalStateException("caller fails after regenerating");
+        })).isInstanceOf(IllegalStateException.class);
+
+        // during() so a late async write cannot be mistaken for absence.
+        await().during(ofSeconds(2)).atMost(ofSeconds(6)).untilAsserted(() -> {
+            Long completed = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
+                    Long.class, TEST_ACCOUNT_ID, PluginActionType.SQL_REGENERATION_COMPLETED.name());
+            assertThat(completed)
+                    .as("the regeneration was rolled back, so nothing may claim it completed")
+                    .isZero();
+        });
+
+        assertThat(pluginSqlGenerationRepository.findById(originalGenerationId).orElseThrow().isSuperseded())
+                .as("the rollback must also have undone the superseded flag")
+                .isFalse();
     }
 
     // ==================== User Story 1: View History ====================

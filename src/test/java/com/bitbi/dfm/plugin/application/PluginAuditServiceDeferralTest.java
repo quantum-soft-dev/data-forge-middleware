@@ -99,6 +99,36 @@ class PluginAuditServiceDeferralTest {
         }
 
         @Test
+        @DisplayName("SQL generation completed — DeltaSqlQueueService.processNextPending supplies the transaction")
+        void shouldDeferSqlGenerationCompleted() {
+            service.logSqlGenerationCompleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(),
+                    new com.bitbi.dfm.plugin.domain.SqlGenerationStats(1, 0, 0, 1), "s3/key", 5L);
+
+            assertThat(deferredEntry().getActionType())
+                    .isEqualTo(PluginActionType.SQL_GENERATION_COMPLETED);
+        }
+
+        @Test
+        @DisplayName("SQL generation completed with no changes")
+        void shouldDeferSqlGenerationCompletedNoChanges() {
+            service.logSqlGenerationCompletedNoChanges(
+                    PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 5L);
+
+            assertThat(deferredEntry().getActionType())
+                    .isEqualTo(PluginActionType.SQL_GENERATION_COMPLETED);
+        }
+
+        @Test
+        @DisplayName("SQL regeneration completed — PluginHistoryService.regenerateSql supplies the transaction")
+        void shouldDeferSqlRegenerationCompleted() {
+            service.logSqlRegenerationCompleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(),
+                    UUID.randomUUID(), new com.bitbi.dfm.plugin.domain.SqlGenerationStats(1, 0, 0, 1), 5L);
+
+            assertThat(deferredEntry().getActionType())
+                    .isEqualTo(PluginActionType.SQL_REGENERATION_COMPLETED);
+        }
+
+        @Test
         @DisplayName("credential rotated")
         void shouldDeferCredentialRotated() {
             service.logCredentialRotated(PLUGIN_ID, accountId, PluginActionType.API_KEY_ROTATED);
@@ -115,6 +145,15 @@ class PluginAuditServiceDeferralTest {
         @DisplayName("reinit failed — the caller throws right after, so deferring would lose it")
         void shouldWriteReinitFailureImmediately() {
             service.logReinitFailed(PLUGIN_ID, accountId, "plugin is not active");
+
+            verify(repository).save(any(PluginAuditLog.class));
+            verifyNoInteractions(eventPublisher);
+        }
+
+        @Test
+        @DisplayName("SQL generation started — an attempt that later rolls back still happened")
+        void shouldWriteSqlGenerationStartedImmediately() {
+            service.logSqlGenerationStarted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID());
 
             verify(repository).save(any(PluginAuditLog.class));
             verifyNoInteractions(eventPublisher);
