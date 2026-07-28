@@ -13,6 +13,22 @@ spring:
   main:
     allow-bean-definition-overriding: true  # Allow test beans to override production beans
 
+  datasource:
+    hikari:
+      # A run keeps every distinct Spring context in the context cache, and each context holds
+      # its own pool. The production defaults (max 10, min-idle 5) reserve about five connections
+      # per cached context even while it sits idle, so roughly twenty contexts exhaust
+      # PostgreSQL's default max_connections=100. The next context then fails to boot, Flyway
+      # reports it as a connection error, and it surfaces as an ApplicationContext failure in
+      # whichever test class happens to load last — a failure that looks unrelated to the change
+      # that caused it and does not reproduce when that class is run on its own.
+      #
+      # Holding no idle connections makes a cached-but-inactive context free, so adding a test
+      # class no longer pushes the suite over a cliff.
+      maximum-pool-size: 4
+      minimum-idle: 0
+      idle-timeout: 10000
+
 # LocalStack S3 configuration for tests
 s3:
   bucket:
