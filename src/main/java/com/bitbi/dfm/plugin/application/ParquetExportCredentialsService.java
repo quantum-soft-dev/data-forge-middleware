@@ -2,12 +2,15 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
+import com.bitbi.dfm.plugin.domain.PluginCredentialRotatedEvent;
+import com.bitbi.dfm.plugin.domain.PluginActionType;
 import com.bitbi.dfm.plugin.domain.ParquetExportCredentials;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,12 +39,12 @@ public class ParquetExportCredentialsService {
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     private final AccountPluginRepository accountPluginRepository;
-    private final PluginAuditService pluginAuditService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ParquetExportCredentialsService(AccountPluginRepository accountPluginRepository,
-                                           PluginAuditService pluginAuditService) {
+                                           ApplicationEventPublisher eventPublisher) {
         this.accountPluginRepository = accountPluginRepository;
-        this.pluginAuditService = pluginAuditService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -95,7 +98,9 @@ public class ParquetExportCredentialsService {
                 PASSWORD_HASH_FIELD, passwordEncoder.encode(credentials.password())));
         accountPluginRepository.save(accountPlugin);
 
-        pluginAuditService.logPasswordRotated(PLUGIN_ID, accountId);
+        // Audited AFTER_COMMIT — see PluginCredentialRotatedEvent.
+        eventPublisher.publishEvent(
+                new PluginCredentialRotatedEvent(PLUGIN_ID, accountId, PluginActionType.PASSWORD_ROTATED));
         log.info("Rotated parquet-export password for accountId={}", accountId);
         return credentials;
     }

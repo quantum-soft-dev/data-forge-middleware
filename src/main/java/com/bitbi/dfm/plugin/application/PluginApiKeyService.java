@@ -2,13 +2,16 @@ package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
+import com.bitbi.dfm.plugin.domain.PluginActionType;
 import com.bitbi.dfm.plugin.domain.PluginApiKey;
+import com.bitbi.dfm.plugin.domain.PluginCredentialRotatedEvent;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -60,15 +63,15 @@ public class PluginApiKeyService {
 
     private final AccountPluginRepository accountPluginRepository;
     private final MeterRegistry meterRegistry;
-    private final PluginAuditService pluginAuditService;
+    private final ApplicationEventPublisher eventPublisher;
     private final PasswordEncoder passwordEncoder;
 
     @Autowired
     public PluginApiKeyService(
             AccountPluginRepository accountPluginRepository,
             MeterRegistry meterRegistry,
-            PluginAuditService pluginAuditService) {
-        this(accountPluginRepository, meterRegistry, pluginAuditService, new BCryptPasswordEncoder());
+            ApplicationEventPublisher eventPublisher) {
+        this(accountPluginRepository, meterRegistry, eventPublisher, new BCryptPasswordEncoder());
     }
 
     /**
@@ -77,11 +80,11 @@ public class PluginApiKeyService {
     PluginApiKeyService(
             AccountPluginRepository accountPluginRepository,
             MeterRegistry meterRegistry,
-            PluginAuditService pluginAuditService,
+            ApplicationEventPublisher eventPublisher,
             PasswordEncoder passwordEncoder) {
         this.accountPluginRepository = accountPluginRepository;
         this.meterRegistry = meterRegistry;
-        this.pluginAuditService = pluginAuditService;
+        this.eventPublisher = eventPublisher;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -305,7 +308,10 @@ public class PluginApiKeyService {
 
         PluginApiKey apiKey = generateApiKeyFor(accountPlugin);
 
-        pluginAuditService.logApiKeyRotated(PLUGIN_ID, accountId);
+        // Audited by an AFTER_COMMIT listener: a rotation that rolls back must leave no trace
+        // claiming it happened.
+        eventPublisher.publishEvent(
+                new PluginCredentialRotatedEvent(PLUGIN_ID, accountId, PluginActionType.API_KEY_ROTATED));
         log.info("Rotated API Key for account: {}", accountId);
         return apiKey;
     }
