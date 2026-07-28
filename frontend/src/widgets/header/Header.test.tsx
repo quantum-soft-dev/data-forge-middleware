@@ -47,7 +47,12 @@ function asAdmin() {
 
 function withoutPersonalData() {
   mockUseAuth.mockReturnValue({
-    user: { sub: 'auth0|sensitive-subject' },
+    user: {
+      name: '   ',
+      email: '\t',
+      picture: '   ',
+      sub: 'auth0|sensitive-subject',
+    },
     hasRole: () => false,
     isRolesLoading: false,
   });
@@ -111,6 +116,7 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
 
+    expect(screen.getByRole('dialog', { name: 'Your profile' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Your profile' })).toBeInTheDocument();
     expect(screen.getByText('Boris Pliss')).toBeInTheDocument();
     expect(screen.getByText('boris@example.com')).toBeInTheDocument();

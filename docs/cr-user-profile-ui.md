@@ -14,7 +14,7 @@ especially confusing for people who use more than one account.
 ## User experience
 
 The initials avatar becomes a button. Activating it opens a compact, right-aligned
-profile popover containing:
+profile popover, exposed as a dialog named by its heading, containing:
 
 - the Auth0 profile image, or initials when no image is available;
 - display name, with an explicit missing-value fallback;
@@ -30,8 +30,9 @@ overlays.
 
 The view consumes the existing `useAuth` session state and makes no new network
 request. Only `name`, `email`, and `picture` are treated as personal display
-fields. The account-type label is derived from the role boolean that the header
-already uses for navigation.
+fields. Whitespace-only values are normalized to the same explicit fallbacks as
+missing fields. The account-type label is derived from the role boolean that the
+header already uses for navigation.
 
 Auth0 subjects, access/ID tokens, custom claims, and other authentication
 identifiers are intentionally excluded. The old unused profile component showed

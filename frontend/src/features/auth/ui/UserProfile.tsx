@@ -23,8 +23,11 @@ export function UserProfile({
   initials,
   isAdmin,
 }: UserProfileProps) {
-  const displayName = name || 'Name not provided'
-  const displayEmail = email || 'Email not provided'
+  const normalizedName = name?.trim() || undefined
+  const normalizedEmail = email?.trim() || undefined
+  const normalizedPicture = picture?.trim() || undefined
+  const displayName = normalizedName || 'Name not provided'
+  const displayEmail = normalizedEmail || 'Email not provided'
   const accountType = isAdmin ? 'Administrator' : 'Member'
 
   return (
@@ -37,10 +40,10 @@ export function UserProfile({
       </h2>
 
       <div className="mt-4 flex items-center gap-3">
-        {picture ? (
+        {normalizedPicture ? (
           <img
-            src={picture}
-            alt={`${name || 'User'} profile picture`}
+            src={normalizedPicture}
+            alt={`${normalizedName || 'User'} profile picture`}
             className="h-12 w-12 shrink-0 rounded-full border border-separator object-cover"
           />
         ) : (

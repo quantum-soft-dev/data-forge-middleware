@@ -43,7 +43,7 @@ export function Header() {
   const isAdmin = !isRolesLoading && hasRole('ROLE_ADMIN')
 
   // Get user name from token (prefer name, fallback to email)
-  const userName = user?.name || user?.email || 'User'
+  const userName = user?.name?.trim() || user?.email?.trim() || 'User'
   const userInitials = initialsOf(userName)
 
   return (
@@ -137,6 +137,7 @@ export function Header() {
               <PopoverContent
                 align="end"
                 sideOffset={8}
+                aria-labelledby="current-user-profile-title"
                 className="w-80 rounded-[10px] border border-hairline bg-white p-0 shadow-panel"
               >
                 <UserProfile

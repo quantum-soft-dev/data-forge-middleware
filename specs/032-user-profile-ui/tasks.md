@@ -57,4 +57,11 @@ Commit: `feat(ui): add personal profile popover (T02)`
 - Review the created PR for correctness, security, accessibility, regressions,
   and test adequacy; fix any findings before handoff.
 
-No source commit is required when validation and review produce no changes.
+**Post-PR review findings**
+
+- Give the Radix `dialog` an accessible name through the profile heading.
+- Treat whitespace-only Auth0 name, email, and picture values as missing so
+  they cannot produce blank labels/initials or a broken image source.
+- Add regression coverage for both findings.
+
+Commit: `fix(ui): address personal profile review findings (T03)`
