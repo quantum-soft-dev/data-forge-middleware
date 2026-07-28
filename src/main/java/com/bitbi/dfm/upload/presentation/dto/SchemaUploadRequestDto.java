@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Request DTO for POST /api/dfc/schema — table schema upload.
+ * Shared table-schema DTO used by the Delta ingestion boundary.
  *
  * <p>The {@code tables} map contains one entry per table. Each entry maps
  * the table name to its {@link TableSchemaDto}.</p>

@@ -165,7 +165,6 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
           site={site}
           statusSlot={
             <SyncHealthPill
-              clientApiVersion={site.clientApiVersion}
               health={healthBySiteId.get(site.id)}
               isLoading={healthQuery.isLoading}
             />

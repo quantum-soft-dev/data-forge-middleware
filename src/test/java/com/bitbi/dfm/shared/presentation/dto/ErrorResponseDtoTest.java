@@ -22,7 +22,7 @@ class ErrorResponseDtoTest {
         Integer status = 403;
         String error = "Forbidden";
         String message = "Authentication failed";
-        String path = "/api/dfc/batch/start";
+        String path = "/api/v1/device/errors";
 
         // When
         ErrorResponseDto dto = new ErrorResponseDto(timestamp, status, error, message, path);
@@ -44,7 +44,7 @@ class ErrorResponseDtoTest {
             403,
             "Forbidden",
             "Authentication failed",
-            "/api/dfc/batch/start"
+            "/api/v1/device/errors"
         );
 
         // When
@@ -55,7 +55,7 @@ class ErrorResponseDtoTest {
         assertThat(json).contains("\"status\":403");
         assertThat(json).contains("\"error\":\"Forbidden\"");
         assertThat(json).contains("\"message\":\"Authentication failed\"");
-        assertThat(json).contains("\"path\":\"/api/dfc/batch/start\"");
+        assertThat(json).contains("\"path\":\"/api/v1/device/errors\"");
     }
 
     @Test
@@ -67,7 +67,7 @@ class ErrorResponseDtoTest {
               "status": 403,
               "error": "Forbidden",
               "message": "Authentication failed",
-              "path": "/api/dfc/batch/start"
+              "path": "/api/v1/device/errors"
             }
             """;
 
@@ -79,15 +79,15 @@ class ErrorResponseDtoTest {
         assertThat(dto.status()).isEqualTo(403);
         assertThat(dto.error()).isEqualTo("Forbidden");
         assertThat(dto.message()).isEqualTo("Authentication failed");
-        assertThat(dto.path()).isEqualTo("/api/dfc/batch/start");
+        assertThat(dto.path()).isEqualTo("/api/v1/device/errors");
     }
 
     @Test
     void shouldEqualWhenAllFieldsMatch() {
         // Given
         Instant timestamp = Instant.parse("2025-10-09T10:00:00Z");
-        ErrorResponseDto dto1 = new ErrorResponseDto(timestamp, 403, "Forbidden", "Authentication failed", "/api/dfc/batch/start");
-        ErrorResponseDto dto2 = new ErrorResponseDto(timestamp, 403, "Forbidden", "Authentication failed", "/api/dfc/batch/start");
+        ErrorResponseDto dto1 = new ErrorResponseDto(timestamp, 403, "Forbidden", "Authentication failed", "/api/v1/device/errors");
+        ErrorResponseDto dto2 = new ErrorResponseDto(timestamp, 403, "Forbidden", "Authentication failed", "/api/v1/device/errors");
 
         // Then
         assertThat(dto1).isEqualTo(dto2);
@@ -98,8 +98,8 @@ class ErrorResponseDtoTest {
     void shouldNotEqualWhenFieldsDiffer() {
         // Given
         Instant timestamp = Instant.parse("2025-10-09T10:00:00Z");
-        ErrorResponseDto dto1 = new ErrorResponseDto(timestamp, 403, "Forbidden", "Authentication failed", "/api/dfc/batch/start");
-        ErrorResponseDto dto2 = new ErrorResponseDto(timestamp, 404, "Not Found", "Resource not found", "/api/dfc/batch/123");
+        ErrorResponseDto dto1 = new ErrorResponseDto(timestamp, 403, "Forbidden", "Authentication failed", "/api/v1/device/errors");
+        ErrorResponseDto dto2 = new ErrorResponseDto(timestamp, 404, "Not Found", "Resource not found", "/api/v1/device/errors/123");
 
         // Then
         assertThat(dto1).isNotEqualTo(dto2);

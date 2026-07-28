@@ -24,14 +24,14 @@ class JwtTokenTest {
     @DisplayName("Should create JWT token with default expiration")
     void shouldCreateJwtTokenWithDefaultExpiration() {
         // When
-        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN);
+        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, 86400L);
 
         // Then
         assertNotNull(token);
         assertEquals(TEST_TOKEN, token.token());
         assertEquals(TEST_SITE_ID, token.siteId());
         assertEquals(TEST_ACCOUNT_ID, token.accountId());
-        assertEquals(TEST_DOMAIN, token.domain());
+        assertNull(token.domain());
         assertNotNull(token.issuedAt());
         assertNotNull(token.expiresAt());
         assertTrue(token.expiresAt().isAfter(token.issuedAt()));
@@ -45,7 +45,7 @@ class JwtTokenTest {
         long customExpiration = 3600L; // 1 hour
 
         // When
-        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN, customExpiration);
+        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, customExpiration);
 
         // Then
         assertNotNull(token);
@@ -56,7 +56,7 @@ class JwtTokenTest {
     @DisplayName("Should validate new token is not expired")
     void shouldValidateNewTokenIsNotExpired() {
         // Given
-        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN);
+        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, 86400L);
 
         // When & Then
         assertFalse(token.isExpired());
@@ -71,7 +71,7 @@ class JwtTokenTest {
         Instant expiresAt = Instant.now().minus(1, ChronoUnit.HOURS);
 
         // When
-        JwtToken token = new JwtToken(TEST_TOKEN, issuedAt, expiresAt, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN);
+        JwtToken token = new JwtToken(TEST_TOKEN, issuedAt, expiresAt, TEST_SITE_ID, TEST_ACCOUNT_ID, null);
 
         // Then
         assertTrue(token.isExpired());
@@ -83,7 +83,7 @@ class JwtTokenTest {
     void shouldCalculateRemainingTimeUntilExpiration() {
         // Given
         long expirationSeconds = 3600L; // 1 hour
-        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN, expirationSeconds);
+        JwtToken token = JwtToken.create(TEST_TOKEN, TEST_SITE_ID, TEST_ACCOUNT_ID, expirationSeconds);
 
         // When
         long remainingSeconds = token.getExpiresInSeconds();
@@ -99,7 +99,7 @@ class JwtTokenTest {
         // Given
         Instant issuedAt = Instant.now().minus(2, ChronoUnit.HOURS);
         Instant expiresAt = Instant.now().minus(1, ChronoUnit.HOURS);
-        JwtToken token = new JwtToken(TEST_TOKEN, issuedAt, expiresAt, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN);
+        JwtToken token = new JwtToken(TEST_TOKEN, issuedAt, expiresAt, TEST_SITE_ID, TEST_ACCOUNT_ID, null);
 
         // When
         long remainingSeconds = token.getExpiresInSeconds();
@@ -117,7 +117,7 @@ class JwtTokenTest {
 
         // When & Then
         assertThrows(NullPointerException.class, () ->
-                new JwtToken(null, now, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN)
+                new JwtToken(null, now, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, null)
         );
     }
 
@@ -130,7 +130,7 @@ class JwtTokenTest {
 
         // When & Then
         assertThrows(IllegalArgumentException.class, () ->
-                new JwtToken("   ", now, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN)
+                new JwtToken("   ", now, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, null)
         );
     }
 
@@ -142,7 +142,7 @@ class JwtTokenTest {
 
         // When & Then
         assertThrows(NullPointerException.class, () ->
-                new JwtToken(TEST_TOKEN, null, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN)
+                new JwtToken(TEST_TOKEN, null, expires, TEST_SITE_ID, TEST_ACCOUNT_ID, null)
         );
     }
 
@@ -154,7 +154,7 @@ class JwtTokenTest {
 
         // When & Then
         assertThrows(NullPointerException.class, () ->
-                new JwtToken(TEST_TOKEN, now, null, TEST_SITE_ID, TEST_ACCOUNT_ID, TEST_DOMAIN)
+                new JwtToken(TEST_TOKEN, now, null, TEST_SITE_ID, TEST_ACCOUNT_ID, null)
         );
     }
 
@@ -167,7 +167,7 @@ class JwtTokenTest {
 
         // When & Then
         assertThrows(NullPointerException.class, () ->
-                new JwtToken(TEST_TOKEN, now, expires, null, TEST_ACCOUNT_ID, TEST_DOMAIN)
+                new JwtToken(TEST_TOKEN, now, expires, null, TEST_ACCOUNT_ID, null)
         );
     }
 
@@ -180,7 +180,7 @@ class JwtTokenTest {
 
         // When & Then
         assertThrows(NullPointerException.class, () ->
-                new JwtToken(TEST_TOKEN, now, expires, TEST_SITE_ID, null, TEST_DOMAIN)
+                new JwtToken(TEST_TOKEN, now, expires, TEST_SITE_ID, null, null)
         );
     }
 

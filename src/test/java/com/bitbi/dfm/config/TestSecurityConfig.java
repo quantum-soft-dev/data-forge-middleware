@@ -40,7 +40,6 @@ import java.util.Map;
  * <p><b>Unified Filter Chain Architecture</b> (mirrors production orders):</p>
  * <ul>
  *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication (Device API)</li>
- *   <li><b>Order 2:</b> /api/dfc/** → Custom JWT (legacy, deprecated)</li>
  *   <li><b>Order 3:</b> /api/v1/plugins/bit-bi/** → Plugin API key</li>
  *   <li><b>Order 4:</b> /api/v1/plugins/parquet-export/** → Basic Auth + anonymous download</li>
  *   <li><b>Order 5:</b> /api/v1/** → Mocked OAuth2 Resource Server (UI/Admin API)</li>
@@ -288,33 +287,6 @@ public class TestSecurityConfig {
             .exceptionHandling(ex -> ex
                 .authenticationEntryPoint((request, response, authException) -> {
                     response.sendError(401, "Unauthorized - Custom JWT authentication required for Device API");
-                })
-            );
-
-        return http.build();
-    }
-
-    /**
-     * Legacy JWT filter chain for old Data Forge Client endpoints.
-     * <p>
-     * Order 2: Second priority - matches /api/dfc/** (deprecated).
-     * Custom JWT tokens only via JwtAuthenticationFilter.
-     * </p>
-     */
-    @Bean
-    @org.springframework.core.annotation.Order(2)
-    public SecurityFilterChain legacyJwtFilterChain(HttpSecurity http) throws Exception {
-        http
-            .securityMatcher("/api/dfc/**")
-            .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .anyRequest().authenticated()
-            )
-            .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class)
-            .exceptionHandling(ex -> ex
-                .authenticationEntryPoint((request, response, authException) -> {
-                    response.sendError(401, "Unauthorized - Custom JWT authentication required");
                 })
             );
 

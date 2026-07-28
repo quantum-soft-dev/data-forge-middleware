@@ -61,7 +61,6 @@ public final class ApiRoutes {
      * Returns: BatchResponseDto
      * </p>
      */
-    public static final String DEVICE_BATCHES_START = DEVICE_BATCHES + "/start";
 
     /**
      * Complete batch endpoint.
@@ -134,7 +133,6 @@ public final class ApiRoutes {
      * Returns: FileUploadResponseDto
      * </p>
      */
-    public static final String DEVICE_FILES_UPLOAD = DEVICE_FILES + "/batches/{batchId}/upload";
 
     /**
      * Get file metadata endpoint.

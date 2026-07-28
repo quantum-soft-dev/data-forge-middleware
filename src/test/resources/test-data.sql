@@ -48,32 +48,32 @@ VALUES ('0199baac-f851-7ed9-5963-00dbaf07b233', 'plugin-test@example.com', 'Plug
 -- Test sites (with BCrypt hashed client_secret_hash)
 -- NOTE: After migration V7, column renamed from client_secret to client_secret_hash
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('b2c3d4e5-f6a7-8901-bcde-f12345678901', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-site.example.com', '$2a$10$zOS1.KWMj6b2crXsM1hsh.hssSJghfUH1Wdxx3RMQzzNfK5zzPhBK', 'Admin Test Site', true, '2025-09-11 00:00:00', CURRENT_TIMESTAMP, 'admin-site.example.com', 'V1');
+VALUES ('b2c3d4e5-f6a7-8901-bcde-f12345678901', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'admin-site.example.com', '$2a$10$zOS1.KWMj6b2crXsM1hsh.hssSJghfUH1Wdxx3RMQzzNfK5zzPhBK', 'Admin Test Site', true, '2025-09-11 00:00:00', CURRENT_TIMESTAMP, 'admin-site.example.com', 'V2');
 -- Plaintext: admin-site-secret
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199baac-f852-753f-6fc3-7c994fc38654', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-01.example.com', '$2a$10$w4ybRJqsZPH4IWHXHaN1rukDAfZc6Ri4P45Hpk3mlfbZpHIHYYyBm', 'Store 01', true, '2025-09-21 00:00:00', CURRENT_TIMESTAMP, 'store-01.example.com', 'V1');
+VALUES ('0199baac-f852-753f-6fc3-7c994fc38654', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-01.example.com', '$2a$10$w4ybRJqsZPH4IWHXHaN1rukDAfZc6Ri4P45Hpk3mlfbZpHIHYYyBm', 'Store 01', true, '2025-09-21 00:00:00', CURRENT_TIMESTAMP, 'store-01.example.com', 'V2');
 -- Plaintext: valid-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-02.example.com', '$2a$10$R2zm98c/.YXxfrR3dDvj6uYfGv7ITs7cyqpWwpImC1n/tTq20bQqG', 'Store 02', true, '2025-09-26 00:00:00', CURRENT_TIMESTAMP, 'store-02.example.com', 'V1');
+VALUES ('0199baaf-ea7a-bd1f-6f6c-8610b9ddc4d7', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'store-02.example.com', '$2a$10$R2zm98c/.YXxfrR3dDvj6uYfGv7ITs7cyqpWwpImC1n/tTq20bQqG', 'Store 02', true, '2025-09-26 00:00:00', CURRENT_TIMESTAMP, 'store-02.example.com', 'V2');
 -- Plaintext: inactive-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-ca3b-e41c-5521-2f4b33fda8b6', '0199bab1-fad2-bf76-c478-eae1f61e1c17', 'store-03.example.com', '$2a$10$8KGp8l7VXbUwby9yQACEEuOYuBApd8uWzSy4hGppksFbIC07MdnB2', 'Store 03', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'store-03.example.com', 'V1');
+VALUES ('0199bab0-ca3b-e41c-5521-2f4b33fda8b6', '0199bab1-fad2-bf76-c478-eae1f61e1c17', 'store-03.example.com', '$2a$10$8KGp8l7VXbUwby9yQACEEuOYuBApd8uWzSy4hGppksFbIC07MdnB2', 'Store 03', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'store-03.example.com', 'V2');
 -- Plaintext: batch-test-secret
 
 -- Sites for AuthenticationIntegrationTest
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-1111-1111-1111-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'test-store.example.com', '$2a$10$gMwFxteMaHb0kkSu3vaK7.z1PD7tXwSxtwZz.Ib.tzITdaFg.nbRy', 'Test Store', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'test-store.example.com', 'V1');
+VALUES ('0199bab0-1111-1111-1111-111111111111', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'test-store.example.com', '$2a$10$gMwFxteMaHb0kkSu3vaK7.z1PD7tXwSxtwZz.Ib.tzITdaFg.nbRy', 'Test Store', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'test-store.example.com', 'V2');
 -- Plaintext: test-client-secret-uuid
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-2222-2222-2222-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'inactive-store.example.com', '$2a$10$H.wcapH9pLI0XcM6Sz1EHeECA2axttsYPjE90GObxmOEkDvgYDEgi', 'Inactive Store', false, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'inactive-store.example.com', 'V1');
+VALUES ('0199bab0-2222-2222-2222-222222222222', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'inactive-store.example.com', '$2a$10$H.wcapH9pLI0XcM6Sz1EHeECA2axttsYPjE90GObxmOEkDvgYDEgi', 'Inactive Store', false, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'inactive-store.example.com', 'V2');
 -- Plaintext: inactive-secret
 
 INSERT INTO sites (id, account_id, domain, client_secret_hash, display_name, is_active, created_at, updated_at, site_name, client_api_version)
-VALUES ('0199bab0-3333-3333-3333-333333333333', '0199bab2-3cbd-cc95-a989-57ba51d258c8', 'orphaned-store.example.com', '$2a$10$t.QXSUqKLALkr4yq6F5PLuX78.Zl1WDYCKF.ZAXW3oym4XNxMv8aO', 'Orphaned Store (inactive parent)', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'orphaned-store.example.com', 'V1');
+VALUES ('0199bab0-3333-3333-3333-333333333333', '0199bab2-3cbd-cc95-a989-57ba51d258c8', 'orphaned-store.example.com', '$2a$10$t.QXSUqKLALkr4yq6F5PLuX78.Zl1WDYCKF.ZAXW3oym4XNxMv8aO', 'Orphaned Store (inactive parent)', true, '2025-10-01 00:00:00', CURRENT_TIMESTAMP, 'orphaned-store.example.com', 'V2');
 -- Plaintext: orphaned-secret
 
 -- Test batches

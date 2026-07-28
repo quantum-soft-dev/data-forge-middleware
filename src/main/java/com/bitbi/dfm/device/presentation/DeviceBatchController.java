@@ -6,7 +6,6 @@ import com.bitbi.dfm.batch.presentation.dto.BatchResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.DeviceControllerHelper;
-import com.bitbi.dfm.site.application.ClientApiVersionGuard;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -25,8 +24,8 @@ import java.util.UUID;
 /**
  * Device API Batch Management Controller.
  * <p>
- * Provides batch lifecycle operations for device clients:
- * start, complete, fail, cancel, and get batch details.
+ * Provides drain/read batch lifecycle operations for device clients:
+ * complete, fail, cancel, and get batch details.
  * </p>
  * <p>
  * <b>Authentication</b>: Custom JWT (obtained from Device Auth endpoint)<br>
@@ -40,7 +39,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping(ApiRoutes.DEVICE_BATCHES)
-@Tag(name = "Device API - Batch Management", description = "Batch lifecycle operations for device clients (start, complete, fail, cancel)")
+@Tag(name = "Device API - Batch Management", description = "Batch drain/read operations for device clients")
 @SecurityRequirement(name = "bearerAuth")
 public class DeviceBatchController {
 
@@ -48,111 +47,18 @@ public class DeviceBatchController {
 
     private final BatchLifecycleService batchLifecycleService;
     private final AuthorizationHelper authorizationHelper;
-    private final ClientApiVersionGuard clientApiVersionGuard;
 
     /**
      * Constructor injection for dependencies.
      *
      * @param batchLifecycleService Service for batch lifecycle operations
      * @param authorizationHelper   Helper for JWT-based authorization
-     * @param clientApiVersionGuard Per-site strangler guard for the HTTP file API
      */
     public DeviceBatchController(
             BatchLifecycleService batchLifecycleService,
-            AuthorizationHelper authorizationHelper,
-            ClientApiVersionGuard clientApiVersionGuard) {
+            AuthorizationHelper authorizationHelper) {
         this.batchLifecycleService = batchLifecycleService;
         this.authorizationHelper = authorizationHelper;
-        this.clientApiVersionGuard = clientApiVersionGuard;
-    }
-
-    /**
-     * Start new batch for the authenticated device client.
-     * <p>
-     * Creates a new IN_PROGRESS batch for uploading files. The site can only have
-     * one active batch at a time.
-     * </p>
-     *
-     * @return 201 Created with batch details, or error response
-     */
-    @PostMapping("/start")
-    @Operation(
-            summary = "Start new batch",
-            description = "Creates a new IN_PROGRESS batch for file uploads. " +
-                    "The authenticated site can only have one active batch at a time. " +
-                    "Account-level concurrent batch limit also applies."
-    )
-    @ApiResponses(value = {
-            @ApiResponse(
-                    responseCode = "201",
-                    description = "Batch started successfully",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = BatchResponseDto.class)
-                    )
-            ),
-            @ApiResponse(
-                    responseCode = "401",
-                    description = "Unauthorized - Invalid or missing JWT token",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "403",
-                    description = "Forbidden - Site not authorized",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "409",
-                    description = "Conflict - Site already has an active batch",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "429",
-                    description = "Too Many Requests - Concurrent batch limit exceeded",
-                    content = @Content(mediaType = "application/json")
-            ),
-            @ApiResponse(
-                    responseCode = "500",
-                    description = "Internal Server Error",
-                    content = @Content(mediaType = "application/json")
-            )
-    })
-    public ResponseEntity<?> startBatch() {
-        try {
-            // Extract authenticated site/account from JWT security context
-            UUID siteId = authorizationHelper.getAuthenticatedSiteId();
-            UUID accountId = authorizationHelper.getAuthenticatedAccountId();
-
-            clientApiVersionGuard.assertHttpFileApiAllowed(siteId);
-
-            logger.info("Device API: Starting batch - siteId={}", siteId);
-
-            // Delegate to service layer
-            Batch batch = batchLifecycleService.startBatch(accountId, siteId);
-
-            BatchResponseDto response = BatchResponseDto.fromEntity(batch);
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
-
-        } catch (AuthorizationHelper.UnauthorizedException e) {
-            logger.warn("Device API: Unauthorized batch start - {}", e.getMessage());
-            return DeviceControllerHelper.handleUnauthorizedException(e);
-
-        } catch (ClientApiVersionGuard.HttpFileApiDisabledException e) {
-            logger.warn("Device API: HTTP file API disabled for V2 site - {}", e.getMessage());
-            return DeviceControllerHelper.handleHttpFileApiDisabledException(e);
-
-        } catch (BatchLifecycleService.ActiveBatchExistsException e) {
-            logger.warn("Device API: Active batch exists - {}", e.getMessage());
-            return DeviceControllerHelper.handleActiveBatchExistsException(e);
-
-        } catch (BatchLifecycleService.ConcurrentBatchLimitException e) {
-            logger.warn("Device API: Concurrent batch limit exceeded - {}", e.getMessage());
-            return DeviceControllerHelper.handleConcurrentBatchLimitException(e);
-
-        } catch (Exception e) {
-            logger.error("Device API: Error starting batch", e);
-            return DeviceControllerHelper.handleInternalServerError("Failed to start batch");
-        }
     }
 
     /**

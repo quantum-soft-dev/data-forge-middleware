@@ -1,5 +1,6 @@
 package com.bitbi.dfm.plugin.unit;
 
+import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.application.CsvFileQueryService;
@@ -7,23 +8,14 @@ import com.bitbi.dfm.plugin.presentation.dto.FileDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.domain.UploadedFileRepository.LatestFileInfoWithS3Key;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.quality.Strictness;
-import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.GetObjectResponse;
-import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
@@ -34,280 +26,139 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.when;
 
-/**
- * Unit tests for CsvFileQueryService.
- *
- * <p>Tests:
- * <ul>
- *   <li>listFiles - returns files for a site</li>
- *   <li>downloadFile - downloads file from S3</li>
- *   <li>site ownership validation</li>
- *   <li>content type determination</li>
- * </ul>
- */
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("CsvFileQueryService")
 class CsvFileQueryServiceTest {
 
     @Mock
     private UploadedFileRepository uploadedFileRepository;
-
     @Mock
     private SiteRepository siteRepository;
-
     @Mock
     private CheckpointRepository checkpointRepository;
-
     @Mock
     private S3CheckpointStorage checkpointStorage;
-
     @Mock
     private S3Client s3Client;
-
     @Mock
     private MeterRegistry meterRegistry;
-
     @Mock
     private Counter counter;
 
     private CsvFileQueryService service;
-
     private UUID accountId;
     private UUID siteId;
-    private static final String BUCKET_NAME = "test-bucket";
 
     @BeforeEach
     void setUp() {
-        when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(counter);
+        org.mockito.Mockito.lenient()
+                .when(meterRegistry.counter(any(String.class), any(String[].class)))
+                .thenReturn(counter);
         service = new CsvFileQueryService(
                 uploadedFileRepository,
                 siteRepository,
                 checkpointRepository,
                 checkpointStorage,
                 s3Client,
-                BUCKET_NAME,
-                meterRegistry
-        );
-
+                "test-bucket",
+                meterRegistry);
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
     }
 
-    @Nested
-    @DisplayName("listFiles()")
-    class ListFilesMethod {
+    @Test
+    void shouldListCheckpointSnapshots() {
+        allowOwnedSite();
+        Checkpoint checkpoint = checkpoint("customers", "checkpoints/customers.csv.gz");
+        when(checkpointRepository.findBySiteId(siteId)).thenReturn(List.of(checkpoint));
+        when(checkpointStorage.contentLength(checkpoint.getS3KeyCsv())).thenReturn(128L);
 
-        @Test
-        @DisplayName("should return list of files for valid site")
-        void shouldReturnListOfFilesForValidSite() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        List<FileDto> result = service.listFiles(accountId, siteId);
 
-            LatestFileInfoWithS3Key file1 = mockFileInfo("customers.csv.gz", 1024L, Instant.now());
-            LatestFileInfoWithS3Key file2 = mockFileInfo("orders.csv.gz", 2048L, Instant.now());
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSite(siteId))
-                    .thenReturn(List.of(file1, file2));
-
-            // When
-            List<FileDto> result = service.listFiles(accountId, siteId);
-
-            // Then
-            assertThat(result).hasSize(2);
-            assertThat(result.get(0).fileName()).isEqualTo("customers.csv.gz");
-            assertThat(result.get(0).fileSize()).isEqualTo(1024L);
-            assertThat(result.get(1).fileName()).isEqualTo("orders.csv.gz");
-        }
-
-        @Test
-        @DisplayName("should return empty list when no files exist")
-        void shouldReturnEmptyListWhenNoFilesExist() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSite(siteId))
-                    .thenReturn(List.of());
-
-            // When
-            List<FileDto> result = service.listFiles(accountId, siteId);
-
-            // Then
-            assertThat(result).isEmpty();
-        }
-
-        @Test
-        @DisplayName("should throw SecurityException when site not found")
-        void shouldThrowSecurityExceptionWhenSiteNotFound() {
-            // Given
-            when(siteRepository.findById(siteId)).thenReturn(Optional.empty());
-
-            // When/Then
-            assertThatThrownBy(() -> service.listFiles(accountId, siteId))
-                    .isInstanceOf(SecurityException.class)
-                    .hasMessage("Site not found");
-        }
-
-        @Test
-        @DisplayName("should throw SecurityException when site belongs to different account")
-        void shouldThrowSecurityExceptionWhenSiteBelongsToDifferentAccount() {
-            // Given
-            UUID otherAccountId = UUID.randomUUID();
-            Site site = mockSite(otherAccountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-
-            // When/Then
-            assertThatThrownBy(() -> service.listFiles(accountId, siteId))
-                    .isInstanceOf(SecurityException.class)
-                    .hasMessage("Site does not belong to your account");
-        }
+        assertThat(result).singleElement().satisfies(file -> {
+            assertThat(file.fileName()).isEqualTo("customers.csv.gz");
+            assertThat(file.fileSize()).isEqualTo(128L);
+        });
     }
 
-    @Nested
-    @DisplayName("downloadFile()")
-    class DownloadFileMethod {
+    @Test
+    void shouldIgnoreCheckpointsWithoutCsvSnapshot() {
+        allowOwnedSite();
+        when(checkpointRepository.findBySiteId(siteId))
+                .thenReturn(List.of(Checkpoint.create(siteId, "customers", 10L, 2L)));
 
-        @Test
-        @DisplayName("should download file from S3")
-        void shouldDownloadFileFromS3() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-
-            String fileName = "customers.csv.gz";
-            String s3Key = "some/s3/key/customers.csv.gz";
-            LatestFileInfoWithS3Key fileInfo = mockFileInfo(fileName, 1024L, Instant.now(), s3Key);
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSiteAndFileName(siteId, fileName))
-                    .thenReturn(Optional.of(fileInfo));
-
-            byte[] fileContent = "csv,content".getBytes();
-            ResponseInputStream<GetObjectResponse> s3Response = new ResponseInputStream<>(
-                    GetObjectResponse.builder().build(),
-                    new ByteArrayInputStream(fileContent)
-            );
-            when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(s3Response);
-
-            // When
-            CsvFileQueryService.FileDownloadResult result = service.downloadFile(accountId, siteId, fileName);
-
-            // Then
-            assertThat(result.fileName()).isEqualTo(fileName);
-            assertThat(result.fileSize()).isEqualTo(1024L);
-            assertThat(result.contentType()).isEqualTo("application/gzip");
-        }
-
-        @Test
-        @DisplayName("should throw FileNotFoundException when file not found")
-        void shouldThrowFileNotFoundExceptionWhenFileNotFound() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSiteAndFileName(siteId, "missing.csv"))
-                    .thenReturn(Optional.empty());
-
-            // When/Then
-            assertThatThrownBy(() -> service.downloadFile(accountId, siteId, "missing.csv"))
-                    .isInstanceOf(CsvFileQueryService.FileNotFoundException.class)
-                    .hasMessage("File not found: missing.csv");
-        }
-
-        @Test
-        @DisplayName("should throw FileDownloadException when S3 fails")
-        void shouldThrowFileDownloadExceptionWhenS3Fails() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-
-            String fileName = "customers.csv.gz";
-            String s3Key = "some/s3/key/customers.csv.gz";
-            LatestFileInfoWithS3Key fileInfo = mockFileInfo(fileName, 1024L, Instant.now(), s3Key);
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSiteAndFileName(siteId, fileName))
-                    .thenReturn(Optional.of(fileInfo));
-
-            when(s3Client.getObject(any(GetObjectRequest.class)))
-                    .thenThrow(S3Exception.builder().message("S3 error").build());
-
-            // When/Then
-            assertThatThrownBy(() -> service.downloadFile(accountId, siteId, fileName))
-                    .isInstanceOf(CsvFileQueryService.FileDownloadException.class)
-                    .hasMessageContaining("Failed to download file");
-        }
+        assertThat(service.listFiles(accountId, siteId)).isEmpty();
     }
 
-    @Nested
-    @DisplayName("Content Type Determination")
-    class ContentTypeDetermination {
+    @Test
+    void shouldListHistoricalUploadsWhenNoCheckpointCsvExists() {
+        allowOwnedSite();
+        UploadedFileRepository.LatestFileInfoWithS3Key historical =
+                org.mockito.Mockito.mock(UploadedFileRepository.LatestFileInfoWithS3Key.class);
+        when(historical.getOriginalFileName()).thenReturn("customers.csv");
+        when(historical.getFileSize()).thenReturn(256L);
+        when(historical.getUploadedAt()).thenReturn(Instant.parse("2026-07-01T00:00:00Z"));
+        when(uploadedFileRepository.findLatestByOriginalFileNameForSite(siteId))
+                .thenReturn(List.of(historical));
 
-        @Test
-        @DisplayName("should return application/gzip for .csv.gz files")
-        void shouldReturnGzipContentTypeForCsvGz() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        List<FileDto> result = service.listFiles(accountId, siteId);
 
-            LatestFileInfoWithS3Key fileInfo = mockFileInfo("data.csv.gz", 100L, Instant.now(), "key");
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSiteAndFileName(siteId, "data.csv.gz"))
-                    .thenReturn(Optional.of(fileInfo));
-
-            ResponseInputStream<GetObjectResponse> s3Response = new ResponseInputStream<>(
-                    GetObjectResponse.builder().build(),
-                    new ByteArrayInputStream(new byte[0])
-            );
-            when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(s3Response);
-
-            // When
-            CsvFileQueryService.FileDownloadResult result = service.downloadFile(accountId, siteId, "data.csv.gz");
-
-            // Then
-            assertThat(result.contentType()).isEqualTo("application/gzip");
-        }
-
-        @Test
-        @DisplayName("should return text/csv for .csv files")
-        void shouldReturnTextCsvContentTypeForCsv() {
-            // Given
-            Site site = mockSite(accountId, siteId);
-            when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
-
-            LatestFileInfoWithS3Key fileInfo = mockFileInfo("data.csv", 100L, Instant.now(), "key");
-            when(uploadedFileRepository.findLatestByOriginalFileNameForSiteAndFileName(siteId, "data.csv"))
-                    .thenReturn(Optional.of(fileInfo));
-
-            ResponseInputStream<GetObjectResponse> s3Response = new ResponseInputStream<>(
-                    GetObjectResponse.builder().build(),
-                    new ByteArrayInputStream(new byte[0])
-            );
-            when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(s3Response);
-
-            // When
-            CsvFileQueryService.FileDownloadResult result = service.downloadFile(accountId, siteId, "data.csv");
-
-            // Then
-            assertThat(result.contentType()).isEqualTo("text/csv; charset=utf-8");
-        }
+        assertThat(result).singleElement().satisfies(file -> {
+            assertThat(file.fileName()).isEqualTo("customers.csv");
+            assertThat(file.fileSize()).isEqualTo(256L);
+        });
     }
 
-    // Helper methods
+    @Test
+    void shouldDownloadCheckpointSnapshot() throws Exception {
+        allowOwnedSite();
+        Checkpoint checkpoint = checkpoint("customers", "checkpoints/customers.csv.gz");
+        byte[] content = "gzip-content".getBytes();
+        when(checkpointRepository.findBySiteIdAndTableName(siteId, "customers"))
+                .thenReturn(Optional.of(checkpoint));
+        when(checkpointStorage.open(checkpoint.getS3KeyCsv()))
+                .thenReturn(new S3CheckpointStorage.CheckpointObject(
+                        new ByteArrayInputStream(content), content.length));
 
-    private Site mockSite(UUID ownerAccountId, UUID id) {
-        Site site = mock(Site.class);
-        when(site.getId()).thenReturn(id);
-        when(site.getAccountId()).thenReturn(ownerAccountId);
-        return site;
+        CsvFileQueryService.FileDownloadResult result =
+                service.downloadFile(accountId, siteId, "customers.csv.gz");
+
+        assertThat(result.fileName()).isEqualTo("customers.csv.gz");
+        assertThat(result.fileSize()).isEqualTo(content.length);
+        assertThat(result.contentType()).isEqualTo("application/gzip");
+        assertThat(result.inputStream().readAllBytes()).isEqualTo(content);
     }
 
-    private LatestFileInfoWithS3Key mockFileInfo(String fileName, Long fileSize, Instant uploadedAt) {
-        return mockFileInfo(fileName, fileSize, uploadedAt, "default/s3/key");
+    @Test
+    void shouldRejectMissingCheckpointSnapshot() {
+        allowOwnedSite();
+        when(checkpointRepository.findBySiteIdAndTableName(siteId, "missing"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.downloadFile(accountId, siteId, "missing.csv.gz"))
+                .isInstanceOf(CsvFileQueryService.FileNotFoundException.class);
     }
 
-    private LatestFileInfoWithS3Key mockFileInfo(String fileName, Long fileSize, Instant uploadedAt, String s3Key) {
-        LatestFileInfoWithS3Key info = mock(LatestFileInfoWithS3Key.class);
-        when(info.getOriginalFileName()).thenReturn(fileName);
-        when(info.getFileSize()).thenReturn(fileSize);
-        when(info.getUploadedAt()).thenReturn(uploadedAt);
-        when(info.getS3Key()).thenReturn(s3Key);
-        return info;
+    @Test
+    void shouldRejectSiteOwnedByAnotherAccount() {
+        Site site = org.mockito.Mockito.mock(Site.class);
+        when(site.getAccountId()).thenReturn(UUID.randomUUID());
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+
+        assertThatThrownBy(() -> service.listFiles(accountId, siteId))
+                .isInstanceOf(SecurityException.class);
+    }
+
+    private void allowOwnedSite() {
+        Site site = org.mockito.Mockito.mock(Site.class);
+        when(site.getAccountId()).thenReturn(accountId);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+    }
+
+    private Checkpoint checkpoint(String table, String s3Key) {
+        Checkpoint checkpoint = Checkpoint.create(siteId, table, 10L, 2L);
+        checkpoint.attachCsv(s3Key);
+        return checkpoint;
     }
 }

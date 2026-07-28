@@ -1,8 +1,10 @@
 package com.bitbi.dfm.integration;
 
-import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.domain.JwtToken;
+import com.bitbi.dfm.auth.infrastructure.JwtTokenProvider;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.site.domain.Site;
+import com.bitbi.dfm.site.domain.SiteRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -34,7 +36,10 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
     protected MockMvc mockMvc;
 
     @Autowired
-    protected TokenService tokenService;
+    protected JwtTokenProvider jwtTokenProvider;
+
+    @Autowired
+    protected SiteRepository siteRepository;
 
     /**
      * Generate JWT token for test site.
@@ -46,18 +51,19 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
      * @return Bearer token string
      */
     protected String generateTestToken() {
-        return generateToken("store-01.example.com", "valid-secret-uuid");
+        return generateToken("store-01.example.com");
     }
 
     /**
      * Generate JWT token for specific site.
      *
-     * @param domain       site domain
-     * @param clientSecret site client secret
+     * @param domain site domain
      * @return Bearer token string
      */
-    protected String generateToken(String domain, String clientSecret) {
-        JwtToken token = tokenService.generateToken(domain, clientSecret);
+    protected String generateToken(String domain) {
+        Site site = siteRepository.findByDomain(domain)
+                .orElseThrow(() -> new IllegalArgumentException("Test site not found: " + domain));
+        JwtToken token = jwtTokenProvider.generateToken(site.getId(), site.getAccountId());
         return "Bearer " + token.token();
     }
 

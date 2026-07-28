@@ -53,27 +53,6 @@ class SiteResponseDtoTest {
     }
 
     @Test
-    @DisplayName("fromEntity should map V1 clientApiVersion")
-    void fromEntity_shouldMapV1ClientApiVersion() {
-        // Given
-        Site site = mock(Site.class);
-        when(site.getId()).thenReturn(UUID.randomUUID());
-        when(site.getAccountId()).thenReturn(UUID.randomUUID());
-        when(site.getSiteName()).thenReturn("legacy.example.com");
-        when(site.getDisplayName()).thenReturn("Legacy Site");
-        when(site.getIsActive()).thenReturn(true);
-        when(site.getRetentionDays()).thenReturn(45);
-        when(site.getCreatedAt()).thenReturn(LocalDateTime.now());
-        when(site.getClientApiVersion()).thenReturn(ClientApiVersion.V1);
-
-        // When
-        SiteResponseDto dto = SiteResponseDto.fromEntity(site);
-
-        // Then
-        assertEquals(ClientApiVersion.V1, dto.clientApiVersion());
-    }
-
-    @Test
     @DisplayName("fromEntity should exclude clientSecret")
     void fromEntity_shouldExcludeClientSecret() {
         // Given

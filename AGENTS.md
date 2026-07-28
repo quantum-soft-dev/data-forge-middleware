@@ -61,8 +61,8 @@ docker-compose up postgres localstack     # Start dependencies
 - **Repository Pattern**: Interface in domain, JPA in infrastructure
 
 ### Authentication
-- **Client API v1** (`/api/dfc/**`): Custom JWT (HMAC-SHA256). _Legacy and unreachable — the only v1 token-issuance endpoint was removed; the surface itself is scheduled for deletion. See API Evolution below._
-- **Client API v2** (`/api/v1/device/**`): OAuth 2.0 Device Authorization Flow with access + refresh tokens (Auth V2). Site declares `siteName` + `siteType` at registration. _Go-forward client path — the only way a client obtains a token._
+- **Device API** (`/api/v1/device/**`): OAuth 2.0 Device Authorization Flow with access + refresh tokens. It provides authorization and surviving metadata/read operations; ingestion uses Delta gRPC.
+- **Retired client API** (`/api/dfc/**`): no controllers or authentication chain remain; requests are denied.
 - **Admin API** (`/api/v1/**`): Auth0 OAuth2 (ROLE_ADMIN/ROLE_USER)
 - **Plugin API** (`/api/v1/plugins/bit-bi/**`): API key via `X-Plugin-Api-Key` header; per-account rate limiting (Bucket4j token bucket)
 
@@ -87,7 +87,6 @@ docker-compose up postgres localstack     # Start dependencies
 - Max 5 concurrent batches per account
 - 60-minute batch timeout (scheduled task)
 - Retention cleanup schedule is configurable by admins (cron via `/api/v1/admin/settings/batch-retention-schedule`)
-- 128MB file size limit (`spring.servlet.multipart.max-file-size` = 128MB, `max-request-size` = 130MB; `upload.max.file-size-mb` = `${UPLOAD_MAX_FILE_SIZE_MB:128}`)
 
 ## Code Style
 
@@ -146,8 +145,8 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V43**, next is **V44**.
-- **API evolution (strangler)**: add a versioned surface **alongside** the old one (e.g. `/api/v1/device/**` v2 next to `/api/dfc/**` v1), reusing the same application services; deprecate the old (`@Deprecated` + sunset), migrate clients, then remove. Do **not** fork a separate service or duplicate the domain/persistence layer.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V45**, next is **V46**.
+- **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ## Key Implementation Patterns
 
@@ -161,7 +160,6 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 400 - IllegalArgumentException, validation errors
 403 - AccessDeniedException, wrong token type
 404 - NoHandlerFoundException
-413 - MaxUploadSizeExceededException
 500 - Generic exceptions
 ```
 
@@ -209,7 +207,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 4. **First batch after activation (no history)**: Becomes the baseline batch automatically
 
 ### Global Error Handling (016)
-- **Client API**: `POST /api/dfc/error` with optional `severity` field (CRITICAL, ERROR, WARNING, INFO)
+- **Device API**: `POST /api/v1/device/errors` with optional `severity` field (CRITICAL, ERROR, WARNING, INFO)
 - **User API**: Auth0 OAuth2 with accountId claim
 - **ErrorLog**: severity (enum), isRead (boolean) fields added
 - **Dashboard**: GlobalErrorsWidget with unread badge (30s polling)
@@ -257,9 +255,10 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V43**; next migration is **V44** (do not reuse numbers)
+- Migrations current at **V45**; next migration is **V46** (do not reuse numbers)
 
 ## Recent Changes
+- 032-remove-client-api-v1: Retired `/api/dfc/**`, credential-based token issuance, V1-only branches, and HTTP multipart ingestion. V45 migrates stored sites to V2 and temporarily normalizes V1 writes from old pods during a rolling deployment. Historical uploaded CSV files remain readable through the Bit BI files API fallback.
 - 029-batch-per-session: Batch = one Delta v2 ingestion session (see `docs/cr-batch-per-session.md`, `specs/029-batch-per-session/`). Continuous seals commit segments under the session's single batch (many segments : 1 batch; per-segment S3 keys `segments/{segmentId}.pb.gz`); no per-seal batch cycling, no empty tail batches; `BATCH_COMPLETED` once per session; Upload History list aggregates SUM(records)/DISTINCT tables SQL-side (`aggregateByBatchIds`); batch timeout for streaming batches counts from `batches.last_activity_at` (V41, touched at start/ack/seal) — the V2 sweeper exclusion is removed.
 - 028-parquet-export-plugin: Parquet Export plugin (see `docs/parquet-export-plugin-guide.md`, `specs/028-parquet-export-plugin/`). Second Plugin SPI impl `parquet-export`: Basic Auth credentials minted at activation (login plaintext + BCrypt hash in plugin_data, shown once as `login:password`; rotation via `POST /api/v1/account/plugins/parquet-export/rotate-password`); `GET /api/v1/plugins/parquet-export/files` (Basic Auth, filters since/siteId/table/type=delta|checkpoint, per-account rate limit) registers one-time download links (`download_links`, V39; V40 unique login index); anonymous `GET /download/{token}` consumes atomically → 302 to ~60s presigned URL, then 410; purge scheduler; dedicated security filter chain (Order 4). Config `plugin.parquet-export.*`.
 - 022-delta-client-v2: Delta Client v2 gRPC ingestion (see `docs/cr-delta-client-v2.md`, `docs/delta-client-v2-guide.md`, `specs/022-delta-client-v2/`). gRPC server on :9090 (`DeltaIngestionService`) — SessionStart/StreamChanges/SessionEnd/GetSyncState/SubmitSchema; the `delta/` aggregate (SiteSyncState, ChangelogSegment, Checkpoint), changelog fold + CSV/Parquet checkpoints, event-driven per-segment delta Parquet egress. Migrations V29–V36. Sites default to `client_api_version = V2`.

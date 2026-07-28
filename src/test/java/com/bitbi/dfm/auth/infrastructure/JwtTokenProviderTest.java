@@ -20,7 +20,6 @@ class JwtTokenProviderTest {
     private JwtTokenProvider jwtTokenProvider;
     private UUID testSiteId;
     private UUID testAccountId;
-    private String testDomain;
 
     // Must be at least 256 bits (32 characters) for HS256
     private static final String TEST_SECRET = "test-secret-key-that-is-long-enough-for-hs256-algorithm";
@@ -31,7 +30,6 @@ class JwtTokenProviderTest {
         jwtTokenProvider = new JwtTokenProvider(TEST_SECRET, TEST_EXPIRATION);
         testSiteId = UUID.randomUUID();
         testAccountId = UUID.randomUUID();
-        testDomain = "test.example.com";
     }
 
     @Test
@@ -90,19 +88,6 @@ class JwtTokenProviderTest {
 
         // Then
         assertEquals(testAccountId, extractedAccountId);
-    }
-
-    @Test
-    @DisplayName("Should extract domain from legacy token with domain")
-    void shouldExtractDomainFromLegacyToken() {
-        // Given - use deprecated method that includes domain in token
-        JwtToken token = jwtTokenProvider.generateTokenWithDomain(testSiteId, testAccountId, testDomain);
-
-        // When
-        String extractedDomain = jwtTokenProvider.extractDomain(token.token());
-
-        // Then
-        assertEquals(testDomain, extractedDomain);
     }
 
     @Test

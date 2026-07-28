@@ -91,7 +91,7 @@ public class BatchLifecycleService {
         if (site.getSiteType() == SiteType.POSTGRES_CDC && !siteSchemaService.hasSchema(siteId)) {
             logger.warn("Attempted to start batch for CDC site without schema: siteId={}", siteId);
             throw new SchemaRequiredException(
-                    "Schema required for POSTGRES_CDC sites. Submit via POST /api/dfc/schema first.");
+                    "Schema required for POSTGRES_CDC sites. Submit it through Delta gRPC SubmitSchema first.");
         }
 
         // Enforce one active batch per site

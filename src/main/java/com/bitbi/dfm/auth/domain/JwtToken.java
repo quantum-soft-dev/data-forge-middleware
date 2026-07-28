@@ -27,8 +27,6 @@ public record JwtToken(
         String domain
 ) {
 
-    private static final long DEFAULT_EXPIRATION_SECONDS = 86400L; // 24 hours
-
     /**
      * Constructs JwtToken with validation.
      * Domain is nullable for Auth V2 tokens.
@@ -63,42 +61,6 @@ public record JwtToken(
         Instant now = Instant.now();
         Instant expires = now.plus(expirationSeconds, ChronoUnit.SECONDS);
         return new JwtToken(tokenString, now, expires, siteId, accountId, null);
-    }
-
-    /**
-     * Create JWT token with domain (legacy).
-     *
-     * @deprecated Use {@link #create(String, UUID, UUID, long)} instead
-     */
-    @Deprecated
-    public static JwtToken createWithDomain(String tokenString, UUID siteId, UUID accountId, String domain, long expirationSeconds) {
-        Instant now = Instant.now();
-        Instant expires = now.plus(expirationSeconds, ChronoUnit.SECONDS);
-        return new JwtToken(tokenString, now, expires, siteId, accountId, domain);
-    }
-
-    /**
-     * Create new JWT token with default expiration (24 hours) and domain (legacy).
-     *
-     * @deprecated Use {@link #create(String, UUID, UUID, long)} instead
-     */
-    @Deprecated
-    public static JwtToken create(String tokenString, UUID siteId, UUID accountId, String domain) {
-        Instant now = Instant.now();
-        Instant expires = now.plus(DEFAULT_EXPIRATION_SECONDS, ChronoUnit.SECONDS);
-        return new JwtToken(tokenString, now, expires, siteId, accountId, domain);
-    }
-
-    /**
-     * Create JWT token with custom expiration duration and domain (legacy).
-     *
-     * @deprecated Use {@link #create(String, UUID, UUID, long)} instead
-     */
-    @Deprecated
-    public static JwtToken create(String tokenString, UUID siteId, UUID accountId, String domain, long expirationSeconds) {
-        Instant now = Instant.now();
-        Instant expires = now.plus(expirationSeconds, ChronoUnit.SECONDS);
-        return new JwtToken(tokenString, now, expires, siteId, accountId, domain);
     }
 
     /**

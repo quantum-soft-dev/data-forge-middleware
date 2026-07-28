@@ -51,8 +51,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain) throws ServletException, IOException {
 
-        // Process Device API endpoints: /api/v1/device/** (new) and /api/dfc/** (legacy)
-        // Filter is already registered only for these paths in SecurityConfiguration
+        // Filter is registered only for Device API paths in SecurityConfiguration.
         // This check is redundant but kept for safety
         String path = request.getRequestURI();
 
@@ -63,7 +62,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (!path.startsWith("/api/dfc/") && !path.startsWith("/api/v1/device/")) {
+        if (!path.startsWith("/api/v1/device/")) {
             filterChain.doFilter(request, response);
             return;
         }

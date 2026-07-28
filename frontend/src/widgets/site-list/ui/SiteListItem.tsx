@@ -109,9 +109,7 @@ export function SiteListItem({
                 <Badge variant="neutral">
                   {site.siteType === 'POSTGRES_CDC' ? 'Postgres CDC' : 'DBF'}
                 </Badge>
-                <Badge variant={site.clientApiVersion === 'V2' ? 'info' : 'neutral'}>
-                  {site.clientApiVersion === 'V2' ? 'Delta v2' : 'v1'}
-                </Badge>
+                <Badge variant="info">Delta v2</Badge>
               </div>
               <p className="text-sm text-muted-foreground truncate">{site.name}</p>
               <p className="text-xs text-muted-foreground mt-1">

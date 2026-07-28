@@ -366,7 +366,6 @@ src/main/java/com/bitbi/dfm/
 2. **Concurrent Batch Limit**: Maximum 5 active batches per account
 3. **Batch Timeout**: Batches auto-expire after 60 minutes (configurable)
 4. **Cascade Deactivation**: Deactivating account deactivates all sites
-5. **File Size Limit**: 128MB per file upload (`UPLOAD_MAX_FILE_SIZE_MB`, default 128; multipart request cap 130MB)
 
 ## Testing
 

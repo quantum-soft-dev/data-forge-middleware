@@ -393,12 +393,11 @@ class SqlGenerationServiceTest {
 
             site = mock(Site.class);
             when(site.getId()).thenReturn(siteId);
-            when(site.isDeltaV2()).thenReturn(true);
             when(site.getSiteType()).thenReturn(SiteType.DBF);
 
             accountPlugin = mock(AccountPlugin.class);
             when(accountPlugin.isBaselineBatch(any())).thenReturn(false);
-            when(accountPlugin.hasBaselineBatch()).thenReturn(false); // would trigger case 2 for V1
+            when(accountPlugin.hasBaselineBatch()).thenReturn(false);
 
             segment = com.bitbi.dfm.delta.domain.ChangelogSegment.create(
                     siteId, batchId, 11L, 20L, 10L, "hash", "delta/x", "DELTA", Map.of());
@@ -408,6 +407,7 @@ class SqlGenerationServiceTest {
             when(batchRepository.findByIdWithFiles(batchId)).thenReturn(Optional.of(batch));
             when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
             when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(false);
+            when(changelogSegmentRepository.existsByBatchId(batchId)).thenReturn(true);
             when(changelogSegmentRepository.findByBatchId(batchId)).thenReturn(List.of(segment));
             when(siteSchemaService.getTableSchemas(siteId)).thenReturn(Map.of());
             when(pluginDeltaBaselineRepository.baselineSeqsBySiteId(siteId)).thenReturn(Map.of());
@@ -433,6 +433,8 @@ class SqlGenerationServiceTest {
             assertThat(result.get().getFirstSeq()).isEqualTo(11L);
             assertThat(result.get().getLastSeq()).isEqualTo(20L);
             assertThat(result.get().getComparisonBatchId()).isNull();
+            verify(changelogSegmentRepository).existsByBatchId(batchId);
+            verify(changelogSegmentRepository).findByBatchId(batchId);
         }
 
         @Test
@@ -449,7 +451,7 @@ class SqlGenerationServiceTest {
         @Test
         @DisplayName("should skip when the V2 batch has no segments")
         void shouldSkipWhenNoSegments() throws Exception {
-            when(changelogSegmentRepository.findByBatchId(batchId)).thenReturn(List.of());
+            when(changelogSegmentRepository.existsByBatchId(batchId)).thenReturn(false);
 
             Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
 
@@ -458,12 +460,14 @@ class SqlGenerationServiceTest {
         }
 
         @Test
-        @DisplayName("should reject regeneration for V2 sites")
-        void shouldRejectRegenerateForDeltaV2() {
+        @DisplayName("should reject regeneration for segment-backed batches")
+        void shouldRejectRegenerateForSegmentBackedBatch() {
             org.assertj.core.api.Assertions.assertThatThrownBy(
                             () -> deltaService.regenerateForBatch(batchId, accountPluginId))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Delta v2");
+                    .hasMessageContaining("segment-backed");
+            verify(changelogSegmentRepository).existsByBatchId(batchId);
+            verify(changelogSegmentRepository, never()).findByBatchId(batchId);
         }
     }
 }

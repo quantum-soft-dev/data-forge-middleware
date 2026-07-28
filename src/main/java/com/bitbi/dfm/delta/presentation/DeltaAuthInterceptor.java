@@ -1,8 +1,6 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
-import com.bitbi.dfm.site.application.SiteService;
-import com.bitbi.dfm.site.domain.Site;
 import io.grpc.*;
 import org.springframework.stereotype.Component;
 
@@ -37,11 +35,8 @@ public class DeltaAuthInterceptor implements ServerInterceptor {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final TokenService tokenService;
-    private final SiteService siteService;
-
-    public DeltaAuthInterceptor(TokenService tokenService, SiteService siteService) {
+    public DeltaAuthInterceptor(TokenService tokenService) {
         this.tokenService = tokenService;
-        this.siteService = siteService;
     }
 
     @Override
@@ -60,21 +55,6 @@ public class DeltaAuthInterceptor implements ServerInterceptor {
             siteId = tokenService.validateToken(token);
             accountId = tokenService.extractAccountId(token);
         } catch (TokenService.InvalidTokenException | TokenService.AuthenticationException e) {
-            return unauthenticated(call, "Invalid or expired token");
-        }
-
-        // Scope the surface to delta sites: v1 and v2 tokens are minted identically (same claims), so
-        // a legacy /api/dfc credentials token would otherwise pass. Require the authenticated site to
-        // be a Delta v2 (gRPC) site — a DBF/v1 site has no business opening delta sessions (review r4).
-        try {
-            Site site = siteService.getSite(siteId);
-            if (!site.isDeltaV2()) {
-                call.close(Status.PERMISSION_DENIED.withDescription(
-                        "Site is not a Delta v2 (gRPC) site"), new Metadata());
-                return new ServerCall.Listener<>() {
-                };
-            }
-        } catch (RuntimeException e) {
             return unauthenticated(call, "Invalid or expired token");
         }
 

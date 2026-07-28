@@ -34,7 +34,6 @@ class PluginDeltaBaselineServiceTest {
 
     private static final UUID ACCOUNT_ID = UUID.randomUUID();
     private static final UUID V2_SITE_ID = UUID.randomUUID();
-    private static final UUID V1_SITE_ID = UUID.randomUUID();
     private static final Long ACTIVATION_ID = 3L;
 
     @Mock
@@ -60,17 +59,13 @@ class PluginDeltaBaselineServiceTest {
         when(activation.getId()).thenReturn(ACTIVATION_ID);
         when(activation.getAccountId()).thenReturn(ACCOUNT_ID);
 
-        Site v2Site = mock(Site.class);
-        when(v2Site.getId()).thenReturn(V2_SITE_ID);
-        when(v2Site.isDeltaV2()).thenReturn(true);
-        Site v1Site = mock(Site.class);
-        when(v1Site.getId()).thenReturn(V1_SITE_ID);
-        when(v1Site.isDeltaV2()).thenReturn(false);
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(v1Site, v2Site));
+        Site site = mock(Site.class);
+        when(site.getId()).thenReturn(V2_SITE_ID);
+        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(site));
     }
 
     @Test
-    @DisplayName("should capture per-table baselines from current checkpoints for V2 sites only")
+    @DisplayName("should capture per-table baselines from current checkpoints")
     void shouldCaptureBaselinesForV2Sites() {
         Checkpoint customers = Checkpoint.create(V2_SITE_ID, "customers", 42L, 100L);
         Checkpoint orders = Checkpoint.create(V2_SITE_ID, "orders", 7L, 10L);
@@ -84,9 +79,6 @@ class PluginDeltaBaselineServiceTest {
         assertThat(captor.getAllValues())
                 .anyMatch(b -> "customers".equals(b.getTableName()) && b.getBaselineSeq() == 42L)
                 .anyMatch(b -> "orders".equals(b.getTableName()) && b.getBaselineSeq() == 7L);
-        // V1 site untouched
-        verify(baselineRepository, never()).deleteByAccountPluginIdAndSiteId(ACTIVATION_ID, V1_SITE_ID);
-        verify(checkpointRepository, never()).findBySiteId(V1_SITE_ID);
     }
 
     @Test
@@ -101,11 +93,9 @@ class PluginDeltaBaselineServiceTest {
     }
 
     @Test
-    @DisplayName("should be a no-op for accounts without V2 sites")
-    void shouldNoOpWithoutV2Sites() {
-        Site v1Only = mock(Site.class);
-        when(v1Only.isDeltaV2()).thenReturn(false);
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(v1Only));
+    @DisplayName("should be a no-op for accounts without sites")
+    void shouldNoOpWithoutSites() {
+        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of());
 
         service.captureBaselines(activation);
 
@@ -128,11 +118,9 @@ class PluginDeltaBaselineServiceTest {
     }
 
     @Test
-    @DisplayName("reinit: should not wake the worker when the account has no V2 sites")
-    void reinitShouldNotWakeWithoutV2Sites() {
-        Site v1Only = mock(Site.class);
-        when(v1Only.isDeltaV2()).thenReturn(false);
-        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of(v1Only));
+    @DisplayName("reinit: should not wake the worker when the account has no sites")
+    void reinitShouldNotWakeWithoutSites() {
+        when(siteRepository.findByAccountId(ACCOUNT_ID)).thenReturn(List.of());
 
         service.recaptureForReinit(activation);
 

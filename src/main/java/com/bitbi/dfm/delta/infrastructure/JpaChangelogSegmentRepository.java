@@ -32,6 +32,9 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findByBatchId(UUID batchId);
 
     @Override
+    boolean existsByBatchId(UUID batchId);
+
+    @Override
     @Query(value = """
             SELECT s.batch_id AS batchId,
                    SUM(s.record_count) AS totalRecords,

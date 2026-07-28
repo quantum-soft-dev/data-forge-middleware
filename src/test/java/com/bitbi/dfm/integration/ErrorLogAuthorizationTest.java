@@ -43,7 +43,7 @@ class ErrorLogAuthorizationTest extends BaseIntegrationTest {
     @DisplayName("Should reject error logging to batch owned by another site (403 Forbidden)")
     void shouldReject_logErrorToOtherSiteBatch() throws Exception {
         // Given: Token for store-02.example.com (same account, different site)
-        String token02 = generateToken("store-02.example.com", "inactive-secret-uuid");
+        String token02 = generateToken("store-02.example.com");
 
         LogErrorRequestDto errorRequest = new LogErrorRequestDto(
                 "MaliciousError",

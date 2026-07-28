@@ -4,18 +4,15 @@
  * Design handoff v2 §3, fed by the bulk health endpoint (B10):
  * Healthy "Synced · lag 12" · Elevated "Lag 2.3k" · Critical "Lag 18.2k" ·
  * Stalled "Stalled · 26 h" · no sync row → grey "No sync yet".
- * V1 sites render muted text "Snapshot uploads". While the bulk data is
- * loading nothing renders (no skeleton pill — D5).
+ * While the bulk data is loading nothing renders (no skeleton pill — D5).
  */
 
-import type { ClientApiVersion } from '@/entities/site';
 import type { DeltaSyncHealth } from '../model/types';
 import { formatLagShort, getSyncSeverity } from '../model/severity';
 import { monitoringTokens as t, severityTokens } from '@/shared/ui/tokens';
 
 interface SyncHealthPillProps {
-  clientApiVersion: ClientApiVersion;
-  /** Bulk health entry for this site; undefined while V2 data is absent. */
+  /** Bulk health entry for this site; undefined while data is absent. */
   health?: DeltaSyncHealth;
   /** True while the bulk health query has not resolved yet — renders nothing. */
   isLoading: boolean;
@@ -23,15 +20,7 @@ interface SyncHealthPillProps {
   now?: Date;
 }
 
-export function SyncHealthPill({ clientApiVersion, health, isLoading, now = new Date() }: SyncHealthPillProps) {
-  if (clientApiVersion === 'V1') {
-    return (
-      <span className="text-xs" style={{ color: t.textMuted }} data-testid="sync-health-v1">
-        Snapshot uploads
-      </span>
-    );
-  }
-
+export function SyncHealthPill({ health, isLoading, now = new Date() }: SyncHealthPillProps) {
   if (isLoading) {
     return null;
   }

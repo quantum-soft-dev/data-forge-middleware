@@ -1,13 +1,10 @@
 package com.bitbi.dfm.device.presentation;
 
-import com.bitbi.dfm.auth.application.TokenService;
-import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,16 +28,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Device API - Error Management Contract Tests")
 class DeviceErrorContractTest extends BaseIntegrationTest {
 
-    @Autowired
-    private TokenService tokenService;
-
     private String jwtToken;
 
     @BeforeEach
     void setUp() {
         // Generate real JWT token for store-01.example.com site (from test-data.sql)
-        JwtToken token = tokenService.generateToken("store-01.example.com", "valid-secret-uuid");
-        jwtToken = token.token();
+        jwtToken = generateToken("store-01.example.com");
     }
 
     /**
@@ -66,7 +59,7 @@ class DeviceErrorContractTest extends BaseIntegrationTest {
                 """;
 
         mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
                 .andExpect(status().isCreated())
@@ -104,7 +97,7 @@ class DeviceErrorContractTest extends BaseIntegrationTest {
                 """;
 
         mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, batchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
                 .andExpect(status().isCreated())
@@ -132,7 +125,7 @@ class DeviceErrorContractTest extends BaseIntegrationTest {
         String errorId = "0199bab3-d4d6-c1d1-226a-241c7b874314"; // Error from test-data.sql
 
         mockMvc.perform(get(ApiRoutes.DEVICE_ERRORS_GET, errorId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -163,7 +156,7 @@ class DeviceErrorContractTest extends BaseIntegrationTest {
                 """;
 
         mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(invalidPayload))
                 .andExpect(status().isBadRequest());
@@ -233,7 +226,7 @@ class DeviceErrorContractTest extends BaseIntegrationTest {
                 """;
 
         mockMvc.perform(post(ApiRoutes.DEVICE_ERRORS_LOG_BATCH, otherSiteBatchId)
-                        .header("Authorization", "Bearer " + jwtToken)
+                        .header("Authorization", jwtToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(errorPayload))
                 .andExpect(status().isForbidden())

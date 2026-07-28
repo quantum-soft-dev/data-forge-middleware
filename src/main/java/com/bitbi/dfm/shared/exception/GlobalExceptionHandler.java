@@ -20,11 +20,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 
@@ -412,9 +413,9 @@ public class GlobalExceptionHandler {
     /**
      * Handle NoHandlerFoundException (404 Not Found).
      */
-    @ExceptionHandler(NoHandlerFoundException.class)
+    @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ErrorResponseDto> handleNotFound(
-            NoHandlerFoundException ex,
+            Exception ex,
             HttpServletRequest request) {
 
         logger.warn("Endpoint not found: {}", request.getRequestURI());
@@ -431,24 +432,21 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handle MaxUploadSizeExceededException (413 Payload Too Large).
+     * A removed method under a controller's surviving base path is a 405, not a generic 500.
      */
-    @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ErrorResponseDto> handleMaxUploadSizeExceeded(
-            MaxUploadSizeExceededException ex,
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponseDto> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex,
             HttpServletRequest request) {
-
-        logger.warn("Upload size exceeded: {}", ex.getMessage());
-
+        logger.warn("Method not allowed: {} {}", ex.getMethod(), request.getRequestURI());
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),
-                HttpStatus.PAYLOAD_TOO_LARGE.value(),
-                "Payload Too Large",
-                "File upload size exceeds maximum allowed size",
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                "Method Not Allowed",
+                ex.getMessage(),
                 request.getRequestURI()
         );
-
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(error);
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(error);
     }
 
     /**
@@ -1206,30 +1204,6 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
-    }
-
-    /**
-     * Handle CsvFileQueryService.FileDownloadException (500 Internal Server Error).
-     * <p>
-     * Thrown when file download from S3 fails.
-     * </p>
-     */
-    @ExceptionHandler(CsvFileQueryService.FileDownloadException.class)
-    public ResponseEntity<ErrorResponseDto> handleCsvFileDownloadError(
-            CsvFileQueryService.FileDownloadException ex,
-            HttpServletRequest request) {
-
-        logger.error("CSV file download failed: {}", ex.getMessage(), ex);
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                Instant.now(),
-                HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                "Internal Server Error",
-                "Failed to download file. Please try again later.",
-                request.getRequestURI()
-        );
-
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
     }
 
     /**

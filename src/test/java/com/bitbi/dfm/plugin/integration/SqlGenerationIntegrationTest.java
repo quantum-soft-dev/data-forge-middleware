@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.integration;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.integration.AbstractIntegrationTest;
+import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
@@ -27,11 +28,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Integration tests for SQL generation triggered by batch completion events.
+ * Integration tests for SQL generation from historical file-backed batches.
  *
  * <p>Tests the end-to-end flow:</p>
  * <ul>
- *   <li>BatchCompletedEvent triggers SqlGenerationService</li>
  *   <li>CSV files are compared between batches</li>
  *   <li>SQL statements are generated and stored</li>
  *   <li>PluginSqlGeneration records are created</li>
@@ -60,6 +60,9 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private S3Client s3Client;
+
+    @Autowired
+    private SqlGenerationService sqlGenerationService;
 
     // Use account from test-data.sql that owns admin-site.example.com
     private static final UUID TEST_ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
@@ -110,14 +113,8 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             Batch secondBatch = createBatchWithCsvFile(null, "customers.csv",
                     "id,name,email\n1,Alice,alice@new.com\n3,Charlie,charlie@example.com");
 
-            // When - Publish batch completed event for second batch
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    secondBatch.getId(), TEST_ACCOUNT_ID, 1, 1024L
-            );
-            eventPublisher.publishEvent(event);
-
-            // Wait for async processing
-            Thread.sleep(1000);
+            // When - Generate from historical file-backed batch data directly.
+            sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then - Verify SQL generation record was created
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
@@ -142,14 +139,8 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "products.csv",
                     "id,name,price\n1,Widget,9.99\n2,Gadget,19.99");
 
-            // When - Publish batch completed event
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    batch.getId(), TEST_ACCOUNT_ID, 1, 512L
-            );
-            eventPublisher.publishEvent(event);
-
-            // Wait for async processing
-            Thread.sleep(1000);
+            // When
+            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
 
             // Then - Verify all rows become INSERT statements (fresh site has no previous batch)
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(FRESH_SITE_ID);
@@ -201,11 +192,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
                     "id,name,status\n1,Alice,active\n2,Bob,inactive");
 
             // When
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    secondBatch.getId(), TEST_ACCOUNT_ID, 1, 512L
-            );
-            eventPublisher.publishEvent(event);
-            Thread.sleep(1000);
+            sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
@@ -230,11 +217,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
                     "id,name\n1,Item1\n2,Item2");
 
             // When
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    secondBatch.getId(), TEST_ACCOUNT_ID, 1, 256L
-            );
-            eventPublisher.publishEvent(event);
-            Thread.sleep(1000);
+            sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
@@ -259,11 +242,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
                     "id,value\n1,A-UPDATED\n2,B\n4,D");
 
             // When
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    secondBatch.getId(), TEST_ACCOUNT_ID, 1, 256L
-            );
-            eventPublisher.publishEvent(event);
-            Thread.sleep(1000);
+            sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
@@ -291,12 +270,8 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "77nsfsfira.csv",
                     "id,name\n1,Test\n2,Data");
 
-            // When - Publish batch completed event
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    batch.getId(), TEST_ACCOUNT_ID, 1, 256L
-            );
-            eventPublisher.publishEvent(event);
-            Thread.sleep(1000);
+            // When
+            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
 
             // Then - SQL generation should succeed (table name prefixed with _)
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(FRESH_SITE_ID);
@@ -325,11 +300,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
                     "id,customer,total\n1,Alice,100.00");
 
             // When
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    batch.getId(), TEST_ACCOUNT_ID, 1, 256L
-            );
-            eventPublisher.publishEvent(event);
-            Thread.sleep(1000);
+            sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
 
             // Then - Verify S3 key follows expected pattern
             List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);

@@ -43,12 +43,6 @@ spring:
     locations: classpath:db/migration
     schemas: public
 
-  servlet:
-    multipart:
-      max-file-size: 128MB
-      max-request-size: 130MB
-      enabled: true
-
 # S3 Configuration
 s3:
   endpoint: ${AWS_S3_ENDPOINT:https://s3.amazonaws.com}
@@ -73,16 +67,7 @@ account:
   # Effective per-account concurrent batch limit, enforced by BatchLifecycleService via AccountProperties.
   max-concurrent-batches: ${ACCOUNT_MAX_CONCURRENT_BATCHES:5}
 
-# Upload Configuration
-upload:
-  max:
-    file-size-mb: ${UPLOAD_MAX_FILE_SIZE_MB:128}
-    files-per-batch: ${UPLOAD_MAX_FILES_PER_BATCH:1000}
-  retry:
-    attempts: 3
-    delay-ms: 1000
-
-# JWT Configuration (for client API backward compatibility)
+# JWT Configuration (Device Authorization Flow access tokens)
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-to-a-secure-random-value-at-least-256-bits}
   expiration-seconds: 86400

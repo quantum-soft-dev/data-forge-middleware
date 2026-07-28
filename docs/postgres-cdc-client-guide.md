@@ -1,5 +1,11 @@
 # Postgres CDC Client Integration Guide
 
+> **Archived protocol guide.** The REST/JSONL `/api/dfc/**` flow documented below was
+> retired by CR-032 and is no longer callable. New and existing clients must use Device
+> Authorization plus the Delta v2 gRPC flow in
+> [Delta Client v2 Integration Guide](./delta-client-v2-guide.md). The remainder of this
+> document is retained only as historical format and migration context.
+
 **Document Version**: 1.0.0
 **Last Updated**: 2026-02-21
 **Audience**: Developers integrating PostgreSQL CDC sources with Data Forge Middleware
