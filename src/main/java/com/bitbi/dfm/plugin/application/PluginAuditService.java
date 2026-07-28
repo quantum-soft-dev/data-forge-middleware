@@ -682,42 +682,27 @@ public class PluginAuditService {
     }
 
     /**
-     * Logs a Parquet Export password rotation (028).
+     * Logs a credential rotation.
+     * <p>
+     * Call this only from an AFTER_COMMIT listener — see
+     * {@code plugin.infrastructure.events.PluginCredentialEventListener}. This method opens its own
+     * transaction, so invoking it inline from a rotating service would let the audit row outlive a
+     * rolled-back rotation.
+     * </p>
      *
-     * @param pluginId  the plugin identifier
-     * @param accountId the account that rotated its password
+     * @param pluginId   the plugin identifier
+     * @param accountId  the account whose credential was rotated
+     * @param actionType API_KEY_ROTATED or PASSWORD_ROTATED
      */
     @Async("pluginExecutor")
     @Transactional
-    public void logPasswordRotated(String pluginId, UUID accountId) {
+    public void logCredentialRotated(String pluginId, UUID accountId, PluginActionType actionType) {
         try {
-            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
-                    PluginActionType.PASSWORD_ROTATED);
-            auditLogRepository.save(auditLog);
-            log.debug("Audit logged: PASSWORD_ROTATED plugin={} account={}", pluginId, accountId);
+            auditLogRepository.save(PluginAuditLog.success(pluginId, accountId, actionType));
+            log.debug("Audit logged: {} plugin={} account={}", actionType, pluginId, accountId);
         } catch (Exception e) {
-            log.error("Failed to log password rotation audit: plugin={} account={} error={}",
-                    pluginId, accountId, e.getMessage());
-        }
-    }
-
-    /**
-     * Logs a Bit BI API key rotation (#66).
-     *
-     * @param pluginId  the plugin identifier
-     * @param accountId the account that rotated its API key
-     */
-    @Async("pluginExecutor")
-    @Transactional
-    public void logApiKeyRotated(String pluginId, UUID accountId) {
-        try {
-            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
-                    PluginActionType.API_KEY_ROTATED);
-            auditLogRepository.save(auditLog);
-            log.debug("Audit logged: API_KEY_ROTATED plugin={} account={}", pluginId, accountId);
-        } catch (Exception e) {
-            log.error("Failed to log API key rotation audit: plugin={} account={} error={}",
-                    pluginId, accountId, e.getMessage());
+            log.error("Failed to log credential rotation audit: plugin={} account={} action={} error={}",
+                    pluginId, accountId, actionType, e.getMessage());
         }
     }
 

@@ -35,13 +35,13 @@ class ParquetExportCredentialsServiceTest {
     private AccountPluginRepository accountPluginRepository;
 
     @Mock
-    private PluginAuditService pluginAuditService;
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private ParquetExportCredentialsService service;
 
     @BeforeEach
     void setUp() {
-        service = new ParquetExportCredentialsService(accountPluginRepository, pluginAuditService);
+        service = new ParquetExportCredentialsService(accountPluginRepository, eventPublisher);
         lenient().when(accountPluginRepository.save(any(AccountPlugin.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
@@ -103,7 +103,8 @@ class ParquetExportCredentialsServiceTest {
             assertTrue(ENCODER.matches(rotated.password(), newHash));
             assertFalse(ENCODER.matches("oldPassword", newHash));
             verify(accountPluginRepository).save(accountPlugin);
-            verify(pluginAuditService).logPasswordRotated("parquet-export", ACCOUNT_ID);
+            verify(eventPublisher).publishEvent(new com.bitbi.dfm.plugin.domain.PluginCredentialRotatedEvent(
+                    "parquet-export", ACCOUNT_ID, com.bitbi.dfm.plugin.domain.PluginActionType.PASSWORD_ROTATED));
         }
 
         @Test
