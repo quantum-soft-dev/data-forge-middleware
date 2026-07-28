@@ -38,7 +38,6 @@ auth0:
   api:
     audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
     issuer: ${AUTH0_ISSUER:https://dev-example.us.auth0.com/}
-  database-connection: Username-Password-Authentication
 
 s3:
   # Use AWS_S3_ENDPOINT to support both host-run (localhost) and container-run (localstack service) setups.

@@ -101,7 +101,6 @@ auth0:
     audience: ${AUTH0_AUDIENCE:https://api.dataforge.com}
     issuer: ${AUTH0_ISSUER:https://dev-example.us.auth0.com/}
     claims-namespace: ${AUTH0_CLAIMS_NAMESPACE:https://api.dataforge.com}
-  database-connection: Username-Password-Authentication
 
 # Actuator Configuration
 management:

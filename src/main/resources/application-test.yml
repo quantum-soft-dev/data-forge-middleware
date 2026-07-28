@@ -39,7 +39,6 @@ auth0:
   api:
     audience: https://api.test.com
     issuer: https://test.auth0.com/
-  database-connection: Username-Password-Authentication
   password-reset-ttl-seconds: 86400
   roles-namespace: https://api.dataforge.com/roles
 

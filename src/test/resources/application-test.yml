@@ -54,4 +54,3 @@ auth0:
     audience: https://api.test.com
     issuer: https://test-domain.auth0.com/
     claims-namespace: https://api.test.com
-  database-connection: Username-Password-Authentication
