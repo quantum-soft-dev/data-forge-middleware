@@ -60,5 +60,15 @@ public enum PluginActionType {
     LINK_REJECTED,
 
     /** Parquet Export: Basic Auth password rotated by the account owner (028) */
-    PASSWORD_ROTATED
+    PASSWORD_ROTATED,
+
+    /**
+     * Bit BI: API key rotated by the account owner.
+     * <p>
+     * Adding a value here requires a migration extending
+     * {@code chk_plugin_audit_logs_action_type} — see V44 and
+     * {@code PluginAuditLogActionTypeIntegrationTest}.
+     * </p>
+     */
+    API_KEY_ROTATED
 }

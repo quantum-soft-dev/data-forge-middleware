@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.application;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginApiKey;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,6 +43,7 @@ class PluginApiKeyServiceTest {
     private AccountPluginRepository repository;
     private CountingPasswordEncoder encoder;
     private SimpleMeterRegistry meterRegistry;
+    private PluginAuditService auditService;
     private PluginApiKeyService service;
     private UUID accountId;
 
@@ -50,7 +52,8 @@ class PluginApiKeyServiceTest {
         repository = mock(AccountPluginRepository.class);
         encoder = new CountingPasswordEncoder();
         meterRegistry = new SimpleMeterRegistry();
-        service = new PluginApiKeyService(repository, meterRegistry, encoder);
+        auditService = mock(PluginAuditService.class);
+        service = new PluginApiKeyService(repository, meterRegistry, auditService, encoder);
         accountId = UUID.randomUUID();
         when(repository.save(any(AccountPlugin.class))).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -179,7 +182,35 @@ class PluginApiKeyServiceTest {
                     .thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.rotateApiKey(accountId))
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(PluginNotActivatedException.class);
+            verifyNoInteractions(auditService);
+        }
+
+        @Test
+        @DisplayName("should fail when the activation is deactivated")
+        void shouldFailForDeactivatedActivation() {
+            AccountPlugin activation = activation(Map.of());
+            activation.deactivate();
+            when(repository.findByAccountIdAndPluginId(accountId, PLUGIN_ID))
+                    .thenReturn(Optional.of(activation));
+
+            assertThatThrownBy(() -> service.rotateApiKey(accountId))
+                    .as("a deactivated plugin must not mint a working key")
+                    .isInstanceOf(PluginNotActivatedException.class);
+            verify(repository, never()).save(any(AccountPlugin.class));
+            verifyNoInteractions(auditService);
+        }
+
+        @Test
+        @DisplayName("should record the rotation in the audit log")
+        void shouldAuditRotation() {
+            AccountPlugin activation = activation(Map.of());
+            when(repository.findByAccountIdAndPluginId(accountId, PLUGIN_ID))
+                    .thenReturn(Optional.of(activation));
+
+            service.rotateApiKey(accountId);
+
+            verify(auditService).logApiKeyRotated(PLUGIN_ID, accountId);
         }
 
         @Test

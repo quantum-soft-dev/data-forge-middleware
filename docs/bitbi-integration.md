@@ -143,9 +143,38 @@ Used for accessing SQL changes and site data after plugin is activated.
 - Example: `plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6`
 
 **Security**:
-- API Key is returned **only once** during activation
-- Stored as BCrypt hash in database (not reversible)
-- Key rotation available via re-activation
+- API Key is returned **only once** — at activation, or from the rotation endpoint below
+- Stored as a BCrypt hash (verification) plus a SHA-256 lookup handle (index); neither is reversible
+- Rotate with `POST /api/v1/account/plugins/bit-bi/rotate-api-key` (see below)
+
+### Rotating the API Key
+
+The account owner rotates the key over HTTP, authenticated with their own OAuth2 token — the
+same shape as the Parquet Export plugin's `rotate-password`.
+
+```bash
+curl -X POST https://api.dataforge.com/api/v1/account/plugins/bit-bi/rotate-api-key \
+  -H "Authorization: Bearer {oauth2_access_token}"
+```
+
+```json
+{
+  "apiKey": "plk_x9Y8w7V6u5T4s3R2q1P0o9N8m7L6k5J4"
+}
+```
+
+| Status | Meaning |
+|---|---|
+| 200 | New key issued — shown here once and never again |
+| 401 | Not authenticated |
+| 403 | Bit BI is not activated for this account |
+
+The previous key stops authenticating **immediately**, so update every client before rotating.
+The action is recorded in the plugin audit log as `API_KEY_ROTATED`.
+
+Rotation also re-derives the indexed SHA-256 lookup handle. Activations issued before V42 have
+no handle and are served by a fallback scan; rotating is what moves them onto the indexed path,
+which is tracked by the `plugin.api.key.validation.legacy.hit` metric.
 
 ---
 
@@ -583,9 +612,11 @@ Response includes `Retry-After` header with seconds to wait.
 ### 1. API Key Lifecycle
 
 - **Generation**: API Key is generated during plugin activation
-- **Single Return**: Key is returned **only once** in activation response
-- **Storage**: Key is stored as BCrypt hash (not retrievable)
-- **Rotation**: Re-activating the plugin generates a **new key** (old key invalidated)
+- **Single Return**: Key is returned **only once** in the activation or rotation response
+- **Storage**: Key is stored as a BCrypt hash plus a SHA-256 lookup handle (not retrievable)
+- **Rotation**: `POST /api/v1/account/plugins/bit-bi/rotate-api-key` issues a new key and
+  invalidates the old one immediately. Re-activating an already active plugin also mints a new
+  key, but does **not** return it — use the rotation endpoint instead.
 - **Deactivation**: API Key remains but returns 403 on all requests
 
 ### 2. Upsert Behavior

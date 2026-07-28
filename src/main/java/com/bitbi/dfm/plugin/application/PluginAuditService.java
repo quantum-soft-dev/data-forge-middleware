@@ -702,6 +702,26 @@ public class PluginAuditService {
     }
 
     /**
+     * Logs a Bit BI API key rotation (#66).
+     *
+     * @param pluginId  the plugin identifier
+     * @param accountId the account that rotated its API key
+     */
+    @Async("pluginExecutor")
+    @Transactional
+    public void logApiKeyRotated(String pluginId, UUID accountId) {
+        try {
+            PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
+                    PluginActionType.API_KEY_ROTATED);
+            auditLogRepository.save(auditLog);
+            log.debug("Audit logged: API_KEY_ROTATED plugin={} account={}", pluginId, accountId);
+        } catch (Exception e) {
+            log.error("Failed to log API key rotation audit: plugin={} account={} error={}",
+                    pluginId, accountId, e.getMessage());
+        }
+    }
+
+    /**
      * Logs a served Parquet Export file listing (028).
      *
      * @param pluginId  the plugin identifier
