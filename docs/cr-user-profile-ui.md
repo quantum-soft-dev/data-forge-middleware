@@ -1,9 +1,9 @@
 # CR: Personal Profile View (032)
 
-**Status**: Planned
-**GitHub issue**: [#73](https://github.com/quantum-soft-dev/data-forge-middleware/issues/73)
-**Spec**: `specs/032-user-profile-ui/`
-**Scope**: Protected frontend header
+- **Status**: Implemented
+- **GitHub issue**: [#73](https://github.com/quantum-soft-dev/data-forge-middleware/issues/73)
+- **Spec**: `specs/032-user-profile-ui/`
+- **Scope**: Protected frontend header
 
 ## Motivation
 

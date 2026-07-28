@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Header } from '@/widgets/header/Header';
@@ -25,7 +26,12 @@ vi.mock('@tanstack/react-router', () => ({
 
 function asUser() {
   mockUseAuth.mockReturnValue({
-    user: { name: 'Boris Pliss' },
+    user: {
+      name: 'Boris Pliss',
+      email: 'boris@example.com',
+      picture: 'https://example.com/boris.png',
+      sub: 'auth0|sensitive-subject',
+    },
     hasRole: () => false,
     isRolesLoading: false,
   });
@@ -33,8 +39,16 @@ function asUser() {
 
 function asAdmin() {
   mockUseAuth.mockReturnValue({
-    user: { name: 'Boris Pliss' },
+    user: { name: 'Boris Pliss', email: 'boris@example.com' },
     hasRole: (r: string) => r === 'ROLE_ADMIN',
+    isRolesLoading: false,
+  });
+}
+
+function withoutPersonalData() {
+  mockUseAuth.mockReturnValue({
+    user: { sub: 'auth0|sensitive-subject' },
+    hasRole: () => false,
     isRolesLoading: false,
   });
 }
@@ -81,7 +95,7 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
   it('renders the user avatar with initials on brand-50', () => {
     asUser();
     render(<Header />);
-    const avatar = screen.getByTitle('Boris Pliss');
+    const avatar = screen.getByRole('button', { name: 'Open profile for Boris Pliss' });
     expect(avatar.textContent).toBe('BP');
     expect(avatar.className).toContain('rounded-full');
     expect(avatar).toHaveStyle({
@@ -90,12 +104,73 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
     });
   });
 
+  it('opens the personal profile with safe Auth0 display fields', async () => {
+    const user = userEvent.setup();
+    asUser();
+    render(<Header />);
+
+    await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
+
+    expect(screen.getByRole('heading', { name: 'Your profile' })).toBeInTheDocument();
+    expect(screen.getByText('Boris Pliss')).toBeInTheDocument();
+    expect(screen.getByText('boris@example.com')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Boris Pliss profile picture' })).toHaveAttribute(
+      'src',
+      'https://example.com/boris.png',
+    );
+    expect(screen.getByText('Member')).toBeInTheDocument();
+    expect(screen.queryByText('auth0|sensitive-subject')).not.toBeInTheDocument();
+  });
+
+  it('supports keyboard opening and Escape dismissal', async () => {
+    const user = userEvent.setup();
+    asUser();
+    render(<Header />);
+
+    const trigger = screen.getByRole('button', { name: 'Open profile for Boris Pliss' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    expect(screen.getByRole('heading', { name: 'Your profile' })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('heading', { name: 'Your profile' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('renders explicit profile fallbacks when optional personal data is missing', async () => {
+    const user = userEvent.setup();
+    withoutPersonalData();
+    render(<Header />);
+
+    const trigger = screen.getByRole('button', { name: 'Open profile for User' });
+    expect(trigger).toHaveTextContent('US');
+    await user.click(trigger);
+
+    expect(screen.getByText('Name not provided')).toBeInTheDocument();
+    expect(screen.getByText('Email not provided')).toBeInTheDocument();
+    expect(screen.getByLabelText('Profile initials')).toHaveTextContent('US');
+    expect(screen.queryByRole('img', { name: /profile picture/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('auth0|sensitive-subject')).not.toBeInTheDocument();
+  });
+
   it('renders the Admin chip as an info alpha pill for admins', () => {
     asAdmin();
     render(<Header />);
     const chip = screen.getByText('Admin');
     expect(chip.className).toContain('rounded-full');
     expect(chip).toHaveStyle({ background: monitoringTokens.blue50 });
+  });
+
+  it('identifies administrators inside the profile', async () => {
+    const user = userEvent.setup();
+    asAdmin();
+    render(<Header />);
+
+    await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
+
+    expect(screen.getByText('Administrator')).toBeInTheDocument();
   });
 
   it('keeps role-based navigation behavior unchanged', () => {
