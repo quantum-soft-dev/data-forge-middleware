@@ -42,9 +42,22 @@ class DeltaSiteSyncStateIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void clientApiVersionRejectsRetiredV1() {
+    void legacyWriterValuesAreNormalizedDuringRollingDeployment() {
+        UUID siteId = UUID.fromString(
+                jdbc.queryForObject("SELECT id::text FROM sites LIMIT 1", String.class));
+
+        jdbc.update("UPDATE sites SET client_api_version = 'V1' WHERE id = ?", siteId);
+
+        assertEquals("V2", jdbc.queryForObject(
+                "SELECT client_api_version FROM sites WHERE id = ?",
+                String.class,
+                siteId));
+    }
+
+    @Test
+    void clientApiVersionRejectsUnknownValues() {
         assertThrows(DataIntegrityViolationException.class, () ->
-                jdbc.update("UPDATE sites SET client_api_version = 'V1' " +
+                jdbc.update("UPDATE sites SET client_api_version = 'V3' " +
                         "WHERE id = (SELECT id FROM sites LIMIT 1)"));
     }
 

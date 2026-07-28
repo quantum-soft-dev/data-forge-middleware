@@ -22,6 +22,12 @@ Migration V45:
 2. keeps sites active and preserves their identifiers and history;
 3. replaces the check constraint so only `V2` is accepted.
 
+Rolling deployments remain safe while old pods drain: V45 installs a temporary
+`BEFORE INSERT OR UPDATE` trigger that rewrites an explicitly supplied `V1` to `V2`
+before the constraint is evaluated. Unknown values still fail the constraint. Remove
+the compatibility trigger and function in V46 only after every pre-V45 pod has been
+drained.
+
 The column stays in place for response compatibility. Its removal, if desired, is a
 separate API/schema change.
 
@@ -58,6 +64,24 @@ WHERE client_api_version <> 'V2';
 ```
 
 The expected result is `0`. No site is deactivated by V45.
+
+During the rollout, verify that no old pods remain before scheduling V46:
+
+```sql
+SELECT count(*) AS stored_v1_sites
+FROM sites
+WHERE client_api_version = 'V1';
+```
+
+The trigger makes the expected result `0` even when an old pod creates a site during
+the rolling window.
+
+## Historical plugin files
+
+The Bit BI files API prefers reconstructed checkpoint CSVs. Sites migrated from V1 can
+have historical `uploaded_files` but no checkpoint yet; for those sites the list and
+download endpoints fall back to the latest uploaded file records. The retirement does
+not make historical file-backed data unreadable.
 
 ## Rollback
 

@@ -14,6 +14,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +51,9 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
     /** store-01 — seeded site under ACCOUNT_ID, owns a seeded COMPLETED batch. */
     private static final UUID SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
     private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    private static final String HISTORICAL_FILE = "mock-file1.csv";
+    private static final String HISTORICAL_KEY =
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890/store-01.example.com/2025-10-06/10-00/mock-file1.csv";
 
     @MockitoBean
     private PluginApiKeyService pluginApiKeyService;
@@ -57,6 +63,12 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private ChangelogSegmentService changelogSegmentService;
+
+    @Autowired
+    private S3Client s3Client;
+
+    @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}")
+    private String bucketName;
 
     private final String filesPath = ApiRoutes.BITBI_SITES + "/" + SITE_ID + "/files";
 
@@ -102,6 +114,28 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
         assertTrue(csv.contains("name"), "header present: " + csv);
         assertTrue(csv.contains("Ann"), "row Ann present: " + csv);
         assertTrue(csv.contains("Bob"), "row Bob present: " + csv);
+    }
+
+    @Test
+    @DisplayName("Site without checkpoints lists historical uploaded CSV files")
+    void siteWithoutCheckpointsListsHistoricalUploadedFiles() throws Exception {
+        mockMvc.perform(get(filesPath).header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[*].fileName", hasItem(HISTORICAL_FILE)));
+    }
+
+    @Test
+    @DisplayName("Site without a matching checkpoint downloads a historical uploaded CSV")
+    void siteWithoutMatchingCheckpointDownloadsHistoricalUploadedFile() throws Exception {
+        byte[] body = "id,name\n1,Historical\n".getBytes(StandardCharsets.UTF_8);
+        s3Client.putObject(
+                PutObjectRequest.builder().bucket(bucketName).key(HISTORICAL_KEY).build(),
+                RequestBody.fromBytes(body));
+
+        mockMvc.perform(get(filesPath + "/" + HISTORICAL_FILE).header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/csv"))
+                .andExpect(content().bytes(body));
     }
 
     // --- helpers (mirror CheckpointCsvIntegrationTest) ---

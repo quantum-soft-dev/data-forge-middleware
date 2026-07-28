@@ -6,11 +6,19 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.presentation.dto.FileDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository.LatestFileInfoWithS3Key;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import java.io.InputStream;
 import java.time.ZoneOffset;
@@ -37,19 +45,28 @@ public class CsvFileQueryService {
 
     private static final Logger log = LoggerFactory.getLogger(CsvFileQueryService.class);
 
+    private final UploadedFileRepository uploadedFileRepository;
     private final SiteRepository siteRepository;
     private final CheckpointRepository checkpointRepository;
     private final S3CheckpointStorage checkpointStorage;
+    private final S3Client s3Client;
+    private final String bucketName;
     private final MeterRegistry meterRegistry;
 
     public CsvFileQueryService(
+            UploadedFileRepository uploadedFileRepository,
             SiteRepository siteRepository,
             CheckpointRepository checkpointRepository,
             S3CheckpointStorage checkpointStorage,
+            S3Client s3Client,
+            @Value("${s3.bucket.name}") String bucketName,
             MeterRegistry meterRegistry) {
+        this.uploadedFileRepository = uploadedFileRepository;
         this.siteRepository = siteRepository;
         this.checkpointRepository = checkpointRepository;
         this.checkpointStorage = checkpointStorage;
+        this.s3Client = s3Client;
+        this.bucketName = bucketName;
         this.meterRegistry = meterRegistry;
     }
 
@@ -71,9 +88,16 @@ public class CsvFileQueryService {
     public List<FileDto> listFiles(UUID accountId, UUID siteId) {
         log.debug("Listing files for siteId={}, accountId={}", siteId, accountId);
 
-        // Validate site ownership
         validateSiteOwnership(accountId, siteId);
-        return listCheckpointFiles(siteId);
+        List<FileDto> files = listCheckpointFiles(siteId);
+        if (files.isEmpty()) {
+            files = listHistoricalUploadedFiles(siteId);
+        }
+
+        meterRegistry.counter("plugin.api.files.listed",
+                "siteId", siteId.toString(),
+                "count", String.valueOf(files.size())).increment();
+        return files;
     }
 
     /**
@@ -87,15 +111,24 @@ public class CsvFileQueryService {
 
         log.info("Found {} checkpoint files for V2 siteId={}", checkpoints.size(), siteId);
 
-        meterRegistry.counter("plugin.api.files.listed",
-                "siteId", siteId.toString(),
-                "count", String.valueOf(checkpoints.size())).increment();
-
         return checkpoints.stream()
                 .map(cp -> FileDto.of(
                         cp.getTableName() + CHECKPOINT_FILE_SUFFIX,
                         checkpointStorage.contentLength(cp.getS3KeyCsv()),
                         cp.getUpdatedAt().toInstant(ZoneOffset.UTC)))
+                .toList();
+    }
+
+    private List<FileDto> listHistoricalUploadedFiles(UUID siteId) {
+        List<LatestFileInfoWithS3Key> files =
+                uploadedFileRepository.findLatestByOriginalFileNameForSite(siteId);
+        log.info("No checkpoint CSVs for siteId={}; found {} historical uploaded files",
+                siteId, files.size());
+        return files.stream()
+                .map(file -> FileDto.of(
+                        file.getOriginalFileName(),
+                        file.getFileSize(),
+                        file.getUploadedAt()))
                 .toList();
     }
 
@@ -116,9 +149,10 @@ public class CsvFileQueryService {
     public FileDownloadResult downloadFile(UUID accountId, UUID siteId, String fileName) {
         log.debug("Downloading file: siteId={}, fileName={}, accountId={}", siteId, fileName, accountId);
 
-        // Validate site ownership
         validateSiteOwnership(accountId, siteId);
-        return downloadCheckpointFile(siteId, fileName);
+        return findCheckpoint(siteId, fileName)
+                .map(checkpoint -> downloadCheckpointFile(siteId, checkpoint))
+                .orElseGet(() -> downloadHistoricalUploadedFile(siteId, fileName));
     }
 
     /**
@@ -129,32 +163,71 @@ public class CsvFileQueryService {
      *
      * @throws FileNotFoundException if no checkpoint snapshot exists for the requested table
      */
-    private FileDownloadResult downloadCheckpointFile(UUID siteId, String fileName) {
+    private java.util.Optional<Checkpoint> findCheckpoint(UUID siteId, String fileName) {
         String tableName = fileName.endsWith(CHECKPOINT_FILE_SUFFIX)
                 ? fileName.substring(0, fileName.length() - CHECKPOINT_FILE_SUFFIX.length())
                 : fileName;
 
-        Checkpoint checkpoint = checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
-                .filter(cp -> cp.getS3KeyCsv() != null)
-                .orElseThrow(() -> {
-                    log.warn("Checkpoint snapshot not found: siteId={}, table={}", siteId, tableName);
-                    return new FileNotFoundException("File not found: " + fileName);
-                });
+        return checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
+                .filter(cp -> cp.getS3KeyCsv() != null);
+    }
 
+    private FileDownloadResult downloadCheckpointFile(UUID siteId, Checkpoint checkpoint) {
         S3CheckpointStorage.CheckpointObject object = checkpointStorage.open(checkpoint.getS3KeyCsv());
 
         log.info("Downloaded checkpoint CSV: siteId={}, table={}, s3Key={}",
-                siteId, tableName, checkpoint.getS3KeyCsv());
+                siteId, checkpoint.getTableName(), checkpoint.getS3KeyCsv());
 
         meterRegistry.counter("plugin.api.files.downloaded",
                 "siteId", siteId.toString()).increment();
 
         return new FileDownloadResult(
                 object.inputStream(),
-                tableName + CHECKPOINT_FILE_SUFFIX,
+                checkpoint.getTableName() + CHECKPOINT_FILE_SUFFIX,
                 object.size(),
                 "application/gzip"
         );
+    }
+
+    private FileDownloadResult downloadHistoricalUploadedFile(UUID siteId, String fileName) {
+        LatestFileInfoWithS3Key fileInfo = uploadedFileRepository
+                .findLatestByOriginalFileNameForSiteAndFileName(siteId, fileName)
+                .orElseThrow(() -> {
+                    log.warn("File not found in checkpoints or uploads: siteId={}, fileName={}",
+                            siteId, fileName);
+                    return new FileNotFoundException("File not found: " + fileName);
+                });
+
+        try {
+            GetObjectRequest request = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(fileInfo.getS3Key())
+                    .build();
+            ResponseInputStream<GetObjectResponse> response = s3Client.getObject(request);
+
+            meterRegistry.counter("plugin.api.files.downloaded",
+                    "siteId", siteId.toString()).increment();
+            return new FileDownloadResult(
+                    response,
+                    fileInfo.getOriginalFileName(),
+                    fileInfo.getFileSize(),
+                    determineContentType(fileName));
+        } catch (S3Exception exception) {
+            log.error("Failed to download historical file from S3: s3Key={}, error={}",
+                    fileInfo.getS3Key(), exception.getMessage());
+            throw new FileDownloadException("Failed to download file: " + fileName, exception);
+        }
+    }
+
+    private String determineContentType(String fileName) {
+        String lowerName = fileName.toLowerCase();
+        if (lowerName.endsWith(".csv.gz") || lowerName.endsWith(".gz")) {
+            return "application/gzip";
+        }
+        if (lowerName.endsWith(".csv")) {
+            return "text/csv; charset=utf-8";
+        }
+        return "application/octet-stream";
     }
 
     /**
@@ -194,6 +267,12 @@ public class CsvFileQueryService {
     public static class FileNotFoundException extends RuntimeException {
         public FileNotFoundException(String message) {
             super(message);
+        }
+    }
+
+    public static class FileDownloadException extends RuntimeException {
+        public FileDownloadException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

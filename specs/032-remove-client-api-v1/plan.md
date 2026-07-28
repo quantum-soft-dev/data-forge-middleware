@@ -35,7 +35,9 @@ WHERE is_active
 GROUP BY 1;
 ```
 
-V45 preserves every site and converts V1 to V2. After migration:
+V45 preserves every site and converts V1 to V2. A temporary database trigger also
+normalizes `V1` writes from old pods during the rolling window before the V2-only
+constraint runs. After migration:
 
 ```sql
 SELECT count(*) FROM sites WHERE client_api_version <> 'V2';
@@ -46,3 +48,8 @@ must return zero.
 Clients must complete Device Flow authorization and use Delta gRPC before deployment.
 The repository and owner audit attached to issue #64 establishes that there are no
 remaining V1 consumers.
+
+After all pre-V45 pods are drained, remove the compatibility trigger and function in
+V46. Until then, rollback of the application alone is safe for site creation because
+legacy V1 writes are stored as V2; a full rollback still requires the database snapshot
+described in the change request.

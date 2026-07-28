@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.application.CsvFileQueryService;
 import com.bitbi.dfm.plugin.presentation.dto.FileDto;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
+import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,8 +15,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import software.amazon.awssdk.services.s3.S3Client;
 
 import java.io.ByteArrayInputStream;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,11 +32,15 @@ import static org.mockito.Mockito.when;
 class CsvFileQueryServiceTest {
 
     @Mock
+    private UploadedFileRepository uploadedFileRepository;
+    @Mock
     private SiteRepository siteRepository;
     @Mock
     private CheckpointRepository checkpointRepository;
     @Mock
     private S3CheckpointStorage checkpointStorage;
+    @Mock
+    private S3Client s3Client;
     @Mock
     private MeterRegistry meterRegistry;
     @Mock
@@ -49,7 +56,13 @@ class CsvFileQueryServiceTest {
                 .when(meterRegistry.counter(any(String.class), any(String[].class)))
                 .thenReturn(counter);
         service = new CsvFileQueryService(
-                siteRepository, checkpointRepository, checkpointStorage, meterRegistry);
+                uploadedFileRepository,
+                siteRepository,
+                checkpointRepository,
+                checkpointStorage,
+                s3Client,
+                "test-bucket",
+                meterRegistry);
         accountId = UUID.randomUUID();
         siteId = UUID.randomUUID();
     }
@@ -76,6 +89,25 @@ class CsvFileQueryServiceTest {
                 .thenReturn(List.of(Checkpoint.create(siteId, "customers", 10L, 2L)));
 
         assertThat(service.listFiles(accountId, siteId)).isEmpty();
+    }
+
+    @Test
+    void shouldListHistoricalUploadsWhenNoCheckpointCsvExists() {
+        allowOwnedSite();
+        UploadedFileRepository.LatestFileInfoWithS3Key historical =
+                org.mockito.Mockito.mock(UploadedFileRepository.LatestFileInfoWithS3Key.class);
+        when(historical.getOriginalFileName()).thenReturn("customers.csv");
+        when(historical.getFileSize()).thenReturn(256L);
+        when(historical.getUploadedAt()).thenReturn(Instant.parse("2026-07-01T00:00:00Z"));
+        when(uploadedFileRepository.findLatestByOriginalFileNameForSite(siteId))
+                .thenReturn(List.of(historical));
+
+        List<FileDto> result = service.listFiles(accountId, siteId);
+
+        assertThat(result).singleElement().satisfies(file -> {
+            assertThat(file.fileName()).isEqualTo("customers.csv");
+            assertThat(file.fileSize()).isEqualTo(256L);
+        });
     }
 
     @Test
