@@ -1,11 +1,17 @@
 name: App Deploy (GKE)
 
+# Dev deploys are tag-driven (NOT on every merge to develop): push a
+# `deploy-dev/*` tag on the commit you want deployed, e.g.
+#   TAG=deploy-dev/$(date +%Y%m%d-%H%M); git tag $TAG && git push origin $TAG
+# Merges to develop only run tests (ci-cd.yml). Stage/prod still deploy on
+# branch push; any environment can also be deployed via workflow_dispatch.
 on:
   push:
     branches:
-      - develop      # -> dev    (bitbi-dev / dev-bitbi-cluster)
       - stage        # -> stage  (bitbi-stage / stage-bitbi-cluster)
       - main         # -> prod   (bitbi-production / prod-bitbi-cluster)
+    tags:
+      - "deploy-dev/*"   # -> dev (bitbi-dev / dev-bitbi-cluster), deploys the tagged commit
     paths:
       - "src/**"
       - "frontend/**"
@@ -24,8 +30,10 @@ on:
           - stage
           - prod
 
+# Every deploy-dev/* tag must share one concurrency group, so map the ref to
+# its environment here instead of using the (unique) tag name directly.
 concurrency:
-  group: forge-app-${{ github.event.inputs.environment || github.ref_name }}
+  group: forge-app-${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/deploy-dev/') && 'dev') || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -35,9 +43,26 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # Bind the job to a GitHub Environment so environment protection rules
+    # (deployment branch/tag policies, env-scoped secrets) apply per target.
+    environment: ${{ github.event.inputs.environment || (startsWith(github.ref, 'refs/tags/deploy-dev/') && 'dev') || (github.ref_name == 'stage' && 'stage') || (github.ref_name == 'main' && 'prod') }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for the tag ancestry check below
+
+      # A deploy-dev/* tag must point at a commit that already landed on
+      # develop (i.e. passed PR review + CI). Runs BEFORE cloud auth so a
+      # tag on an unreviewed commit never reaches the WIF credential step.
+      - name: Verify deploy tag is on develop
+        if: startsWith(github.ref, 'refs/tags/deploy-dev/')
+        run: |
+          git fetch origin develop
+          if ! git merge-base --is-ancestor HEAD origin/develop; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' points at a commit not reachable from origin/develop — refusing to deploy"
+            exit 1
+          fi
 
       - uses: google-github-actions/auth@v2
         with:
@@ -49,14 +74,20 @@ jobs:
       # ── Resolve env-specific variables ──────────────────────────────────────
       - name: Resolve environment
         id: env
+        # ref_name goes through env vars, NOT ${{ }} interpolation inside `run`:
+        # git allows `$(...)` in ref names, so inlining the ref into the script
+        # would be a shell-injection vector once wildcard tags are a trigger.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_ENV: ${{ github.event.inputs.environment }}
         run: |
-          ENV="${{ github.event.inputs.environment }}"
+          ENV="$INPUT_ENV"
           if [ -z "$ENV" ]; then
-            case "${{ github.ref_name }}" in
-              develop) ENV=dev ;;
-              stage)   ENV=stage ;;
-              main)    ENV=prod ;;
-              *)       echo "Unsupported branch ${{ github.ref_name }}"; exit 1 ;;
+            case "$REF_NAME" in
+              deploy-dev/*) ENV=dev ;;
+              stage)        ENV=stage ;;
+              main)         ENV=prod ;;
+              *)            echo "Unsupported ref $REF_NAME"; exit 1 ;;
             esac
           fi
           case $ENV in

@@ -1,5 +1,14 @@
 # Docker Deployment Guide
 
+> **⚠️ Dormant since 2026-07-28 (AWS rollback path only).** The ghcr images described in this
+> guide are **no longer published**: the `build` / `docker-build` / `docker-build-frontend` jobs
+> in `ci-cd.yml` are disabled (`if: false`) because the live deployment path is GKE + Artifact
+> Registry (`.github/workflows/app-deploy.yml`, see
+> [cr-tag-driven-dev-deploy.md](../cr-tag-driven-dev-deploy.md) and
+> [cr-gke-migration.md](../cr-gke-migration.md)). Existing `ghcr.io/...` tags remain pullable but
+> are **frozen at pre-2026-07-28 code**. To use this guide for an AWS rollback, first re-enable
+> those jobs (their original `if:` conditions are kept in comments in `ci-cd.yml`).
+
 ## Table of Contents
 
 - [Overview](#overview)

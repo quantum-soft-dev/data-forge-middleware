@@ -15,6 +15,10 @@ namespace, kustomize overlays, Terraform infra, GitHub Actions + Workload Identi
 Move forge to the same model: three clusters, namespace **`forge`**, branch → cluster
 (`develop`→dev, `stage`→stage, `main`→prod). Two stages:
 
+> **Update 2026-07-28:** dev is no longer deployed on push to `develop` — dev deploys are
+> tag-driven (`deploy-dev/*`), see [cr-tag-driven-dev-deploy.md](./cr-tag-driven-dev-deploy.md).
+> Stage/prod branch triggers are unchanged.
+
 1. **Dev migration** into the `forge` namespace of `dev-bitbi-cluster`, testing, reconnect bitbi-dev.
 2. **Prod cutover** into `prod-bitbi-cluster`.
 
@@ -61,7 +65,9 @@ checksum on, path-style off).
   `terraform validate` is green; dev `terraform plan` = 10 to add, 0 change, 0 destroy.
 - **CI/CD** — `.github/workflows/app-deploy.yml` (build backend+frontend → push AR → sync
   `forge-secrets` → kustomize apply → rollout) and `infra-deploy.yml` (Terraform plan/apply via WIF).
-  Branch → env: `develop`→dev, `stage`→stage, `main`→prod.
+  Branch → env: `develop`→dev, `stage`→stage, `main`→prod. *(Superseded for dev: since
+  2026-07-28 dev deploys only via `deploy-dev/*` tags — see
+  [cr-tag-driven-dev-deploy.md](./cr-tag-driven-dev-deploy.md).)*
 
 **Secret mapping** (existing forge GitHub secrets → GKE needs, from `deploy-script/config/dev.json.template`):
 
