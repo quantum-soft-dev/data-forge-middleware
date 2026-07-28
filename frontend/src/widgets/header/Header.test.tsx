@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -58,6 +58,14 @@ function withoutPersonalData() {
   });
 }
 
+function whileRolesLoad() {
+  mockUseAuth.mockReturnValue({
+    user: { name: 'Boris Pliss', email: 'boris@example.com' },
+    hasRole: (r: string) => r === 'ROLE_ADMIN',
+    isRolesLoading: true,
+  });
+}
+
 describe('Header (floating monitoring shell per prototype, T013)', () => {
   it('renders as a floating rounded card, not a full-width bar', () => {
     asUser();
@@ -103,6 +111,7 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
     const avatar = screen.getByRole('button', { name: 'Open profile for Boris Pliss' });
     expect(avatar.textContent).toBe('BP');
     expect(avatar.className).toContain('rounded-full');
+    expect(avatar).not.toHaveAttribute('title');
     expect(avatar).toHaveStyle({
       background: monitoringTokens.blue50,
       color: monitoringTokens.primary,
@@ -116,8 +125,11 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
 
-    expect(screen.getByRole('dialog', { name: 'Your profile' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Your profile' })).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Your profile' });
+    const heading = screen.getByRole('heading', { name: 'Your profile' });
+    expect(dialog).toHaveAttribute('aria-labelledby', heading.id);
+    expect(heading.id).not.toBe('current-user-profile-title');
+    expect(within(dialog).queryByRole('region')).not.toBeInTheDocument();
     expect(screen.getByText('Boris Pliss')).toBeInTheDocument();
     expect(screen.getByText('boris@example.com')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Boris Pliss profile picture' })).toHaveAttribute(
@@ -156,7 +168,8 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
 
     expect(screen.getByText('Name not provided')).toBeInTheDocument();
     expect(screen.getByText('Email not provided')).toBeInTheDocument();
-    expect(screen.getByLabelText('Profile initials')).toHaveTextContent('US');
+    const initials = within(screen.getByRole('dialog')).getByText('US');
+    expect(initials).toHaveAttribute('aria-hidden', 'true');
     expect(screen.queryByRole('img', { name: /profile picture/i })).not.toBeInTheDocument();
     expect(screen.queryByText('auth0|sensitive-subject')).not.toBeInTheDocument();
   });
@@ -177,6 +190,18 @@ describe('Header (floating monitoring shell per prototype, T013)', () => {
     await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
 
     expect(screen.getByText('Administrator')).toBeInTheDocument();
+  });
+
+  it('does not claim Member access while roles are loading', async () => {
+    const user = userEvent.setup();
+    whileRolesLoad();
+    render(<Header />);
+
+    await user.click(screen.getByRole('button', { name: 'Open profile for Boris Pliss' }));
+
+    expect(screen.getByText('Account type loading')).toBeInTheDocument();
+    expect(screen.queryByText('Member')).not.toBeInTheDocument();
+    expect(screen.queryByText('Administrator')).not.toBeInTheDocument();
   });
 
   it('keeps role-based navigation behavior unchanged', () => {

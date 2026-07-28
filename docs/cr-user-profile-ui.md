@@ -16,7 +16,8 @@ especially confusing for people who use more than one account.
 The initials avatar becomes a button. Activating it opens a compact, right-aligned
 profile popover, exposed as a dialog named by its heading, containing:
 
-- the Auth0 profile image, or initials when no image is available;
+- the Auth0 profile image, or initials when no image is available or it fails
+  to load;
 - display name, with an explicit missing-value fallback;
 - email address, with an explicit missing-value fallback;
 - the friendly account type, Administrator or Member.
@@ -24,7 +25,8 @@ profile popover, exposed as a dialog named by its heading, containing:
 The existing sign-out icon remains next to the profile trigger. The popover uses
 the shared Radix primitive, so keyboard activation, focus management, Escape,
 and outside-click dismissal follow the same behavior as other application
-overlays.
+overlays. The dialog is named by a generated heading id without adding a nested
+region landmark.
 
 ## Data and security
 
@@ -32,7 +34,9 @@ The view consumes the existing `useAuth` session state and makes no new network
 request. Only `name`, `email`, and `picture` are treated as personal display
 fields. Whitespace-only values are normalized to the same explicit fallbacks as
 missing fields. The account-type label is derived from the role boolean that the
-header already uses for navigation.
+header already uses for navigation; while roles resolve, the profile shows an
+unresolved value instead of claiming Member access. Profile image requests omit
+the referrer and fall back to visual-only initials after a load error.
 
 Auth0 subjects, access/ID tokens, custom claims, and other authentication
 identifiers are intentionally excluded. The old unused profile component showed

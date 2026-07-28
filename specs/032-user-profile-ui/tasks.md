@@ -65,3 +65,32 @@ Commit: `feat(ui): add personal profile popover (T02)`
 - Add regression coverage for both findings.
 
 Commit: `fix(ui): address personal profile review findings (T03)`
+
+---
+
+## T04 — Address follow-up PR review
+
+**Tests first**
+
+- An unresolved role state shows an unknown/loading account type, never
+  `Member`.
+- The dialog and heading share a generated id, without a nested named region.
+- Initials are visual-only because the adjacent display name already supplies
+  the accessible text.
+- A failed profile image request falls back to initials.
+- The image request uses `referrerPolicy="no-referrer"`.
+- `UserProfile` has direct prop-matrix coverage, including picture without
+  name.
+- The trigger no longer has a redundant native `title`.
+
+**Implementation**
+
+- Pass `isRolesLoading` into the profile and render a neutral unresolved value.
+- Replace the initials `aria-label` with `aria-hidden`.
+- Track the failed picture URL and fall back to initials on `onError`.
+- Generate the profile heading id with `useId()` in the header and pass it to
+  `UserProfile`.
+- Replace the nested named `section` with a regular `div`.
+- Remove the trigger's `title`.
+
+Commit: `fix(ui): address follow-up profile review (T04)`

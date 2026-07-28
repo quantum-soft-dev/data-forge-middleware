@@ -15,12 +15,14 @@ Keep profile discovery in the global header and avoid a route for a small,
 read-only data set:
 
 1. Refactor `UserProfile` into a presentational component that accepts the
-   typed user plus the already-resolved administrator flag.
+   typed user plus resolved/loading role state.
 2. Remove its direct Auth0/environment dependency and all raw claim/subject
    rendering.
 3. Wrap the header avatar in the shared Radix `Popover`.
 4. Render the refactored profile in right-aligned `PopoverContent`.
 5. Preserve `LogoutButton` as the adjacent, existing action.
+6. Generate one heading id per header instance and use it only to name the
+   popover dialog.
 
 The profile uses only fields already present in the Auth0 ID-token user object:
 `name`, `email`, and `picture`. It performs no network request and stores no new
@@ -52,7 +54,9 @@ No backend, database, API, or routing changes are required.
 - **Radix/jsdom mismatch**: test through accessible roles and user events, not
   implementation state.
 - **Long profile values**: constrain the popover and allow name/email wrapping.
+- **Expired profile images**: omit the referrer and replace an image that emits
+  an error with visual-only initials.
 - **Sensitive data leakage**: expose an explicit typed prop subset and assert
   that the Auth0 subject is absent.
-- **Role loading**: use the same `isAdmin` result as navigation; unresolved
-  roles retain the safe Member label until role resolution completes.
+- **Role loading**: pass the loading state into the profile and show an
+  unresolved value; never assert Member until role resolution completes.

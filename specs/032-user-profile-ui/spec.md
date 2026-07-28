@@ -23,13 +23,14 @@ header so that I can confirm which personal account is active.
   button.
 - **FR-002** Activating the avatar MUST open a profile popover.
 - **FR-003** The popover MUST show the user's profile image when available and
-  MUST fall back to initials when it is not.
+  MUST fall back to initials when it is missing or fails to load.
 - **FR-004** The popover MUST show the Auth0 display name and email when
   available.
 - **FR-005** Missing name or email values MUST render explicit, readable
   fallbacks.
 - **FR-006** The popover MUST identify the account type as Administrator or
-  Member using the already-resolved header role.
+  Member using the already-resolved header role. While roles are loading it
+  MUST show an unresolved value rather than claim either type.
 - **FR-007** The profile MUST NOT show the Auth0 subject, token values, raw
   claims, or other authentication identifiers.
 - **FR-008** The existing logout action and role-based navigation MUST remain
