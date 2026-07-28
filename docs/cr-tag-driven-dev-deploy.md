@@ -65,6 +65,25 @@ Conventions:
 - `.github/workflows/README.md` — rewritten to describe the current pipelines (was stale:
   Docker Hub secrets, staging-on-main).
 
+## Security hardening (PR #69 review)
+
+Making a wildcard tag a credential-bearing trigger widens the attack surface; three measures
+address the review findings:
+
+1. **Shell injection via ref name** — git allows `$(...)` in ref names, and `${{ github.ref_name }}`
+   is textual substitution into the `run:` script. With fixed branch names this was unreachable;
+   with `deploy-dev/*` a tag like `deploy-dev/$(cmd)` would execute after WIF auth. Fixed: the ref
+   reaches the shell only via `env:` variables (`$REF_NAME`), never `${{ }}` interpolation.
+2. **Tag ancestry guard** — before cloud auth, a tag-triggered run verifies the tagged commit is
+   reachable from `origin/develop` (`git merge-base --is-ancestor`), so a tag on an unreviewed
+   commit (e.g. with a modified workflow) fails before any credentials are minted.
+3. **Environment binding + tag ruleset** (repo settings, not workflow code) — the deploy job is
+   bound to GitHub Environments with deployment ref policies: dev ← `develop` branch or
+   `deploy-dev/*` tag, stage ← `stage`, prod ← `main`; refs outside the policy (including
+   `workflow_dispatch` from feature branches) are rejected at the environment gate. The
+   `deploy-dev/*` tag namespace itself is restricted by a repository ruleset
+   (creation/update/deletion limited to repo admins).
+
 ## Rollback
 
 To restore auto-deploy of dev on every merge: re-add `develop` to `on.push.branches` and the

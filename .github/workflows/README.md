@@ -35,6 +35,8 @@ TAG=deploy-dev/$(date +%Y%m%d-%H%M); git tag $TAG && git push origin $TAG
 
 Tags are unique (timestamped), so the tag history is the dev deploy log. Concurrent deploys to the same environment are coalesced (`concurrency` + `cancel-in-progress`).
 
+Guardrails: a `deploy-dev/*` tag must point at a commit reachable from `origin/develop` (checked before cloud auth); the `deploy-dev/*` namespace is admin-only via a repository tag ruleset; the deploy job is bound to GitHub Environments with deployment ref policies (dev ← `develop` branch or `deploy-dev/*` tag; stage ← `stage`; prod ← `main`). `workflow_dispatch` is subject to the same environment policies, so dev can also be deployed from `develop` HEAD without a tag — but not from feature branches.
+
 The deploy job: builds backend + frontend images (`us-central1-docker.pkg.dev/<project>/forge-app/*`, tagged with the commit SHA), syncs `forge-secrets`, applies the kustomize overlay `k8s/overlays/<env>` and waits for rollout.
 
 ## Local gates (see CLAUDE.md)
