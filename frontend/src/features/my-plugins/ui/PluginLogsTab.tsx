@@ -33,6 +33,20 @@ const USER_VISIBLE_ACTIONS: PluginActionType[] = [
   'SQL_GENERATION_STARTED',
   'SQL_GENERATION_COMPLETED',
   'SQL_GENERATION_FAILED',
+  'SQL_REGENERATION_STARTED',
+  'SQL_REGENERATION_COMPLETED',
+  'SQL_REGENERATION_FAILED',
+  'REINIT',
+  'PLUGIN_HISTORY_CLEARED',
+  // Credential rotations are security-relevant: the owner must be able to see when their own
+  // key or password changed, and when it did not.
+  'API_KEY_ROTATED',
+  'PASSWORD_ROTATED',
+  // Parquet Export activity. Written since 028 but rejected by the audit CHECK constraint until
+  // V44, so these only start appearing now.
+  'FILES_LISTED',
+  'LINK_CONSUMED',
+  'LINK_REJECTED',
 ]
 
 interface PluginLogsTabProps {
@@ -53,6 +67,17 @@ const ACTION_TYPE_LABELS: Record<PluginActionType, string> = {
   EVENT_DISPATCHED: 'Event Dispatched',
   EVENT_FAILED: 'Event Failed',
   EVENT_TIMEOUT: 'Event Timeout',
+  SQL_GENERATION_DELETED: 'SQL Generation Deleted',
+  SQL_REGENERATION_STARTED: 'Regenerating SQL...',
+  SQL_REGENERATION_COMPLETED: 'SQL Regenerated',
+  SQL_REGENERATION_FAILED: 'SQL Regeneration Failed',
+  PLUGIN_HISTORY_CLEARED: 'History Cleared',
+  REINIT: 'Plugin Reinitialized',
+  FILES_LISTED: 'Files Listed',
+  LINK_CONSUMED: 'Download Link Used',
+  LINK_REJECTED: 'Download Link Rejected',
+  PASSWORD_ROTATED: 'Password Rotated',
+  API_KEY_ROTATED: 'API Key Rotated',
 }
 
 /**
