@@ -1,5 +1,5 @@
 # Development Docker Compose Configuration
-# This configuration includes only infrastructure services (PostgreSQL, Keycloak, LocalStack)
+# This configuration includes only infrastructure services (PostgreSQL, LocalStack)
 # Run dfm-backend from IntelliJ IDEA for debugging
 
 services:
@@ -92,7 +92,6 @@ networks:
 #
 # 5. Application will connect to:
 #    - PostgreSQL: localhost:5432/dfm (user: dfm, password: dfm_password)
-#    - Keycloak: http://localhost:8081 (admin/admin)
 #    - LocalStack S3: http://localhost:4566 (bucket: dfm-uploads)
 #
 #    - Redis: localhost:6379 (password: redis_password)

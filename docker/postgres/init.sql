@@ -1,28 +1,9 @@
 -- Initialize databases and users for Data Forge Middleware
--- This script creates separate databases for Keycloak and DFM with dedicated users
-
--- Create Keycloak database and user
-CREATE DATABASE keycloak
-    WITH
-    OWNER = postgres
-    ENCODING = 'UTF8'
-    LC_COLLATE = 'en_US.utf8'
-    LC_CTYPE = 'en_US.utf8'
-    TABLESPACE = pg_default
-    CONNECTION LIMIT = -1;
-
-CREATE USER keycloak WITH PASSWORD 'keycloak_password';
-GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
-
--- Connect to keycloak database and grant schema permissions
-\c keycloak;
-GRANT ALL ON SCHEMA public TO keycloak;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO keycloak;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO keycloak;
+-- This script creates the dfm database and its dedicated user.
+-- The keycloak database and role were dropped after the Auth0 migration: nothing
+-- connected to them, and the role shipped with a hardcoded password.
 
 -- Create DFM database and user
-\c postgres;
-
 CREATE DATABASE dfm
     WITH
     OWNER = postgres

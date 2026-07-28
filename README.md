@@ -36,7 +36,7 @@ via `docker-compose.dev.yml` and provides a Java 25 + Node 20 dev environment.
 6. Start frontend: `cd frontend && npm install && npm run dev`
 
 Notes:
-- Auth is via Auth0. Keycloak is legacy: it is no longer part of the dev or default Docker stack (see [Legacy: Keycloak](#legacy-keycloak)).
+- Auth is via Auth0. Keycloak has been fully removed (see [Legacy: Keycloak](#legacy-keycloak)).
 - LocalStack bucket `dfm-uploads` is created automatically by `docker-compose.dev.yml`.
 - Auth0 setup details: `docs/local-auth0.md`
 - If backend fails with Flyway checksum mismatch, wipe local volumes: `docker-compose -f docker-compose.dev.yml down -v` then `up -d`.
@@ -300,14 +300,15 @@ The OAuth2 resource server is configured against the Auth0 issuer
 `spring.security.oauth2.resourceserver.jwt.issuer-uri` = `https://${auth0.domain}/`),
 and the frontend uses `@auth0/auth0-react`.
 
-Remaining Keycloak references in the tree are legacy and are **not** part of the dev or
-default Docker stack (neither `docker-compose.dev.yml` nor `docker-compose.yml` runs a
-Keycloak container):
+The Keycloak-era artefacts have been removed: the `keycloak` service and issuer in
+`docker-compose.prod.yml`, the `docker/keycloak/` realm files, the `keycloak` database and
+role in `docker/postgres/init.sql`, and the dead `src/main/resources/application-test.yml`
+(shadowed by `src/test/resources/application-test.yml` on the test classpath).
 
-- `docker-compose.prod.yml` still defines a `keycloak` service and points the resource
-  server at a Keycloak issuer — stale, not a reference for new deployments.
-- `docker/keycloak/dfm-realm.json` and the `keycloak` database notes in `docker/README.md`.
-- `keycloak.enabled: false` in `application-test.yml`.
+One deliberate exception remains in code: `Auth0RoleConverter` still falls back to
+Keycloak's `realm_access.roles` claim, because the test harness itself
+(`config/TestSecurityConfig`) mints tokens in that shape. Removing the fallback means
+migrating the harness to Auth0-shaped claims first, and is tracked separately.
 
 ## Architecture
 

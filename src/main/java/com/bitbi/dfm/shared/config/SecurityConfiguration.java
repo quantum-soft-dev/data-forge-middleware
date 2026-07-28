@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
  * <p><b>Unified API Structure (Post-Migration):</b></p>
  * <ul>
  *   <li><b>Order 1:</b> /api/v1/device/** → Custom JWT authentication only (Device API)</li>
- *   <li><b>Order 2:</b> /api/v1/** → Keycloak OAuth2 authentication only (UI/Admin API)</li>
+ *   <li><b>Order 2:</b> /api/v1/** → Auth0 OAuth2 authentication only (UI/Admin API)</li>
  *   <li><b>Order 3:</b> Default → Public endpoints + deny all others</li>
  * </ul>
  *
@@ -133,7 +133,7 @@ public class SecurityConfiguration {
      * </p>
      * <p>
      * This filter chain routes all Device API requests (IoT devices, mobile apps, data
-     * collection clients) to Custom JWT authentication. Keycloak tokens will be rejected.
+     * collection clients) to Custom JWT authentication. Auth0 tokens will be rejected.
      * </p>
      * <p>
      * <b>Public endpoints</b>:
@@ -296,11 +296,11 @@ public class SecurityConfiguration {
      * <p>
      * <b>Order 5</b>: Fifth priority - evaluated AFTER the plugin API filter chains<br>
      * <b>Matches</b>: /api/v1/** (excluding /api/v1/device/**, /api/v1/plugins/bit-bi/** and /api/v1/plugins/parquet-export/**)<br>
-     * <b>Authentication</b>: Keycloak OAuth2 Resource Server only
+     * <b>Authentication</b>: Auth0 OAuth2 Resource Server only
      * </p>
      * <p>
      * This filter chain routes all UI/Admin API requests (web dashboard, user portal,
-     * admin operations) to Keycloak OAuth2 authentication. Custom JWT tokens will be rejected.
+     * admin operations) to Auth0 OAuth2 authentication. Custom JWT tokens will be rejected.
      * </p>
      * <p>
      * <b>Authorization</b>:
@@ -345,7 +345,7 @@ public class SecurityConfiguration {
             .exceptionHandling(ex -> ex
                 .authenticationEntryPoint((request, response, authException) -> {
                     authenticationAuditLogger.onAuthenticationFailure(request, response, authException);
-                    response.sendError(401, "Unauthorized - Keycloak OAuth2 authentication required for UI/Admin API");
+                    response.sendError(401, "Unauthorized - Auth0 OAuth2 authentication required for UI/Admin API");
                 })
             );
 

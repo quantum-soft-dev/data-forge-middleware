@@ -65,7 +65,7 @@ public class OpenApiConfiguration {
                                 "**Device API** (`/api/v1/device/*`): For IoT devices, mobile apps, and data collection clients.\n" +
                                 "Authentication: Custom JWT\n\n" +
                                 "**UI/Admin API** (`/api/v1/*`): For web dashboard, user portal, and administrative operations.\n" +
-                                "Authentication: Keycloak OAuth2")
+                                "Authentication: Auth0 OAuth2")
                         .contact(new Contact()
                                 .name("Data Forge Team")
                                 .email("support@bitbi.com"))
