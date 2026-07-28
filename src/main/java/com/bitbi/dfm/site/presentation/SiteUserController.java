@@ -37,7 +37,7 @@ import java.util.UUID;
  * </p>
  * <p>
  * API Path: /api/v1/sites (per API Unification Spec 010)
- * Authentication: Keycloak OAuth2 JWT with accountId claim
+ * Authentication: Auth0 OAuth2 JWT with accountId claim
  * </p>
  *
  * @author Data Forge Team

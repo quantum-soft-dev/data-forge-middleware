@@ -22,7 +22,7 @@ import java.util.List;
  * </p>
  * <ul>
  *   <li><b>Device API</b>: For IoT devices and client applications (Custom JWT authentication)</li>
- *   <li><b>UI/Admin API</b>: For web interface and administrative operations (Keycloak OAuth2 authentication)</li>
+ *   <li><b>UI/Admin API</b>: For web interface and administrative operations (Auth0 OAuth2 authentication)</li>
  * </ul>
  * <p>
  * Security schemes:
@@ -30,7 +30,7 @@ import java.util.List;
  * <ul>
  *   <li>Basic Auth - for token generation endpoint</li>
  *   <li>Bearer JWT - for Device API endpoints (Custom JWT)</li>
- *   <li>OAuth2 - for UI/Admin API endpoints (Keycloak)</li>
+ *   <li>OAuth2 - for UI/Admin API endpoints (Auth0)</li>
  * </ul>
  *
  * @author Data Forge Team
@@ -91,7 +91,7 @@ public class OpenApiConfiguration {
                                 .description("Custom JWT Bearer token for Device API endpoints"))
                         .addSecuritySchemes("oauth2", new SecurityScheme()
                                 .type(SecurityScheme.Type.OAUTH2)
-                                .description("Keycloak OAuth2 for UI/Admin API endpoints")))
+                                .description("Auth0 OAuth2 for UI/Admin API endpoints")))
                 .addSecurityItem(new SecurityRequirement()
                         .addList("basicAuth")
                         .addList("bearerAuth")
@@ -120,7 +120,7 @@ public class OpenApiConfiguration {
      * UI/Admin API group configuration.
      * <p>
      * Groups all UI/Admin API endpoints under `/api/v1/**` (excluding Device API)
-     * for Swagger UI display. These endpoints use Keycloak OAuth2 authentication.
+     * for Swagger UI display. These endpoints use Auth0 OAuth2 authentication.
      * </p>
      *
      * @return Grouped UI/Admin API configuration

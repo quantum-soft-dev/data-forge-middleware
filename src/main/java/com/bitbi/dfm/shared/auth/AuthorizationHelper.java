@@ -99,7 +99,7 @@ public class AuthorizationHelper {
                 }
             }
 
-            // Strategy 2: Try to extract accountId from direct "accountId" claim (legacy Keycloak)
+            // Strategy 2: Try the un-namespaced "accountId" claim (legacy token shape)
             accountIdClaim = jwt.getClaimAsString("accountId");
             if (accountIdClaim != null && !accountIdClaim.isEmpty()) {
                 try {
@@ -109,8 +109,8 @@ public class AuthorizationHelper {
                 }
             }
 
-            // Strategy 3: Try to extract from Keycloak user attributes (custom mapper)
-            // Keycloak can be configured to include user attributes in JWT via mappers
+            // Strategy 3: Try the snake_case "account_id" claim (legacy identity-provider mapper).
+            // No current provider emits this; kept only so old tokens keep resolving.
             Object accountIdAttr = jwt.getClaim("account_id");
             if (accountIdAttr != null) {
                 try {
@@ -121,13 +121,13 @@ public class AuthorizationHelper {
             }
 
             // Strategy 3: Extract from subject claim (if it's a UUID)
-            // This works when Keycloak subject is the account ID
+            // This works when the subject itself is the account ID
             String subject = jwt.getSubject();
             if (subject != null && !subject.isEmpty()) {
                 try {
                     return UUID.fromString(subject);
                 } catch (IllegalArgumentException e) {
-                    // Subject is not a UUID (probably Keycloak user ID)
+                    // Subject is not a UUID (an identity-provider user id)
                     // Continue to Strategy 4 (database lookup)
                 }
             }
@@ -158,7 +158,7 @@ public class AuthorizationHelper {
                 }
             }
 
-            // If we reach here, accountId is not configured in Auth0/Keycloak JWT and no email found
+            // If we reach here, accountId is not present in the Auth0 JWT and no email was found
             // Log available claims for debugging
             throw new UnauthorizedException(
                 "Account ID not found in JWT token. Please configure Auth0 Action to include 'accountId' claim " +

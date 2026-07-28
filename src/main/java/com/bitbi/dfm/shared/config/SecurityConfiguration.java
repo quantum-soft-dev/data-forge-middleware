@@ -408,29 +408,26 @@ public class SecurityConfiguration {
      * - "ROLE_ADMIN" → "ROLE_ADMIN" (unchanged)
      * </p>
      * <p>
-     * Falls back to Keycloak's realm_access.roles for backward compatibility during migration.
+     * This claim is the only source of authorities. A fallback to Keycloak's
+     * {@code realm_access.roles} was kept "during migration" long after the migration ended; it
+     * granted authorities from a claim shape Auth0 never issues and has been removed.
+     * </p>
+     * <p>
+     * Public so the test harness ({@code config.TestSecurityConfig}) can use the real converter
+     * rather than its own copy. The duplicate is what let the Keycloak fallback survive unnoticed:
+     * the harness minted Keycloak-shaped tokens, so nothing exercised the Auth0 path.
      * </p>
      */
-    static class Auth0RoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
+    public static class Auth0RoleConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
         private final String rolesClaim;
 
-        Auth0RoleConverter(String rolesClaim) {
+        public Auth0RoleConverter(String rolesClaim) {
             this.rolesClaim = rolesClaim;
         }
 
         @Override
-        @SuppressWarnings("unchecked")
         public Collection<GrantedAuthority> convert(Jwt jwt) {
-            // Strategy 1: Try Auth0 custom claim first (using configurable namespace)
             List<String> roles = jwt.getClaimAsStringList(rolesClaim);
-
-            // Strategy 2: Fall back to Keycloak realm_access.roles (backward compatibility)
-            if (roles == null || roles.isEmpty()) {
-                Map<String, Object> realmAccess = jwt.getClaimAsMap("realm_access");
-                if (realmAccess != null && realmAccess.containsKey("roles")) {
-                    roles = (List<String>) realmAccess.get("roles");
-                }
-            }
 
             if (roles == null || roles.isEmpty()) {
                 return List.of();
