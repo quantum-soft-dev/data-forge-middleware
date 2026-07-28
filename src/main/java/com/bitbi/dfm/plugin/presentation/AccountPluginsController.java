@@ -2,6 +2,7 @@ package com.bitbi.dfm.plugin.presentation;
 
 import com.bitbi.dfm.plugin.application.ParquetExportCredentialsService;
 import com.bitbi.dfm.plugin.application.PluginAdminQueryService;
+import com.bitbi.dfm.plugin.application.PluginApiKeyService;
 import com.bitbi.dfm.plugin.application.PluginHistoryService;
 import com.bitbi.dfm.plugin.application.PluginQueryService;
 import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
@@ -9,6 +10,7 @@ import com.bitbi.dfm.plugin.application.SqlGenerationService;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.ParquetExportCredentials;
+import com.bitbi.dfm.plugin.domain.PluginApiKey;
 import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.domain.PluginAuditLog;
 import com.bitbi.dfm.plugin.domain.PluginAuditLogRepository;
@@ -84,6 +86,7 @@ public class AccountPluginsController {
     private final AuthorizationHelper authorizationHelper;
     private final SiteRepository siteRepository;
     private final ParquetExportCredentialsService parquetExportCredentialsService;
+    private final PluginApiKeyService pluginApiKeyService;
 
     public AccountPluginsController(
             PluginQueryService pluginQueryService,
@@ -95,7 +98,8 @@ public class AccountPluginsController {
             AccountPluginRepository accountPluginRepository,
             AuthorizationHelper authorizationHelper,
             SiteRepository siteRepository,
-            ParquetExportCredentialsService parquetExportCredentialsService) {
+            ParquetExportCredentialsService parquetExportCredentialsService,
+            PluginApiKeyService pluginApiKeyService) {
         this.pluginQueryService = pluginQueryService;
         this.pluginAdminQueryService = pluginAdminQueryService;
         this.auditLogRepository = auditLogRepository;
@@ -106,6 +110,7 @@ public class AccountPluginsController {
         this.authorizationHelper = authorizationHelper;
         this.siteRepository = siteRepository;
         this.parquetExportCredentialsService = parquetExportCredentialsService;
+        this.pluginApiKeyService = pluginApiKeyService;
     }
 
     /**
@@ -484,6 +489,41 @@ public class AccountPluginsController {
 
         ParquetExportCredentials credentials = parquetExportCredentialsService.rotatePassword(accountId);
         return ResponseEntity.ok(RotatePasswordResponseDto.fromCredentials(credentials));
+    }
+
+    /**
+     * Rotates the Bit BI plugin's API key (#66).
+     *
+     * <p>The old key stops authenticating immediately. The new raw key appears in this response
+     * exactly once. Rotating also re-derives the indexed SHA-256 lookup handle, which is how an
+     * activation issued before V42 leaves the legacy validation path.</p>
+     *
+     * @return the new raw API key
+     */
+    @PostMapping("/bit-bi/rotate-api-key")
+    @Operation(
+        summary = "Rotate the Bit BI plugin API key",
+        description = """
+            Generates a new API key for the Bit BI plugin. The previous key is invalidated
+            immediately, so any client using it must be updated.
+
+            **Important:** The new key is shown only in this response and cannot be
+            retrieved later — store it securely.
+            """
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "New API key issued",
+            content = @Content(mediaType = "application/json",
+                schema = @Schema(implementation = RotateApiKeyResponseDto.class))),
+        @ApiResponse(responseCode = "401", description = "Not authenticated"),
+        @ApiResponse(responseCode = "403", description = "Plugin not activated for this account")
+    })
+    public ResponseEntity<RotateApiKeyResponseDto> rotateBitBiApiKey() {
+        UUID accountId = authorizationHelper.getOptionalAuthenticatedAccountId()
+                .orElseThrow(() -> new IllegalArgumentException("Account not found for authenticated user"));
+
+        PluginApiKey apiKey = pluginApiKeyService.rotateApiKey(accountId);
+        return ResponseEntity.ok(RotateApiKeyResponseDto.fromApiKey(apiKey));
     }
 
     // ==================== Batch SQL Management (User-facing) ====================

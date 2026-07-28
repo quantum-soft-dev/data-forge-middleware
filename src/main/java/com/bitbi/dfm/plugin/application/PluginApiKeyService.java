@@ -3,6 +3,7 @@ package com.bitbi.dfm.plugin.application;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginApiKey;
+import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -59,13 +60,15 @@ public class PluginApiKeyService {
 
     private final AccountPluginRepository accountPluginRepository;
     private final MeterRegistry meterRegistry;
+    private final PluginAuditService pluginAuditService;
     private final PasswordEncoder passwordEncoder;
 
     @Autowired
     public PluginApiKeyService(
             AccountPluginRepository accountPluginRepository,
-            MeterRegistry meterRegistry) {
-        this(accountPluginRepository, meterRegistry, new BCryptPasswordEncoder());
+            MeterRegistry meterRegistry,
+            PluginAuditService pluginAuditService) {
+        this(accountPluginRepository, meterRegistry, pluginAuditService, new BCryptPasswordEncoder());
     }
 
     /**
@@ -74,9 +77,11 @@ public class PluginApiKeyService {
     PluginApiKeyService(
             AccountPluginRepository accountPluginRepository,
             MeterRegistry meterRegistry,
+            PluginAuditService pluginAuditService,
             PasswordEncoder passwordEncoder) {
         this.accountPluginRepository = accountPluginRepository;
         this.meterRegistry = meterRegistry;
+        this.pluginAuditService = pluginAuditService;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -281,13 +286,27 @@ public class PluginApiKeyService {
     /**
      * Rotates (regenerates) the API Key for an account's Bit BI plugin.
      * Invalidates the old key immediately.
+     * <p>
+     * Rotation re-derives the SHA-256 lookup handle along with the BCrypt hash, so a rotated
+     * activation always leaves the pre-V42 fallback scan. This is the path that lets
+     * {@code plugin.api.key.validation.legacy.hit} reach zero and the legacy branch be deleted.
+     * </p>
      *
      * @param accountId The account ID
-     * @return The new API Key
+     * @return The new API Key (raw value - store securely, cannot be retrieved again)
+     * @throws PluginNotActivatedException if the account has no active Bit BI activation
      */
     @Transactional
     public PluginApiKey rotateApiKey(UUID accountId) {
-        log.info("Rotating API Key for account: {}", accountId);
-        return generateApiKeyForAccount(accountId);
+        AccountPlugin accountPlugin = accountPluginRepository
+                .findByAccountIdAndPluginId(accountId, PLUGIN_ID)
+                .filter(AccountPlugin::isActive)
+                .orElseThrow(() -> new PluginNotActivatedException(PLUGIN_ID, accountId));
+
+        PluginApiKey apiKey = generateApiKeyFor(accountPlugin);
+
+        pluginAuditService.logApiKeyRotated(PLUGIN_ID, accountId);
+        log.info("Rotated API Key for account: {}", accountId);
+        return apiKey;
     }
 }
