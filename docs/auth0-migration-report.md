@@ -258,7 +258,6 @@ public class Auth0AdminClient {
 # ДОБАВИТЬ auth0 блок
 auth0:
   domain: ${AUTH0_DOMAIN:your-tenant.us.auth0.com}
-  database-connection: Username-Password-Authentication
   management:
     client-id: ${AUTH0_MGMT_CLIENT_ID:}
     client-secret: ${AUTH0_MGMT_CLIENT_SECRET:}

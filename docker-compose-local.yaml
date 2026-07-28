@@ -123,7 +123,6 @@ services:
       AUTH0_MGMT_CLIENT_ID: ${AUTH0_MGMT_CLIENT_ID}
       AUTH0_MGMT_CLIENT_SECRET: ${AUTH0_MGMT_CLIENT_SECRET}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://api.dataforge.com}
-      AUTH0_DATABASE_CONNECTION: ${AUTH0_DATABASE_CONNECTION:-Username-Password-Authentication}
 
       # JWT (for backward compatibility with client API)
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production-minimum-256-bits-required-for-hmac-sha256-algorithm}

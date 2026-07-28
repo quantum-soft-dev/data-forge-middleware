@@ -125,7 +125,7 @@ If these secrets are missing, logins may fail at Post-Login time.
 ## Local Run (No AWS)
 
 Infra (Docker):
-- Use `docker-compose.dev.yml` (Postgres, Redis, LocalStack, Keycloak)
+- Use `docker-compose.dev.yml` (Postgres, Redis, LocalStack)
 
 Backend:
 - `./gradlew bootRun`
