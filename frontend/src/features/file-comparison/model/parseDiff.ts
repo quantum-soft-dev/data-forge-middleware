@@ -86,7 +86,7 @@ export function parseDiff(unifiedDiff: UnifiedDiff): ParsedDiff {
 
         default:
           // Handle unexpected change types gracefully
-          console.warn(`Unknown change type: ${(change as any).type}`);
+          console.warn(`Unknown change type: ${(change as { type?: string }).type}`);
       }
     }
   }

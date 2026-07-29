@@ -33,14 +33,14 @@ export interface Auth0User {
   email?: string
   email_verified?: boolean
   picture?: string
-  [key: string]: any // Allow dynamic claim keys
+  [key: string]: unknown // Allow dynamic claim keys
 }
 
 /**
  * Decoded access token payload with custom claims
  */
 interface AccessTokenPayload {
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -74,34 +74,49 @@ export function useAuth(): AuthState {
     getAccessTokenSilently
   } = useAuth0<Auth0User>()
 
-  // Store roles from access token (not ID token)
-  const [roles, setRoles] = useState<string[]>([])
-  const [isRolesLoading, setIsRolesLoading] = useState(true)
+  // Roles come from the access token (not the ID token) and are fetched
+  // asynchronously, so they are tracked together with their loading flag.
+  const [rolesState, setRolesState] = useState<{ roles: string[]; isLoading: boolean }>(() => ({
+    roles: [],
+    isLoading: isAuthenticated,
+  }))
+
+  // Reset while rendering when the session flips: an effect would leave one
+  // render showing the previous session's roles.
+  const [sessionIsAuthenticated, setSessionIsAuthenticated] = useState(isAuthenticated)
+  if (isAuthenticated !== sessionIsAuthenticated) {
+    setSessionIsAuthenticated(isAuthenticated)
+    setRolesState({ roles: [], isLoading: isAuthenticated })
+  }
 
   // Extract roles from access token when authenticated
   useEffect(() => {
-    if (isAuthenticated) {
-      setIsRolesLoading(true)
-      getAccessTokenSilently()
-        .then((accessToken) => {
-          const payload = decodeJwtPayload(accessToken)
-          const rolesClaimKey = `${CLAIMS_NAMESPACE}/roles`
-          const tokenRoles = payload?.[rolesClaimKey] || []
-          console.log('[useAuth] Extracted roles from access token:', tokenRoles, 'using claim:', rolesClaimKey)
-          setRoles(tokenRoles)
-        })
-        .catch((err) => {
-          console.error('[useAuth] Failed to get access token:', err)
-          setRoles([])
-        })
-        .finally(() => {
-          setIsRolesLoading(false)
-        })
-    } else {
-      setRoles([])
-      setIsRolesLoading(false)
+    if (!isAuthenticated) return
+
+    let cancelled = false
+
+    getAccessTokenSilently()
+      .then((accessToken) => {
+        const payload = decodeJwtPayload(accessToken)
+        const rolesClaimKey = `${CLAIMS_NAMESPACE}/roles`
+        const claim = payload?.[rolesClaimKey]
+        const tokenRoles = Array.isArray(claim) ? (claim as string[]) : []
+        console.log('[useAuth] Extracted roles from access token:', tokenRoles, 'using claim:', rolesClaimKey)
+        if (!cancelled) setRolesState({ roles: tokenRoles, isLoading: false })
+      })
+      .catch((err) => {
+        console.error('[useAuth] Failed to get access token:', err)
+        if (!cancelled) setRolesState({ roles: [], isLoading: false })
+      })
+
+    // Ignore a response that arrives after the session changed
+    return () => {
+      cancelled = true
     }
   }, [isAuthenticated, getAccessTokenSilently])
+
+  const roles = rolesState.roles
+  const isRolesLoading = rolesState.isLoading
 
   const hasRole = (role: string): boolean => {
     if (!isAuthenticated) return false

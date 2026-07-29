@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { useState, type ComponentType } from 'react'
 import { AuthenticationGuard } from '@/shared/lib/auth/AuthenticationGuard'
 import * as auth0React from '@auth0/auth0-react'
 
@@ -9,20 +11,26 @@ vi.mock('@auth0/auth0-react')
 // Test component to wrap with AuthenticationGuard
 const TestComponent = () => <div>Protected Content</div>
 
+const loginWithRedirect = vi.fn().mockResolvedValue(undefined)
+
+function mockAuth0State(state: { isAuthenticated: boolean; isLoading: boolean }) {
+  vi.mocked(auth0React.useAuth0).mockReturnValue({
+    ...state,
+    loginWithRedirect,
+  } as unknown as ReturnType<typeof auth0React.useAuth0>)
+}
+
 describe('AuthenticationGuard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(window, 'location', {
+      value: { pathname: '/dashboard' },
+      writable: true,
+    })
   })
 
   it('renders loading spinner when authentication is in progress', () => {
-    // Mock withAuthenticationRequired to show loading state
-    vi.mocked(auth0React.withAuthenticationRequired).mockImplementation(
-      (component: any, options: any) => {
-        // Call the onRedirecting callback to get the loading component
-        const LoadingComponent = options?.onRedirecting
-        return LoadingComponent ? LoadingComponent : component
-      }
-    )
+    mockAuth0State({ isAuthenticated: false, isLoading: true })
 
     render(<AuthenticationGuard component={TestComponent} />)
 
@@ -33,52 +41,60 @@ describe('AuthenticationGuard', () => {
     // Check for spinner element
     const spinner = document.querySelector('.animate-spin')
     expect(spinner).toBeInTheDocument()
+
+    // Still loading — no redirect yet
+    expect(loginWithRedirect).not.toHaveBeenCalled()
   })
 
   it('renders protected component when user is authenticated', () => {
-    // Mock withAuthenticationRequired to return the original component
-    vi.mocked(auth0React.withAuthenticationRequired).mockImplementation(
-      (component: any) => component
-    )
+    mockAuth0State({ isAuthenticated: true, isLoading: false })
 
     render(<AuthenticationGuard component={TestComponent} />)
 
     // Check that protected content is rendered
     expect(screen.getByText('Protected Content')).toBeInTheDocument()
+    expect(loginWithRedirect).not.toHaveBeenCalled()
   })
 
-  it('passes returnTo prop to withAuthenticationRequired', () => {
-    // Mock window.location.pathname
-    Object.defineProperty(window, 'location', {
-      value: { pathname: '/dashboard' },
-      writable: true,
+  it('redirects anonymous users to Auth0 and returns them to the current route', () => {
+    mockAuth0State({ isAuthenticated: false, isLoading: false })
+
+    render(<AuthenticationGuard component={TestComponent} />)
+
+    expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
+    expect(loginWithRedirect).toHaveBeenCalledWith({
+      appState: { returnTo: '/dashboard' },
     })
-
-    vi.mocked(auth0React.withAuthenticationRequired).mockImplementation(
-      (component: any) => component
-    )
-
-    render(<AuthenticationGuard component={TestComponent} />)
-
-    // Verify withAuthenticationRequired was called with correct options
-    expect(auth0React.withAuthenticationRequired).toHaveBeenCalledWith(
-      TestComponent,
-      expect.objectContaining({
-        returnTo: '/dashboard',
-      })
-    )
   })
 
-  it('provides onRedirecting callback to show loading spinner', () => {
-    vi.mocked(auth0React.withAuthenticationRequired).mockImplementation(
-      (component: any) => component
-    )
+  it('keeps the protected component mounted across re-renders', async () => {
+    // Regression guard (issue #77, react-hooks/static-components): the guard used
+    // to build a component type during render, which remounted the protected
+    // subtree — and wiped its state — on every parent render.
+    mockAuth0State({ isAuthenticated: true, isLoading: false })
 
-    render(<AuthenticationGuard component={TestComponent} />)
+    function Counter() {
+      const [count, setCount] = useState(0)
+      return <button onClick={() => setCount((value) => value + 1)}>count: {count}</button>
+    }
 
-    // Verify withAuthenticationRequired was called with onRedirecting callback
-    const call = vi.mocked(auth0React.withAuthenticationRequired).mock.calls[0]
-    expect(call[1]).toHaveProperty('onRedirecting')
-    expect(typeof call[1]?.onRedirecting).toBe('function')
+    function Parent({ component }: { component: ComponentType }) {
+      const [, forceRender] = useState(0)
+      return (
+        <>
+          <button onClick={() => forceRender((value) => value + 1)}>re-render</button>
+          <AuthenticationGuard component={component} />
+        </>
+      )
+    }
+
+    render(<Parent component={Counter} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /count: 0/ }))
+    expect(screen.getByRole('button', { name: /count: 1/ })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 're-render' }))
+
+    expect(screen.getByRole('button', { name: /count: 1/ })).toBeInTheDocument()
   })
 })

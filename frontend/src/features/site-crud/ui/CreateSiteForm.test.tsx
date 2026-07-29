@@ -19,8 +19,11 @@ import { CreateSiteForm } from './CreateSiteForm';
 import * as queries from '../model/queries';
 
 // Mock the queries module
+// Both hooks are called on every render (hooks cannot be conditional); only the
+// one matching the context is used.
 vi.mock('../model/queries', () => ({
   useCreateSite: vi.fn(),
+  useCreateAdminSite: vi.fn(),
 }));
 
 // Mock the password generator
@@ -58,8 +61,7 @@ describe('CreateSiteForm', () => {
 
     mockMutateAsync = vi.fn();
 
-    // Mock the useCreateSite hook
-    vi.mocked(queries.useCreateSite).mockReturnValue({
+    const mutationResult = {
       mutateAsync: mockMutateAsync,
       isPending: false,
       isError: false,
@@ -75,7 +77,11 @@ describe('CreateSiteForm', () => {
       failureReason: null,
       isPaused: false,
       submittedAt: 0,
-    } as any);
+    } as any;
+
+    // Mock the site creation hooks (user + admin)
+    vi.mocked(queries.useCreateSite).mockReturnValue(mutationResult);
+    vi.mocked(queries.useCreateAdminSite).mockReturnValue(mutationResult);
 
     // Clear mocks
     vi.clearAllMocks();

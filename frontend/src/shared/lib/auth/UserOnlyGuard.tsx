@@ -1,5 +1,5 @@
 import { ComponentType, useEffect } from 'react';
-import { withAuthenticationRequired } from '@auth0/auth0-react';
+import { useAuth0 } from '@auth0/auth0-react';
 import { useAuth } from '@/entities/user-session/api/useAuth';
 
 /**
@@ -54,13 +54,22 @@ function UserOnlyWrapper({ component: Component }: { component: ComponentType })
 }
 
 export function UserOnlyGuard({ component }: UserOnlyGuardProps) {
-  const WrappedComponent = withAuthenticationRequired(
-    () => <UserOnlyWrapper component={component} />,
-    {
-      onRedirecting: () => <LoadingSpinner />,
-      returnTo: window.location.pathname,
-    }
-  );
+  const { isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
 
-  return <WrappedComponent />;
+  // Same as AuthenticationGuard: the authentication check is inlined rather than
+  // applied through `withAuthenticationRequired`, whose per-call component type
+  // remounted the protected subtree on every render.
+  useEffect(() => {
+    if (isLoading || isAuthenticated) return;
+
+    void loginWithRedirect({
+      appState: { returnTo: window.location.pathname },
+    });
+  }, [isAuthenticated, isLoading, loginWithRedirect]);
+
+  if (!isAuthenticated) {
+    return <LoadingSpinner />;
+  }
+
+  return <UserOnlyWrapper component={component} />;
 }

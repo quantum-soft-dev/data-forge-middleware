@@ -14,10 +14,11 @@ export {
   type ParsedDiff,
 } from './parseDiff';
 
+export { DiffViewerProvider } from './DiffViewerContext';
+
 export {
-  DiffViewerProvider,
   useDiffViewerSettings,
   DEFAULT_SETTINGS,
   type DiffViewerSettings,
   type DiffViewerContextValue,
-} from './DiffViewerContext';
+} from './diffViewerSettings';

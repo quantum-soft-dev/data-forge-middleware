@@ -92,7 +92,7 @@ export function ComparisonListWidget({
   };
 
   const handleViewDetails = (comparisonId: number) => {
-    navigate({ to: `/comparisons/${comparisonId}` as any });
+    navigate({ to: `/account/comparisons/${comparisonId}` });
   };
 
   const handlePreviousPage = () => {

@@ -25,6 +25,7 @@ import {
 } from '@/features/site-crud/model/queries';
 import { AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 import { useNavigate } from '@tanstack/react-router';
 import { useDeltaSyncHealth } from '@/features/delta-sync/api/queries';
 import { SyncHealthPill } from '@/features/delta-sync/ui/SyncHealthPill';
@@ -61,23 +62,25 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
   const healthQuery = useDeltaSyncHealth({ accountId });
   const healthBySiteId = new Map((healthQuery.data ?? []).map((entry) => [entry.siteId, entry]));
 
-  // Use admin or user mutations based on context
+  // Both sets of mutations are created on every render (hooks cannot be called
+  // conditionally); only the one matching the current context is used.
   const userUpdateMutation = useUpdateSiteStatus();
-  const adminUpdateMutation = accountId ? useAdminUpdateSiteStatus(accountId) : null;
-  const updateStatusMutation = adminUpdateMutation || userUpdateMutation;
+  const adminUpdateMutation = useAdminUpdateSiteStatus(accountId ?? '');
+  const updateStatusMutation = isAdminContext ? adminUpdateMutation : userUpdateMutation;
 
   const userDeleteMutation = useDeleteSite();
-  const adminDeleteMutation = accountId ? useAdminDeleteSite(accountId) : null;
-  const deleteSiteMutation = adminDeleteMutation || userDeleteMutation;
+  const adminDeleteMutation = useAdminDeleteSite(accountId ?? '');
+  const deleteSiteMutation = isAdminContext ? adminDeleteMutation : userDeleteMutation;
 
-  const adminRetentionMutation = accountId ? useAdminUpdateSiteRetention(accountId) : null;
+  const retentionMutation = useAdminUpdateSiteRetention(accountId ?? '');
+  const adminRetentionMutation = isAdminContext ? retentionMutation : null;
 
   const handleActivate = async (siteId: string) => {
     try {
       await updateStatusMutation.mutateAsync({ siteId, isActive: true });
       toast.success('Site activated successfully');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to activate site');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to activate site');
     }
   };
 
@@ -85,8 +88,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await updateStatusMutation.mutateAsync({ siteId, isActive: false });
       toast.success('Site deactivated successfully');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to deactivate site');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to deactivate site');
     }
   };
 
@@ -94,8 +97,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await deleteSiteMutation.mutateAsync(siteId);
       toast.success('Site deleted successfully');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to delete site');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to delete site');
     }
   };
 
@@ -113,8 +116,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await adminRetentionMutation.mutateAsync({ siteId, retentionDays });
       toast.success('Retention policy updated');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to update retention policy');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to update retention policy');
     }
   };
 

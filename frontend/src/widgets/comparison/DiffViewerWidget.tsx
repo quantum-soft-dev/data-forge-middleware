@@ -13,7 +13,7 @@
 
 import React from 'react';
 import { DiffViewer } from '@/features/file-comparison/ui/DiffViewer';
-import { useDiffViewerSettings } from '@/features/file-comparison/model/DiffViewerContext';
+import { useDiffViewerSettings } from '@/features/file-comparison/model/diffViewerSettings';
 import type { UnifiedDiff } from '@/entities/comparison/model/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/ui/ui/card';
 import { Button } from '@/shared/ui/ui/button';

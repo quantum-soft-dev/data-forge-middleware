@@ -35,13 +35,6 @@ describe.skip('useExcelExport', () => {
   const mockCreateObjectURL = vi.fn();
   const mockRevokeObjectURL = vi.fn();
   const mockClick = vi.fn();
-  const mockLink = {
-    href: '',
-    download: '',
-    style: { display: '' },
-    click: mockClick,
-  };
-
   beforeEach(() => {
     queryClient = new QueryClient({
       defaultOptions: {
