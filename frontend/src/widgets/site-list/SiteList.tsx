@@ -25,6 +25,7 @@ import {
 } from '@/features/site-crud/model/queries';
 import { AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 import { useNavigate } from '@tanstack/react-router';
 import { useDeltaSyncHealth } from '@/features/delta-sync/api/queries';
 import { SyncHealthPill } from '@/features/delta-sync/ui/SyncHealthPill';
@@ -78,8 +79,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await updateStatusMutation.mutateAsync({ siteId, isActive: true });
       toast.success('Site activated successfully');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to activate site');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to activate site');
     }
   };
 
@@ -87,8 +88,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await updateStatusMutation.mutateAsync({ siteId, isActive: false });
       toast.success('Site deactivated successfully');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to deactivate site');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to deactivate site');
     }
   };
 
@@ -96,8 +97,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await deleteSiteMutation.mutateAsync(siteId);
       toast.success('Site deleted successfully');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to delete site');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to delete site');
     }
   };
 
@@ -115,8 +116,8 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
     try {
       await adminRetentionMutation.mutateAsync({ siteId, retentionDays });
       toast.success('Retention policy updated');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to update retention policy');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to update retention policy');
     }
   };
 

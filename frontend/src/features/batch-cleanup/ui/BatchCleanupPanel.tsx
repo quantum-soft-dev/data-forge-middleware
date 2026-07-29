@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/shared/ui/ui/card';
 import { Label } from '@/shared/ui/ui/label';
 import { Input } from '@/shared/ui/ui/input';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 
 interface BatchCleanupPanelProps {
   accountId: string;
@@ -43,8 +44,8 @@ export function BatchCleanupPanel({ accountId }: BatchCleanupPanelProps) {
       });
       setResult(response);
       toast.success(executeDryRun ? 'Dry run completed' : 'Cleanup completed');
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Cleanup failed');
+    } catch (error) {
+      toast.error(getServerErrorMessage(error) ?? 'Cleanup failed');
     } finally {
       setIsRunning(false);
     }

@@ -14,6 +14,7 @@ import { Card, CardContent } from '@/shared/ui/ui/card';
 import { Label } from '@/shared/ui/ui/label';
 import { Input } from '@/shared/ui/ui/input';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 import { getBatchRetentionSchedule, updateBatchRetentionSchedule } from '@/entities/settings';
 
 const settingsKeys = {
@@ -37,8 +38,8 @@ export default function AdminSettingsPage() {
       await queryClient.invalidateQueries({ queryKey: settingsKeys.retentionSchedule() });
       toast.success('Schedule updated');
     },
-    onError: (error: any) => {
-      toast.error(error?.response?.data?.message || 'Failed to update schedule');
+    onError: (error: unknown) => {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to update schedule');
     },
   });
 

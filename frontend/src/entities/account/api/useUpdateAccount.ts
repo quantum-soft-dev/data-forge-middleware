@@ -10,6 +10,17 @@ import { toast } from 'sonner'
 import { updateAccount } from './client'
 import { accountKeys } from './keys'
 import type { UpdateAccountFormData } from '../model/schema'
+import { getServerErrorMessage, getServerErrorStatus } from '@/shared/api/error-handler'
+
+/** Per-field validation errors the backend attaches to a 400 body. */
+function getFieldErrors(error: unknown): Record<string, string> | undefined {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return undefined
+  }
+  const data = (error as { response?: { data?: { fieldErrors?: Record<string, string> } } })
+    .response?.data
+  return data?.fieldErrors
+}
 
 export function useUpdateAccount() {
   const queryClient = useQueryClient()
@@ -28,23 +39,26 @@ export function useUpdateAccount() {
       toast.success('Account updated successfully')
     },
 
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       // Handle specific error codes
-      if (error.response?.status === 409) {
+      const status = getServerErrorStatus(error)
+      if (status === 409) {
         toast.error('Email already exists')
-      } else if (error.response?.status === 404) {
+      } else if (status === 404) {
         toast.error('Account not found')
-      } else if (error.response?.status === 400) {
-        const fieldErrors = error.response?.data?.fieldErrors
+      } else if (status === 400) {
+        const fieldErrors = getFieldErrors(error)
         if (fieldErrors) {
           // Show first field error
-          const firstError = Object.values(fieldErrors)[0] as string
+          const firstError = Object.values(fieldErrors)[0]
           toast.error(firstError)
         } else {
-          toast.error(error.response?.data?.message || 'Failed to update account')
+          toast.error(getServerErrorMessage(error) ?? 'Failed to update account')
         }
       } else {
-        toast.error(error.message || 'Failed to update account')
+        toast.error(
+          (error instanceof Error ? error.message : undefined) || 'Failed to update account'
+        )
       }
     },
   })

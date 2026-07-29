@@ -33,14 +33,14 @@ export interface Auth0User {
   email?: string
   email_verified?: boolean
   picture?: string
-  [key: string]: any // Allow dynamic claim keys
+  [key: string]: unknown // Allow dynamic claim keys
 }
 
 /**
  * Decoded access token payload with custom claims
  */
 interface AccessTokenPayload {
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -99,7 +99,8 @@ export function useAuth(): AuthState {
       .then((accessToken) => {
         const payload = decodeJwtPayload(accessToken)
         const rolesClaimKey = `${CLAIMS_NAMESPACE}/roles`
-        const tokenRoles = payload?.[rolesClaimKey] || []
+        const claim = payload?.[rolesClaimKey]
+        const tokenRoles = Array.isArray(claim) ? (claim as string[]) : []
         console.log('[useAuth] Extracted roles from access token:', tokenRoles, 'using claim:', rolesClaimKey)
         if (!cancelled) setRolesState({ roles: tokenRoles, isLoading: false })
       })

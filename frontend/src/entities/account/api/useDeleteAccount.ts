@@ -9,6 +9,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { deleteAccount } from './client'
 import { accountKeys } from './keys'
+import { getServerErrorStatus } from '@/shared/api/error-handler'
 
 export function useDeleteAccount() {
   const queryClient = useQueryClient()
@@ -27,12 +28,14 @@ export function useDeleteAccount() {
       toast.success('Account deleted successfully')
     },
 
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       // Handle specific error codes
-      if (error.response?.status === 404) {
+      if (getServerErrorStatus(error) === 404) {
         toast.error('Account not found')
       } else {
-        toast.error(error.message || 'Failed to delete account')
+        toast.error(
+          (error instanceof Error ? error.message : undefined) || 'Failed to delete account'
+        )
       }
     },
   })

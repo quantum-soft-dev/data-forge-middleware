@@ -15,6 +15,7 @@
 import { useQuery, UseQueryResult } from '@tanstack/react-query';
 import { getComparisonsForBatch } from '@/entities/comparison/api/comparisonApi';
 import type { ComparisonResponse } from '@/entities/comparison/model/types';
+import { getServerErrorStatus } from '@/shared/api/error-handler';
 
 /**
  * Options for the useBatchComparisons hook.
@@ -82,11 +83,9 @@ export function useBatchComparisons({
     // Retry configuration
     retry: (failureCount, error) => {
       // Don't retry on 404 (batch not found) or 403 (unauthorized)
-      if (error && 'response' in error) {
-        const status = (error as any).response?.status;
-        if (status === 404 || status === 403) {
-          return false;
-        }
+      const status = getServerErrorStatus(error);
+      if (status === 404 || status === 403) {
+        return false;
       }
 
       // Retry up to 2 times for other errors

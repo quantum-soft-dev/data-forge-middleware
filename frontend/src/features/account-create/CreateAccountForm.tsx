@@ -51,8 +51,8 @@ export function CreateAccountForm({
     const transformedData = {
       name: data.name,
       email: data.email,
-      phone: (data.phone === '' || data.phone === undefined ? null : data.phone) as any,
-      company: (data.company === '' || data.company === undefined ? null : data.company) as any,
+      phone: data.phone === '' || data.phone === undefined ? null : data.phone,
+      company: data.company === '' || data.company === undefined ? null : data.company,
     }
     onSubmit(transformedData)
   }

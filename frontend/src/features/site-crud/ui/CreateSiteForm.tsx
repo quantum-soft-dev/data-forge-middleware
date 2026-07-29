@@ -27,8 +27,10 @@ import { Alert, AlertDescription } from '@/shared/ui/ui/alert';
 import { generatePassword } from '@/shared/lib/password-generator';
 import { CreateSiteFormSchema, type CreateSiteFormData } from '../model/schemas';
 import { useCreateSite, useCreateAdminSite } from '../model/queries';
+import type { CreateSiteResponse } from '@/entities/site';
 import { Loader2, RefreshCw, Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 import { SiteCreatedDialog } from './SiteCreatedDialog';
 
 interface CreateSiteFormProps {
@@ -43,7 +45,7 @@ interface CreateSiteFormProps {
    * Callback when site is successfully created.
    * Receives the created site data and plaintext password.
    */
-  onSuccess?: (data: { site: any; password: string }) => void;
+  onSuccess?: (data: CreateSiteResponse) => void;
 
   /**
    * Whether to show the form in a card layout.
@@ -55,10 +57,7 @@ interface CreateSiteFormProps {
 export function CreateSiteForm({ accountId, onSuccess, showCard = true }: CreateSiteFormProps) {
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
   const [passwordCopied, setPasswordCopied] = useState(false);
-  const [createdSiteData, setCreatedSiteData] = useState<{
-    site: any;
-    password: string;
-  } | null>(null);
+  const [createdSiteData, setCreatedSiteData] = useState<CreateSiteResponse | null>(null);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
 
   const {
@@ -127,8 +126,11 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
       reset();
       setGeneratedPassword(null);
       setPasswordCopied(false);
-    } catch (error: any) {
-      const errorMessage = error?.response?.data?.message || error?.message || 'Failed to create site';
+    } catch (error) {
+      const errorMessage =
+        getServerErrorMessage(error) ??
+        (error instanceof Error ? error.message : undefined) ??
+        'Failed to create site';
       toast.error(errorMessage);
     }
   };
