@@ -10,10 +10,10 @@
 import { useState } from 'react'
 import { Trash2, AlertTriangle } from 'lucide-react'
 import { useDeleteAccountMutation } from '../api/userMutations'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 
 interface DeleteAccountButtonProps {
-  account: AccountWithKeycloakStatus
+  account: AccountWithAuthStatus
   onSuccess?: () => void
 }
 

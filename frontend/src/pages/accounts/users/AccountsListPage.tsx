@@ -21,7 +21,7 @@ import { PageHeader } from '@/shared/ui/page-header'
 import { UserListTable } from '@/widgets/user-management/UserListTable'
 import { SearchInput } from '@/features/account-search/SearchInput'
 import { useAccountsQuery } from '@/features/user-management/api/userQueries'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 
 export default function AccountsListPage() {
   const navigate = useNavigate()
@@ -62,21 +62,21 @@ export default function AccountsListPage() {
     setPage(1)
   }
 
-  const handleViewDetails = (user: AccountWithKeycloakStatus) => {
+  const handleViewDetails = (user: AccountWithAuthStatus) => {
     navigate({ to: '/admin/users/$id', params: { id: user.id } })
   }
 
-  const handleLock = (user: AccountWithKeycloakStatus) => {
+  const handleLock = (user: AccountWithAuthStatus) => {
     // TODO: Implement lock functionality (T040-T045 - User Story 2)
     console.log('Lock user:', user.id)
   }
 
-  const handleUnlock = (user: AccountWithKeycloakStatus) => {
+  const handleUnlock = (user: AccountWithAuthStatus) => {
     // TODO: Implement unlock functionality (T040-T045 - User Story 2)
     console.log('Unlock user:', user.id)
   }
 
-  const handleResetPassword = (user: AccountWithKeycloakStatus) => {
+  const handleResetPassword = (user: AccountWithAuthStatus) => {
     // TODO: Implement reset password functionality (T054-T059 - User Story 3)
     console.log('Reset password for user:', user.id)
   }

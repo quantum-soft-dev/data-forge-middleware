@@ -14,10 +14,10 @@
 
 import { Mail, User, Phone, Building, Calendar, Key } from 'lucide-react'
 import { cn } from '@/shared/lib/utils'
-import type { AccountWithKeycloakStatus } from '../model/types'
+import type { AccountWithAuthStatus } from '../model/types'
 
 interface AccountCardProps {
-  account: AccountWithKeycloakStatus
+  account: AccountWithAuthStatus
   className?: string
 }
 

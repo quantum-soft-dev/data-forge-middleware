@@ -6,7 +6,7 @@
  * - Temporary password displayed after successful reset
  * - Copy button functionality
  * - Warning messages shown
- * - Disabled states for accounts without Keycloak
+ * - Disabled states for accounts without Auth0
  * - Cancel functionality
  * - Accessibility (ARIA attributes)
  */
@@ -17,7 +17,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ResetPasswordDialog } from '@/features/user-management/ui/ResetPasswordDialog'
 import * as userMutationsModule from '@/features/user-management/api/userMutations'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 
 // Mock the userMutations module
 vi.mock('@/features/user-management/api/userMutations', () => ({
@@ -28,7 +28,7 @@ describe('ResetPasswordDialog', () => {
   let queryClient: QueryClient
   let mockClipboardWriteText: ReturnType<typeof vi.fn>
 
-  const mockAccount: AccountWithKeycloakStatus = {
+  const mockAccount: AccountWithAuthStatus = {
     id: 'acc-123',
     email: 'test.user@example.com',
     name: 'Test User',
@@ -44,7 +44,7 @@ describe('ResetPasswordDialog', () => {
     lastLogin: null,
   }
 
-  const mockAccountNoKeycloak: AccountWithKeycloakStatus = {
+  const mockAccountNoAuth0: AccountWithAuthStatus = {
     ...mockAccount,
     identityProviderUserId: null,
     isBlocked: true,
@@ -213,7 +213,7 @@ describe('ResetPasswordDialog', () => {
       expect(screen.getByRole('button', { name: /reset password/i })).toBeInTheDocument()
     })
 
-    it('disables Reset Password button when account has no Keycloak integration', () => {
+    it('disables Reset Password button when account has no Auth0 integration', () => {
       const mockMutateAsync = vi.fn()
       vi.mocked(userMutationsModule.useResetPasswordMutation).mockReturnValue({
         mutateAsync: mockMutateAsync,
@@ -225,7 +225,7 @@ describe('ResetPasswordDialog', () => {
 
       renderWithProviders(
         <ResetPasswordDialog
-          account={mockAccountNoKeycloak}
+          account={mockAccountNoAuth0}
           isOpen={true}
         />
       )
