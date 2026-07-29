@@ -61,16 +61,18 @@ export function SiteList({ accountId, compact = false }: SiteListProps) {
   const healthQuery = useDeltaSyncHealth({ accountId });
   const healthBySiteId = new Map((healthQuery.data ?? []).map((entry) => [entry.siteId, entry]));
 
-  // Use admin or user mutations based on context
+  // Both sets of mutations are created on every render (hooks cannot be called
+  // conditionally); only the one matching the current context is used.
   const userUpdateMutation = useUpdateSiteStatus();
-  const adminUpdateMutation = accountId ? useAdminUpdateSiteStatus(accountId) : null;
-  const updateStatusMutation = adminUpdateMutation || userUpdateMutation;
+  const adminUpdateMutation = useAdminUpdateSiteStatus(accountId ?? '');
+  const updateStatusMutation = isAdminContext ? adminUpdateMutation : userUpdateMutation;
 
   const userDeleteMutation = useDeleteSite();
-  const adminDeleteMutation = accountId ? useAdminDeleteSite(accountId) : null;
-  const deleteSiteMutation = adminDeleteMutation || userDeleteMutation;
+  const adminDeleteMutation = useAdminDeleteSite(accountId ?? '');
+  const deleteSiteMutation = isAdminContext ? adminDeleteMutation : userDeleteMutation;
 
-  const adminRetentionMutation = accountId ? useAdminUpdateSiteRetention(accountId) : null;
+  const retentionMutation = useAdminUpdateSiteRetention(accountId ?? '');
+  const adminRetentionMutation = isAdminContext ? retentionMutation : null;
 
   const handleActivate = async (siteId: string) => {
     try {

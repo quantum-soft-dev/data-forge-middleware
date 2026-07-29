@@ -77,10 +77,11 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
     },
   });
 
-  // Use admin or user mutation based on context
+  // Both mutations are created on every render (hooks cannot be called
+  // conditionally); only the one matching the current context is used.
   const userCreateMutation = useCreateSite();
-  const adminCreateMutation = accountId ? useCreateAdminSite(accountId) : null;
-  const createSiteMutation = adminCreateMutation || userCreateMutation;
+  const adminCreateMutation = useCreateAdminSite(accountId ?? '');
+  const createSiteMutation = accountId ? adminCreateMutation : userCreateMutation;
 
   const passwordValue = watch('password');
 
