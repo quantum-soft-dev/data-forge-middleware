@@ -132,9 +132,10 @@ npm run dev
 
 ### 3. Login
 
-Navigate to http://localhost:3000 and click **Sign In with Auth0**. You are
-redirected to the Auth0 Universal Login page and back to `/dashboard` after
-authenticating.
+Navigate to http://localhost:3000. Every route is behind an authentication
+guard, so you are redirected straight to the Auth0 Universal Login page and
+back to `/dashboard` after authenticating — there is no login screen of our
+own to click through.
 
 > Users must be created through the admin UI of the environment you are using —
 > see the account management docs. Roles are assigned via an Auth0 Post-Login
@@ -182,11 +183,13 @@ Required Auth0 setup:
 2. Clear browser cookies/sessionStorage
 3. Verify Refresh Token grant and rotation are enabled on the SPA client
 
-### Blocked requests to the Auth0 domain
+### Blocked requests to the Auth0 domain / blank page behind a proxy
 
-If you deploy behind a proxy with a Content Security Policy, the Auth0 tenant
-domain must be allowed in `connect-src` — auth0-spa-js calls `/oauth/token`
-from the page. See `nginx.conf.example`.
+If you deploy behind a proxy with a Content Security Policy, it needs two
+directives: the Auth0 tenant domain in `connect-src` (auth0-spa-js calls
+`/oauth/token`), and `blob:` in `worker-src` — we run with
+`cacheLocation: "memory"`, so the SDK builds its token worker from a blob URL
+and `new Worker()` throws without it. See `nginx.conf.example`.
 
 ### API 401 Unauthorized
 

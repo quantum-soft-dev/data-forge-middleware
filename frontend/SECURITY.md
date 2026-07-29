@@ -87,13 +87,20 @@ Server-side validation prevents malicious data from being persisted:
 Add the following HTTP headers to further harden against XSS:
 
 ```http
-Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' http://localhost:8080
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://your-tenant.us.auth0.com https://api.domain.com; worker-src 'self' blob:
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
 X-XSS-Protection: 1; mode=block
 ```
 
-**Configuration:** Add to Vite config or reverse proxy (nginx/Apache)
+Auth0 needs both of the last two directives: `connect-src` for the
+`/oauth/token` calls auth0-spa-js makes from the page, and `blob:` in
+`worker-src` because with `cacheLocation: "memory"` the SDK builds its token
+worker from a blob URL — without it `new Worker()` throws and the app renders
+a blank page.
+
+**Configuration:** Add to the reverse proxy (nginx/Apache); see
+`nginx.conf.example` for a working header.
 
 ### Testing XSS Protection
 
