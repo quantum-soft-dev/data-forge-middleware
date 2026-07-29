@@ -18,6 +18,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import MockAdapter from 'axios-mock-adapter'
+import { toast } from 'sonner'
 import { CreateAccountForm } from '@/features/user-management/ui/CreateAccountForm'
 import { apiClient } from '@/shared/api/client'
 
@@ -226,7 +227,7 @@ describe('Create Account Flow - Integration Test', () => {
     const mockOnCancel = vi.fn()
 
     // Mock API error (e.g., duplicate email)
-    mockAxios.onPost('/v1/accounts/with-keycloak').reply(409, {
+    mockAxios.onPost('/v1/accounts').reply(409, {
       message: 'Account with this email already exists',
     })
 
@@ -246,6 +247,15 @@ describe('Create Account Flow - Integration Test', () => {
     // Verify API was called
     await waitFor(() => {
       expect(mockAxios.history.post.length).toBe(1)
+      expect(mockAxios.history.post[0].url).toBe('/v1/accounts')
+    })
+
+    // Verify the 409 response body reached the error toast (and not, say, a
+    // network failure caused by a mock that never matched)
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to create account', {
+        description: 'Account with this email already exists (HTTP 409)',
+      })
     })
 
     // Wait a bit to ensure no modal appears

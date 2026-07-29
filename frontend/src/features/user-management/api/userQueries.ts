@@ -8,7 +8,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '@/shared/api/client'
 import { ACCOUNTS, ACCOUNTS_ID, ACCOUNTS_AUDIT_LOGS } from '@/shared/api/apiRoutes'
 import type {
-  AccountWithKeycloakStatus,
+  AccountWithAuthStatus,
   AdminActionLogListResponse,
   AccountFilters,
 } from '../../../entities/account/model/types'
@@ -31,7 +31,7 @@ export const accountKeys = {
  * Returns accounts with lastLogin and Auth0 status information.
  */
 async function fetchAccounts(filters: AccountFilters): Promise<{
-  content: AccountWithKeycloakStatus[]
+  content: AccountWithAuthStatus[]
   page: number
   size: number
   totalElements: number
@@ -53,7 +53,7 @@ async function fetchAccounts(filters: AccountFilters): Promise<{
   }
 
   const response = await apiClient.get<{
-    content: AccountWithKeycloakStatus[]
+    content: AccountWithAuthStatus[]
     page: number
     size: number
     totalElements: number
@@ -86,8 +86,8 @@ export function useAccountsQuery(
  * Fetch single account by ID with Auth0 integration data.
  * Uses the standard accounts endpoint to get full Auth0 status.
  */
-async function fetchAccount(accountId: string): Promise<AccountWithKeycloakStatus> {
-  const response = await apiClient.get<AccountWithKeycloakStatus>(
+async function fetchAccount(accountId: string): Promise<AccountWithAuthStatus> {
+  const response = await apiClient.get<AccountWithAuthStatus>(
     ACCOUNTS_ID(accountId)
   )
 

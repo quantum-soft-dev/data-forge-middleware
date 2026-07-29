@@ -1,12 +1,12 @@
 /**
  * UserListTable Component
  *
- * Per T031: Table for user management with Keycloak integration.
+ * Per T031: Table for user management with Auth0 integration.
  * Uses TanStack Table with pagination, sorting, and filtering.
  *
  * Features:
- * - Displays AccountWithKeycloakStatus (includes Keycloak fields)
- * - Status badges for active, keycloak, password states
+ * - Displays AccountWithAuthStatus (includes Auth0 blocked state and last login)
+ * - Status badge per account (active / inactive / blocked)
  * - Sortable columns
  * - Pagination controls
  * - Action buttons (view details, lock/unlock, reset password)
@@ -24,25 +24,25 @@ import {
 import { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { ArrowUpDown, Eye, Lock, Unlock, KeyRound } from 'lucide-react'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 import { AccountStatusBadge } from '@/entities/account/ui/AccountStatusBadge'
 import { Pagination } from '../account-table/Pagination'
 
 interface UserListTableProps {
-  users: AccountWithKeycloakStatus[]
+  users: AccountWithAuthStatus[]
   totalCount: number
   page: number // 1-indexed for UI
   pageSize: number
   onPageChange: (page: number) => void
   onPageSizeChange: (size: number) => void
-  onViewDetails?: (user: AccountWithKeycloakStatus) => void
-  onLock?: (user: AccountWithKeycloakStatus) => void
-  onUnlock?: (user: AccountWithKeycloakStatus) => void
-  onResetPassword?: (user: AccountWithKeycloakStatus) => void
+  onViewDetails?: (user: AccountWithAuthStatus) => void
+  onLock?: (user: AccountWithAuthStatus) => void
+  onUnlock?: (user: AccountWithAuthStatus) => void
+  onResetPassword?: (user: AccountWithAuthStatus) => void
   isLoading?: boolean
 }
 
-const columnHelper = createColumnHelper<AccountWithKeycloakStatus>()
+const columnHelper = createColumnHelper<AccountWithAuthStatus>()
 
 export function UserListTable({
   users,

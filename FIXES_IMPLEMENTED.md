@@ -1,5 +1,13 @@
 # Code Review Fixes - Implementation Summary
 
+> **Historical record — do not read as current-state documentation.**
+> This is a frozen snapshot of what PR #1 fixed on 2025-10-07. File paths,
+> class names and design notes below describe the tree *as it was then*;
+> several no longer exist. Most notably the Keycloak-era security config
+> (`KeycloakSecurityConfig`) is gone — authentication moved to Auth0, and the
+> client API v1 (`/api/dfc/**`) it protected was retired entirely.
+> For how the system works today see `CLAUDE.md` and `docs/`.
+
 **Date**: 2025-10-07
 **Branch**: `001-technical-specification-data`
 **Review Reference**: GitHub PR #1 Comment #3377581633

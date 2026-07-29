@@ -31,7 +31,5 @@ dist-ssr
 # Test coverage
 coverage
 
-# Playwright
+# Test output
 test-results/
-playwright-report/
-playwright/.cache/

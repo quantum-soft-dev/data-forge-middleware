@@ -24,12 +24,23 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     # Content Security Policy
+    # Replace your-tenant.us.auth0.com with your Auth0 tenant domain (VITE_AUTH0_DOMAIN).
+    # connect-src must allow it: auth0-spa-js calls the /oauth/token endpoint from
+    # the page (and from its token worker). The login redirect itself is a top-level
+    # navigation, so it needs no directive here.
+    # worker-src must allow blob: — with useRefreshTokens and cacheLocation "memory"
+    # auth0-spa-js builds that token worker from URL.createObjectURL(). Without the
+    # directive it falls back to default-src 'self' and new Worker() throws.
+    # If you ever set useRefreshTokensFallback, also add:
+    #     frame-src https://your-tenant.us.auth0.com;
+    # for the hidden silent-auth iframe. It defaults to false, so it is omitted.
     add_header Content-Security-Policy "default-src 'self'; \
         script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
         style-src 'self' 'unsafe-inline'; \
         img-src 'self' data: https:; \
         font-src 'self' data:; \
-        connect-src 'self' https://keycloak.example.com https://api.domain.com; \
+        connect-src 'self' https://your-tenant.us.auth0.com https://api.domain.com; \
+        worker-src 'self' blob:; \
         frame-ancestors 'none'; \
         base-uri 'self'; \
         form-action 'self'" always;

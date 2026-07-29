@@ -7,7 +7,7 @@
  *
  * The API is structured into two main groups:
  * - Device API (/api/v1/device/*): For client devices using Custom JWT authentication
- * - UI/Admin API (/api/v1/*): For web interface using Keycloak OAuth2 authentication
+ * - UI/Admin API (/api/v1/*): For web interface using Auth0 OAuth2 authentication
  *
  * @see /src/main/java/com/bitbi/dfm/shared/api/ApiRoutes.java
  * @since 1.0.0
@@ -32,19 +32,17 @@ export const DEVICE_API_BASE = '/v1/device';
 /**
  * Base path for UI/Admin API endpoints.
  * All admin and user-facing endpoints (web interface, admin dashboard)
- * are under this base path and use Keycloak OAuth2 authentication.
+ * are under this base path and use Auth0 OAuth2 authentication.
  */
 export const ADMIN_API_BASE = '/v1';
 
 // Accounts
 export const ACCOUNTS = `${ADMIN_API_BASE}/accounts`;
-export const ACCOUNTS_WITH_KEYCLOAK = `${ACCOUNTS}/with-keycloak`;
 export const ACCOUNTS_ID = (id: string) => `${ACCOUNTS}/${id}`;
 export const ACCOUNTS_LOCK = (id: string) => `${ACCOUNTS}/${id}/lock`;
 export const ACCOUNTS_UNLOCK = (id: string) => `${ACCOUNTS}/${id}/unlock`;
 export const ACCOUNTS_RESET_PASSWORD = (id: string) => `${ACCOUNTS}/${id}/reset-password`;
 export const ACCOUNTS_AUDIT_LOGS = (id: string) => `${ACCOUNTS}/${id}/audit-logs`;
-export const ACCOUNTS_WITH_KEYCLOAK_ID = (id: string) => `${ACCOUNTS}/${id}/with-keycloak`;
 
 // Sites (User-facing)
 export const SITES_USER = `${ADMIN_API_BASE}/account/sites`;

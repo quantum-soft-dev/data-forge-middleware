@@ -20,7 +20,7 @@ export interface Account {
   updatedAt: string // ISO 8601 datetime
 }
 
-export interface AccountWithKeycloakStatus extends Account {
+export interface AccountWithAuthStatus extends Account {
   isBlocked: boolean // From Auth0 user.blocked
   lastLogin: string | null // ISO 8601
 }
@@ -45,7 +45,7 @@ export interface CreateAccountRequest {
   name: string
   phone?: string
   company?: string
-  role: string // Keycloak role assignment
+  role: string // Auth0 role assignment
 }
 
 /**

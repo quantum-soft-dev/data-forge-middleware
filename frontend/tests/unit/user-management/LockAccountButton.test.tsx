@@ -16,13 +16,13 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LockAccountButton } from '@/features/user-management/ui/LockAccountButton'
 import * as userMutationsModule from '@/features/user-management/api/userMutations'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 
 // Mock the mutations module
 vi.mock('@/features/user-management/api/userMutations')
 
 // Helper to create a mock account
-const createMockAccount = (overrides?: Partial<AccountWithKeycloakStatus>): AccountWithKeycloakStatus => ({
+const createMockAccount = (overrides?: Partial<AccountWithAuthStatus>): AccountWithAuthStatus => ({
   id: '550e8400-e29b-41d4-a716-446655440000',
   identityProviderUserId: 'auth0|a3bb189e-8bf9-3888-9912-ace4e6543002',
   email: 'test@example.com',

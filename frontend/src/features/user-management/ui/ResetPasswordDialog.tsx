@@ -14,10 +14,10 @@
 import { useState } from 'react'
 import { KeyRound, Copy, Check } from 'lucide-react'
 import { useResetPasswordMutation } from '../api/userMutations'
-import type { AccountWithKeycloakStatus, ResetPasswordResponse } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus, ResetPasswordResponse } from '@/entities/account/model/types'
 
 interface ResetPasswordDialogProps {
-  account: AccountWithKeycloakStatus
+  account: AccountWithAuthStatus
   onSuccess?: () => void
   onClose?: () => void
   isOpen: boolean

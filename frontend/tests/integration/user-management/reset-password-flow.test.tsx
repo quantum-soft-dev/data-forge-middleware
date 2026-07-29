@@ -18,7 +18,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ResetPasswordDialog } from '@/features/user-management/ui/ResetPasswordDialog'
 import * as apiClientModule from '@/shared/api/client'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 
 // Mock the API client module
 vi.mock('@/shared/api/client', () => ({
@@ -31,7 +31,7 @@ describe('Reset Password Flow - Integration Test', () => {
   let queryClient: QueryClient
   let user: ReturnType<typeof userEvent.setup>
 
-  const mockAccount: AccountWithKeycloakStatus = {
+  const mockAccount: AccountWithAuthStatus = {
     id: 'acc-reset-123',
     email: 'reset.user@example.com',
     name: 'Reset Test User',
@@ -46,7 +46,7 @@ describe('Reset Password Flow - Integration Test', () => {
     company: null,
   }
 
-  const mockAccountNoKeycloak: AccountWithKeycloakStatus = {
+  const mockAccountNoAuth0: AccountWithAuthStatus = {
     ...mockAccount,
     id: 'acc-no-auth0',
     email: 'no.auth0@example.com',
@@ -208,7 +208,7 @@ describe('Reset Password Flow - Integration Test', () => {
       response: {
         status: 400,
         data: {
-          message: 'Account does not have Keycloak integration',
+          message: 'Account does not have Auth0 integration',
         },
       },
     }
@@ -243,10 +243,10 @@ describe('Reset Password Flow - Integration Test', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
-  it('disables reset button for account without Keycloak integration', () => {
+  it('disables reset button for account without Auth0 integration', () => {
     renderWithProviders(
       <ResetPasswordDialog
-        account={mockAccountNoKeycloak}
+        account={mockAccountNoAuth0}
         isOpen={true}
       />
     )

@@ -6,7 +6,7 @@
 
 export type {
   Account,
-  AccountWithKeycloakStatus,
+  AccountWithAuthStatus,
   CreateAccountRequest,
   CreateAccountResponse,
   ResetPasswordResponse,

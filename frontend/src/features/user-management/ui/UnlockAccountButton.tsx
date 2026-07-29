@@ -13,10 +13,10 @@
 import { useState } from 'react'
 import { Unlock } from 'lucide-react'
 import { useUnlockAccountMutation } from '../api/userMutations'
-import type { AccountWithKeycloakStatus } from '@/entities/account/model/types'
+import type { AccountWithAuthStatus } from '@/entities/account/model/types'
 
 interface UnlockAccountButtonProps {
-  account: AccountWithKeycloakStatus
+  account: AccountWithAuthStatus
   onSuccess?: () => void
   className?: string
 }
