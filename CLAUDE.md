@@ -12,10 +12,11 @@
 - **JUnit 5 + Mockito + Testcontainers** (PostgreSQL + LocalStack S3)
 
 ### Frontend
-- **React 19.2** + **TypeScript 5.6** + **Vite 5.4**
+- **React 19.2** + **TypeScript 5.6** + **Vite 7**
 - **TanStack Query v5** + **TanStack Router v1** (code-based routes in `src/app/router.tsx`) + **shadcn/ui** + **Tailwind CSS 3.4**
 - **@auth0/auth0-react 2.8.0** + **Axios** + **Zod** + **React Hook Form**
-- **Vitest + React Testing Library**
+- **Vitest 4 + React Testing Library**
+- **ESLint 10** (flat config in `frontend/eslint.config.js`) — runs, but is **not** part of any gate and currently reports pre-existing problems
 
 ## Project Structure
 
