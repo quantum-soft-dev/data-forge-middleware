@@ -94,10 +94,14 @@ class PluginAuditServiceDeferralTest {
         @Test
         @DisplayName("generation deleted")
         void shouldDeferGenerationDeleted() {
-            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L);
+            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L, true);
 
-            assertThat(deferredEntry().getActionType())
-                    .isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
+            PluginAuditLog entry = deferredEntry();
+
+            assertThat(entry.getActionType()).isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
+            assertThat(entry.getMetadata())
+                    .containsEntry("deletedFilesCount", 1)
+                    .containsEntry("deletedBytes", 10L);
         }
 
         @Test
@@ -184,7 +188,7 @@ class PluginAuditServiceDeferralTest {
         @Test
         @DisplayName("generation deleted")
         void shouldCarryRollbackEntryForGenerationDeleted() {
-            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L);
+            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L, true);
 
             PluginAuditLog rollbackEntry = deferredEvent().rollbackEntry();
 
@@ -192,6 +196,38 @@ class PluginAuditServiceDeferralTest {
             assertThat(rollbackEntry.getActionType())
                     .isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
             assertThat(rollbackEntry.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("history cleared with every S3 delete failing — nothing was destroyed")
+        void shouldCarryNoRollbackEntryWhenNoFileWasCleared() {
+            service.logHistoryCleared(PLUGIN_ID, accountId, 3L, 0L, 1024L);
+
+            assertThat(deferredEvent().rollbackEntry())
+                    .as("no file left the bucket, so a rollback undoes the whole operation")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("reinit that deleted no S3 file")
+        void shouldCarryNoRollbackEntryWhenReinitDeletedNothing() {
+            service.logReinit(PLUGIN_ID, accountId, 3L, 0L, true, UUID.randomUUID());
+
+            assertThat(deferredEvent().rollbackEntry()).isNull();
+        }
+
+        @Test
+        @DisplayName("generation deleted whose S3 key was blank or whose delete failed")
+        void shouldCarryNoRollbackEntryWhenGenerationFileSurvived() {
+            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L, false);
+
+            PluginAuditEntryReadyEvent event = deferredEvent();
+
+            assertThat(event.rollbackEntry()).isNull();
+            assertThat(event.entry().getMetadata())
+                    .as("nothing was freed, so the entry must not claim bytes were")
+                    .containsEntry("deletedFilesCount", 0)
+                    .containsEntry("deletedBytes", 0L);
         }
 
         @Test

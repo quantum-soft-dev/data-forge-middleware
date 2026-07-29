@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Service for creating audit log entries for plugin operations.
@@ -65,13 +66,22 @@ public class PluginAuditService {
     }
 
     /**
-     * Same deferral, for a state change whose side effects are not transactional: the S3 objects
+     * Same deferral, for a state change whose side effects may not be transactional: the S3 objects
      * are already destroyed by the time the caller's transaction resolves. On commit the entry is
      * written as usual; on rollback {@code rollbackEntry} records that the database was restored
      * over files that no longer exist, instead of leaving that divergence unlogged.
+     * <p>
+     * {@code deletedFiles} is the number of objects that actually left the bucket, not the number
+     * attempted. At zero — a blank key, a failed delete, nothing to delete — the operation was
+     * wholly transactional after all, so the rollback entry is dropped: it would otherwise assert
+     * a destruction that never happened.
+     * </p>
      */
-    private void publishAfterCommit(PluginAuditLog entry, PluginAuditLog rollbackEntry) {
-        eventPublisher.publishEvent(new PluginAuditEntryReadyEvent(entry, rollbackEntry));
+    private void publishAfterCommit(PluginAuditLog entry, long deletedFiles,
+                                    Supplier<PluginAuditLog> rollbackEntry) {
+        eventPublisher.publishEvent(deletedFiles > 0
+                ? new PluginAuditEntryReadyEvent(entry, rollbackEntry.get())
+                : new PluginAuditEntryReadyEvent(entry));
     }
 
     /**
@@ -451,7 +461,9 @@ public class PluginAuditService {
      * Logs that plugin history was cleared for an account.
      * <p>
      * The S3 objects are deleted before the caller commits, so a rollback cannot take them back:
-     * this records a failure on that path rather than nothing at all.
+     * this records a failure on that path rather than nothing at all — but only when
+     * {@code deletedFilesCount} is above zero. If nothing left the bucket there is nothing a
+     * rollback failed to undo, and claiming otherwise would be its own false record.
      * </p>
      *
      * @param pluginId the plugin identifier
@@ -476,7 +488,8 @@ public class PluginAuditService {
                             PluginActionType.PLUGIN_HISTORY_CLEARED)
                     .withMetadata(metadata);
 
-            publishAfterCommit(auditLog, PluginAuditLog.failure(pluginId, accountId,
+            publishAfterCommit(auditLog, deletedFilesCount, () -> PluginAuditLog.failure(
+                            pluginId, accountId,
                             PluginActionType.PLUGIN_HISTORY_CLEARED, S3_DELETED_BEFORE_ROLLBACK)
                     .withMetadata(new HashMap<>(metadata)));
             log.debug("Audit logged: PLUGIN_HISTORY_CLEARED plugin={} account={} deleted={}",
@@ -612,7 +625,7 @@ public class PluginAuditService {
      * Logs a successful plugin reinitialization.
      * <p>
      * Like {@link #logHistoryCleared}, the S3 deletions outlive a rollback, so that path gets a
-     * failure entry instead of silence.
+     * failure entry instead of silence — only when {@code deletedS3Files} is above zero.
      * </p>
      *
      * @param pluginId the plugin identifier
@@ -642,11 +655,13 @@ public class PluginAuditService {
             PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId, PluginActionType.REINIT)
                     .withMetadata(metadata);
 
-            Map<String, Object> rollbackMetadata = new HashMap<>(metadata);
-            rollbackMetadata.put("success", false);
-            publishAfterCommit(auditLog, PluginAuditLog.failure(pluginId, accountId,
-                            PluginActionType.REINIT, S3_DELETED_BEFORE_ROLLBACK)
-                    .withMetadata(rollbackMetadata));
+            publishAfterCommit(auditLog, deletedS3Files, () -> {
+                Map<String, Object> rollbackMetadata = new HashMap<>(metadata);
+                rollbackMetadata.put("success", false);
+                return PluginAuditLog.failure(pluginId, accountId,
+                                PluginActionType.REINIT, S3_DELETED_BEFORE_ROLLBACK)
+                        .withMetadata(rollbackMetadata);
+            });
             log.debug("Audit logged: REINIT plugin={} account={} deleted={} triggered={}",
                     pluginId, accountId, deletedGenerations, sqlGenerationTriggered);
         } catch (Exception e) {
@@ -690,32 +705,38 @@ public class PluginAuditService {
      * Logs a SQL generation deletion event.
      * <p>
      * Like {@link #logHistoryCleared}, the S3 deletion outlives a rollback, so that path gets a
-     * failure entry instead of silence.
+     * failure entry instead of silence — only when {@code s3FileDeleted} is true.
      * </p>
      *
      * @param pluginId the plugin identifier
      * @param accountId the account ID
      * @param generationId the deleted generation ID
      * @param batchId the batch ID associated with the generation
-     * @param deletedBytes the size of the deleted file in bytes
+     * @param deletedBytes the size of the generation's file in bytes
+     * @param s3FileDeleted whether the S3 object actually left the bucket — false for a blank key
+     *                      or a failed delete, in which case nothing was freed and a rollback
+     *                      undoes the whole operation
      */
     public void logGenerationDeleted(
             String pluginId,
             UUID accountId,
             UUID generationId,
             UUID batchId,
-            Long deletedBytes) {
+            Long deletedBytes,
+            boolean s3FileDeleted) {
         try {
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("generationId", generationId.toString());
             metadata.put("batchId", batchId != null ? batchId.toString() : null);
-            metadata.put("deletedBytes", deletedBytes != null ? deletedBytes : 0L);
+            metadata.put("deletedFilesCount", s3FileDeleted ? 1 : 0);
+            metadata.put("deletedBytes", s3FileDeleted && deletedBytes != null ? deletedBytes : 0L);
 
             PluginAuditLog auditLog = PluginAuditLog.success(pluginId, accountId,
                             PluginActionType.SQL_GENERATION_DELETED)
                     .withMetadata(metadata);
 
-            publishAfterCommit(auditLog, PluginAuditLog.failure(pluginId, accountId,
+            publishAfterCommit(auditLog, s3FileDeleted ? 1L : 0L, () -> PluginAuditLog.failure(
+                            pluginId, accountId,
                             PluginActionType.SQL_GENERATION_DELETED, S3_DELETED_BEFORE_ROLLBACK)
                     .withMetadata(new HashMap<>(metadata)));
             log.debug("Audit logged: SQL_GENERATION_DELETED plugin={} account={} generation={}",

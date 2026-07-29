@@ -355,6 +355,32 @@ class PluginHistoryServiceTest {
             // Then
             assertThat(result.deletedFilesCount()).isEqualTo(1L); // Only 1 succeeded
             assertThat(result.failedS3Keys()).containsExactly("key2.sql");
+            // The audit decides from this count whether a rollback still destroyed something,
+            // so it must be the number that actually left the bucket — not the attempt count.
+            verify(auditService).logHistoryCleared(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(2L), eq(1L), eq(1000L));
+        }
+
+        @Test
+        @DisplayName("Should report zero deleted files to the audit when every S3 delete failed")
+        void shouldReportZeroDeletedFilesWhenAllS3DeletionsFailed() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+
+            Object[] countAndSum = new Object[]{2L, 1000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            List<String> s3Keys = List.of("key1.sql", "key2.sql");
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(s3Keys);
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(s3Keys);
+
+            // When
+            pluginHistoryService.clearHistory(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then — nothing left the bucket, so a rollback would undo the whole operation
+            verify(auditService).logHistoryCleared(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(2L), eq(0L), eq(1000L));
         }
     }
 
@@ -579,6 +605,57 @@ class PluginHistoryServiceTest {
             // This test requires proper SqlGenerationService mock setup which would
             // need a @Mock for SqlGenerationService and proper wiring.
             // The regeneration flow is better tested via integration tests.
+        }
+    }
+
+    // ==================== User Story: Delete Single Generation ====================
+
+    @Nested
+    @DisplayName("deleteGeneration")
+    class DeleteGeneration {
+
+        @BeforeEach
+        void stubLookups() {
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(sqlGenerationRepository.findById(GENERATION_ID)).thenReturn(Optional.of(mockGeneration));
+            when(mockGeneration.getFileSizeBytes()).thenReturn(4096L);
+        }
+
+        @Test
+        @DisplayName("Should tell the audit the S3 file is gone when the delete succeeded")
+        void shouldReportTheFileAsDeleted() {
+            when(s3StorageService.deleteFiles(List.of("plugins/bit-bi/test/file.sql")))
+                    .thenReturn(List.of());
+
+            pluginHistoryService.deleteGeneration(PLUGIN_ID, ACCOUNT_ID, GENERATION_ID);
+
+            verify(auditService).logGenerationDeleted(
+                    eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(GENERATION_ID), eq(BATCH_ID), eq(4096L), eq(true));
+        }
+
+        @Test
+        @DisplayName("Should tell the audit nothing was destroyed when the S3 delete failed")
+        void shouldReportTheFileAsSurvivingWhenS3DeleteFails() {
+            when(s3StorageService.deleteFiles(List.of("plugins/bit-bi/test/file.sql")))
+                    .thenReturn(List.of("plugins/bit-bi/test/file.sql"));
+
+            pluginHistoryService.deleteGeneration(PLUGIN_ID, ACCOUNT_ID, GENERATION_ID);
+
+            verify(auditService).logGenerationDeleted(
+                    eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(GENERATION_ID), eq(BATCH_ID), eq(4096L), eq(false));
+        }
+
+        @Test
+        @DisplayName("Should tell the audit nothing was destroyed when there was no S3 key")
+        void shouldReportTheFileAsSurvivingWhenThereIsNoS3Key() {
+            when(mockGeneration.getS3Key()).thenReturn("  ");
+
+            pluginHistoryService.deleteGeneration(PLUGIN_ID, ACCOUNT_ID, GENERATION_ID);
+
+            verify(s3StorageService, never()).deleteFiles(any());
+            verify(auditService).logGenerationDeleted(
+                    eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(GENERATION_ID), eq(BATCH_ID), eq(4096L), eq(false));
         }
     }
 }

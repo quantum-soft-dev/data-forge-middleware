@@ -268,8 +268,10 @@ public class PluginHistoryService {
         accountPlugin.deactivate();
         accountPluginRepository.save(accountPlugin);
 
-        // Audit log
-        auditService.logHistoryCleared(pluginId, accountId, count, s3Keys.size(), totalBytes);
+        // Audit log — the count of files that actually left the bucket, not the attempt count:
+        // the audit decides from it whether a rollback still destroyed something.
+        auditService.logHistoryCleared(pluginId, accountId, count,
+                s3Keys.size() - failedKeys.size(), totalBytes);
 
         log.info("History cleared: pluginId={}, accountId={}, deleted={}, failedS3={}",
                 pluginId, accountId, count, failedKeys.size());
@@ -446,9 +448,14 @@ public class PluginHistoryService {
 
         // Delete S3 file
         boolean s3Deleted = true;
+        // Distinct from s3Deleted, which reports "nothing left to delete" as success to the caller:
+        // the audit needs to know whether an object actually left the bucket, because that is what
+        // a rollback cannot undo.
+        boolean s3ObjectDestroyed = false;
         if (s3Key != null && !s3Key.isBlank()) {
             List<String> failedKeys = deleteS3Files(List.of(s3Key));
             s3Deleted = failedKeys.isEmpty();
+            s3ObjectDestroyed = s3Deleted;
             if (!s3Deleted) {
                 log.warn("Failed to delete S3 file for generation {}: {}", generationId, s3Key);
             }
@@ -458,7 +465,8 @@ public class PluginHistoryService {
         sqlGenerationRepository.delete(generation);
 
         // Audit log
-        auditService.logGenerationDeleted(pluginId, accountId, generationId, batchId, fileSizeBytes);
+        auditService.logGenerationDeleted(pluginId, accountId, generationId, batchId, fileSizeBytes,
+                s3ObjectDestroyed);
 
         log.info("Generation deleted: generationId={}, batchId={}, s3Deleted={}",
                 generationId, batchId, s3Deleted);
