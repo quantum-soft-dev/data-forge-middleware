@@ -20,8 +20,6 @@ dist-ssr
 # Testing
 coverage
 test-results
-playwright-report
-playwright/.cache
 tests
 __tests__
 *.test.ts
