@@ -43,6 +43,31 @@ describe('SiteListItem retention controls', () => {
 
     expect(onUpdateRetention).toHaveBeenCalledWith('site-1', 30)
   })
+
+  it('resets the draft when the saved retention value changes', async () => {
+    const { rerender } = render(<SiteListItem site={site} showRetentionControls />)
+
+    const input = screen.getByRole('spinbutton')
+    await userEvent.clear(input)
+    await userEvent.type(input, '10')
+    expect(input).toHaveValue(10)
+
+    rerender(<SiteListItem site={{ ...site, retentionDays: 90 }} showRetentionControls />)
+
+    expect(screen.getByRole('spinbutton')).toHaveValue(90)
+  })
+
+  it('keeps the draft while the saved retention value is unchanged', async () => {
+    const { rerender } = render(<SiteListItem site={site} showRetentionControls />)
+
+    const input = screen.getByRole('spinbutton')
+    await userEvent.clear(input)
+    await userEvent.type(input, '10')
+
+    rerender(<SiteListItem site={{ ...site, name: 'Renamed' }} showRetentionControls />)
+
+    expect(screen.getByRole('spinbutton')).toHaveValue(10)
+  })
 })
 
 describe('SiteListItem API version chip (F2)', () => {

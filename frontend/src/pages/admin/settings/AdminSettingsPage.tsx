@@ -5,7 +5,7 @@
  * Requires: ROLE_ADMIN (backend enforced)
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/widgets/header/Header';
 import { PageHeader } from '@/shared/ui/page-header';
@@ -44,9 +44,14 @@ export default function AdminSettingsPage() {
 
   const [cron, setCron] = useState<string>('');
 
-  useEffect(() => {
-    if (scheduleQuery.data?.cron) setCron(scheduleQuery.data.cron);
-  }, [scheduleQuery.data?.cron]);
+  // Seed (and re-seed) the editor from the loaded schedule. Adjusting during
+  // render instead of in an effect keeps the field from flashing the stale value.
+  const loadedCron = scheduleQuery.data?.cron;
+  const [seededCron, setSeededCron] = useState<string | undefined>(undefined);
+  if (loadedCron && loadedCron !== seededCron) {
+    setSeededCron(loadedCron);
+    setCron(loadedCron);
+  }
 
   const metaText = useMemo(() => {
     if (!scheduleQuery.data) return '';

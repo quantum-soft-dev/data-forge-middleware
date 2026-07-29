@@ -66,6 +66,80 @@ describe('useAuth', () => {
     expect(mockLogout).toHaveBeenCalledTimes(1)
   })
 
+  it('extracts roles from the access token', async () => {
+    // Payload: { "https://dev.dfm.bitbi.io/roles": ["ROLE_ADMIN"] }
+    const token = `header.${btoa(
+      JSON.stringify({ 'https://dev.dfm.bitbi.io/roles': ['ROLE_ADMIN'] })
+    )}.signature`
+
+    vi.mocked(auth0React.useAuth0).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { sub: 'auth0|123' },
+      error: undefined,
+      loginWithRedirect: vi.fn(),
+      logout: vi.fn(),
+      getAccessTokenSilently: vi.fn().mockResolvedValue(token),
+    } as any)
+
+    const { result } = renderHook(() => useAuth())
+
+    await waitFor(() => expect(result.current.isRolesLoading).toBe(false))
+    expect(result.current.hasRole('ROLE_ADMIN')).toBe(true)
+    expect(result.current.hasRole('ADMIN')).toBe(true)
+    expect(result.current.hasRole('ROLE_USER')).toBe(false)
+  })
+
+  it('reports no roles and no pending load for anonymous users', async () => {
+    const getAccessTokenSilently = vi.fn()
+
+    vi.mocked(auth0React.useAuth0).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      user: undefined,
+      error: undefined,
+      loginWithRedirect: vi.fn(),
+      logout: vi.fn(),
+      getAccessTokenSilently,
+    } as any)
+
+    const { result } = renderHook(() => useAuth())
+
+    await waitFor(() => expect(result.current.isRolesLoading).toBe(false))
+    expect(result.current.hasRole('ROLE_ADMIN')).toBe(false)
+    expect(getAccessTokenSilently).not.toHaveBeenCalled()
+  })
+
+  it('drops roles when the session ends', async () => {
+    const token = `header.${btoa(
+      JSON.stringify({ 'https://dev.dfm.bitbi.io/roles': ['ROLE_ADMIN'] })
+    )}.signature`
+    const authenticatedState = {
+      isAuthenticated: true,
+      isLoading: false,
+      user: { sub: 'auth0|123' },
+      error: undefined,
+      loginWithRedirect: vi.fn(),
+      logout: vi.fn(),
+      getAccessTokenSilently: vi.fn().mockResolvedValue(token),
+    }
+
+    vi.mocked(auth0React.useAuth0).mockReturnValue(authenticatedState as any)
+
+    const { result, rerender } = renderHook(() => useAuth())
+    await waitFor(() => expect(result.current.hasRole('ROLE_ADMIN')).toBe(true))
+
+    vi.mocked(auth0React.useAuth0).mockReturnValue({
+      ...authenticatedState,
+      isAuthenticated: false,
+      user: undefined,
+    } as any)
+    rerender()
+
+    expect(result.current.hasRole('ROLE_ADMIN')).toBe(false)
+    expect(result.current.isRolesLoading).toBe(false)
+  })
+
   it('returns undefined error when no error exists', () => {
     vi.mocked(auth0React.useAuth0).mockReturnValue({
       isAuthenticated: false,

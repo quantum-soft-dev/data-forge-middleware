@@ -16,7 +16,7 @@
  * @version 2.0.0
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSearch } from '@tanstack/react-router';
 import { Header } from '@/widgets/header/Header';
 import { Button } from '@/shared/ui/ui/button';
@@ -43,15 +43,17 @@ export default function DeviceVerifyPage() {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [createdSiteName, setCreatedSiteName] = useState<string | null>(null);
 
-  // Sync userCode state when URL code parameter changes (e.g. navigating from one device-verify to another)
-  useEffect(() => {
-    if (userCodeFromUrl && userCodeFromUrl !== userCode) {
-      setUserCode(userCodeFromUrl);
-      setPageState('confirm');
-      setErrorMessage('');
-      setCreatedSiteName(null);
-    }
-  }, [userCodeFromUrl]);
+  // Sync userCode state when URL code parameter changes (e.g. navigating from one device-verify to another).
+  // Adjusted during render rather than in an effect: an effect would first
+  // render the previous code and only then correct it.
+  const [syncedUrlCode, setSyncedUrlCode] = useState(userCodeFromUrl);
+  if (userCodeFromUrl && userCodeFromUrl !== syncedUrlCode) {
+    setSyncedUrlCode(userCodeFromUrl);
+    setUserCode(userCodeFromUrl);
+    setPageState('confirm');
+    setErrorMessage('');
+    setCreatedSiteName(null);
+  }
 
   // Fetch verification info when user code is provided
   const {
@@ -65,33 +67,30 @@ export default function DeviceVerifyPage() {
   const approveMutation = useApproveAuthorization();
   const denyMutation = useDenyAuthorization();
 
-  // Handle verification info error
-  useEffect(() => {
-    if (verifyInfoError) {
-      const status = (verifyInfoError as { response?: { status?: number } })?.response?.status;
-      const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string; message?: string } } })
-        ?.response?.data?.error_description ||
-        (verifyInfoError as { response?: { data?: { message?: string } } })?.response?.data?.message;
+  // Handle verification info error — once per failure, during render
+  const [reportedError, setReportedError] = useState<unknown>(null);
+  if (verifyInfoError && verifyInfoError !== reportedError) {
+    setReportedError(verifyInfoError);
 
+    const status = (verifyInfoError as { response?: { status?: number } })?.response?.status;
+    const errorMsg = (verifyInfoError as { response?: { data?: { error_description?: string; message?: string } } })
+      ?.response?.data?.error_description ||
+      (verifyInfoError as { response?: { data?: { message?: string } } })?.response?.data?.message;
+
+    setPageState('error');
+    setErrorMessage(
       // 400 = Authorization already processed (approved or denied) - show error, not success
-      if (status === 400) {
-        setPageState('error');
-        setErrorMessage('This authorization code has already been processed. Please start a new authorization from your device.');
-        return;
-      }
-
-      // 404 = Not found or expired
-      setPageState('error');
-      setErrorMessage(errorMsg || 'Device code not found or expired. Please check the code and try again.');
-    }
-  }, [verifyInfoError]);
+      status === 400
+        ? 'This authorization code has already been processed. Please start a new authorization from your device.'
+        // 404 = Not found or expired
+        : errorMsg || 'Device code not found or expired. Please check the code and try again.'
+    );
+  }
 
   // Update page state when verify info is loaded
-  useEffect(() => {
-    if (verifyInfo && pageState === 'input') {
-      setPageState('confirm');
-    }
-  }, [verifyInfo, pageState]);
+  if (verifyInfo && pageState === 'input') {
+    setPageState('confirm');
+  }
 
   const handleCodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
