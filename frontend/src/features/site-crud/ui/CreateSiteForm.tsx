@@ -101,7 +101,7 @@ export function CreateSiteForm({ accountId, onSuccess, showCard = true }: Create
       setPasswordCopied(true);
       toast.success('Password copied to clipboard');
       setTimeout(() => setPasswordCopied(false), 2000);
-    } catch (err) {
+    } catch {
       toast.error('Failed to copy password');
     }
   };

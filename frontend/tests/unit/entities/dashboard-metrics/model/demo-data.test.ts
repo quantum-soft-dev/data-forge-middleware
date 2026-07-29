@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { generateDemoData } from '@/entities/dashboard-metrics/model/demo-data'
-import type { DashboardMetrics } from '@/entities/dashboard-metrics/model/types'
 
 describe('generateDemoData', () => {
   it('should return DashboardMetrics object', () => {

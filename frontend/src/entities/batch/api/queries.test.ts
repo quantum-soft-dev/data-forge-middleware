@@ -220,7 +220,7 @@ describe('useBatchHistory', () => {
   it('should use correct query key', () => {
     vi.spyOn(batchApi, 'listBatches').mockResolvedValueOnce(mockFirstPage);
 
-    const { result } = renderHook(() => useBatchHistory(20), {
+    renderHook(() => useBatchHistory(20), {
       wrapper: createWrapper(),
     });
 

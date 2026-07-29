@@ -199,14 +199,14 @@ describe('AuditLogTable', () => {
 
   describe('Status Icons', () => {
     it('should display CheckCircle icon for success', () => {
-      const { container } = render(<AuditLogTable {...defaultProps} />)
+      render(<AuditLogTable {...defaultProps} />)
 
       const checkCircle = screen.getByText('Success').closest('span[style]')
       expect(checkCircle).toBeInTheDocument()
     })
 
     it('should display XCircle icon for failure', () => {
-      const { container } = render(<AuditLogTable {...defaultProps} />)
+      render(<AuditLogTable {...defaultProps} />)
 
       const xCircle = screen.getByText('Failed').closest('span[style]')
       expect(xCircle).toBeInTheDocument()

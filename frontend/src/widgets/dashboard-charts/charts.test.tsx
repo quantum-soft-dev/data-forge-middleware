@@ -7,7 +7,6 @@ import { PieChartWidget } from './PieChartWidget';
 import { TopCompaniesWidget } from './TopCompaniesWidget';
 
 vi.mock('recharts', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Stub = ({ children }: any) => <div>{children}</div>;
   return {
     ResponsiveContainer: Stub,

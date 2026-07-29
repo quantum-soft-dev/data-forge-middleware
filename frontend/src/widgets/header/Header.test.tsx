@@ -16,7 +16,6 @@ vi.mock('@auth0/auth0-react', () => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Link: ({ children, activeProps: _activeProps, to, ...props }: any) => (
     <a href={to} {...props}>
       {children}
