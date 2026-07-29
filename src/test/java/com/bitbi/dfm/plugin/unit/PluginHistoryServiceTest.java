@@ -15,6 +15,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -382,6 +383,36 @@ class PluginHistoryServiceTest {
             // Then — nothing left the bucket, so a rollback would undo the whole operation
             verify(auditService).logHistoryCleared(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(2L), eq(0L), eq(1000L));
         }
+
+        @Test
+        @DisplayName("Should audit between the S3 deletion and the rest of the database work")
+        void shouldAuditBeforeTheRemainingDatabaseWork() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+
+            Object[] countAndSum = new Object[]{2L, 1000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            List<String> s3Keys = List.of("key1.sql", "key2.sql");
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(s3Keys);
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(List.of());
+
+            // When
+            pluginHistoryService.clearHistory(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then — the files are already gone by the time the row deletion and the deactivation
+            // run, so the rollback entry has to be armed before either of them can fail.
+            InOrder inOrder = inOrder(
+                    s3StorageService, auditService, sqlGenerationRepository, accountPluginRepository);
+            inOrder.verify(s3StorageService).deleteFiles(s3Keys);
+            inOrder.verify(auditService)
+                    .logHistoryCleared(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(2L), eq(2L), eq(1000L));
+            inOrder.verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
+            inOrder.verify(accountPluginRepository).save(mockAccountPlugin);
+        }
     }
 
     // ==================== User Story 4: Reinit (Feature 015) ====================
@@ -444,6 +475,43 @@ class PluginHistoryServiceTest {
 
             // 026: per-table delta baselines recaptured on reinit
             verify(pluginDeltaBaselineService).recaptureForReinit(mockAccountPlugin);
+        }
+
+        @Test
+        @DisplayName("Should audit between the S3 deletion and the rest of the database work")
+        void shouldAuditBeforeTheRemainingDatabaseWork() {
+            // Given
+            when(accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, PLUGIN_ID))
+                    .thenReturn(Optional.of(mockAccountPlugin));
+            when(mockAccountPlugin.isActive()).thenReturn(true);
+
+            Object[] countAndSum = new Object[]{10L, 50000L};
+            when(sqlGenerationRepository.countAndSumByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(countAndSum);
+
+            List<String> s3Keys = List.of("key1.sql", "key2.sql", "key3.sql");
+            when(sqlGenerationRepository.findS3KeysByAccountPluginId(ACCOUNT_PLUGIN_ID))
+                    .thenReturn(s3Keys);
+            when(s3StorageService.deleteFiles(s3Keys)).thenReturn(List.of());
+
+            com.bitbi.dfm.batch.domain.Batch mockBatch = mock(com.bitbi.dfm.batch.domain.Batch.class);
+            when(mockBatch.getId()).thenReturn(BATCH_ID);
+            when(batchRepository.findLatestCompletedByAccountId(ACCOUNT_ID))
+                    .thenReturn(Optional.of(mockBatch));
+
+            // When
+            pluginHistoryService.reinit(PLUGIN_ID, ACCOUNT_ID);
+
+            // Then — recaptureForReinit alone deletes, saves and bulk-updates rows per site. Any of
+            // that can fail long after the S3 objects are gone, so the rollback entry must already
+            // be armed. The new baseline is resolved up front to make that possible.
+            InOrder inOrder = inOrder(
+                    s3StorageService, auditService, sqlGenerationRepository, pluginDeltaBaselineService);
+            inOrder.verify(s3StorageService).deleteFiles(s3Keys);
+            inOrder.verify(auditService)
+                    .logReinit(eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(10L), eq(3L), eq(false), eq(BATCH_ID));
+            inOrder.verify(sqlGenerationRepository).deleteByAccountPluginId(ACCOUNT_PLUGIN_ID);
+            inOrder.verify(pluginDeltaBaselineService).recaptureForReinit(mockAccountPlugin);
         }
 
         @Test
@@ -656,6 +724,23 @@ class PluginHistoryServiceTest {
             verify(s3StorageService, never()).deleteFiles(any());
             verify(auditService).logGenerationDeleted(
                     eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(GENERATION_ID), eq(BATCH_ID), eq(4096L), eq(false));
+        }
+
+        @Test
+        @DisplayName("Should audit between the S3 deletion and the row deletion")
+        void shouldAuditBeforeTheRowIsDeleted() {
+            when(s3StorageService.deleteFiles(List.of("plugins/bit-bi/test/file.sql")))
+                    .thenReturn(List.of());
+
+            pluginHistoryService.deleteGeneration(PLUGIN_ID, ACCOUNT_ID, GENERATION_ID);
+
+            // The file is gone before the row is, so a failure on the row deletion must still find
+            // the rollback entry armed.
+            InOrder inOrder = inOrder(s3StorageService, auditService, sqlGenerationRepository);
+            inOrder.verify(s3StorageService).deleteFiles(List.of("plugins/bit-bi/test/file.sql"));
+            inOrder.verify(auditService).logGenerationDeleted(
+                    eq(PLUGIN_ID), eq(ACCOUNT_ID), eq(GENERATION_ID), eq(BATCH_ID), eq(4096L), eq(true));
+            inOrder.verify(sqlGenerationRepository).delete(mockGeneration);
         }
     }
 }

@@ -260,6 +260,13 @@ public class PluginHistoryService {
 
         // Delete S3 files (best effort, collect failures)
         List<String> failedKeys = deleteS3Files(s3Keys);
+        long deletedFiles = s3Keys.size() - failedKeys.size();
+
+        // Audit log — published here, before the rest of the transaction's work rather than after
+        // it: the files are already gone, so everything below has to run with the rollback entry
+        // already armed. The count is the number that actually left the bucket, not the attempt
+        // count; the audit decides from it whether a rollback still destroyed something.
+        auditService.logHistoryCleared(pluginId, accountId, count, deletedFiles, totalBytes);
 
         // Delete database records
         sqlGenerationRepository.deleteByAccountPluginId(accountPluginId);
@@ -268,15 +275,10 @@ public class PluginHistoryService {
         accountPlugin.deactivate();
         accountPluginRepository.save(accountPlugin);
 
-        // Audit log — the count of files that actually left the bucket, not the attempt count:
-        // the audit decides from it whether a rollback still destroyed something.
-        auditService.logHistoryCleared(pluginId, accountId, count,
-                s3Keys.size() - failedKeys.size(), totalBytes);
-
         log.info("History cleared: pluginId={}, accountId={}, deleted={}, failedS3={}",
                 pluginId, accountId, count, failedKeys.size());
 
-        return HistoryClearResultDto.create(count, s3Keys.size() - failedKeys.size(), totalBytes, failedKeys);
+        return HistoryClearResultDto.create(count, deletedFiles, totalBytes, failedKeys);
     }
 
     // ==================== User Story 4: Reinit (Feature 015) ====================
@@ -323,20 +325,33 @@ public class PluginHistoryService {
         // Get all S3 keys for deletion
         List<String> s3Keys = sqlGenerationRepository.findS3KeysByAccountPluginId(accountPluginId);
 
+        // Find the latest completed batch up front, before anything is destroyed: it is a read, so
+        // its position does not change what reinit does, and having batchId in hand is what lets
+        // the audit be published straight after the S3 deletion.
+        UUID batchId = batchRepository.findLatestCompletedByAccountId(accountId)
+                .map(com.bitbi.dfm.batch.domain.Batch::getId)
+                .orElse(null);
+
         // Delete S3 files (best effort, collect failures) - reuse existing helper
         List<String> failedKeys = deleteS3Files(s3Keys);
+        long deletedFiles = s3Keys.size() - failedKeys.size();
+
+        // Audit log — before the remaining database work, not after it. recaptureForReinit below
+        // deletes, saves and bulk-updates rows per site; any of that can fail long after the S3
+        // objects are gone, and the rollback entry is what keeps that divergence on record.
+        auditService.logReinit(
+                pluginId,
+                accountId,
+                count,
+                deletedFiles,
+                false,  // SQL generation no longer triggered for reinit
+                batchId
+        );
 
         // Delete database records
         sqlGenerationRepository.deleteByAccountPluginId(accountPluginId);
 
-        // Find latest completed batch and set it as new baseline
-        Optional<com.bitbi.dfm.batch.domain.Batch> latestBatch = batchRepository
-                .findLatestCompletedByAccountId(accountId);
-
-        UUID batchId = null;
-
-        if (latestBatch.isPresent()) {
-            batchId = latestBatch.get().getId();
+        if (batchId != null) {
             // Set new baseline batch - SQL generation will be skipped for this batch
             // Client should download CSV files via /sites/{siteId}/files endpoint
             accountPlugin.setBaselineBatchId(batchId);
@@ -356,22 +371,12 @@ public class PluginHistoryService {
         // the V2 sites' segments — the checkpoint-lag gap regenerates under the new baselines
         pluginDeltaBaselineService.recaptureForReinit(accountPlugin);
 
-        // Audit log
-        auditService.logReinit(
-                pluginId,
-                accountId,
-                count,
-                s3Keys.size() - failedKeys.size(),
-                false,  // SQL generation no longer triggered for reinit
-                batchId
-        );
-
         log.info("Reinit completed: pluginId={}, accountId={}, deleted={}, newBaselineBatch={}",
                 pluginId, accountId, count, batchId);
 
         return ReinitResultDto.success(
                 count,
-                s3Keys.size() - failedKeys.size(),
+                deletedFiles,
                 totalBytes,
                 false,  // SQL generation no longer triggered for reinit
                 batchId,
@@ -461,12 +466,13 @@ public class PluginHistoryService {
             }
         }
 
-        // Delete database record
-        sqlGenerationRepository.delete(generation);
-
-        // Audit log
+        // Audit log — before the row is deleted, not after: the file is already gone, so the row
+        // deletion has to run with the rollback entry already armed.
         auditService.logGenerationDeleted(pluginId, accountId, generationId, batchId, fileSizeBytes,
                 s3ObjectDestroyed);
+
+        // Delete database record
+        sqlGenerationRepository.delete(generation);
 
         log.info("Generation deleted: generationId={}, batchId={}, s3Deleted={}",
                 generationId, batchId, s3Deleted);

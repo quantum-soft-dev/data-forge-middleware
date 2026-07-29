@@ -39,6 +39,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * still right — but a rollback there is not a non-event, so those entries also carry a failure
  * entry recording that the database was restored and the files were not.
  * </p>
+ * <p>
+ * That failure entry carries only what the rollback left standing. The success entry's row counts
+ * and their byte total describe deletions the rollback undid, so repeating them would swap one
+ * false record for another.
+ * </p>
  */
 @DisplayName("PluginAuditService — transaction-aware audit writes")
 class PluginAuditServiceDeferralTest {
@@ -167,7 +172,21 @@ class PluginAuditServiceDeferralTest {
                     .isEqualTo(PluginActionType.PLUGIN_HISTORY_CLEARED);
             assertThat(rollbackEntry.isSuccess()).isFalse();
             assertThat(rollbackEntry.getErrorMessage()).contains("S3");
-            assertThat(rollbackEntry.getMetadata()).containsEntry("deletedFilesCount", 2L);
+            assertThat(rollbackEntry.getMetadata())
+                    .as("the rows and their bytes came back; only the file count is still true")
+                    .containsOnlyKeys("deletedFilesCount")
+                    .containsEntry("deletedFilesCount", 2L);
+        }
+
+        @Test
+        @DisplayName("history cleared — the success entry keeps the full picture")
+        void shouldKeepFullMetadataOnTheCommitPathForHistoryCleared() {
+            service.logHistoryCleared(PLUGIN_ID, accountId, 3L, 2L, 1024L);
+
+            assertThat(deferredEvent().entry().getMetadata())
+                    .containsEntry("deletedCount", 3L)
+                    .containsEntry("deletedFilesCount", 2L)
+                    .containsEntry("totalBytes", 1024L);
         }
 
         @Test
@@ -181,7 +200,10 @@ class PluginAuditServiceDeferralTest {
             assertThat(rollbackEntry.getActionType()).isEqualTo(PluginActionType.REINIT);
             assertThat(rollbackEntry.isSuccess()).isFalse();
             assertThat(rollbackEntry.getMetadata())
-                    .as("the metadata flag must not keep claiming success")
+                    .as("only the S3 deletion outlived the rollback — the generations and the new " +
+                            "baseline batch did not")
+                    .containsOnlyKeys("deletedS3Files", "success")
+                    .containsEntry("deletedS3Files", 2L)
                     .containsEntry("success", false);
         }
 
@@ -196,6 +218,10 @@ class PluginAuditServiceDeferralTest {
             assertThat(rollbackEntry.getActionType())
                     .isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
             assertThat(rollbackEntry.isSuccess()).isFalse();
+            assertThat(rollbackEntry.getMetadata())
+                    .as("one file of known size, so both numbers describe exactly what was lost")
+                    .containsEntry("deletedFilesCount", 1)
+                    .containsEntry("deletedBytes", 10L);
         }
 
         @Test

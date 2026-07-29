@@ -76,6 +76,11 @@ public class PluginAuditService {
      * wholly transactional after all, so the rollback entry is dropped: it would otherwise assert
      * a destruction that never happened.
      * </p>
+     * <p>
+     * For the same reason {@code rollbackEntry} must not simply reuse the success entry's metadata:
+     * the row counts there, and the bytes attributed to them, describe deletions the rollback undid.
+     * It carries only what the rollback left standing.
+     * </p>
      */
     private void publishAfterCommit(PluginAuditLog entry, long deletedFiles,
                                     Supplier<PluginAuditLog> rollbackEntry) {
@@ -465,6 +470,12 @@ public class PluginAuditService {
      * {@code deletedFilesCount} is above zero. If nothing left the bucket there is nothing a
      * rollback failed to undo, and claiming otherwise would be its own false record.
      * </p>
+     * <p>
+     * The rollback entry keeps only {@code deletedFilesCount}. {@code deletedCount} counts rows the
+     * rollback restored, and {@code deletedTotalBytes} is the size of <em>every</em> generation, not
+     * of the subset whose files actually left the bucket — on a partial S3 failure it would
+     * overstate the loss.
+     * </p>
      *
      * @param pluginId the plugin identifier
      * @param accountId the account ID
@@ -488,10 +499,13 @@ public class PluginAuditService {
                             PluginActionType.PLUGIN_HISTORY_CLEARED)
                     .withMetadata(metadata);
 
-            publishAfterCommit(auditLog, deletedFilesCount, () -> PluginAuditLog.failure(
-                            pluginId, accountId,
-                            PluginActionType.PLUGIN_HISTORY_CLEARED, S3_DELETED_BEFORE_ROLLBACK)
-                    .withMetadata(new HashMap<>(metadata)));
+            publishAfterCommit(auditLog, deletedFilesCount, () -> {
+                Map<String, Object> rollbackMetadata = new HashMap<>();
+                rollbackMetadata.put("deletedFilesCount", deletedFilesCount);
+                return PluginAuditLog.failure(pluginId, accountId,
+                                PluginActionType.PLUGIN_HISTORY_CLEARED, S3_DELETED_BEFORE_ROLLBACK)
+                        .withMetadata(rollbackMetadata);
+            });
             log.debug("Audit logged: PLUGIN_HISTORY_CLEARED plugin={} account={} deleted={}",
                     pluginId, accountId, deletedCount);
         } catch (Exception e) {
@@ -625,7 +639,9 @@ public class PluginAuditService {
      * Logs a successful plugin reinitialization.
      * <p>
      * Like {@link #logHistoryCleared}, the S3 deletions outlive a rollback, so that path gets a
-     * failure entry instead of silence — only when {@code deletedS3Files} is above zero.
+     * failure entry instead of silence — only when {@code deletedS3Files} is above zero, and
+     * carrying only {@code deletedS3Files}. The deleted generations and the new baseline batch are
+     * both back where they were by then, so naming them would misdescribe the account's state.
      * </p>
      *
      * @param pluginId the plugin identifier
@@ -656,7 +672,8 @@ public class PluginAuditService {
                     .withMetadata(metadata);
 
             publishAfterCommit(auditLog, deletedS3Files, () -> {
-                Map<String, Object> rollbackMetadata = new HashMap<>(metadata);
+                Map<String, Object> rollbackMetadata = new HashMap<>();
+                rollbackMetadata.put("deletedS3Files", deletedS3Files);
                 rollbackMetadata.put("success", false);
                 return PluginAuditLog.failure(pluginId, accountId,
                                 PluginActionType.REINIT, S3_DELETED_BEFORE_ROLLBACK)
@@ -705,7 +722,9 @@ public class PluginAuditService {
      * Logs a SQL generation deletion event.
      * <p>
      * Like {@link #logHistoryCleared}, the S3 deletion outlives a rollback, so that path gets a
-     * failure entry instead of silence — only when {@code s3FileDeleted} is true.
+     * failure entry instead of silence — only when {@code s3FileDeleted} is true. Here the whole
+     * metadata carries over: one named file of known size, so every number in it still describes
+     * exactly what was lost, and {@code generationId} names the restored row the file belonged to.
      * </p>
      *
      * @param pluginId the plugin identifier
