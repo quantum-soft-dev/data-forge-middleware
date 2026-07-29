@@ -2,13 +2,13 @@
  * AccountCard Component
  *
  * Per T029: Display account information in a card format.
- * Shows email, name, status badges, and Keycloak integration status.
+ * Shows email, name, status badges, and Auth0 integration status.
  *
  * Features:
  * - Account details (email, name, phone, company)
- * - Status badges (active, keycloak, password)
+ * - Status badges (active, Auth0, blocked)
  * - Timestamps (created, updated, last login)
- * - Keycloak user ID display
+ * - Auth0 user ID display
  * - Responsive layout
  */
 

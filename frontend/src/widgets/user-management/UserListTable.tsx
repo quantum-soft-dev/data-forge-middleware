@@ -1,12 +1,12 @@
 /**
  * UserListTable Component
  *
- * Per T031: Table for user management with Keycloak integration.
+ * Per T031: Table for user management with Auth0 integration.
  * Uses TanStack Table with pagination, sorting, and filtering.
  *
  * Features:
- * - Displays AccountWithKeycloakStatus (includes Keycloak fields)
- * - Status badges for active, keycloak, password states
+ * - Displays AccountWithKeycloakStatus (includes Auth0 blocked state and last login)
+ * - Status badge per account (active / inactive / blocked)
  * - Sortable columns
  * - Pagination controls
  * - Action buttons (view details, lock/unlock, reset password)

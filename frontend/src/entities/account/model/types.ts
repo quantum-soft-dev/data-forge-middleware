@@ -45,7 +45,7 @@ export interface CreateAccountRequest {
   name: string
   phone?: string
   company?: string
-  role: string // Keycloak role assignment
+  role: string // Auth0 role assignment
 }
 
 /**

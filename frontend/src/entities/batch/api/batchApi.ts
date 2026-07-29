@@ -32,7 +32,7 @@ import type {
  *
  * GET /api/v1/history/batches?cursor={cursor}&limit={limit}
  *
- * Uses Keycloak OAuth2 authentication. Returns batches filtered by user's account.
+ * Uses Auth0 OAuth2 authentication. Returns batches filtered by user's account.
  *
  * @param cursor - Cursor for next page (undefined for first page)
  * @param limit - Maximum items per page (default 20, max 100)
