@@ -14,7 +14,27 @@ package com.bitbi.dfm.plugin.domain;
  * followed straight by a throw, so deferring it would drop the very record it exists to capture.
  * </p>
  *
- * @param entry the audit entry, ready to persist
+ * <p>
+ * {@code rollbackEntry} covers the case where a rollback is not a non-event: clear, reinit and
+ * delete-generation destroy S3 objects before their transaction commits, and no rollback brings
+ * those back. Waiting for the commit is still right — the entry claiming success must not be
+ * written — but the divergence a rollback leaves behind (rows restored, files gone) has to be
+ * recorded rather than vanish. It stays {@code null} for changes a rollback undoes in full.
+ * </p>
+ *
+ * @param entry         the audit entry, ready to persist once the transaction commits
+ * @param rollbackEntry the entry to persist instead when the transaction rolls back, or
+ *                      {@code null} when a rollback leaves nothing worth recording
  */
-public record PluginAuditEntryReadyEvent(PluginAuditLog entry) {
+public record PluginAuditEntryReadyEvent(PluginAuditLog entry, PluginAuditLog rollbackEntry) {
+
+    /**
+     * A state change that is wholly transactional: a rollback undoes all of it, so there is
+     * nothing to record on that path.
+     *
+     * @param entry the audit entry, ready to persist once the transaction commits
+     */
+    public PluginAuditEntryReadyEvent(PluginAuditLog entry) {
+        this(entry, null);
+    }
 }

@@ -152,6 +152,50 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
                 .isFalse();
     }
 
+    @Test
+    @DisplayName("Should record a clear that rolled back after its S3 files were already deleted")
+    void shouldAuditRolledBackHistoryClear() {
+        // clearHistory() deletes the S3 objects before its transaction commits, and no rollback
+        // brings them back. Withholding the success entry is right — but staying silent is not:
+        // the rows come back pointing at files that no longer exist, and that has to be on record.
+        Batch baseline = createBatchWithCsvFile("rollback-clear-baseline.csv",
+                "id,name,email\n1,Alice,alice@example.com");
+        sqlGenerationService.generateSqlForBatch(baseline.getId(), testAccountPlugin.getId());
+
+        Batch batch = createBatchWithCsvFile("rollback-clear.csv",
+                "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
+        UUID generationId = sqlGenerationService
+                .generateSqlForBatch(batch.getId(), testAccountPlugin.getId())
+                .orElseThrow(() -> new AssertionError("fixture did not produce a generation"))
+                .getId();
+
+        jdbcTemplate.update(
+                "DELETE FROM plugin_audit_logs WHERE account_id = ? AND action_type = ?",
+                TEST_ACCOUNT_ID, PluginActionType.PLUGIN_HISTORY_CLEARED.name());
+
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
+            pluginHistoryService.clearHistory(PLUGIN_ID, TEST_ACCOUNT_ID);
+            throw new IllegalStateException("caller fails after clearing");
+        })).isInstanceOf(IllegalStateException.class);
+
+        await().atMost(ofSeconds(10)).untilAsserted(() -> {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT success, error_message FROM plugin_audit_logs " +
+                            "WHERE account_id = ? AND action_type = ?",
+                    TEST_ACCOUNT_ID, PluginActionType.PLUGIN_HISTORY_CLEARED.name());
+            assertThat(rows)
+                    .as("the orphaned S3 files must be on record, and nothing may claim success")
+                    .hasSize(1);
+            assertThat(rows.get(0).get("success")).isEqualTo(false);
+            assertThat((String) rows.get(0).get("error_message")).contains("S3");
+        });
+
+        assertThat(pluginSqlGenerationRepository.findById(generationId))
+                .as("the rollback restored the row the deleted file belonged to")
+                .isPresent();
+    }
+
     // ==================== User Story 1: View History ====================
 
     @Nested

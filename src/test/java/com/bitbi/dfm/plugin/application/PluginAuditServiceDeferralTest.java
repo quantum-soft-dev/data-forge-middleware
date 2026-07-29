@@ -33,6 +33,17 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * a throw; deferring it to AFTER_COMMIT would drop the record of every failure it exists to
  * capture. Failures and observations must be written regardless of the caller's outcome.
  * </p>
+ * <p>
+ * A third case sits between the two: clear, reinit and delete-generation destroy S3 objects
+ * before their transaction commits, and no rollback brings those back. Waiting for the commit is
+ * still right — but a rollback there is not a non-event, so those entries also carry a failure
+ * entry recording that the database was restored and the files were not.
+ * </p>
+ * <p>
+ * That failure entry carries only what the rollback left standing. The success entry's row counts
+ * and their byte total describe deletions the rollback undid, so repeating them would swap one
+ * false record for another.
+ * </p>
  */
 @DisplayName("PluginAuditService — transaction-aware audit writes")
 class PluginAuditServiceDeferralTest {
@@ -52,12 +63,16 @@ class PluginAuditServiceDeferralTest {
         accountId = UUID.randomUUID();
     }
 
-    private PluginAuditLog deferredEntry() {
+    private PluginAuditEntryReadyEvent deferredEvent() {
         ArgumentCaptor<PluginAuditEntryReadyEvent> captor =
                 ArgumentCaptor.forClass(PluginAuditEntryReadyEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
         verify(repository, never()).save(any());
-        return captor.getValue().entry();
+        return captor.getValue();
+    }
+
+    private PluginAuditLog deferredEntry() {
+        return deferredEvent().entry();
     }
 
     @Nested
@@ -84,10 +99,14 @@ class PluginAuditServiceDeferralTest {
         @Test
         @DisplayName("generation deleted")
         void shouldDeferGenerationDeleted() {
-            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L);
+            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L, true);
 
-            assertThat(deferredEntry().getActionType())
-                    .isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
+            PluginAuditLog entry = deferredEntry();
+
+            assertThat(entry.getActionType()).isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
+            assertThat(entry.getMetadata())
+                    .containsEntry("deletedFilesCount", 1)
+                    .containsEntry("deletedBytes", 10L);
         }
 
         @Test
@@ -134,6 +153,124 @@ class PluginAuditServiceDeferralTest {
             service.logCredentialRotated(PLUGIN_ID, accountId, PluginActionType.API_KEY_ROTATED);
 
             assertThat(deferredEntry().getActionType()).isEqualTo(PluginActionType.API_KEY_ROTATED);
+        }
+    }
+
+    @Nested
+    @DisplayName("state changes a rollback cannot fully undo also carry a rollback entry")
+    class IrreversibleOnRollback {
+
+        @Test
+        @DisplayName("history cleared — the S3 files stay deleted even when the rows come back")
+        void shouldCarryRollbackEntryForHistoryCleared() {
+            service.logHistoryCleared(PLUGIN_ID, accountId, 3L, 2L, 1024L);
+
+            PluginAuditLog rollbackEntry = deferredEvent().rollbackEntry();
+
+            assertThat(rollbackEntry).isNotNull();
+            assertThat(rollbackEntry.getActionType())
+                    .isEqualTo(PluginActionType.PLUGIN_HISTORY_CLEARED);
+            assertThat(rollbackEntry.isSuccess()).isFalse();
+            assertThat(rollbackEntry.getErrorMessage()).contains("S3");
+            assertThat(rollbackEntry.getMetadata())
+                    .as("the rows and their bytes came back; only the file count is still true")
+                    .containsOnlyKeys("deletedFilesCount")
+                    .containsEntry("deletedFilesCount", 2L);
+        }
+
+        @Test
+        @DisplayName("history cleared — the success entry keeps the full picture")
+        void shouldKeepFullMetadataOnTheCommitPathForHistoryCleared() {
+            service.logHistoryCleared(PLUGIN_ID, accountId, 3L, 2L, 1024L);
+
+            assertThat(deferredEvent().entry().getMetadata())
+                    .containsEntry("deletedCount", 3L)
+                    .containsEntry("deletedFilesCount", 2L)
+                    .containsEntry("totalBytes", 1024L);
+        }
+
+        @Test
+        @DisplayName("reinit")
+        void shouldCarryRollbackEntryForReinit() {
+            service.logReinit(PLUGIN_ID, accountId, 3L, 2L, true, UUID.randomUUID());
+
+            PluginAuditLog rollbackEntry = deferredEvent().rollbackEntry();
+
+            assertThat(rollbackEntry).isNotNull();
+            assertThat(rollbackEntry.getActionType()).isEqualTo(PluginActionType.REINIT);
+            assertThat(rollbackEntry.isSuccess()).isFalse();
+            assertThat(rollbackEntry.getMetadata())
+                    .as("only the S3 deletion outlived the rollback — the generations and the new " +
+                            "baseline batch did not")
+                    .containsOnlyKeys("deletedS3Files", "success")
+                    .containsEntry("deletedS3Files", 2L)
+                    .containsEntry("success", false);
+        }
+
+        @Test
+        @DisplayName("generation deleted")
+        void shouldCarryRollbackEntryForGenerationDeleted() {
+            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L, true);
+
+            PluginAuditLog rollbackEntry = deferredEvent().rollbackEntry();
+
+            assertThat(rollbackEntry).isNotNull();
+            assertThat(rollbackEntry.getActionType())
+                    .isEqualTo(PluginActionType.SQL_GENERATION_DELETED);
+            assertThat(rollbackEntry.isSuccess()).isFalse();
+            assertThat(rollbackEntry.getMetadata())
+                    .as("one file of known size, so both numbers describe exactly what was lost")
+                    .containsEntry("deletedFilesCount", 1)
+                    .containsEntry("deletedBytes", 10L);
+        }
+
+        @Test
+        @DisplayName("history cleared with every S3 delete failing — nothing was destroyed")
+        void shouldCarryNoRollbackEntryWhenNoFileWasCleared() {
+            service.logHistoryCleared(PLUGIN_ID, accountId, 3L, 0L, 1024L);
+
+            assertThat(deferredEvent().rollbackEntry())
+                    .as("no file left the bucket, so a rollback undoes the whole operation")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("reinit that deleted no S3 file")
+        void shouldCarryNoRollbackEntryWhenReinitDeletedNothing() {
+            service.logReinit(PLUGIN_ID, accountId, 3L, 0L, true, UUID.randomUUID());
+
+            assertThat(deferredEvent().rollbackEntry()).isNull();
+        }
+
+        @Test
+        @DisplayName("generation deleted whose S3 key was blank or whose delete failed")
+        void shouldCarryNoRollbackEntryWhenGenerationFileSurvived() {
+            service.logGenerationDeleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(), 10L, false);
+
+            PluginAuditEntryReadyEvent event = deferredEvent();
+
+            assertThat(event.rollbackEntry()).isNull();
+            assertThat(event.entry().getMetadata())
+                    .as("nothing was freed, so the entry must not claim bytes were")
+                    .containsEntry("deletedFilesCount", 0)
+                    .containsEntry("deletedBytes", 0L);
+        }
+
+        @Test
+        @DisplayName("a wholly transactional change carries nothing — the rollback undid all of it")
+        void shouldCarryNoRollbackEntryForCredentialRotation() {
+            service.logCredentialRotated(PLUGIN_ID, accountId, PluginActionType.API_KEY_ROTATED);
+
+            assertThat(deferredEvent().rollbackEntry()).isNull();
+        }
+
+        @Test
+        @DisplayName("SQL generation completed carries nothing either")
+        void shouldCarryNoRollbackEntryForSqlGenerationCompleted() {
+            service.logSqlGenerationCompleted(PLUGIN_ID, accountId, UUID.randomUUID(), UUID.randomUUID(),
+                    new com.bitbi.dfm.plugin.domain.SqlGenerationStats(1, 0, 0, 1), "s3/key", 5L);
+
+            assertThat(deferredEvent().rollbackEntry()).isNull();
         }
     }
 
