@@ -45,6 +45,18 @@ export function getServerErrorMessage(error: unknown): string | undefined {
   return typeof message === 'string' && message.length > 0 ? message : undefined
 }
 
+/**
+ * HTTP status of a failed request, if the failure carries a server response.
+ * Undefined for network errors and for anything that is not an Axios failure —
+ * so callers can branch on a status without widening the error to `any`.
+ */
+export function getServerErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return undefined
+  }
+  return (error as AxiosError).response?.status
+}
+
 export function setupErrorHandler() {
   apiClient.interceptors.response.use(
     (response) => response,

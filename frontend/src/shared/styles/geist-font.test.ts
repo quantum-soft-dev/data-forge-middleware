@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-// eslint-disable-next-line import/no-relative-packages
 import tailwindConfig from '../../../tailwind.config.js';
 
 /**

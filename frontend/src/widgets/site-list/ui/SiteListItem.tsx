@@ -10,7 +10,7 @@
  * Feature: 007-adding-a-site (T036, US1, US2, US3)
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/shared/ui/ui/button';
 import { Badge } from '@/shared/ui/ui/badge';
 import {
@@ -58,9 +58,14 @@ export function SiteListItem({
   const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
   const [retentionInput, setRetentionInput] = useState(String(site.retentionDays));
 
-  useEffect(() => {
+  // Reset the draft when the saved value changes (e.g. after a successful save
+  // or a refetch). Adjusting during render instead of in an effect avoids the
+  // extra render pass with the stale value.
+  const [savedRetentionDays, setSavedRetentionDays] = useState(site.retentionDays);
+  if (site.retentionDays !== savedRetentionDays) {
+    setSavedRetentionDays(site.retentionDays);
     setRetentionInput(String(site.retentionDays));
-  }, [site.retentionDays]);
+  }
 
   const handleStatusToggle = () => {
     if (site.isActive) {

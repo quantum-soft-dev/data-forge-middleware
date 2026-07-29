@@ -7,6 +7,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from '@/shared/api/client'
+import { getServerErrorMessage, getServerErrorStatus } from '@/shared/api/error-handler'
 import { ACCOUNTS, ACCOUNTS_ID, ACCOUNTS_LOCK, ACCOUNTS_UNLOCK, ACCOUNTS_RESET_PASSWORD } from '@/shared/api/apiRoutes'
 import type {
   CreateAccountRequest,
@@ -25,10 +26,10 @@ async function createAccount(request: CreateAccountRequest): Promise<CreateAccou
       request
     )
     return response.data
-  } catch (error: any) {
-    const errorMessage = error.response?.data?.message || 'Failed to create account'
-    const statusCode = error.response?.status || 'unknown'
-    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  } catch (error) {
+    const errorMessage = getServerErrorMessage(error) ?? 'Failed to create account'
+    const statusCode = getServerErrorStatus(error) ?? 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`, { cause: error })
   }
 }
 
@@ -64,10 +65,10 @@ export function useCreateAccountMutation() {
 async function lockAccount(accountId: string): Promise<void> {
   try {
     await apiClient.post(ACCOUNTS_LOCK(accountId))
-  } catch (error: any) {
-    const errorMessage = error.response?.data?.message || 'Failed to lock account'
-    const statusCode = error.response?.status || 'unknown'
-    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  } catch (error) {
+    const errorMessage = getServerErrorMessage(error) ?? 'Failed to lock account'
+    const statusCode = getServerErrorStatus(error) ?? 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`, { cause: error })
   }
 }
 
@@ -103,10 +104,10 @@ export function useLockAccountMutation() {
 async function unlockAccount(accountId: string): Promise<void> {
   try {
     await apiClient.post(ACCOUNTS_UNLOCK(accountId))
-  } catch (error: any) {
-    const errorMessage = error.response?.data?.message || 'Failed to unlock account'
-    const statusCode = error.response?.status || 'unknown'
-    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  } catch (error) {
+    const errorMessage = getServerErrorMessage(error) ?? 'Failed to unlock account'
+    const statusCode = getServerErrorStatus(error) ?? 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`, { cause: error })
   }
 }
 
@@ -145,10 +146,10 @@ async function resetPassword(accountId: string): Promise<ResetPasswordResponse> 
       ACCOUNTS_RESET_PASSWORD(accountId)
     )
     return response.data
-  } catch (error: any) {
-    const errorMessage = error.response?.data?.message || 'Failed to reset password'
-    const statusCode = error.response?.status || 'unknown'
-    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  } catch (error) {
+    const errorMessage = getServerErrorMessage(error) ?? 'Failed to reset password'
+    const statusCode = getServerErrorStatus(error) ?? 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`, { cause: error })
   }
 }
 
@@ -185,10 +186,10 @@ export function useResetPasswordMutation() {
 async function deleteAccount(accountId: string): Promise<void> {
   try {
     await apiClient.delete(ACCOUNTS_ID(accountId))
-  } catch (error: any) {
-    const errorMessage = error.response?.data?.message || 'Failed to delete account'
-    const statusCode = error.response?.status || 'unknown'
-    throw new Error(`${errorMessage} (HTTP ${statusCode})`)
+  } catch (error) {
+    const errorMessage = getServerErrorMessage(error) ?? 'Failed to delete account'
+    const statusCode = getServerErrorStatus(error) ?? 'unknown'
+    throw new Error(`${errorMessage} (HTTP ${statusCode})`, { cause: error })
   }
 }
 

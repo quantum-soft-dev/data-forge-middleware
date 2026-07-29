@@ -4,7 +4,7 @@
 # Blocks a commit unless the relevant test suite is 100% green.
 #
 #   - Backend changes  -> ./gradlew test -PexcludeIntegration  (unit + contract, no Docker)
-#   - Frontend changes -> tsc --noEmit + npm --prefix frontend test (typecheck + vitest run)
+#   - Frontend changes -> tsc --noEmit + eslint + npm --prefix frontend test
 #   - Docs/config-only -> skipped
 #
 # Integration (Testcontainers) tests are NOT run here — they are the before-PR gate
@@ -52,6 +52,13 @@ if [ "$frontend_changed" = true ]; then
   echo "▶ pre-commit: frontend typecheck (tsc --noEmit)"
   if ! (cd frontend && npx tsc --noEmit); then
     echo "✖ Frontend typecheck failed — commit blocked (npm run build would fail)."
+    status=1
+  fi
+
+  # Lint is at zero findings (issue #77) — it stays there by being a gate.
+  echo "▶ pre-commit: frontend lint (npm --prefix frontend run lint)"
+  if ! npm --prefix frontend run lint; then
+    echo "✖ Frontend lint failed — commit blocked (0 errors / 0 warnings is the bar)."
     status=1
   fi
 

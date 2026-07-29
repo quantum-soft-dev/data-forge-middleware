@@ -37,8 +37,10 @@ export const accountListResponseSchema = z.object({
 export const createAccountSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   email: z.string().min(1, 'Email is required').email('Invalid email format'),
-  phone: z.string().optional(),
-  company: z.string().optional(),
+  // Nullable: the forms send null (not undefined) to clear an optional field,
+  // and the API distinguishes "clear it" from "leave it alone".
+  phone: z.string().nullish(),
+  company: z.string().nullish(),
 })
 
 export const updateAccountSchema = createAccountSchema.partial().extend({

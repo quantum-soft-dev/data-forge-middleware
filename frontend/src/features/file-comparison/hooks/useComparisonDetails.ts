@@ -17,6 +17,7 @@
 import { useQuery, UseQueryResult } from '@tanstack/react-query';
 import { comparisonApi } from '../api/comparisonApi';
 import type { Comparison } from '@/entities/comparison/model/types';
+import { getServerErrorStatus } from '@/shared/api/error-handler';
 
 /**
  * Options for the useComparisonDetails hook.
@@ -141,7 +142,7 @@ export function useComparisonDetails({
     // Retry configuration
     retry: (failureCount, error) => {
       // Don't retry on 404 (comparison not found)
-      if (error && 'response' in error && (error as any).response?.status === 404) {
+      if (getServerErrorStatus(error) === 404) {
         return false;
       }
 

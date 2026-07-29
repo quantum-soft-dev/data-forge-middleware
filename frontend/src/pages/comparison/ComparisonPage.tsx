@@ -87,9 +87,7 @@ export function ComparisonPage() {
   });
 
   // Filter completed batches for selection
-  const completedBatches = allBatches.filter(
-    (batch: any) => batch.status === 'COMPLETED'
-  );
+  const completedBatches = allBatches.filter((batch) => batch.status === 'COMPLETED');
 
   // Handle file selection from FileTable
   const handleFileSelection = (fileIds: string[]) => {
@@ -134,7 +132,7 @@ export function ComparisonPage() {
                 <option value="">
                   {isLoadingBatches ? 'Loading batches...' : 'Select current batch...'}
                 </option>
-                {completedBatches.map((batch: any) => (
+                {completedBatches.map((batch) => (
                   <option key={batch.id} value={batch.id}>
                     Batch {batch.id} - {batch.uploadedFilesCount} files ({new Date(batch.startedAt).toLocaleDateString()})
                   </option>
@@ -159,7 +157,7 @@ export function ComparisonPage() {
                 <option value="">
                   {isLoadingBatches ? 'Loading batches...' : 'Select target batch...'}
                 </option>
-                {completedBatches.map((batch: any) => (
+                {completedBatches.map((batch) => (
                   <option key={batch.id} value={batch.id}>
                     Batch {batch.id} - {batch.uploadedFilesCount} files ({new Date(batch.startedAt).toLocaleDateString()})
                   </option>

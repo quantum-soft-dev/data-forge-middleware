@@ -27,11 +27,11 @@ export function BatchDetailWidget({ batchId, onBack }: BatchDetailWidgetProps) {
   const { data: sites } = useSites();
 
   // Create site lookup map for displaying site name
+  const siteId = batch?.siteId;
   const siteName = useMemo(() => {
-    if (!batch?.siteId || !sites) return undefined;
-    const site = sites.find((s) => s.id === batch.siteId);
-    return site?.name;
-  }, [batch?.siteId, sites]);
+    if (!siteId || !sites) return undefined;
+    return sites.find((s) => s.id === siteId)?.name;
+  }, [siteId, sites]);
 
   return (
     <BatchDetailView

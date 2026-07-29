@@ -1,5 +1,5 @@
-import { ComponentType } from 'react';
-import { withAuthenticationRequired } from '@auth0/auth0-react';
+import { ComponentType, useEffect } from 'react';
+import { useAuth0 } from '@auth0/auth0-react';
 
 /**
  * Loading spinner component shown during authentication redirect.
@@ -13,7 +13,7 @@ function LoadingSpinner() {
 }
 
 /**
- * Higher-Order Component (HOC) that protects routes requiring authentication.
+ * Guard that protects routes requiring authentication.
  *
  * Usage:
  * ```tsx
@@ -26,8 +26,11 @@ function LoadingSpinner() {
  * - During redirect: shows loading spinner
  * - After login: navigates back to original route
  *
+ * This inlines what `withAuthenticationRequired` does instead of calling it:
+ * the HOC returns a new component type per call, so calling it while rendering
+ * remounted the protected subtree (and reset its state) on every render.
+ *
  * @param component - The component to protect (must be a React component)
- * @returns Protected component wrapped with Auth0 authentication
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -36,11 +39,20 @@ interface AuthenticationGuardProps {
   component: ComponentType;
 }
 
-export function AuthenticationGuard({ component }: AuthenticationGuardProps) {
-  const Component = withAuthenticationRequired(component, {
-    onRedirecting: () => <LoadingSpinner />,
-    returnTo: window.location.pathname,
-  });
+export function AuthenticationGuard({ component: Component }: AuthenticationGuardProps) {
+  const { isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
+
+  useEffect(() => {
+    if (isLoading || isAuthenticated) return;
+
+    void loginWithRedirect({
+      appState: { returnTo: window.location.pathname },
+    });
+  }, [isAuthenticated, isLoading, loginWithRedirect]);
+
+  if (!isAuthenticated) {
+    return <LoadingSpinner />;
+  }
 
   return <Component />;
 }

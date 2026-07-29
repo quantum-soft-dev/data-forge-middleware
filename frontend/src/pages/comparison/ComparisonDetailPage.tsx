@@ -132,15 +132,16 @@ export function ComparisonDetailPage(): React.ReactElement {
 
   // Parse unifiedDiff from JSON string to object with error handling
   // IMPORTANT: useMemo must be called unconditionally (React Hooks rules)
+  const unifiedDiff = currentFile?.unifiedDiff;
   const parsedDiff = React.useMemo(() => {
-    if (!isCompleted || !currentFile?.unifiedDiff) return null;
+    if (!isCompleted || !unifiedDiff) return null;
     try {
-      return JSON.parse(currentFile.unifiedDiff);
+      return JSON.parse(unifiedDiff);
     } catch (error) {
       console.error('Failed to parse unified diff:', error);
       return null;
     }
-  }, [isCompleted, currentFile?.unifiedDiff]);
+  }, [isCompleted, unifiedDiff]);
 
   // Debug logging
   console.log('[ComparisonDetailPage] Results data:', results);

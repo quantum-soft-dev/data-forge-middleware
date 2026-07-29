@@ -16,7 +16,7 @@
 - **TanStack Query v5** + **TanStack Router v1** (code-based routes in `src/app/router.tsx`) + **shadcn/ui** + **Tailwind CSS 3.4**
 - **@auth0/auth0-react 2.8.0** + **Axios** + **Zod** + **React Hook Form**
 - **Vitest 4 + React Testing Library**
-- **ESLint 10** (flat config in `frontend/eslint.config.js`) — runs, but is **not** part of any gate and currently reports pre-existing problems
+- **ESLint 10** (flat config in `frontend/eslint.config.js`) — **0 errors / 0 warnings**, enforced by the pre-commit hook and the `frontend-test` CI job (`npm run lint`, `--max-warnings 0`)
 
 ## Project Structure
 
@@ -129,15 +129,15 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
   6. Commit **one atomic commit per task** (Conventional Commit referencing the task), e.g. `feat(batch): add retention scheduler (T03)`.
 - **Gate — per-task tests must be 100% green** before committing (enforced by the pre-commit hook):
   - backend → `./gradlew test -PexcludeIntegration` (unit + contract; fast, no Docker)
-  - frontend → `npx tsc --noEmit` (from `frontend/`) + `npm --prefix frontend test`
+  - frontend → `npx tsc --noEmit` (from `frontend/`) + `npm --prefix frontend run lint` + `npm --prefix frontend test`
 - "100% green" = **all tests pass**, not 100% code coverage.
 
 ### Gates summary
 | Gate | When | Must be green |
 |---|---|---|
-| **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit` and `vitest` if touched) |
+| **Per-task** (commit) | before every commit | `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`, `npm run lint` and `vitest` if touched) |
 | **Before PR** | before opening the PR | `./gradlew integrationTest` (Testcontainers) |
-| **Merge** (PR → develop) | before merge | full CI (`backend-test`) green + automated review |
+| **Merge** (PR → develop) | before merge | full CI (`backend-test`, `frontend-test`) green + automated review |
 
 Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with a `deploy-dev/*` tag; stage/prod deploy on push to `stage`/`main` (see `docs/cr-tag-driven-dev-deploy.md`).
 

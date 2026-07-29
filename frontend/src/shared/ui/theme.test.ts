@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import resolveConfig from 'tailwindcss/resolveConfig';
 
-// eslint-disable-next-line import/no-relative-packages -- tailwind config lives at package root
 import tailwindConfig from '../../../tailwind.config.js';
 import { monitoringTokens } from '@/shared/ui/tokens';
 

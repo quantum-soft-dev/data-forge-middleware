@@ -15,19 +15,24 @@ import { getSessionExpired, clearSessionExpired } from '@/shared/lib/auth/sessio
  * @see specs/012-key-caching-logic/spec.md - US3 User Story
  */
 export function SessionExpiredBanner() {
-  const [shouldShow, setShouldShow] = useState(false)
-
-  useEffect(() => {
+  // Read once on mount: the stored flag is external state that never changes
+  // while this banner is on screen. Reading it during the first render (instead
+  // of in an effect) avoids rendering the empty banner first and then swapping
+  // it in.
+  const [shouldShow] = useState(() => {
     const expiryData = getSessionExpired()
 
     // Only show banner for inactivity-based expiry (refresh_token_expired)
     // Don't show for manual logout
-    if (expiryData?.isExpired && expiryData.reason === 'refresh_token_expired') {
-      setShouldShow(true)
-      // Clear the state after reading (one-time display)
+    return expiryData?.isExpired === true && expiryData.reason === 'refresh_token_expired'
+  })
+
+  useEffect(() => {
+    // Clear the state after reading (one-time display)
+    if (shouldShow) {
       clearSessionExpired()
     }
-  }, [])
+  }, [shouldShow])
 
   if (!shouldShow) {
     return null

@@ -5,7 +5,7 @@
  * Requires: ROLE_ADMIN (backend enforced)
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/widgets/header/Header';
 import { PageHeader } from '@/shared/ui/page-header';
@@ -14,6 +14,7 @@ import { Card, CardContent } from '@/shared/ui/ui/card';
 import { Label } from '@/shared/ui/ui/label';
 import { Input } from '@/shared/ui/ui/input';
 import { toast } from 'sonner';
+import { getServerErrorMessage } from '@/shared/api/error-handler';
 import { getBatchRetentionSchedule, updateBatchRetentionSchedule } from '@/entities/settings';
 
 const settingsKeys = {
@@ -37,16 +38,21 @@ export default function AdminSettingsPage() {
       await queryClient.invalidateQueries({ queryKey: settingsKeys.retentionSchedule() });
       toast.success('Schedule updated');
     },
-    onError: (error: any) => {
-      toast.error(error?.response?.data?.message || 'Failed to update schedule');
+    onError: (error: unknown) => {
+      toast.error(getServerErrorMessage(error) ?? 'Failed to update schedule');
     },
   });
 
   const [cron, setCron] = useState<string>('');
 
-  useEffect(() => {
-    if (scheduleQuery.data?.cron) setCron(scheduleQuery.data.cron);
-  }, [scheduleQuery.data?.cron]);
+  // Seed (and re-seed) the editor from the loaded schedule. Adjusting during
+  // render instead of in an effect keeps the field from flashing the stale value.
+  const loadedCron = scheduleQuery.data?.cron;
+  const [seededCron, setSeededCron] = useState<string | undefined>(undefined);
+  if (loadedCron && loadedCron !== seededCron) {
+    setSeededCron(loadedCron);
+    setCron(loadedCron);
+  }
 
   const metaText = useMemo(() => {
     if (!scheduleQuery.data) return '';
