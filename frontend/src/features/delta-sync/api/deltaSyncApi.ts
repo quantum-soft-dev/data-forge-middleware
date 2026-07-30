@@ -9,11 +9,13 @@
 import { isAxiosError } from 'axios';
 import { apiClient } from '@/shared/api/client';
 import {
+  cancelRebaselineResultSchema,
   deltaCheckpointDownloadSchema,
   deltaCheckpointSchema,
   deltaSegmentSchema,
   deltaSyncHealthSchema,
   deltaSyncStateSchema,
+  type CancelRebaselineStatus,
   type DeltaCheckpoint,
   type DeltaCheckpointDownload,
   type DeltaCheckpointFormat,
@@ -105,6 +107,19 @@ export async function requestCheckpointRebuild(siteId: string): Promise<void> {
 /** Request a full re-baseline on the client's next connect (owner + admin). */
 export async function requestRebaseline(siteId: string, scope: DeltaApiScope): Promise<void> {
   await apiClient.post(`${deltaBasePath(siteId, scope)}/rebaseline`);
+}
+
+/**
+ * Take a pending re-baseline request back (#84) — the watermark, checkpoints and segments are
+ * untouched, so the client resumes ordinary delta. Idempotent server-side; the returned status says
+ * what the cancellation achieved — see `cancelRebaselineResultSchema` for what each value means.
+ */
+export async function cancelRebaseline(
+  siteId: string,
+  scope: DeltaApiScope,
+): Promise<CancelRebaselineStatus> {
+  const response = await apiClient.delete(`${deltaBasePath(siteId, scope)}/rebaseline`);
+  return cancelRebaselineResultSchema.parse(response.data).status;
 }
 
 /**

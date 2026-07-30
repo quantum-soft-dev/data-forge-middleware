@@ -258,6 +258,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         }
 
         SyncStateView view = syncStateService.getSyncState(siteId);
+        if (view.needRebaseline() && !view.rebaselineNotified()) {
+            // The client now knows it must re-baseline, so a cancellation from here on may lose the
+            // race against the snapshot it is about to send (issue #84). Recorded once per request:
+            // the view already tells us whether the stamp is there, so a poll during the (hours
+            // long) snapshot upload costs no extra write.
+            syncStateService.markRebaselineNotified(siteId);
+        }
 
         SyncStateResponse response = SyncStateResponse.newBuilder()
                 .setLastAppliedSeq(view.lastAppliedSeq())
@@ -506,12 +513,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              * indistinguishable to the client, and invisible to us.
              * </p>
              *
+             * @param sessionMode the session's mode, recorded on the batch so a running FULL_SNAPSHOT
+             *                    stays recognizable while it uploads (issue #84)
              * @return the opened batch, or {@code null} when the session was rejected (the caller
              *         must return; the {@code ServerError} is already on the wire)
              */
-            private Batch openBatch() {
+            private Batch openBatch(String sessionMode) {
                 try {
-                    return batchLifecycleService.startBatch(accountId, siteId);
+                    return batchLifecycleService.startBatch(accountId, siteId, sessionMode);
                 } catch (BatchLifecycleService.ActiveBatchExistsException e) {
                     // 033 review: before refusing, try to reclaim a batch nobody is driving any more.
                     // A dropped session is staged in the SERVING pod's memory, so with more than one
@@ -520,7 +529,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     // sweeper uses, so a merely quiet session survives.
                     if (reclaimAbandonedBatch(siteId)) {
                         try {
-                            return batchLifecycleService.startBatch(accountId, siteId);
+                            return batchLifecycleService.startBatch(accountId, siteId, sessionMode);
                         } catch (RuntimeException ignored) {
                             // Fall through to the rejection below with the original reason.
                         }
@@ -578,8 +587,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         UUID resumeBatchId = resume.batchId();
                         if (!batchLifecycleService.isBatchInProgress(resumeBatchId)) {
                             // Same rules as a fresh session start — including a site deactivated
-                            // while this session was parked.
-                            Batch replacement = openBatch();
+                            // while this session was parked. The staged session's mode is carried
+                            // onto the replacement batch, so a resumed FULL_SNAPSHOT stays
+                            // recognizable as one (issue #84).
+                            Batch replacement = openBatch(resume.mode());
                             if (replacement == null) {
                                 return; // rejected; a typed ServerError was already emitted
                             }
@@ -681,7 +692,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return;
                 }
 
-                Batch batch = openBatch();
+                // The mode is persisted on the batch (issue #84): while a FULL_SNAPSHOT is
+                // uploading it is the only way to tell it from an ordinary delta session.
+                Batch batch = openBatch(start.getMode().name());
                 if (batch == null) {
                     return; // rejected; a typed ServerError was already emitted
                 }

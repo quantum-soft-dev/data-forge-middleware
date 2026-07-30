@@ -496,7 +496,7 @@ class PluginHistoryIntegrationTest extends BaseIntegrationTest {
     private Batch createBatchWithCsvFile(String filename, String content) {
         byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
 
-        Batch batch = Batch.start(TEST_ACCOUNT_ID, TEST_SITE_ID, TEST_SITE_DOMAIN);
+        Batch batch = Batch.start(TEST_ACCOUNT_ID, TEST_SITE_ID);
         batch = batchRepository.save(batch);
 
         String s3Path = batch.getS3Path();

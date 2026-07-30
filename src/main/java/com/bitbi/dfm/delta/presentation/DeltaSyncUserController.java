@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
+import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
@@ -23,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -54,17 +56,20 @@ public class DeltaSyncUserController {
     private static final Logger logger = LoggerFactory.getLogger(DeltaSyncUserController.class);
 
     private final DeltaSyncStateService syncStateService;
+    private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final DeltaSegmentParquetQueryService segmentParquetQueryService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
 
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
+                                   DeltaRebaselineCancellationService cancellationService,
                                    DeltaCheckpointQueryService checkpointQueryService,
                                    DeltaSegmentParquetQueryService segmentParquetQueryService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
+        this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
         this.segmentParquetQueryService = segmentParquetQueryService;
         this.siteService = siteService;
@@ -84,7 +89,8 @@ public class DeltaSyncUserController {
     @Operation(
             summary = "Get delta sync state",
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
-                    + "rebaseline/rebuild flags. 404 when the Delta client has never connected (no sync state row)."
+                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading. "
+                    + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Sync state retrieved",
@@ -96,8 +102,9 @@ public class DeltaSyncUserController {
     })
     public ResponseEntity<DeltaSyncStateResponseDto> getSyncState(@PathVariable UUID siteId) {
         requireOwnedSite(siteId);
+        boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state)))
+                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state, snapshotInProgress)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -181,8 +188,9 @@ public class DeltaSyncUserController {
     @Operation(
             summary = "Request full re-baseline",
             description = "Raises the persistent rebaseline_requested flag: on its next connect the Delta client is "
-                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is cleared when that "
-                    + "FULL_SNAPSHOT session commits, so a snapshot that drops part-way re-arms a clean retry."
+                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is consumed when that "
+                    + "FULL_SNAPSHOT session commits, so it stays raised while the snapshot uploads and a "
+                    + "snapshot that drops part-way re-arms a clean retry."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "202", description = "Re-baseline requested",
@@ -197,6 +205,42 @@ public class DeltaSyncUserController {
         syncStateService.requestRebaseline(siteId);
         logger.info("Full re-baseline requested by owner: siteId={}", siteId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "requested"));
+    }
+
+    /**
+     * Take back a pending re-baseline request for an owned site (issue #84).
+     * <p>
+     * DELETE /api/v1/account/sites/{siteId}/delta/rebaseline
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 200 OK with the cancellation outcome — see
+     * {@link com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService.Outcome}
+     */
+    @DeleteMapping("/rebaseline")
+    @Operation(
+            summary = "Cancel a requested full re-baseline",
+            description = "Clears the persistent rebaseline_requested flag without touching the watermark, "
+                    + "checkpoints or segments: GetSyncState answers PROCEED again and the client resumes "
+                    + "ordinary delta from its watermark. Idempotent. Status: 'cancelled' when the request was "
+                    + "called off before the client was ever told; 'snapshot-in-progress' when a FULL_SNAPSHOT "
+                    + "session is uploading, which keeps its own intent and replaces the baseline regardless; "
+                    + "'client-notified' when the client already holds NEED_REBASELINE and may start at any "
+                    + "moment; 'not-requested' when nothing was pending."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, too late, or none was pending",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Map<String, String>> cancelRebaseline(@PathVariable UUID siteId) {
+        requireOwnedSite(siteId);
+        DeltaRebaselineCancellationService.Outcome outcome = cancellationService.cancel(siteId);
+        logger.info("Full re-baseline cancellation by owner: siteId={}, outcome={}", siteId, outcome.status());
+        return ResponseEntity.ok(Map.of("status", outcome.status()));
     }
 
 

@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
 import {
+  useCancelRebaseline,
   useDeltaCheckpoints,
   useDeltaSegments,
   useDeltaSyncState,
@@ -21,7 +22,11 @@ import type { DeltaCheckpointFormat } from '@/features/delta-sync/model/types';
 import { CheckpointsCard } from '@/features/delta-sync/ui/CheckpointsCard';
 import { RecentSegmentsCard } from '@/features/delta-sync/ui/RecentSegmentsCard';
 import { RebaselineCard } from '@/features/delta-sync/ui/RebaselineCard';
-import { RebaselineDialog, RebuildCheckpointDialog } from '@/features/delta-sync/ui/DeltaSyncDialogs';
+import {
+  CancelRebaselineDialog,
+  RebaselineDialog,
+  RebuildCheckpointDialog,
+} from '@/features/delta-sync/ui/DeltaSyncDialogs';
 import { computeLag, getSyncSeverity } from '@/features/delta-sync/model/severity';
 import { useLagHistory } from '@/features/delta-sync/model/useLagHistory';
 import { ActivityCard } from '@/features/delta-sync/ui/ActivityCard';
@@ -52,9 +57,11 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
 
   const [rebuildDialogOpen, setRebuildDialogOpen] = useState(false);
   const [rebaselineDialogOpen, setRebaselineDialogOpen] = useState(false);
+  const [cancelRebaselineDialogOpen, setCancelRebaselineDialogOpen] = useState(false);
 
   const rebuildMutation = useRebuildCheckpoint(siteId);
   const rebaselineMutation = useRequestRebaseline(siteId, { admin });
+  const cancelRebaselineMutation = useCancelRebaseline(siteId, { admin });
 
   const handleRebuildConfirm = () => {
     setRebuildDialogOpen(false);
@@ -68,6 +75,32 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
     setRebaselineDialogOpen(false);
     rebaselineMutation.mutate(undefined, {
       onSuccess: () => toast.success('Full re-baseline requested'),
+      onError: () => toast.error('Something went wrong. Please try again.'),
+    });
+  };
+
+  // Only `cancelled` averts the full re-upload. A snapshot already uploading keeps its own
+  // re-baseline intent (the server consumes the flag at commit, not at session start), and a client
+  // that already holds NEED_REBASELINE may open its session at any moment — reporting either as a
+  // success would tell the user a re-upload was called off that is still coming (#84).
+  const handleCancelRebaselineConfirm = () => {
+    setCancelRebaselineDialogOpen(false);
+    cancelRebaselineMutation.mutate(undefined, {
+      onSuccess: (status) => {
+        if (status === 'cancelled') {
+          toast.success('Re-baseline request cancelled');
+        } else if (status === 'snapshot-in-progress') {
+          toast.warning(
+            'The client is already uploading the full snapshot — it runs to completion and replaces the baseline',
+          );
+        } else if (status === 'client-notified') {
+          toast.warning(
+            'Request cleared, but the client already has the order — it may still send the snapshot',
+          );
+        } else {
+          toast.warning('No re-baseline was pending — nothing to cancel');
+        }
+      },
       onError: () => toast.error('Something went wrong. Please try again.'),
     });
   };
@@ -134,7 +167,13 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         ))}
       <RebaselineCard
         rebaselineRequested={state.rebaselineRequested || rebaselineMutation.isPending}
+        snapshotInProgress={state.snapshotInProgress}
         onRequest={() => setRebaselineDialogOpen(true)}
+        onCancel={() => setCancelRebaselineDialogOpen(true)}
+        cancelling={cancelRebaselineMutation.isPending}
+        // Cancelling while the request POST is still unacknowledged races it: the DELETE can be
+        // answered "nothing was pending" moments before the flag appears (#84 review).
+        cancellable={!rebaselineMutation.isPending}
       />
       <RebuildCheckpointDialog
         open={rebuildDialogOpen}
@@ -145,6 +184,11 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         open={rebaselineDialogOpen}
         onOpenChange={setRebaselineDialogOpen}
         onConfirm={handleRebaselineConfirm}
+      />
+      <CancelRebaselineDialog
+        open={cancelRebaselineDialogOpen}
+        onOpenChange={setCancelRebaselineDialogOpen}
+        onConfirm={handleCancelRebaselineConfirm}
       />
     </div>
   );

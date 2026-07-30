@@ -107,7 +107,7 @@ class DeltaSessionCommitServiceTest {
         order.verify(segmentService).persist(SITE, BATCH, "CONTINUOUS", 1L, records);
         order.verify(syncStateService).advanceWatermark(SITE, 100L);
         verify(batchLifecycleService, never()).completeBatch(any());
-        verify(batchLifecycleService, never()).startBatch(any(), any());
+        verify(batchLifecycleService, never()).startBatch(any(), any(), any());
         verify(egressWorker).wake();
     }
 

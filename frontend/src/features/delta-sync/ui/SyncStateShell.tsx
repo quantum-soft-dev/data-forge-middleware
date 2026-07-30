@@ -70,12 +70,21 @@ export function SyncStateShell({ state, now = new Date() }: SyncStateShellProps)
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {state.rebaselineRequested && (
+            {/* The request flag is only consumed when the snapshot commits, so it stays raised
+                for the whole upload — without snapshotInProgress the header would keep saying
+                "scheduled" while the card says "in progress" (#84 review). */}
+            {(state.rebaselineRequested || state.snapshotInProgress) && (
               <span
                 className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-                style={{ background: severityTokens.elevated.bg, color: severityTokens.elevated.text }}
+                style={
+                  state.snapshotInProgress
+                    ? { background: severityTokens.critical.bg, color: severityTokens.critical.text }
+                    : { background: severityTokens.elevated.bg, color: severityTokens.elevated.text }
+                }
               >
-                Full snapshot scheduled on next connect
+                {state.snapshotInProgress
+                  ? 'Full snapshot in progress'
+                  : 'Full snapshot scheduled on next connect'}
               </span>
             )}
             <span
