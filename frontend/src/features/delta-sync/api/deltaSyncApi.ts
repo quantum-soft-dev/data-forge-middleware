@@ -9,11 +9,13 @@
 import { isAxiosError } from 'axios';
 import { apiClient } from '@/shared/api/client';
 import {
+  cancelRebaselineResultSchema,
   deltaCheckpointDownloadSchema,
   deltaCheckpointSchema,
   deltaSegmentSchema,
   deltaSyncHealthSchema,
   deltaSyncStateSchema,
+  type CancelRebaselineStatus,
   type DeltaCheckpoint,
   type DeltaCheckpointDownload,
   type DeltaCheckpointFormat,
@@ -109,10 +111,16 @@ export async function requestRebaseline(siteId: string, scope: DeltaApiScope): P
 
 /**
  * Take a pending re-baseline request back (#84) — the watermark, checkpoints and segments are
- * untouched, so the client resumes ordinary delta. Idempotent server-side.
+ * untouched, so the client resumes ordinary delta. Idempotent server-side; the returned status
+ * tells the two outcomes apart, since `not-requested` means the client already started the
+ * snapshot and the cancellation changed nothing.
  */
-export async function cancelRebaseline(siteId: string, scope: DeltaApiScope): Promise<void> {
-  await apiClient.delete(`${deltaBasePath(siteId, scope)}/rebaseline`);
+export async function cancelRebaseline(
+  siteId: string,
+  scope: DeltaApiScope,
+): Promise<CancelRebaselineStatus> {
+  const response = await apiClient.delete(`${deltaBasePath(siteId, scope)}/rebaseline`);
+  return cancelRebaselineResultSchema.parse(response.data).status;
 }
 
 /**

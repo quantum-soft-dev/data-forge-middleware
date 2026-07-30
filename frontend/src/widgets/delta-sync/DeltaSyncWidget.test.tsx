@@ -27,7 +27,7 @@ vi.mock('@/features/delta-sync/api/queries', async (importOriginal) => {
 })
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
 const mockedUseDeltaSyncState = vi.mocked(useDeltaSyncState)
@@ -233,7 +233,7 @@ describe('DeltaSyncWidget actions (F9)', () => {
 describe('DeltaSyncWidget re-baseline cancellation (#84)', () => {
   it('confirms the cancellation via AlertDialog and toasts on success', async () => {
     mockQuery({ data: { ...state, rebaselineRequested: true } })
-    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.())
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('cancelled'))
     render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
 
     await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
@@ -243,6 +243,21 @@ describe('DeltaSyncWidget re-baseline cancellation (#84)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
     expect(cancelRebaselineMutate).toHaveBeenCalled()
     expect(toast.success).toHaveBeenCalledWith('Re-baseline request cancelled')
+  })
+
+  it('warns instead of confirming when nothing was pending anymore (#84)', async () => {
+    // The pill is up to one poll stale: the client may have started the snapshot in between,
+    // and a success toast would claim the full re-upload was averted.
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('not-requested'))
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.warning).toHaveBeenCalledWith(
+      'The client already started the full snapshot — it can no longer be cancelled',
+    )
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('keeps the request when the dialog is dismissed', async () => {

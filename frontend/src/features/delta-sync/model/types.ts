@@ -57,6 +57,15 @@ export const deltaSegmentSchema = z.object({
 });
 export type DeltaSegment = z.infer<typeof deltaSegmentSchema>;
 
+/**
+ * DELETE .../delta/rebaseline (#84). `not-requested` means nothing was pending anymore — the
+ * client has already started its full snapshot, so the cancellation came too late.
+ */
+export const cancelRebaselineResultSchema = z.object({
+  status: z.enum(['cancelled', 'not-requested']),
+});
+export type CancelRebaselineStatus = z.infer<typeof cancelRebaselineResultSchema>['status'];
+
 /** GET .../sites/delta/health (B10) — one entry per V2 site of the account. */
 export const deltaSyncHealthSchema = z.object({
   siteId: z.string(),

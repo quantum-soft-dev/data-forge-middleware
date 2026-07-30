@@ -540,7 +540,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for one table's **delta** Parquet of a session's segment (feature 025); 404 when the table has no declared schema / not yet egressed. Admin twin descoped 2026-07-08 — no admin batch-detail surface |
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
-| `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session starts |
+| `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session commits |
 | `.../delta/rebaseline` | DELETE | owner · admin | Takes a pending request back (issue #84): clears `rebaseline_requested` only — watermark, checkpoints and segments untouched → `GetSyncState` answers `PROCEED` again. Idempotent: `200 {"status": "cancelled"}` when a request was pending, `200 {"status": "not-requested"}` otherwise |
 | `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
 
@@ -554,9 +554,14 @@ the `NEED_REBASELINE` recovery path described above — previously the flag had 
 "Full snapshot scheduled on next connect" pill; confirming it issues the `DELETE` above and the
 site returns to ordinary delta from its existing watermark — nothing else in `site_sync_state` moves,
 and no checkpoint or segment is touched. This only helps *before* the client starts its
-FULL_SNAPSHOT session; once the session starts, `resetForRebaseline` has already dropped the old
-baseline and the snapshot must run to completion. The request dialog now spells out that cost
-(the whole dataset is re-uploaded) and that the request can be taken back until the client starts.
+FULL_SNAPSHOT session: the cancellation never reaches a session already in flight, which keeps its
+own re-baseline intent and wipes the old baseline when it commits (`DeltaRebaselineService.reset`
+runs inside the commit transaction, not at session start — review r4). The request dialog now
+spells out that cost (the whole dataset is re-uploaded) and that the request can be taken back
+until the client starts. The widget's pill is up to one poll (20 s) stale, so the request may be
+gone by the time the user confirms — a `DELETE` answered `{"status": "not-requested"}` means
+nothing was called off (the snapshot has already committed, or another operator got there first),
+and the widget warns instead of confirming a cancellation that did not happen.
 
 **Delta Parquet in the UI (feature 025)**: the delta Batch Detail's "Table changes" card carries a
 per-table **Parquet** pill for completed sessions — one click presigns and opens the segment's
