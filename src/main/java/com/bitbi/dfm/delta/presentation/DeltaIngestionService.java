@@ -3,12 +3,12 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.delta.application.ChangeRecordValidator;
-import com.bitbi.dfm.delta.application.ChangelogContentHash;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
+import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
+import com.bitbi.dfm.delta.application.SessionTotals;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService.SyncStateView;
-import com.bitbi.dfm.delta.application.SessionReconciler;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.SiteSchema;
@@ -53,6 +53,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final BatchLifecycleService batchLifecycleService;
     private final SiteSchemaService siteSchemaService;
     private final DeltaSessionCommitService commitService;
+    private final DeltaRebaselineService rebaselineService;
     private final DeltaMetrics metrics;
     /** Max records one session may buffer before the server rejects it (OOM guard). */
     private final int maxSessionRecords;
@@ -78,6 +79,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  BatchLifecycleService batchLifecycleService,
                                  SiteSchemaService siteSchemaService,
                                  DeltaSessionCommitService commitService,
+                                 DeltaRebaselineService rebaselineService,
                                  DeltaMetrics metrics,
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.max-session-records:2000000}") int maxSessionRecords,
@@ -93,6 +95,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
         this.commitService = commitService;
+        this.rebaselineService = rebaselineService;
         this.metrics = metrics;
         this.maxSessionRecords = maxSessionRecords;
         this.maxSessionBytes = resolveMaxSessionBytes(maxSessionBytes);
@@ -243,6 +246,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private SessionChangeBuffer buffer;
             private String sessionMode;
             private long firstSeq;
+            /**
+             * First sequence of the whole session, unlike {@link #firstSeq} which tracks the segment
+             * currently accumulating. They diverge once a session seals mid-stream; a re-baseline
+             * resets the baseline in terms of where the snapshot started, not where its tail did.
+             */
+            private long sessionFirstSeq;
+            /**
+             * Whole-session counts + content hash (033). A sealed session no longer holds its earlier
+             * records, so {@code SessionEnd} reconciliation cannot read them back off the buffer.
+             */
+            private SessionTotals totals;
             private boolean closed;
             private boolean committed;
             private boolean continuous;
@@ -326,7 +340,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 RecoveryAction.NEED_REBASELINE);
                         return;
                     }
-                    case ACCEPTED -> { /* fall through to ack / seal */ }
+                    case ACCEPTED -> totals.add(List.of(change));
                 }
                 if (++sinceAck >= ACK_INTERVAL) {
                     sinceAck = 0;
@@ -349,7 +363,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 // segments instead of a bloated buffer. Keeps the buffer far below the session byte
                 // budget, which then only backstops misconfiguration.
                 boolean bytesReached = buffer.acceptedBytes() >= continuousSealBytes;
-                if (continuous && (sizeReached || timeReached || bytesReached)) {
+                // 033: a re-baseline seals on the same thresholds. Without this the whole snapshot
+                // buffered on-heap, so any site above max-session-records was rejected with
+                // NEED_REBASELINE — which sent the client straight back into FULL_SNAPSHOT (#82).
+                // Its seals are silent and provisional: see sealSegment.
+                if ((continuous || rebaseline) && (sizeReached || timeReached || bytesReached)) {
                     sealSegment();
                 }
             }
@@ -397,6 +415,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         buffer = resume.buffer();
                         sessionMode = resume.mode();
                         firstSeq = resume.firstSeq();
+                        // 033: the session's own origin and its running reconciliation totals travel
+                        // with the staged session. Re-deriving them here would reconcile the resumed
+                        // session against only the records that arrived after the drop.
+                        sessionFirstSeq = resume.sessionFirstSeq();
+                        totals = resume.totals();
                         // 030/T05: restore the re-baseline intent. A FULL_SNAPSHOT is not CONTINUOUS,
                         // so a mid-stream drop stages it here — and this branch returns before the
                         // fresh-start path would set the flag. Losing it committed a re-baseline as
@@ -474,13 +497,19 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     // before the snapshot's first record.
                     rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
+                    // 033: collect the invisible remains of an earlier snapshot that never reached
+                    // SessionEnd. They are harmless to readers but hold UNIQUE (site_id, first_seq)
+                    // slots this attempt may need.
+                    rebaselineService.deleteProvisional(siteId);
                 }
                 buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords, maxSessionBytes);
+                totals = new SessionTotals();
                 sessionMode = start.getMode().name();
                 // For a delta replay (first_seq below the watermark) the segment's first_seq is the
                 // first genuinely-new sequence, not the replayed start, so the persisted segment row
                 // never claims a range it did not accept.
                 firstSeq = delta ? Math.max(start.getFirstSeq(), serverLastSeq + 1) : start.getFirstSeq();
+                sessionFirstSeq = firstSeq;
                 continuous = start.getMode() == SessionMode.CONTINUOUS;
                 metrics.sessionStarted();
                 responseObserver.onNext(ServerEvent.newBuilder()
@@ -496,14 +525,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 if (buffer != null) {
                     // Hard-fail: declared counts and (when provided) the integrity hash must match the
                     // accepted records (CR §10). A blank content_hash means the client opted out.
-                    if (!SessionReconciler.reconcile(buffer.accepted(), end.getPerTableMap())) {
+                    // 033: verified against the session-scoped totals, not the buffer — a sealed
+                    // session has already discarded everything but its tail.
+                    if (!totals.reconcile(end.getPerTableMap())) {
                         metrics.reconciliationFailed();
                         emitError(ErrorCode.RECONCILIATION_FAILED,
                                 "Declared per-table counts do not match accepted records",
                                 RecoveryAction.NEED_REBASELINE);
                         return; // do not complete the batch
                     }
-                    if (!ChangelogContentHash.matches(buffer.accepted(), end.getContentHash())) {
+                    if (!totals.hashMatches(end.getContentHash())) {
                         metrics.reconciliationFailed();
                         emitError(ErrorCode.RECONCILIATION_FAILED,
                                 "Declared content_hash does not match accepted records",
@@ -541,7 +572,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 // failure can never leave the watermark ahead of a still-active batch. A rebaseline
                 // commit additionally wipes the old baseline in the same transaction.
                 String segmentKey = commitService.commit(
-                        siteId, batchId, sessionMode, firstSeq, committedSeq, records, rebaselineCommit);
+                        siteId, batchId, sessionMode, firstSeq, committedSeq, records, rebaselineCommit,
+                        sessionFirstSeq);
                 metrics.sessionCommitted();
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
@@ -561,16 +593,27 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private void sealSegment() {
                 long committedSeq = buffer.lastSeq();
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
-                String segmentKey = commitService.commitSegment(
-                        siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
+                if (rebaseline) {
+                    // 033: a snapshot seal is durable but invisible — no watermark move and no
+                    // SessionCommitted. Announcing it would break the periodic-session contract
+                    // ("the server replies SessionCommitted and closes its side"): a conforming
+                    // client would treat the first seal as end-of-session and stop mid-snapshot.
+                    // The progressive Acks above remain the client's only progress signal, exactly
+                    // as before 033, so no client change is needed.
+                    commitService.commitProvisionalSegment(
+                            siteId, batchId, sessionMode, firstSeq, buffer.accepted());
+                } else {
+                    String segmentKey = commitService.commitSegment(
+                            siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
+                    metrics.recordSeqLag(committedSeq - checkpointSeq);
+                    responseObserver.onNext(ServerEvent.newBuilder()
+                            .setCommitted(SessionCommitted.newBuilder()
+                                    .setCommittedSeq(committedSeq)
+                                    .setSegmentS3Key(segmentKey)
+                                    .build())
+                            .build());
+                }
                 batchLifecycleService.touchActivity(batchId);
-                metrics.recordSeqLag(committedSeq - checkpointSeq);
-                responseObserver.onNext(ServerEvent.newBuilder()
-                        .setCommitted(SessionCommitted.newBuilder()
-                                .setCommittedSeq(committedSeq)
-                                .setSegmentS3Key(segmentKey)
-                                .build())
-                        .build());
                 lastSealMillis = System.currentTimeMillis();
                 firstSeq = committedSeq + 1;
                 buffer = new SessionChangeBuffer(committedSeq, maxSessionRecords, maxSessionBytes);
@@ -588,7 +631,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     // whether the eventual commit wipes the prior baseline, and a drop must not
                     // silently downgrade a FULL_SNAPSHOT to an ordinary delta commit.
                     stagedSessions.put(siteId, new StagedSession(
-                            batchId, sessionMode, firstSeq, buffer, rebaseline, System.currentTimeMillis()));
+                            batchId, sessionMode, firstSeq, sessionFirstSeq, buffer, totals, rebaseline,
+                            System.currentTimeMillis()));
                     closed = true;
                 }
             }
@@ -619,6 +663,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         batchLifecycleService.failBatch(toFail);
                     } catch (RuntimeException ignored) {
                         // Batch may already be terminal (e.g. timed out); failing it is best-effort.
+                    }
+                    if (rebaseline) {
+                        // 033: drop this snapshot's provisional segments now rather than leaving them
+                        // for the next attempt's start-of-session sweep. They were never published,
+                        // so nothing observable changes — this only shortens how long the storage and
+                        // the UNIQUE (site_id, first_seq) slots stay occupied.
+                        try {
+                            rebaselineService.deleteProvisional(siteId);
+                        } catch (RuntimeException ignored) {
+                            // Best-effort: the next FULL_SNAPSHOT start collects whatever is left.
+                        }
                     }
                 }
             }
@@ -693,11 +748,14 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
     /**
      * A session retained for resume after a mid-session drop (T5.1): the active batch it opened, its
-     * mode and first sequence, the buffer of records staged so far, whether it is a re-baseline
-     * (030 — a FULL_SNAPSHOT must still wipe the prior baseline when it commits after a resume), and
-     * when it was staged (for TTL eviction).
+     * mode, the first sequence of the segment being accumulated and of the session as a whole (033 —
+     * they differ once a re-baseline has sealed), the buffer of records staged so far, the
+     * whole-session reconciliation totals (033 — records already sealed are no longer in the buffer),
+     * whether it is a re-baseline (030 — a FULL_SNAPSHOT must still wipe the prior baseline when it
+     * commits after a resume), and when it was staged (for TTL eviction).
      */
-    private record StagedSession(UUID batchId, String mode, long firstSeq, SessionChangeBuffer buffer,
+    private record StagedSession(UUID batchId, String mode, long firstSeq, long sessionFirstSeq,
+                                 SessionChangeBuffer buffer, SessionTotals totals,
                                  boolean rebaseline, long stagedAtMillis) {
     }
 }

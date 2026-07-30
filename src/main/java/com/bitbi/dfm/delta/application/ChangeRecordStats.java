@@ -9,9 +9,9 @@ import java.util.Map;
 
 /**
  * Computes per-table insert/update/delete counts from a session's accepted change records
- * (Delta Client v2 — 022). Shared by {@link SessionReconciler} (reconciliation against the
- * client's declared counts) and {@link ChangelogSegmentService} (persisted segment stats,
- * surfaced in batch history).
+ * (Delta Client v2 — 022), for the per-segment stats {@link ChangelogSegmentService} persists and
+ * surfaces in batch history. Whole-session reconciliation totals accumulate in
+ * {@link SessionTotals} instead, which must survive mid-session segment seals (033).
  *
  * @author Data Forge Team
  * @version 1.0.0
