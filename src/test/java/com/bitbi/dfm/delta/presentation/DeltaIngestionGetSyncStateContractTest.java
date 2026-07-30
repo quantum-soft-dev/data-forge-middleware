@@ -24,7 +24,12 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -85,6 +90,32 @@ class DeltaIngestionGetSyncStateContractTest {
 
         assertEquals(120L, response.getLastAppliedSeq());
         assertEquals(RecoveryAction.PROCEED, response.getAction());
+    }
+
+    @Test
+    void needRebaselineAnswerRecordsThatTheClientWasTold() {
+        // #84 review: a cancellation issued before the client is told provably reaches it; once
+        // NEED_REBASELINE has gone out, the client may already be preparing its snapshot.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        SyncStateResponse response = stub.getSyncState(SyncStateRequest.newBuilder().build());
+
+        assertEquals(RecoveryAction.NEED_REBASELINE, response.getAction());
+        assertNotNull(state.getRebaselineNotifiedAt());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void proceedAnswerRecordsNothing() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        stub.getSyncState(SyncStateRequest.newBuilder().build());
+
+        assertNull(state.getRebaselineNotifiedAt());
+        verify(repository, never()).save(any());
     }
 
     private static ServerInterceptor fixedSiteInterceptor(UUID siteId) {

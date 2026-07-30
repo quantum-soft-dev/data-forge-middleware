@@ -11,6 +11,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -173,6 +174,51 @@ class DeltaSyncStateServiceTest {
 
         assertFalse(service.cancelRebaseline(SITE));
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void markRebaselineNotifiedStampsOnceAndIsForgottenOnCancel() {
+        // #84 review: "the client has already been told to re-baseline" is what separates a
+        // cancellation that provably worked from one the client may already be acting on.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.markRebaselineNotified(SITE);
+        assertNotNull(state.getRebaselineNotifiedAt());
+        verify(repository).save(state);
+
+        // GetSyncState is polled continuously — a second NEED_REBASELINE answer must not re-save.
+        service.markRebaselineNotified(SITE);
+        verify(repository, times(1)).save(state);
+
+        service.cancelRebaseline(SITE);
+        assertNull(state.getRebaselineNotifiedAt(), "cancelling must forget the notification too");
+    }
+
+    @Test
+    void markRebaselineNotifiedIsNoOpWithoutPendingRequest() {
+        // No pending request means GetSyncState answered PROCEED — there is nothing to remember.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.markRebaselineNotified(SITE);
+
+        assertNull(state.getRebaselineNotifiedAt());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void resetForRebaselineForgetsTheNotification() {
+        // The snapshot committed: the next request starts from a clean slate.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        state.markRebaselineNotified();
+
+        state.resetForRebaseline(41L);
+
+        assertFalse(state.isRebaselineRequested());
+        assertNull(state.getRebaselineNotifiedAt());
     }
 
     @Test

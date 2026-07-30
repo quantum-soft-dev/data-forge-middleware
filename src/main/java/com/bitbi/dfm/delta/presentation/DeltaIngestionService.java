@@ -157,6 +157,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         }
 
         SyncStateView view = syncStateService.getSyncState(siteId);
+        if (view.needRebaseline()) {
+            // The client now knows it must re-baseline, so a cancellation from here on may lose the
+            // race against the snapshot it is about to send (issue #84). Recorded once per request.
+            syncStateService.markRebaselineNotified(siteId);
+        }
 
         SyncStateResponse response = SyncStateResponse.newBuilder()
                 .setLastAppliedSeq(view.lastAppliedSeq())
@@ -384,7 +389,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         if (!batchLifecycleService.isBatchInProgress(resumeBatchId)) {
                             Batch replacement;
                             try {
-                                replacement = batchLifecycleService.startBatch(accountId, siteId);
+                                // Carry the staged session's mode onto the replacement batch, so a
+                                // resumed FULL_SNAPSHOT stays recognizable as one (issue #84).
+                                replacement = batchLifecycleService.startBatch(accountId, siteId, resume.mode());
                             } catch (BatchLifecycleService.ActiveBatchExistsException e) {
                                 // Same rule as a fresh session start: one active session per site.
                                 emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(),
@@ -456,7 +463,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
                 Batch batch;
                 try {
-                    batch = batchLifecycleService.startBatch(accountId, siteId);
+                    // The mode is persisted on the batch (issue #84): while a FULL_SNAPSHOT is
+                    // uploading it is the only way to tell it from an ordinary delta session.
+                    batch = batchLifecycleService.startBatch(accountId, siteId, start.getMode().name());
                 } catch (BatchLifecycleService.ActiveBatchExistsException e) {
                     // One active session per site (mirrors one-active-batch).
                     emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);

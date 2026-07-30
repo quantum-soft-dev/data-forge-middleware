@@ -59,6 +59,14 @@ public class SiteSyncState {
     private boolean rebuildRequested = false;
 
     /**
+     * When {@code GetSyncState} first answered NEED_REBASELINE for the pending request (issue #84).
+     * Null while the client has not been told yet — a cancellation up to that point provably
+     * reaches it; afterwards the client may already be preparing its snapshot.
+     */
+    @Column(name = "rebaseline_notified_at")
+    private LocalDateTime rebaselineNotifiedAt;
+
+    /**
      * Create the initial sync state for a site (no changes applied yet).
      *
      * @param siteId site identifier
@@ -106,6 +114,7 @@ public class SiteSyncState {
         this.lastCheckpointSeq = 0L;
         this.lastCheckpointAt = null;
         this.rebaselineRequested = false;
+        this.rebaselineNotifiedAt = null;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
@@ -132,6 +141,23 @@ public class SiteSyncState {
             return false;
         }
         this.rebaselineRequested = false;
+        this.rebaselineNotifiedAt = null;
+        return true;
+    }
+
+    /**
+     * Remember that {@code GetSyncState} has answered NEED_REBASELINE for the pending request
+     * (issue #84), so a later cancellation can say whether it still reaches the client. Stamped
+     * once — GetSyncState is polled continuously and re-stamping would be a write per poll.
+     *
+     * @return {@code true} when this call recorded the notification, {@code false} when it was
+     * already recorded or no request is pending
+     */
+    public boolean markRebaselineNotified() {
+        if (!rebaselineRequested || rebaselineNotifiedAt != null) {
+            return false;
+        }
+        this.rebaselineNotifiedAt = LocalDateTime.now(ZoneOffset.UTC);
         return true;
     }
 

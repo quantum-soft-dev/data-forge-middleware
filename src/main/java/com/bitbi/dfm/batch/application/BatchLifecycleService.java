@@ -76,7 +76,21 @@ public class BatchLifecycleService {
      * @throws ConcurrentBatchLimitException if account exceeded concurrent batch limit
      */
     public Batch startBatch(UUID accountId, UUID siteId) {
-        logger.info("Starting new batch: accountId={}, siteId={}", accountId, siteId);
+        return startBatch(accountId, siteId, null);
+    }
+
+    /**
+     * Start a new batch for a Delta v2 session, recording its mode (issue #84) so a FULL_SNAPSHOT
+     * can be recognized while it is still uploading. Same business rules as
+     * {@link #startBatch(UUID, UUID)}.
+     *
+     * @param accountId   account identifier
+     * @param siteId      site identifier
+     * @param sessionMode Delta v2 session mode (FULL_SNAPSHOT, DELTA, CONTINUOUS), may be null
+     * @return started batch
+     */
+    public Batch startBatch(UUID accountId, UUID siteId, String sessionMode) {
+        logger.info("Starting new batch: accountId={}, siteId={}, sessionMode={}", accountId, siteId, sessionMode);
 
         // Validate site is active
         Site site = siteRepository.findById(siteId)
@@ -108,7 +122,7 @@ public class BatchLifecycleService {
                     "Account exceeded concurrent batch limit: " + activeBatchCount + "/" + maxConcurrentBatches);
         }
 
-        Batch batch = Batch.start(accountId, siteId);
+        Batch batch = Batch.start(accountId, siteId, sessionMode);
         Batch saved = batchRepository.save(batch);
 
         // Publish domain event

@@ -34,6 +34,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -85,11 +88,49 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void sessionStartRecordsTheModeOnTheBatch() throws Exception {
+        // #84 review: while a FULL_SNAPSHOT uploads, the persisted mode is the only thing telling it
+        // apart from an ordinary delta session — the re-baseline cancellation endpoint reports on it.
+        Batch batch = mock(Batch.class);
+        when(batch.getId()).thenReturn(UUID.randomUUID());
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
+
+        for (SessionMode mode : List.of(SessionMode.FULL_SNAPSHOT, SessionMode.CONTINUOUS)) {
+            CountDownLatch done = new CountDownLatch(1);
+            StreamObserver<ClientEvent> request = asyncStub.streamChanges(silentObserver(done));
+            request.onNext(ClientEvent.newBuilder().setStart(
+                    SessionStart.newBuilder().setMode(mode).setFirstSeq(1).build()).build());
+            request.onCompleted();
+            assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete for " + mode);
+
+            verify(batchLifecycle).startBatch(ACCOUNT, SITE, mode.name());
+        }
+    }
+
+    private StreamObserver<ServerEvent> silentObserver(CountDownLatch done) {
+        return new StreamObserver<>() {
+            @Override
+            public void onNext(ServerEvent event) {
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                done.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                done.countDown();
+            }
+        };
+    }
+
+    @Test
     void happyPathSessionOpensAndCommitsBatch() throws Exception {
         UUID batchId = UUID.randomUUID();
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = new CopyOnWriteArrayList<>();
         CountDownLatch done = new CountDownLatch(1);
@@ -123,7 +164,7 @@ class DeltaIngestionStreamChangesContractTest {
 
         assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
 
-        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle).completeBatch(batchId);
 
         assertEquals(2, received.size(), "expected SessionOpened then SessionCommitted");
@@ -137,7 +178,7 @@ class DeltaIngestionStreamChangesContractTest {
 
     @Test
     void secondConcurrentSessionRejectedWithActiveSessionExists() throws Exception {
-        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new BatchLifecycleService.ActiveBatchExistsException(
                         "Site already has an active batch"));
 
@@ -184,7 +225,7 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(received.get(0).hasError());
         assertEquals(ErrorCode.SEQUENCE_GAP, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.NEED_REBASELINE, received.get(0).getError().getAction());
-        verify(batchLifecycle, never()).startBatch(any(), any());
+        verify(batchLifecycle, never()).startBatch(any(), any(), any());
     }
 
     @Test
@@ -198,7 +239,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req -> req.onNext(start(SessionMode.DELTA, 100L)));
 
@@ -215,14 +256,14 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req ->
                 req.onNext(start(SessionMode.DELTA, 121L)));
 
         assertTrue(received.get(0).hasOpened());
         assertEquals(120L, received.get(0).getOpened().getServerLastSeq());
-        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).startBatch(eq(ACCOUNT), eq(SITE), any());
     }
 
     @Test
@@ -232,7 +273,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req ->
                 req.onNext(start(SessionMode.FULL_SNAPSHOT, 200L)));
@@ -252,7 +293,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         runSession(req -> {
             req.onNext(start(SessionMode.FULL_SNAPSHOT, 200L));
@@ -274,20 +315,20 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req ->
                 req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L))); // not contiguous, but allowed
 
         assertTrue(received.get(0).hasOpened());
-        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).startBatch(eq(ACCOUNT), eq(SITE), any());
     }
 
     @Test
     void reconciliationMismatchRejectsAndDoesNotCompleteBatch() throws Exception {
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req -> {
             req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
@@ -321,7 +362,7 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(received.get(0).hasError());
         assertEquals(ErrorCode.SCHEMA_MISMATCH, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.NEED_REBASELINE, received.get(0).getError().getAction());
-        verify(batchLifecycle, never()).startBatch(any(), any());
+        verify(batchLifecycle, never()).startBatch(any(), any(), any());
     }
 
     @Test
@@ -331,7 +372,7 @@ class DeltaIngestionStreamChangesContractTest {
         UUID batchId = UUID.randomUUID();
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req -> {
             req.onNext(start(SessionMode.DELTA, 1L));
@@ -350,7 +391,7 @@ class DeltaIngestionStreamChangesContractTest {
         UUID batchId = UUID.randomUUID();
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         // Table "t" has no primary/unique key -> keyless: UPDATE is not allowed.
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
                 "t", new TableSchema(List.of(
@@ -374,7 +415,7 @@ class DeltaIngestionStreamChangesContractTest {
         UUID batchId = UUID.randomUUID();
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req -> {
             req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
@@ -396,7 +437,7 @@ class DeltaIngestionStreamChangesContractTest {
     void contentHashMismatchRejectsAndDoesNotCompleteBatch() throws Exception {
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req -> {
             req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
@@ -420,7 +461,7 @@ class DeltaIngestionStreamChangesContractTest {
         // wrong last_seq betrays a client watermark bug — reject rather than silently commit (P2, r4).
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = runSession(req -> {
             req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
@@ -445,7 +486,7 @@ class DeltaIngestionStreamChangesContractTest {
         UUID batchId = UUID.randomUUID();
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         // 030/T02: the batch is still live, so the resume re-attaches to it.
         when(batchLifecycle.isBatchInProgress(batchId)).thenReturn(true);
 
@@ -486,7 +527,7 @@ class DeltaIngestionStreamChangesContractTest {
 
         // One batch overall (started by session 1), completed once on resume; the committed segment
         // spans the staged + replayed records [121..123].
-        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle).completeBatch(batchId);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ChangeRecord>> records = ArgumentCaptor.forClass(List.class);
@@ -507,7 +548,7 @@ class DeltaIngestionStreamChangesContractTest {
         UUID freshBatchId = UUID.randomUUID();
         Batch reapedBatch = mockBatch(reapedBatchId);
         Batch freshBatch = mockBatch(freshBatchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(reapedBatch, freshBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(reapedBatch, freshBatch);
         when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
 
         // --- Session 1: open, stage 121 & 122, then drop mid-stream (no SessionEnd). ---
@@ -544,7 +585,7 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(committed.hasCommitted(), "resumed session commits under the fresh batch");
         assertEquals(123L, committed.getCommitted().getCommittedSeq());
 
-        verify(batchLifecycle, times(2)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(2)).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle).completeBatch(freshBatchId);
         verify(batchLifecycle, never()).completeBatch(reapedBatchId);
         @SuppressWarnings("unchecked")
@@ -563,7 +604,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         UUID reapedBatchId = UUID.randomUUID();
         Batch reapedBatch = mockBatch(reapedBatchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenReturn(reapedBatch)
                 .thenThrow(new BatchLifecycleService.ActiveBatchExistsException(
                         "Site already has an active batch: " + SITE));
@@ -599,7 +640,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
 
         StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
@@ -632,7 +673,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
 
         StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
@@ -672,7 +713,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
 
         StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
@@ -713,7 +754,7 @@ class DeltaIngestionStreamChangesContractTest {
         UUID freshBatchId = UUID.randomUUID();
         Batch reapedBatch = mockBatch(reapedBatchId);
         Batch freshBatch = mockBatch(freshBatchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(reapedBatch, freshBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(reapedBatch, freshBatch);
         when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
 
         StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
@@ -745,7 +786,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         long total = 250L;
         List<ServerEvent> received = runSession(req -> {
@@ -781,7 +822,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
         UUID batchId = UUID.randomUUID();
         Batch sessionBatch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
 
         long total = 250L;
         List<ServerEvent> received = runSession(req -> {
@@ -802,7 +843,7 @@ class DeltaIngestionStreamChangesContractTest {
         assertTrue(received.stream().noneMatch(ServerEvent::hasError), "no error in continuous mode");
 
         // One batch for the whole session, completed exactly once at close.
-        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle, times(1)).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(any());
 
@@ -824,7 +865,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
         UUID batchId = UUID.randomUUID();
         Batch sessionBatch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
 
         runSession(req -> {
             req.onNext(start(SessionMode.CONTINUOUS, 1L));
@@ -834,7 +875,7 @@ class DeltaIngestionStreamChangesContractTest {
             // No more records; runSession half-closes the stream.
         });
 
-        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle, times(1)).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(any());
         // The threshold seal wrote the one and only segment; the close flushed no second one.
@@ -849,7 +890,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         UUID batchId = UUID.randomUUID();
         Batch sessionBatch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
 
         runSession(req -> {
             req.onNext(start(SessionMode.CONTINUOUS, 1L));
@@ -869,7 +910,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         UUID batchId = UUID.randomUUID();
         Batch sessionBatch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
 
         runSession(req -> {
             req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
@@ -890,11 +931,11 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         UUID batchId = UUID.randomUUID();
         Batch sessionBatch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(sessionBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
 
         runSession(req -> req.onNext(start(SessionMode.CONTINUOUS, 1L)));
 
-        verify(batchLifecycle, times(1)).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle, times(1)).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(batchLifecycle, times(1)).completeBatch(batchId);
         verify(batchLifecycle, never()).failBatch(any());
         verify(changelogSegmentService, never()).persist(any(), any(), any(), anyLong(), any());
@@ -905,7 +946,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
 
         List<ServerEvent> received = new CopyOnWriteArrayList<>();
         StreamObserver<ClientEvent> s = asyncStub.streamChanges(collect(received, new CountDownLatch(1)));
@@ -915,7 +956,7 @@ class DeltaIngestionStreamChangesContractTest {
         s.onError(new RuntimeException("transport drop"));
 
         // The unsealed tail is durably sealed and the batch completed (not left IN_PROGRESS).
-        verify(batchLifecycle).startBatch(ACCOUNT, SITE);
+        verify(batchLifecycle).startBatch(eq(ACCOUNT), eq(SITE), any());
         verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("CONTINUOUS"), eq(1L),
                 argThat((List<ChangeRecord> r) -> r.size() == 2));
         verify(batchLifecycle).completeBatch(batchId);
@@ -930,7 +971,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any()))
                 .thenThrow(new RuntimeException("s3 down"));
 
@@ -952,7 +993,7 @@ class DeltaIngestionStreamChangesContractTest {
         // than accumulating the whole dataset in heap (review r4).
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         Batch batch = mockBatch(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
                 changelogSegmentService, syncStateService, batchLifecycle,
@@ -990,7 +1031,7 @@ class DeltaIngestionStreamChangesContractTest {
         // SESSION-level error (and a failed batch) instead of killing the JVM.
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         Batch batch = mockBatch(UUID.randomUUID());
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         long budget = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
                 .getSerializedSize() * 2L; // room for two records, not three
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
@@ -1051,7 +1092,7 @@ class DeltaIngestionStreamChangesContractTest {
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         UUID batchId = UUID.randomUUID();
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
         long recordSize = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
                 .getSerializedSize();
         long sealBytes = recordSize + 1;  // first record does not seal...
@@ -1112,7 +1153,7 @@ class DeltaIngestionStreamChangesContractTest {
         Batch b1 = mockBatch(id1);
         Batch b2 = mockBatch(id2);
         Batch b3 = mockBatch(id3);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(b1, b2, b3);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
                 changelogSegmentService, syncStateService, batchLifecycle,
@@ -1152,7 +1193,7 @@ class DeltaIngestionStreamChangesContractTest {
         Batch b1 = mockBatch(id1);
         Batch b2 = mockBatch(id2);
         Batch b3 = mockBatch(id3);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(b1, b2, b3);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(b1, b2, b3);
         long sealBytes = ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(1L).build()
                 .getSerializedSize() * 2L; // seal after every two records
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);

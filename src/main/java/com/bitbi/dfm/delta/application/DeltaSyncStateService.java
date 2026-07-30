@@ -93,6 +93,21 @@ public class DeltaSyncStateService {
     }
 
     /**
+     * Remember that {@code GetSyncState} answered NEED_REBASELINE for a site's pending request
+     * (issue #84), so a later cancellation can tell "the client has not been told yet" from "the
+     * client may already be preparing the snapshot". No-op once recorded, so the continuous
+     * GetSyncState polling costs one write per request, not one per poll.
+     *
+     * @param siteId site identifier
+     */
+    @Transactional
+    public void markRebaselineNotified(UUID siteId) {
+        repository.findBySiteId(siteId)
+                .filter(SiteSyncState::markRebaselineNotified)
+                .ifPresent(repository::save);
+    }
+
+    /**
      * Flag a site for a forced out-of-schedule checkpoint rebuild (creating the sync state row
      * if absent); cleared via {@link #clearRebuildRequested} once the rebuild completes.
      * Idempotent: an already-flagged site is left untouched.

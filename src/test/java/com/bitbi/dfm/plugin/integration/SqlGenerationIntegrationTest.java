@@ -344,7 +344,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
 
         // Create Batch entity using the factory method
-        Batch batch = Batch.start(TEST_ACCOUNT_ID, siteId, siteDomain);
+        Batch batch = Batch.start(TEST_ACCOUNT_ID, siteId);
 
         // Save batch first to get its ID
         batch = batchRepository.save(batch);
