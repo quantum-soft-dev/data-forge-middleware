@@ -18,6 +18,8 @@ import com.google.protobuf.Timestamp;
 import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -37,11 +39,20 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link DeltaAuthInterceptor}. This class maps between the application layer and the Protobuf
  * contract.</p>
  *
+ * <p><b>Observability (#83).</b> Since client API v1 was retired this is the only path that creates
+ * a batch, and it used to carry no logger at all — a rejected session left no trace anywhere, so an
+ * incident could only be investigated by proving the <em>absence</em> of log lines. Every session
+ * now records its start, its opening, each seal and its commit at INFO; every typed rejection at
+ * WARN with its {@code ErrorCode} and {@code RecoveryAction}; every unexpected fault at ERROR with
+ * its stack trace. Deliberately bounded — per session and per seal, never per record.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
 @Component
 public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImplBase {
+
+    private static final Logger logger = LoggerFactory.getLogger(DeltaIngestionService.class);
 
     /** Emit a progressive {@link Ack} every this many accepted records (backpressure watermark). */
     private static final int ACK_INTERVAL = 100;
@@ -138,10 +149,15 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         long cutoff = System.currentTimeMillis() - stagedTtlMillis;
         stagedSessions.forEach((site, staged) -> {
             if (staged.stagedAtMillis() < cutoff && stagedSessions.remove(site, staged)) {
+                logger.warn("Delta staged session evicted after {} ms without a resume — its {} staged "
+                                + "records are discarded: siteId={}, batchId={}",
+                        stagedTtlMillis, staged.buffer().acceptedCount(), site, staged.batchId());
                 try {
                     batchLifecycleService.failBatch(staged.batchId());
-                } catch (RuntimeException ignored) {
+                } catch (RuntimeException e) {
                     // batch may already be terminal (timed out) — best-effort
+                    logger.debug("Delta staged session eviction could not fail its batch: batchId={}, error={}",
+                            staged.batchId(), e.getMessage());
                 }
             }
         });
@@ -151,6 +167,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     public void getSyncState(SyncStateRequest request, StreamObserver<SyncStateResponse> responseObserver) {
         UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
         if (siteId == null) {
+            logger.warn("auth_failure: Delta call reached the handler with no authenticated site on context");
             responseObserver.onError(Status.UNAUTHENTICATED
                     .withDescription("No authenticated site on context").asRuntimeException());
             return;
@@ -173,6 +190,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     public void submitSchema(SchemaRequest request, StreamObserver<SchemaResponse> responseObserver) {
         UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
         if (siteId == null) {
+            logger.warn("auth_failure: Delta call reached the handler with no authenticated site on context");
             responseObserver.onError(Status.UNAUTHENTICATED
                     .withDescription("No authenticated site on context").asRuntimeException());
             return;
@@ -190,8 +208,13 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                             .setNanos(updated.getNano())
                             .build())
                     .build());
+            logger.info("Delta schema submitted: siteId={}, schemaVersion={}, tables={}",
+                    siteId, saved.getSchemaVersion(), request.getTablesMap().keySet());
             responseObserver.onCompleted();
         } catch (SiteSchemaService.InvalidSchemaException e) {
+            // A CDC site cannot open a session until its schema lands, so a rejected schema is the
+            // upstream cause of every SCHEMA_MISMATCH that follows.
+            logger.warn("Delta schema rejected: siteId={}, reason={}", siteId, e.getMessage());
             responseObserver.onError(Status.INVALID_ARGUMENT
                     .withDescription(e.getMessage()).asRuntimeException());
         }
@@ -266,6 +289,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         case EVENT_NOT_SET -> { /* ignore empty frame */ }
                     }
                 } catch (RuntimeException e) {
+                    // #83: this used to close the call with a bare Status.INTERNAL and record
+                    // nothing. The stack trace is the whole point — an unexpected fault here is
+                    // otherwise indistinguishable from the client simply never having called.
+                    logger.error("Delta session failed: siteId={}, batchId={}, event={}",
+                            siteId, batchId, event.getEventCase(), e);
                     abortBatch();
                     closed = true;
                     responseObserver.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());
@@ -403,6 +431,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onSessionStart(SessionStart start) {
+                logger.info("Delta session start: siteId={}, mode={}, firstSeq={}, schemaVersion={}",
+                        siteId, start.getMode(), start.getFirstSeq(), start.getSchemaVersion());
                 // Resume: a DELTA reconnect re-attaches to a session that dropped mid-stream and
                 // replays from the staged watermark, rather than re-sending everything (T5.1). A
                 // FULL_SNAPSHOT re-baseline instead discards any staged data.
@@ -443,6 +473,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // setting the flag here would enable mid-stream seals that must not happen.
                         // The re-attached batch is live again — refresh its activity (029).
                         batchLifecycleService.touchActivity(batchId);
+                        logger.info("Delta session opened: siteId={}, batchId={}, mode={}, action=RESUME_FROM, "
+                                        + "resumeFromSeq={}, stagedRecords={}, rebaseline={}, freshBatch={}",
+                                siteId, batchId, sessionMode, buffer.lastSeq() + 1, buffer.acceptedCount(),
+                                rebaseline, !batchId.equals(resume.batchId()));
                         responseObserver.onNext(ServerEvent.newBuilder()
                                 .setOpened(SessionOpened.newBuilder()
                                         .setServerSessionId(batchId.toString())
@@ -512,6 +546,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 firstSeq = delta ? Math.max(start.getFirstSeq(), serverLastSeq + 1) : start.getFirstSeq();
                 continuous = start.getMode() == SessionMode.CONTINUOUS;
                 metrics.sessionStarted();
+                logger.info("Delta session opened: siteId={}, batchId={}, mode={}, action=PROCEED, "
+                                + "firstSeq={}, serverLastSeq={}, rebaseline={}",
+                        siteId, batchId, sessionMode, firstSeq, serverLastSeq, rebaseline);
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setOpened(SessionOpened.newBuilder()
                                 .setServerSessionId(batchId.toString())
@@ -573,6 +610,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         siteId, batchId, sessionMode, firstSeq, committedSeq, records, rebaselineCommit);
                 metrics.sessionCommitted();
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
+                logger.info("Delta session committed: siteId={}, batchId={}, mode={}, committedSeq={}, "
+                                + "records={}, segment={}, rebaseline={}",
+                        siteId, batchId, sessionMode, committedSeq, records.size(), segmentKey, rebaselineCommit);
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committedSeq)
@@ -589,11 +629,18 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void sealSegment() {
                 long committedSeq = buffer.lastSeq();
+                // Captured before the buffer is replaced below — this is the only record of how big
+                // the sealed segment actually was.
+                int sealedRecords = buffer.acceptedCount();
+                long sealedBytes = buffer.acceptedBytes();
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
                 String segmentKey = commitService.commitSegment(
                         siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
                 batchLifecycleService.touchActivity(batchId);
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
+                logger.info("Delta segment sealed: siteId={}, batchId={}, segment={}, records={}, bytes={}, "
+                                + "firstSeq={}, committedSeq={}",
+                        siteId, batchId, segmentKey, sealedRecords, sealedBytes, firstSeq, committedSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committedSeq)
@@ -619,10 +666,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     stagedSessions.put(siteId, new StagedSession(
                             batchId, sessionMode, firstSeq, buffer, rebaseline, System.currentTimeMillis()));
                     closed = true;
+                    logger.info("Delta session staged for resume: siteId={}, batchId={}, mode={}, "
+                                    + "stagedRecords={}, resumeFromSeq={}, rebaseline={}",
+                            siteId, batchId, sessionMode, buffer.acceptedCount(), buffer.lastSeq() + 1, rebaseline);
                 }
             }
 
             private void emitError(ErrorCode code, String message, RecoveryAction action) {
+                // Logged before abortBatch(), which clears batchId — the batch the rejection killed
+                // is exactly what an investigation needs to correlate.
+                logger.warn("Delta session rejected: siteId={}, batchId={}, code={}, action={}, message={}",
+                        siteId, batchId, code, action, message);
                 abortBatch();
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setError(ServerError.newBuilder()
@@ -646,8 +700,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     batchId = null;
                     try {
                         batchLifecycleService.failBatch(toFail);
-                    } catch (RuntimeException ignored) {
+                    } catch (RuntimeException e) {
                         // Batch may already be terminal (e.g. timed out); failing it is best-effort.
+                        logger.debug("Delta batch could not be failed, likely already terminal: batchId={}, error={}",
+                                toFail, e.getMessage());
                     }
                 }
             }
@@ -681,7 +737,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     commitService.commit(siteId, batchId, sessionMode, firstSeq,
                             buffer.lastSeq(), buffer.accepted());
                     metrics.sessionCommitted();
+                    logger.info("Delta continuous session dropped, tail sealed: siteId={}, batchId={}, "
+                                    + "records={}, committedSeq={}",
+                            siteId, batchId, buffer.acceptedCount(), buffer.lastSeq());
                 } catch (RuntimeException e) {
+                    logger.error("Delta continuous session dropped and its tail could not be sealed — "
+                            + "failing the batch: siteId={}, batchId={}", siteId, batchId, e);
                     abortBatch();
                 }
             }
