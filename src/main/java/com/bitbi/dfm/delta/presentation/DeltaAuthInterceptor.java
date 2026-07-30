@@ -2,8 +2,11 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.auth.application.TokenService;
 import io.grpc.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.net.SocketAddress;
 import java.util.UUID;
 
 /**
@@ -17,11 +20,18 @@ import java.util.UUID;
  * <p>The authenticated {@link #SITE_ID} is the only site a call may act on; downstream handlers
  * read it from the context (cross-site requests are rejected by comparing against it).</p>
  *
+ * <p>Every rejection is logged at WARN (#83), mirroring
+ * {@link com.bitbi.dfm.shared.auth.AuthenticationAuditLogger} on the REST side. Without it a client
+ * stuck on authentication leaves no trace at all — the call never reaches a handler, so the only
+ * evidence is a gRPC status the server never records.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
 @Component
 public class DeltaAuthInterceptor implements ServerInterceptor {
+
+    private static final Logger logger = LoggerFactory.getLogger(DeltaAuthInterceptor.class);
 
     /** gRPC context key holding the authenticated site identifier for the current call. */
     public static final Context.Key<UUID> SITE_ID = Context.key("delta-site-id");
@@ -64,8 +74,15 @@ public class DeltaAuthInterceptor implements ServerInterceptor {
         return Contexts.interceptCall(context, call, headers, next);
     }
 
-    private <ReqT, RespT> ServerCall.Listener<ReqT> unauthenticated(ServerCall<ReqT, RespT> call, String message) {
-        call.close(Status.UNAUTHENTICATED.withDescription(message), new Metadata());
+    /**
+     * Close the call as unauthenticated. Every rejection path funnels through here, so the audit
+     * line cannot be forgotten on a new one.
+     */
+    private <ReqT, RespT> ServerCall.Listener<ReqT> unauthenticated(ServerCall<ReqT, RespT> call, String reason) {
+        SocketAddress peer = call.getAttributes().get(Grpc.TRANSPORT_ATTR_REMOTE_ADDR);
+        logger.warn("auth_failure: gRPC {} rejected: {} (peer={})",
+                call.getMethodDescriptor().getFullMethodName(), reason, peer);
+        call.close(Status.UNAUTHENTICATED.withDescription(reason), new Metadata());
         return new ServerCall.Listener<>() {
         };
     }

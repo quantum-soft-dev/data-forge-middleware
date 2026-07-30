@@ -26,6 +26,7 @@
 17. [What the server produces (egress)](#what-the-server-produces-egress)
 18. [End-to-end example (pseudocode)](#end-to-end-example-pseudocode)
 19. [Troubleshooting](#troubleshooting)
+20. [Server-side observability](#server-side-observability-83)
 
 ---
 
@@ -448,13 +449,20 @@ message ServerError { ErrorCode code = 1; string message = 2; RecoveryAction act
 |---|---|---|
 | `SEQUENCE_GAP` | `first_seq != server_last_seq + 1` | Open a `FULL_SNAPSHOT` (action = `NEED_REBASELINE`). |
 | `RECONCILIATION_FAILED` | `SessionEnd` counts ≠ accepted records | Fix your counts; re-baseline. Nothing was committed. |
-| `ACTIVE_SESSION_EXISTS` | another session is live for this site | Serialize sessions; retry after the other ends/times out. |
-| `SCHEMA_MISMATCH` | `schema_version` unknown/stale | `SubmitSchema`, then retry. |
-| `UNAUTHORIZED` | token/site problem | Re-authenticate. |
+| `ACTIVE_SESSION_EXISTS` | another session is live for this site, **or** the account is at its concurrent-batch limit | Serialize sessions; retry after the other ends/times out. |
+| `SCHEMA_MISMATCH` | `schema_version` unknown/stale, **or** a `POSTGRES_CDC` site has no schema on file yet | `SubmitSchema`, then retry. |
+| `UNAUTHORIZED` | token/site problem — including a site **deactivated or deleted** while the stream was open | Re-authenticate; if the site was deactivated, an operator must reactivate it. |
 | `INTERNAL` | server error | Retry with backoff. |
 
 gRPC transport-level `UNAUTHENTICATED` (closed call, no `ServerError`) means the `authorization` metadata was
-missing/invalid before the handler ran.
+missing/invalid before the handler ran. That — not `UNAUTHORIZED` — is the usual symptom of a deactivated or
+deleted site, because the token is checked when the stream opens. The in-band `UNAUTHORIZED` covers the
+narrower case where the site changed *after* that check and before `SessionStart`.
+
+The last three rows widened in #83. A deactivated or deleted site, a CDC site with no schema, and the account
+concurrency limit used to escape the typed protocol entirely: they surfaced as a bare `Status.INTERNAL`
+carrying no `ErrorCode`, indistinguishable from a genuine server fault. They are now ordinary in-band
+`ServerError`s with `action = PROCEED` — none of them is fixed by a re-baseline.
 
 ---
 
@@ -640,7 +648,50 @@ for ev in stub.StreamChanges(client_events(), metadata=md):
 | `RECONCILIATION_FAILED` | `SessionEnd` per-table counts, `content_hash`, or `last_seq` ≠ records sent | count exactly per table; set `last_seq` to your highest seq; for resume use **cumulative** counts |
 | `INTERNAL` "exceeded … record limit" | one non-continuous session buffered too many records | stream large datasets in `CONTINUOUS` mode |
 | `INTERNAL` "exceeded … byte buffer budget" | one non-continuous session buffered too many bytes (fat rows can trip this far below the record cap) | stream large datasets in `CONTINUOUS` mode, or raise `DELTA_MAX_SESSION_BYTES` alongside pod memory |
-| `ACTIVE_SESSION_EXISTS` | another session live for this site (or a prior dropped batch not yet timed out) | serialize sessions; for a resumable DELTA drop, reconnect to get `RESUME_FROM` |
+| `ACTIVE_SESSION_EXISTS` | another session live for this site (or a prior dropped batch not yet timed out), or the account is at `MAX_CONCURRENT_BATCHES` | serialize sessions; for a resumable DELTA drop, reconnect to get `RESUME_FROM` |
+| `SCHEMA_MISMATCH` at `SessionStart` on a fresh CDC site | the site is `POSTGRES_CDC` and has no schema on file | `SubmitSchema` first — a `FULL_SNAPSHOT` hits the same wall |
+| `UNAUTHORIZED` on a token that still validates | the **site** was deactivated or deleted after this stream opened | an operator must reactivate the site; retrying and re-authenticating will not help |
+| Records sent, no `SessionCommitted`, stream closes cleanly | change records were streamed without a `SessionStart` the server accepted | check the server log for `Delta change records discarded`; open a session first and read its `SessionOpened` before streaming |
 | `UPDATE` rejected | the table is keyless (empty `primary_key`) | emit `DELETE` + `INSERT` instead |
 | Wrong Parquet types / parse errors in egress | wire value doesn't match declared type | send decimals/dates/timestamps as **strings**; keep `SubmitSchema` in sync with the data |
 | Server seems to lose the unsealed tail (continuous) | stream dropped mid-segment | reconnect and continue from the last `committed_seq`; only sealed segments are durable |
+
+---
+
+## Server-side observability (#83)
+
+Until #83 the ingestion path carried no logger at all, and since client API v1 was retired it is the
+only way a batch can be created — so a rejected session left no trace anywhere and an incident could
+only be investigated by proving the *absence* of log lines. When a client reports a problem, these are
+the lines to grep in the backend pod. All are bounded **per session and per seal, never per record**.
+
+| Line (prefix) | Level | Carries |
+|---|---|---|
+| `auth_failure: gRPC …` | WARN | the gRPC method, the reason, the peer — a call rejected before any handler ran |
+| `Delta schema submitted` / `Delta schema rejected` | INFO / WARN | `siteId`, `schemaVersion`, table names — the upstream cause of later `SCHEMA_MISMATCH`es |
+| `Delta session start` | INFO | `siteId`, `mode`, `firstSeq`, `schemaVersion` as the client declared them |
+| `Delta session opened` | INFO | `batchId`, `action`, `serverLastSeq` (or `resumeFromSeq` + `stagedRecords` on a resume), `rebaseline` |
+| `Delta segment sealed` | INFO | `segment` S3 key, `records`, `bytes`, `firstSeq`, `committedSeq` — one per continuous seal |
+| `Delta session committed` | INFO | `committedSeq`, `records`, `segment`, `rebaseline` |
+| `Delta session transport drop` | INFO | **why** the stream broke: the gRPC `status` and the cause. One per abnormal ending, including one with no session open at all |
+| `Delta session staged for resume` | INFO | a mid-stream drop parked for reconnect: `stagedRecords`, `resumeFromSeq` |
+| `Delta session rejected` | WARN | **every** in-band `ServerError`: `ErrorCode`, `RecoveryAction`, `batchId`, message |
+| `Delta change records discarded` | WARN | a client streaming records the server never opened a session for — once per stream, not per record |
+| `Delta staged session evicted` | WARN | a client that dropped and never came back; its buffered records are discarded |
+| `Delta session failed` | ERROR | an unexpected fault, with the stack trace `Status.INTERNAL` never carried |
+
+A session that opens and commits normally produces three lines (`start`, `opened`, `committed`) plus
+one per seal. If a client claims it uploaded and you see no `Delta session start` for its site, the
+request never reached the handler — look for `auth_failure` next. A session that ends on
+`transport drop` instead of `committed` broke below the protocol; the `status` on that line says
+whether the client cancelled, a deadline expired, or the server itself closed the stream at
+`delta.grpc.max-connection-age-seconds` (routine for a long `CONTINUOUS` session). A stream that
+shows `Delta change records discarded` and nothing else never opened a session at all: the client
+streamed records past a `SessionStart` that was rejected or never sent, and the server dropped
+every one of them.
+
+Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
+`delta.sessions.overflow`, `delta.reconciliation.failures`, `delta.seq.lag`) are exposed on `/actuator/metrics` and
+`/actuator/prometheus`. **Those endpoints are not reachable on dev** — the default security chain
+denies everything it does not explicitly permit, so scraping the delta metrics needs a deployment
+change that is still open (issue #83, point 5).
