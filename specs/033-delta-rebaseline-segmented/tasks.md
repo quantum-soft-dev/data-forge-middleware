@@ -167,3 +167,23 @@ Commit: `test(delta): re-baseline larger than the session record cap (T07)`
 - `CLAUDE.md`: Recent Changes entry, migration pointer to V46/next V47.
 
 Commit: `docs(delta): segmented re-baseline and delta v2 doc corrections (T08)`
+
+---
+
+## Outcome
+
+All eight tasks landed. Two deviations from the plan, both recorded in
+`docs/cr-delta-rebaseline-segmented.md`:
+
+- **T03** dropped the planned `keepBatchId` parameter — T02's query change already excludes
+  provisional rows from `reset`'s delete set, so the exclusion is structural rather than a parameter.
+- **T07** surfaced a pre-existing gap: a `FULL_SNAPSHOT` retry after a drop was rejected with
+  `ACTIVE_SESSION_EXISTS` until the staged sweeper ran (~50 min), because the abandoned session's
+  batch stayed `IN_PROGRESS`. A non-`DELTA` start now fails the session it supersedes. Without this,
+  every dropped attempt at a large snapshot cost an hour of dead time — enough to undo the fix.
+
+`SessionReconciler` was removed in T05: replacing its only production call site with `SessionTotals`
+left it with no callers.
+
+Gates: `./gradlew test -PexcludeIntegration` green at every commit; `./gradlew integrationTest`
+green over the full suite (190 tests, 0 failures).

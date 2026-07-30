@@ -215,6 +215,11 @@ message SessionStart {
 4. Send exactly one `SessionEnd{last_seq, per_table, content_hash}` (omit in [continuous mode](#continuous-mode)).
 5. The server replies `SessionCommitted{committed_seq, segment_s3_key}` and closes its side, or `ServerError` if it refuses to commit.
 
+A periodic session emits **exactly one** `SessionCommitted`, and it is terminal. A large
+`FULL_SNAPSHOT` is sealed into bounded segments internally (033), but those seals are deliberately
+silent on the wire — `Ack` remains your only progress signal, so this sequence is unchanged. Only
+[continuous mode](#continuous-mode) emits `SessionCommitted` per sealed segment.
+
 **Only one active session per site.** A concurrent `SessionStart` while a session is live is rejected with
 `ACTIVE_SESSION_EXISTS` — serialize your sessions per site.
 
@@ -248,6 +253,11 @@ exceeding either cap is rejected with `INTERNAL` (naming the cap that tripped) �
 [continuous mode](#continuous-mode), whose seals reset the buffer far below the caps (there they
 only backstop; `continuous-seal-bytes < max-session-bytes` is enforced at startup). Overflow
 rejections are counted by the `delta.sessions.overflow` meter, tagged `reason=records|bytes`.
+
+Since 033 the caps apply only to a periodic **`DELTA`** session: `CONTINUOUS` and `FULL_SNAPSHOT`
+both seal as they stream, so their buffers never approach either cap. A snapshot of any size
+completes — the caps used to make a re-baseline impossible above 2M records, and clicking
+"Full re-baseline" on such a site bricked it permanently ([#82](https://github.com/quantum-soft-dev/data-forge-middleware/issues/82)).
 
 ---
 
@@ -503,9 +513,12 @@ You don't write these — they're how downstream tools read your data:
   a comma-separated list of the columns the `UPDATE` actually carried, so for an `UPDATE` a null cell
   in a **listed** column means *set to SQL NULL* and a null cell in an **unlisted** column means
   *unchanged* (keep the prior value); it is null for `INSERT` (full row) and `DELETE` (key only).
-  Apply the files sequentially by seq; a `FULL_SNAPSHOT` session produces an all-`INSERT` file — a
-  full table — so bootstrap and re-baseline need no special handling. Only tables with a submitted
-  schema are materialized.
+  Apply the files sequentially by seq; a `FULL_SNAPSHOT` session produces all-`INSERT` files, so
+  bootstrap and re-baseline need no special handling **provided you apply files in seq order**. Do
+  not treat a single `FULL_SNAPSHOT` file as a whole-table replacement: since 033 a snapshot larger
+  than the session buffer is sealed into several segments, so one table's snapshot can span several
+  files (see [re-baseline](#recovery-gaps-resume-re-baseline)). Only tables with a submitted schema
+  are materialized.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
@@ -540,7 +553,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for one table's **delta** Parquet of a session's segment (feature 025); 404 when the table has no declared schema / not yet egressed. Admin twin descoped 2026-07-08 — no admin batch-detail surface |
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
-| `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session starts |
+| `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
 | `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
 
 All endpoints are documented in the OpenAPI spec (`/v3/api-docs`, Swagger UI).
@@ -643,4 +656,4 @@ for ev in stub.StreamChanges(client_events(), metadata=md):
 | `ACTIVE_SESSION_EXISTS` | another session live for this site (or a prior dropped batch not yet timed out) | serialize sessions; for a resumable DELTA drop, reconnect to get `RESUME_FROM` |
 | `UPDATE` rejected | the table is keyless (empty `primary_key`) | emit `DELETE` + `INSERT` instead |
 | Wrong Parquet types / parse errors in egress | wire value doesn't match declared type | send decimals/dates/timestamps as **strings**; keep `SubmitSchema` in sync with the data |
-| Server seems to lose the unsealed tail (continuous) | stream dropped mid-segment | reconnect and continue from the last `committed_seq`; only sealed segments are durable |
+| Watermark did not move after a continuous drop | stream dropped mid-segment | the server durably seals the unsealed tail and closes the batch — reconnect and continue from `GetSyncState.last_applied_seq`, which already includes it |

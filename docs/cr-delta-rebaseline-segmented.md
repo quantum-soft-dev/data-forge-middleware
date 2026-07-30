@@ -1,6 +1,6 @@
 # CR: Segmented Re-baseline (033)
 
-**Status**: In progress (branch `issue-82`)
+**Status**: Implemented (branch `issue-82`)
 **Spec**: `specs/033-delta-rebaseline-segmented/`
 **Migration**: V46
 **Issue**: [#82](https://github.com/quantum-soft-dev/data-forge-middleware/issues/82) — *re-baseline is
@@ -88,12 +88,16 @@ spent, nothing is published.
 
 `SessionEnd` runs, in the single existing commit transaction:
 
-1. `rebaselineService.reset(siteId, sessionFirstSeq, keepBatchId)` — delete every **non-provisional**
-   segment of the site plus all checkpoint rows, reset the watermark to `sessionFirstSeq - 1`, clear
+1. `rebaselineService.reset(siteId, sessionFirstSeq)` — delete every **non-provisional** segment of
+   the site plus all checkpoint rows, reset the watermark to `sessionFirstSeq - 1`, clear
    `rebaseline_requested`. S3 object deletes stay deferred to `afterCommit`.
 2. Persist the tail segment (non-provisional).
 3. `UPDATE changelog_segments SET provisional = false WHERE batch_id = :batchId`.
 4. `advanceWatermark(committedSeq)`, `completeBatch(batchId)`.
+
+*Implementation note:* the planned `keepBatchId` argument on `reset` proved unnecessary. `reset`
+sources its delete set from `findBySiteIdOrderByFirstSeq`, which excludes provisional rows, so the
+snapshot being written is out of scope by construction rather than by an explicit exclusion.
 
 Old baseline destroyed **exactly once**, and only after the new one is durably complete. A drop at
 any point before step 1 leaves the previous baseline byte-for-byte intact and still served — the
@@ -114,10 +118,11 @@ reconciles against its whole-session totals, preserving the 030/T05 invariant.
 A snapshot that never completes leaves provisional segments behind. They are invisible, but they
 occupy `UNIQUE (site_id, first_seq)` slots and S3 space. They are collected:
 
-- at `FULL_SNAPSHOT` `SessionStart` — any provisional segments for the site from an earlier failed
-  attempt are deleted (rows + S3) before the new attempt begins;
-- when the session's batch is failed (`abortBatch`, staged-TTL eviction) via the existing
-  `ChangelogSegmentService.deleteByBatchId`.
+- at `FULL_SNAPSHOT` `SessionStart` — `DeltaRebaselineService.deleteProvisional(siteId)` drops any
+  provisional segments left by an earlier failed attempt (rows in-transaction, S3 objects after
+  commit) before the new attempt begins. This is the guaranteed path;
+- on `abortBatch` — a snapshot rejected mid-session drops its own provisional segments immediately,
+  which only shortens how long the storage and the `UNIQUE (site_id, first_seq)` slots stay held.
 
 ### 6. Bit BI baseline suspension becomes idempotent
 
@@ -128,6 +133,18 @@ the account's baselines are already suspended, so one re-baseline produces one s
 
 The product rule is unchanged: a `FULL_SNAPSHOT` still requires a manual plugin reinit
 (`docs/cr-bitbi-delta-sql.md`).
+
+### 7. A snapshot retry no longer collides with the session it abandons
+
+Found while writing the T07 integration test, and pre-existing rather than introduced here. A staged
+session's batch is deliberately left `IN_PROGRESS` so a `DELTA` reconnect can re-attach to it. A
+`FULL_SNAPSHOT` never re-attaches — it abandons the staged session — but the batch stayed active, so
+the retry was rejected with `ACTIVE_SESSION_EXISTS` until the staged sweeper ran (~50 min).
+
+That was tolerable while a large re-baseline could never succeed anyway. It is not tolerable now: a
+multi-million-record snapshot takes long enough that a mid-stream drop is likely, and an hour of
+dead time per attempt would undo the fix. A non-`DELTA` `SessionStart` now fails the session it
+supersedes.
 
 ## Downstream contract change
 
