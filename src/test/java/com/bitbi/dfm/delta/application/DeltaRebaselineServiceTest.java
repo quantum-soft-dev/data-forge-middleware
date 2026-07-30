@@ -24,6 +24,7 @@ import static org.mockito.Mockito.*;
 class DeltaRebaselineServiceTest {
 
     private static final UUID SITE = UUID.randomUUID();
+    private static final UUID BATCH = UUID.randomUUID();
 
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final S3ChangelogSegmentStorage segmentStorage = mock(S3ChangelogSegmentStorage.class);
@@ -62,5 +63,49 @@ class DeltaRebaselineServiceTest {
         assertEquals(199L, saved.getValue().getLastAppliedSeq(), "watermark reset to firstSeq-1");
         assertEquals(0L, saved.getValue().getLastCheckpointSeq(), "checkpoint pointer cleared");
         assertEquals(3, saved.getValue().getSchemaVersion(), "schema version preserved");
+    }
+
+    @Test
+    void resetOnlyDiscardsCommittedSegmentsNotTheSnapshotBeingWritten() {
+        // 033: a large re-baseline seals its own segments before SessionEnd calls reset. Those are
+        // provisional, and reset must source its delete set from the committed-only query — sweeping
+        // them too would destroy the very snapshot that is replacing the baseline.
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
+        when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+
+        service.reset(SITE, 10L);
+
+        verify(segmentRepository).findBySiteIdOrderByFirstSeq(SITE);
+        verify(segmentRepository, never()).findProvisionalBySiteId(any());
+    }
+
+    @Test
+    void deleteProvisionalRemovesOrphanedSnapshotRowsAndObjects() {
+        // A re-baseline that never reached SessionEnd leaves invisible segments behind; they hold
+        // UNIQUE (site_id, first_seq) slots, so the next attempt collects them before streaming.
+        UUID orphanId = UUID.randomUUID();
+        ChangelogSegment orphan = mock(ChangelogSegment.class);
+        when(orphan.getId()).thenReturn(orphanId);
+        when(orphan.getS3Key()).thenReturn("delta/site/segments/orphan.pb.gz");
+        when(segmentRepository.findProvisionalByBatchId(BATCH)).thenReturn(List.of(orphan));
+
+        int deleted = service.deleteProvisionalByBatch(BATCH);
+
+        assertEquals(1, deleted);
+        verify(segmentRepository).deleteById(orphanId);
+        verify(segmentStorage).delete("delta/site/segments/orphan.pb.gz");
+        verify(syncStateRepository, never()).save(any());
+        verify(checkpointRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void deleteProvisionalIsANoOpWhenNothingWasLeftBehind() {
+        when(segmentRepository.findProvisionalByBatchId(BATCH)).thenReturn(List.of());
+
+        assertEquals(0, service.deleteProvisionalByBatch(BATCH));
+
+        verify(segmentRepository, never()).deleteById(any());
+        verifyNoInteractions(segmentStorage);
     }
 }

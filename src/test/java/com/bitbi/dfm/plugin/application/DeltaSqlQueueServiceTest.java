@@ -63,13 +63,15 @@ class DeltaSqlQueueServiceTest {
 
     private Site site;
     private AccountPlugin activation;
+    private SimpleMeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         queueService = new DeltaSqlQueueService(
                 segmentRepository, siteRepository, accountPluginRepository,
                 sqlGenerationService, baselineRepository, pluginAuditService,
-                new SimpleMeterRegistry());
+                meterRegistry);
 
         site = mock(Site.class);
         when(site.getId()).thenReturn(SITE_ID);
@@ -153,6 +155,55 @@ class DeltaSqlQueueServiceTest {
         verify(pluginAuditService).logSqlGenerationFailed(
                 eq("bit-bi"), eq(ACCOUNT_ID), eq(BATCH_ID), eq(SITE_ID), anyString(), anyLong());
         assertThat(segment.getPluginSqlAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("FULL_SNAPSHOT: a segmented snapshot signals reinit once, not once per segment")
+    void shouldSignalRebaselineOncePerSnapshotNotPerSegment() {
+        // 033: a re-baseline larger than the session buffer now arrives as N FULL_SNAPSHOT segments
+        // published together. Suspension is already idempotent per table, but the audit entry and
+        // the rebaseline metric must not fire N times — the owner is told to reinit once.
+        PluginDeltaBaseline existing = PluginDeltaBaseline.create(ACTIVATION_ID, SITE_ID, "customers", 3L);
+        when(baselineRepository.findByAccountPluginIdAndSiteId(ACTIVATION_ID, SITE_ID))
+                .thenReturn(List.of(existing));
+
+        ChangelogSegment first = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(10, 0, 0)));
+        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(first));
+        assertThat(queueService.processNextPending()).isTrue();
+
+        ChangelogSegment second = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(7, 0, 0)));
+        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(second));
+        assertThat(queueService.processNextPending()).isTrue();
+
+        assertThat(existing.getBaselineSeq()).isEqualTo(Long.MAX_VALUE);
+        verify(pluginAuditService, times(1)).logSqlGenerationFailed(
+                eq("bit-bi"), eq(ACCOUNT_ID), any(), eq(SITE_ID), anyString(), anyLong());
+        assertThat(meterRegistry.counter("sql.generation.delta.rebaseline.detected").count()).isEqualTo(1.0);
+        // Both segments are still consumed — the queue must not stall on the quiet one.
+        assertThat(second.getPluginSqlAt()).isNotNull();
+        verifyNoInteractions(sqlGenerationService);
+    }
+
+    @Test
+    @DisplayName("FULL_SNAPSHOT: a later segment still suspends a table the earlier ones never carried")
+    void shouldSuspendTablesFirstSeenInALaterSegment() {
+        // Tables are spread across a snapshot's segments; one appearing only in the tail must still
+        // be suspended, and that is a real change, so it signals again.
+        when(baselineRepository.findByAccountPluginIdAndSiteId(ACTIVATION_ID, SITE_ID))
+                .thenReturn(List.of());
+
+        ChangelogSegment first = segment("FULL_SNAPSHOT", Map.of("customers", new TableChangeStats(10, 0, 0)));
+        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(first));
+        queueService.processNextPending();
+
+        ChangelogSegment second = segment("FULL_SNAPSHOT", Map.of("orders", new TableChangeStats(4, 0, 0)));
+        when(segmentRepository.findNextPendingPluginSql(1)).thenReturn(List.of(second));
+        queueService.processNextPending();
+
+        ArgumentCaptor<PluginDeltaBaseline> captor = ArgumentCaptor.forClass(PluginDeltaBaseline.class);
+        verify(baselineRepository, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .anyMatch(b -> "orders".equals(b.getTableName()) && b.getBaselineSeq() == Long.MAX_VALUE);
     }
 
     @Test

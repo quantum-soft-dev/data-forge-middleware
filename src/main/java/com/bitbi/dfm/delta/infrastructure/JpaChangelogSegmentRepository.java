@@ -24,8 +24,54 @@ public interface JpaChangelogSegmentRepository
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
 
     @Override
-    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId ORDER BY s.firstSeq")
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false "
+            + "ORDER BY s.firstSeq")
     java.util.List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
+
+    @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId = :batchId AND s.provisional = true "
+            + "ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findProvisionalByBatchId(UUID batchId);
+
+    @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = true "
+            + "ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findProvisionalBySiteId(UUID siteId);
+
+    // flushAutomatically is load-bearing, not decoration. This runs mid-transaction in
+    // DeltaSessionCommitService.commit, right after rebaselineService.reset() dirtied SiteSyncState
+    // and queued checkpoint deletes. Hibernate auto-flushes before a query only when the query space
+    // intersects the pending changes; site_sync_state / checkpoints do not intersect
+    // changelog_segments, so without an explicit flush clearAutomatically would detach and silently
+    // discard them — leaving rebaseline_requested set after a SUCCESSFUL snapshot and stale
+    // checkpoint rows alive.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.provisional = false, s.egressAt = NULL, s.pluginSqlAt = NULL "
+            + "WHERE s.batchId = :batchId AND s.provisional = true")
+    int flipProvisionalByBatchId(UUID batchId);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.batchId = :toBatchId "
+            + "WHERE s.batchId = :fromBatchId AND s.provisional = true")
+    int reassignProvisionalBatch(UUID fromBatchId, UUID toBatchId);
+
+    // Crash/eviction backstop: a provisional segment is only legitimate while the session that wrote
+    // it still owns a running batch. A staged session deliberately leaves its batch IN_PROGRESS, so
+    // this never touches one that may still resume; everything else is garbage.
+    @Override
+    @Query(value = """
+            SELECT * FROM changelog_segments s
+            WHERE s.provisional = TRUE
+              AND NOT EXISTS (SELECT 1 FROM batches b
+                              WHERE b.id = s.batch_id AND b.status = 'IN_PROGRESS')
+            ORDER BY s.created_at
+            LIMIT :limit
+            """, nativeQuery = true)
+    java.util.List<ChangelogSegment> findProvisionalWithoutRunningBatch(int limit);
 
     @Override
     @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId = :batchId")
@@ -90,9 +136,12 @@ public interface JpaChangelogSegmentRepository
             """, nativeQuery = true)
     java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit);
 
+    // flushAutomatically for the same reason as flipProvisionalByBatchId: clearAutomatically alone
+    // detaches whatever the caller's transaction has not yet flushed.
     @Override
-    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true)
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
-    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL WHERE s.siteId = :siteId")
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL "
+            + "WHERE s.siteId = :siteId AND s.provisional = false")
     int clearPluginSqlBySiteId(UUID siteId);
 }

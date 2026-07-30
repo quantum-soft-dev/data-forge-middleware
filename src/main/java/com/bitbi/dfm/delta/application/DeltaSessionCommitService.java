@@ -69,13 +69,27 @@ public class DeltaSessionCommitService {
      *
      * @param rebaseline whether to reset the prior baseline before persisting (FULL_SNAPSHOT)
      */
-    @Transactional
     public String commit(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
                          List<ChangeRecord> records, boolean rebaseline) {
+        return commit(siteId, batchId, mode, firstSeq, committedSeq, records, rebaseline, firstSeq);
+    }
+
+    /**
+     * As above, but {@code sessionFirstSeq} is the first sequence of the whole session rather than of
+     * the segment being persisted. The two differ once a re-baseline seals mid-stream (033): the
+     * final call carries only the tail, while the baseline reset must be expressed in terms of where
+     * the snapshot started.
+     *
+     * @param sessionFirstSeq first sequence of the session (== {@code firstSeq} when it never sealed)
+     */
+    @Transactional
+    public String commit(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
+                         List<ChangeRecord> records, boolean rebaseline, long sessionFirstSeq) {
         if (rebaseline) {
-            // Wipe the old baseline first (in this transaction) — it deletes all prior segments, so
-            // it must run before the new snapshot segment is persisted below.
-            rebaselineService.reset(siteId, firstSeq);
+            // Wipe the old baseline first (in this transaction) — it deletes all prior committed
+            // segments, so it must run before the tail segment is persisted below. Provisional
+            // segments sealed earlier in this session are excluded by construction (033/T03).
+            rebaselineService.reset(siteId, sessionFirstSeq);
         }
         String segmentKey = "";
         // An empty session persists no segment: a degenerate segment at first_seq=watermark+1 would
@@ -85,9 +99,66 @@ public class DeltaSessionCommitService {
             segmentKey = segment.getS3Key();
             wakeEgressAfterCommit();
         }
+        if (rebaseline) {
+            // Publish the segments sealed earlier in this session, after the old baseline is gone and
+            // before the watermark moves: readers switch from the whole old baseline to the whole new
+            // one in one transaction. A no-op for a snapshot small enough never to have sealed.
+            if (changelogSegmentService.publishProvisional(batchId) > 0) {
+                wakeEgressAfterCommit();
+            }
+        }
         syncStateService.advanceWatermark(siteId, committedSeq);
         batchLifecycleService.completeBatch(batchId);
         return segmentKey;
+    }
+
+    /**
+     * Move a resumed session's provisional segments onto the batch it now runs under (033 review).
+     *
+     * <p>A resume whose original batch had already been reaped continues under a replacement batch.
+     * Publication is keyed on the batch, and {@link DeltaRebaselineService#reset} cannot see
+     * provisional rows, so segments left under the old batch would be neither published nor deleted:
+     * the snapshot would commit a baseline missing everything it streamed before the drop, with the
+     * watermark advanced and the client told it succeeded. Reconciliation does not catch it — the
+     * totals travel with the staged session and still match.</p>
+     *
+     * @param fromBatchId the reaped batch the segments were sealed under
+     * @param toBatchId   the replacement batch
+     * @return number of segments moved
+     */
+    @Transactional
+    public int reassignProvisionalSegments(UUID fromBatchId, UUID toBatchId) {
+        if (fromBatchId == null || fromBatchId.equals(toBatchId)) {
+            return 0;
+        }
+        return changelogSegmentService.reassignProvisionalBatch(fromBatchId, toBatchId);
+    }
+
+    /**
+     * Seal a mid-snapshot segment of a re-baseline (033): durable, but {@code provisional} — hidden
+     * from the checkpoint fold and both work queues, and deliberately <em>not</em> advancing the
+     * watermark.
+     *
+     * <p>This is what lets a snapshot larger than {@code delta.ingestion.max-session-records} stream
+     * at all: the buffer is drained on each seal instead of growing to the whole dataset. Holding the
+     * watermark back keeps {@code GetSyncState} reporting the pre-snapshot position, so a client that
+     * drops mid-snapshot restarts a clean snapshot rather than resuming into a half-replaced
+     * baseline — and the old baseline keeps serving until {@code SessionEnd} publishes the new one.</p>
+     *
+     * @param siteId   site identifier
+     * @param batchId  the session's batch (stays open)
+     * @param mode     session mode ({@code FULL_SNAPSHOT})
+     * @param firstSeq first sequence of this segment
+     * @param records  accepted change records
+     * @return the persisted segment's S3 key, or {@code ""} when {@code records} is empty (no-op)
+     */
+    @Transactional
+    public String commitProvisionalSegment(UUID siteId, UUID batchId, String mode, long firstSeq,
+                                           List<ChangeRecord> records) {
+        if (records.isEmpty()) {
+            return "";
+        }
+        return changelogSegmentService.persistProvisional(siteId, batchId, mode, firstSeq, records).getS3Key();
     }
 
     /**

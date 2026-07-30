@@ -68,14 +68,18 @@ abstract class DeltaIngestionContractTestSupport {
         ChangelogSegment segment = mock(ChangelogSegment.class);
         when(segment.getS3Key()).thenReturn(SEGMENT_KEY);
         when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
+        when(changelogSegmentService.persistProvisional(any(), any(), any(), anyLong(), any())).thenReturn(segment);
         DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
         DeltaSessionCommitService commitService = new DeltaSessionCommitService(
                 changelogSegmentService, syncStateService, batchLifecycle,
                 mock(DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService service = new DeltaIngestionService(
-                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()),
-                2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
+                2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L,
+                // 033: snapshot seal pinned to 100 so seal behaviour is observable in a 250-record
+                // test; the shipped default is far higher (DeltaIngestionSnapshotSealConfigTest).
+                500, 100);
 
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)

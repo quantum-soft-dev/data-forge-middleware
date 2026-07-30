@@ -31,8 +31,8 @@ import java.util.TreeMap;
  * </ul>
  *
  * <p>Result is lowercase hex SHA-256. Clients implementing this algorithm get end-to-end integrity;
- * a client that cannot yet compute it may send an empty {@code content_hash} (see
- * {@link #matches(List, String)}).</p>
+ * a client that cannot yet compute it may send an empty {@code content_hash}, which
+ * {@link SessionTotals#hashMatches(String)} treats as an opt-out.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -47,23 +47,53 @@ public final class ChangelogContentHash {
     }
 
     /**
-     * @return whether the declared hash matches the records; a blank {@code declaredHex} (client did
-     *         not provide one) is treated as a match so optional integrity is not a hard requirement
-     */
-    public static boolean matches(List<ChangeRecord> records, String declaredHex) {
-        if (declaredHex == null || declaredHex.isBlank()) {
-            return true;
-        }
-        return compute(records).equalsIgnoreCase(declaredHex.trim());
-    }
-
-    /**
      * @return the lowercase-hex SHA-256 over the canonical serialization of {@code records}
      */
     public static String compute(List<ChangeRecord> records) {
-        MessageDigest digest = sha256();
-        StringBuilder sb = new StringBuilder();
-        for (ChangeRecord record : records) {
+        Hasher hasher = new Hasher();
+        hasher.update(records);
+        return hasher.hex();
+    }
+
+    /**
+     * Incremental form of {@link #compute(List)} (033): records are fed in as they are accepted and
+     * the digest is finalized once, so a session whose buffer is drained by mid-stream segment seals
+     * can still verify the client's whole-session {@code content_hash}.
+     *
+     * <p>The canonical encoding is unchanged — each record contributes exactly the bytes it would in
+     * {@code compute}, and the digest is order-dependent but chunk-boundary independent. Not
+     * thread-safe; a session is driven by a single gRPC stream.</p>
+     */
+    public static final class Hasher {
+
+        private final MessageDigest digest = sha256();
+        private final StringBuilder sb = new StringBuilder();
+        /** Memoized result: {@link MessageDigest#digest()} resets, so it may only be called once. */
+        private String hex;
+
+        /**
+         * Fold the next chunk of accepted records into the running digest.
+         *
+         * @param records records in sequence order (may be empty)
+         * @throws IllegalStateException if the digest was already finalized by {@link #hex()}
+         */
+        public void update(List<ChangeRecord> records) {
+            for (ChangeRecord record : records) {
+                update(record);
+            }
+        }
+
+        /**
+         * Fold a single record into the running digest — the per-record form used by the ingestion
+         * path, avoiding a singleton list and its iterator per accepted record.
+         *
+         * @param record the accepted change record
+         * @throws IllegalStateException if the digest was already finalized by {@link #hex()}
+         */
+        public void update(ChangeRecord record) {
+            if (hex != null) {
+                throw new IllegalStateException("Hasher already finalized — cannot accept more records");
+            }
             sb.setLength(0);
             sb.append(record.getOp().name()).append(UNIT_SEPARATOR);
             appendPrefixed(sb, record.getTable());
@@ -74,7 +104,19 @@ public final class ChangelogContentHash {
             sb.append(RECORD_SEPARATOR);
             digest.update(sb.toString().getBytes(StandardCharsets.UTF_8));
         }
-        return HexFormat.of().formatHex(digest.digest());
+
+        /**
+         * Finalize and return the lowercase-hex digest. Idempotent — the result is memoized, so a
+         * caller may compare it more than once; further {@link #update} calls are rejected.
+         *
+         * @return lowercase-hex SHA-256 over everything fed in so far
+         */
+        public String hex() {
+            if (hex == null) {
+                hex = HexFormat.of().formatHex(digest.digest());
+            }
+            return hex;
+        }
     }
 
     /**

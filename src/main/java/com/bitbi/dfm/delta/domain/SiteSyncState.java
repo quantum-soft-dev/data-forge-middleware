@@ -111,7 +111,10 @@ public class SiteSyncState {
 
     /**
      * Flag the site for a full re-baseline: {@code GetSyncState} answers NEED_REBASELINE until the
-     * client starts its FULL_SNAPSHOT session (which clears the flag via {@link #resetForRebaseline}).
+     * client's FULL_SNAPSHOT session <em>commits</em> (which clears the flag via
+     * {@link #resetForRebaseline}). Holding it until the commit is deliberate: a snapshot that drops
+     * part-way leaves the request standing, so the client retries instead of silently resuming as an
+     * ordinary delta on top of a baseline that was never replaced.
      */
     public void requestRebaseline() {
         this.rebaselineRequested = true;

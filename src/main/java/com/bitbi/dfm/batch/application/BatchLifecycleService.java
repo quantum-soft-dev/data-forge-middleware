@@ -373,6 +373,29 @@ public class BatchLifecycleService {
     }
 
     /**
+     * Reclaim a site's active batch when it has been silent since {@code cutoffTime} (033 review).
+     *
+     * <p>A Delta v2 session that drops is staged for resume in the serving pod's memory, leaving its
+     * batch {@code IN_PROGRESS} on purpose. With more than one replica the retry usually lands on a
+     * different pod, which knows nothing of that staged entry and is rejected with
+     * {@code ACTIVE_SESSION_EXISTS} until the original pod's sweeper runs. Callers use this to
+     * unblock a legitimate new session across pods.</p>
+     *
+     * <p>Safe by construction: it delegates to the same conditional update the timeout sweeper uses,
+     * which re-checks status and cutoff atomically, so a session that is merely quiet — and touches
+     * its batch before the update lands — is never killed.</p>
+     *
+     * @param siteId     site whose active batch to reclaim
+     * @param cutoffTime reclaim only if the batch has had no activity since this instant
+     * @return true when a batch was reclaimed and the caller may retry
+     */
+    public boolean reclaimAbandonedBatch(UUID siteId, LocalDateTime cutoffTime) {
+        return batchRepository.findActiveBySiteId(siteId)
+                .map(batch -> markBatchNotCompletedIfStillExpired(batch.getId(), cutoffTime))
+                .orElse(false);
+    }
+
+    /**
      * Update batch hasErrors flag.
      * <p>
      * Called by ErrorLoggingService when errors are logged.

@@ -13,7 +13,8 @@ import java.time.ZoneOffset;
  * @param lastCheckpointAt    when the latest checkpoint was materialized (null before the first one)
  * @param schemaVersion       schema version the server currently holds
  * @param updatedAt           last sync-state update (drives the "stalled" indicator)
- * @param rebaselineRequested whether a full re-baseline is pending (cleared when the client starts FULL_SNAPSHOT)
+ * @param rebaselineRequested whether a full re-baseline is pending (cleared when the client's
+ *                            FULL_SNAPSHOT session commits, not when it starts)
  * @param rebuildRequested    whether a forced checkpoint rebuild is queued (cleared when it completes)
  */
 public record DeltaSyncStateResponseDto(

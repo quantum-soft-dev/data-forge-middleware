@@ -108,13 +108,31 @@ public class DeltaSqlQueueService {
     /**
      * FULL_SNAPSHOT handling: suspend every known table of the site (existing baseline rows and
      * tables present in the snapshot) until the user reinitializes the plugin.
+     *
+     * <p>033: a re-baseline too large to buffer arrives as N {@code FULL_SNAPSHOT} segments published
+     * together, so this runs once per segment. Suspending is idempotent per table, but the audit
+     * entry and the {@code rebaseline.detected} metric are the owner's "reinit required" signal — they
+     * fire only when a table actually moved into suspension, so one re-baseline produces one signal
+     * however many segments carried it.</p>
      */
     private void suspendBaselines(ChangelogSegment segment, Site site, AccountPlugin activation) {
         Set<String> covered = new HashSet<>();
-        for (PluginDeltaBaseline baseline : baselineRepository
-                .findByAccountPluginIdAndSiteId(activation.getId(), site.getId())) {
-            baseline.suspend();
-            baselineRepository.save(baseline);
+        Set<String> newlySuspended = new HashSet<>();
+        List<PluginDeltaBaseline> existing = baselineRepository
+                .findByAccountPluginIdAndSiteId(activation.getId(), site.getId());
+        // Whether the site was ALREADY in the suspended state before this segment. A re-baseline now
+        // arrives as N segments (033), and tables are spread across them, so "did this segment
+        // suspend anything" is not the same question as "is this a new re-baseline": a table first
+        // seen in segment 7 would otherwise raise a second reinit signal for the same snapshot.
+        boolean alreadySuspended = !existing.isEmpty()
+                && existing.stream().allMatch(b -> b.getBaselineSeq() != null
+                        && b.getBaselineSeq() == Long.MAX_VALUE);
+        for (PluginDeltaBaseline baseline : existing) {
+            if (baseline.getBaselineSeq() == null || baseline.getBaselineSeq() != Long.MAX_VALUE) {
+                baseline.suspend();
+                baselineRepository.save(baseline);
+                newlySuspended.add(baseline.getTableName());
+            }
             covered.add(baseline.getTableName());
         }
 
@@ -125,13 +143,21 @@ public class DeltaSqlQueueService {
                     PluginDeltaBaseline suspended =
                             PluginDeltaBaseline.create(activation.getId(), site.getId(), tableName, Long.MAX_VALUE);
                     baselineRepository.save(suspended);
+                    newlySuspended.add(tableName);
                 }
             }
         }
 
+        if (alreadySuspended || newlySuspended.isEmpty()) {
+            log.debug("Site {} is already suspended for this re-baseline — segment {} raises no "
+                    + "second reinit signal", site.getId(), segment.getId());
+            return;
+        }
+
         String message = "Site was rebaselined (FULL_SNAPSHOT) — SQL generation is suspended for its tables; "
                 + "reinitialize the bit-bi plugin to resume";
-        log.warn("{}: siteId={}, batchId={}, tables={}", message, site.getId(), segment.getBatchId(), covered);
+        log.warn("{}: siteId={}, batchId={}, tables={}", message, site.getId(), segment.getBatchId(),
+                newlySuspended);
         pluginAuditService.logSqlGenerationFailed(
                 PLUGIN_ID, site.getAccountId(), segment.getBatchId(), site.getId(), message, 0L);
         meterRegistry.counter("sql.generation.delta.rebaseline.detected").increment();

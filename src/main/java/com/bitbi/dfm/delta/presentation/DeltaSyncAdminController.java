@@ -211,8 +211,8 @@ public class DeltaSyncAdminController {
     @Operation(
             summary = "Request full re-baseline (admin)",
             description = "Raises the persistent rebaseline_requested flag: on its next connect the Delta client is "
-                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is cleared when the "
-                    + "FULL_SNAPSHOT session actually starts."
+                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is cleared when that "
+                    + "FULL_SNAPSHOT session commits, so a snapshot that drops part-way re-arms a clean retry."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "202", description = "Re-baseline requested",
