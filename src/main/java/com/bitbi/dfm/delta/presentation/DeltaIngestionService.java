@@ -770,6 +770,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 } catch (RuntimeException e) {
                     // A commit failure on the final seal must not escape the gRPC callback and strand
                     // the batch IN_PROGRESS — fail the batch and surface the error, like onNext/onError.
+                    // #83: and like onNext, record it — Status.INTERNAL carries no stack trace, so the
+                    // continuous final commit is otherwise the one fault that still closes silently.
+                    logger.error("Delta session failed on final close: siteId={}, batchId={}",
+                            siteId, batchId, e);
                     abortBatch();
                     closed = true;
                     responseObserver.onError(Status.INTERNAL.withDescription(e.getMessage()).asRuntimeException());

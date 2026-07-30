@@ -178,6 +178,32 @@ class DeltaIngestionSessionLoggingContractTest {
                 "a Status.INTERNAL with no stack trace is what made #83 uninvestigable");
     }
 
+    /**
+     * The sibling of the fault above, on the other {@code catch (RuntimeException)}: a CONTINUOUS
+     * session half-closes without {@code SessionEnd}, so its final commit runs from
+     * {@code onCompleted()}. A failure there also closes the call with a bare {@code Status.INTERNAL}
+     * and must not be the one fault that still leaves no trace.
+     */
+    @Test
+    void aFailedFinalCommitOnAContinuousCloseIsAlsoLoggedWithItsStackTrace() throws Exception {
+        openableBatch(UUID.randomUUID());
+        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any()))
+                .thenThrow(new IllegalStateException("segment write failed"));
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.CONTINUOUS, 1L));
+            req.onNext(change(1L));
+        });
+
+        List<ILoggingEvent> errors = appender.list.stream()
+                .filter(event -> event.getLevel() == Level.ERROR).toList();
+        assertEquals(1, errors.size(), "a failed final commit must leave exactly one ERROR");
+        assertTrue(errors.getFirst().getFormattedMessage().contains(SITE.toString()),
+                "the ERROR must name the site: " + errors.getFirst().getFormattedMessage());
+        assertNotNull(errors.getFirst().getThrowableProxy(),
+                "Status.INTERNAL carries no stack trace, so the log line must");
+    }
+
     @Test
     void loggingIsBoundedPerSessionNotPerRecord() throws Exception {
         openableBatch(UUID.randomUUID());
