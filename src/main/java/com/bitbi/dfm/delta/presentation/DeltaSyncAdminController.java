@@ -20,6 +20,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -226,6 +227,37 @@ public class DeltaSyncAdminController {
         siteService.getSite(siteId); // 404 when the site does not exist
         syncStateService.requestRebaseline(siteId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "requested"));
+    }
+
+    /**
+     * Take back a pending re-baseline request for any site (issue #84).
+     * <p>
+     * DELETE /api/v1/sites/{siteId}/delta/rebaseline
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 200 OK, {@code status=cancelled} when a request was pending, {@code not-requested} otherwise
+     */
+    @DeleteMapping("/rebaseline")
+    @Operation(
+            summary = "Cancel a requested full re-baseline (admin)",
+            description = "Clears the persistent rebaseline_requested flag without touching the watermark, "
+                    + "checkpoints or segments: GetSyncState answers PROCEED again and the client resumes "
+                    + "ordinary delta from its watermark. Only effective while the client has not started "
+                    + "its FULL_SNAPSHOT session yet. Idempotent."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, or none was pending",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Map<String, String>> cancelRebaseline(@PathVariable UUID siteId) {
+        siteService.getSite(siteId); // 404 when the site does not exist
+        boolean cancelled = syncStateService.cancelRebaseline(siteId);
+        return ResponseEntity.ok(Map.of("status", cancelled ? "cancelled" : "not-requested"));
     }
 
     /**

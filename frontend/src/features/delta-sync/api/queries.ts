@@ -8,6 +8,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  cancelRebaseline,
   getDeltaCheckpoints,
   getDeltaSegments,
   getDeltaSyncHealth,
@@ -74,6 +75,18 @@ export function useRequestRebaseline(siteId: string, scope: DeltaApiScope) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => requestRebaseline(siteId, scope),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: deltaSyncKeys.syncState(siteId) });
+      queryClient.invalidateQueries({ queryKey: deltaSyncKeys.checkpoints(siteId) });
+    },
+  });
+}
+
+/** Takes a pending re-baseline request back (#84); same invalidations as the request. */
+export function useCancelRebaseline(siteId: string, scope: DeltaApiScope) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => cancelRebaseline(siteId, scope),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.syncState(siteId) });
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.checkpoints(siteId) });

@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -197,6 +198,38 @@ public class DeltaSyncUserController {
         syncStateService.requestRebaseline(siteId);
         logger.info("Full re-baseline requested by owner: siteId={}", siteId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of("status", "requested"));
+    }
+
+    /**
+     * Take back a pending re-baseline request for an owned site (issue #84).
+     * <p>
+     * DELETE /api/v1/account/sites/{siteId}/delta/rebaseline
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 200 OK, {@code status=cancelled} when a request was pending, {@code not-requested} otherwise
+     */
+    @DeleteMapping("/rebaseline")
+    @Operation(
+            summary = "Cancel a requested full re-baseline",
+            description = "Clears the persistent rebaseline_requested flag without touching the watermark, "
+                    + "checkpoints or segments: GetSyncState answers PROCEED again and the client resumes "
+                    + "ordinary delta from its watermark. Only effective while the client has not started "
+                    + "its FULL_SNAPSHOT session yet. Idempotent."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, or none was pending",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Map<String, String>> cancelRebaseline(@PathVariable UUID siteId) {
+        requireOwnedSite(siteId);
+        boolean cancelled = syncStateService.cancelRebaseline(siteId);
+        logger.info("Full re-baseline cancelled by owner: siteId={}, wasPending={}", siteId, cancelled);
+        return ResponseEntity.ok(Map.of("status", cancelled ? "cancelled" : "not-requested"));
     }
 
 

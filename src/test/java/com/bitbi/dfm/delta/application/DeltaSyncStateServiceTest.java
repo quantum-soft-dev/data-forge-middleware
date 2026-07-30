@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -122,6 +123,55 @@ class DeltaSyncStateServiceTest {
         when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
 
         assertFalse(service.requestRebuild(SITE), "already-flagged request must report false");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void cancelRebaselineClearsFlagAndPersists() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        assertTrue(service.cancelRebaseline(SITE), "cancelling a pending request must report true");
+
+        assertFalse(state.isRebaselineRequested());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void cancelRebaselineLeavesTheRestOfTheRowUntouched() {
+        // Issue #84 acceptance: cancelling must leave site_sync_state exactly as it was before the
+        // request — only the flag moves, so the client resumes ordinary delta from lastAppliedSeq.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(100L);
+        state.recordCheckpoint(50L);
+        state.recordSchemaVersion(3);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.cancelRebaseline(SITE);
+
+        assertEquals(100L, state.getLastAppliedSeq());
+        assertEquals(50L, state.getLastCheckpointSeq());
+        assertNotNull(state.getLastCheckpointAt());
+        assertEquals(3, state.getSchemaVersion());
+        assertFalse(service.getSyncState(SITE).needRebaseline(), "GetSyncState must answer PROCEED again");
+    }
+
+    @Test
+    void cancelRebaselineIsNoOpWhenNothingPending() {
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+
+        assertFalse(service.cancelRebaseline(SITE), "cancelling with no pending request must report false");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void cancelRebaselineIsNoOpWhenRowAbsent() {
+        // Never-synced site: no row means PROCEED already — do not materialize one just to clear a flag.
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
+
+        assertFalse(service.cancelRebaseline(SITE));
         verify(repository, never()).save(any());
     }
 

@@ -118,6 +118,22 @@ public class SiteSyncState {
     }
 
     /**
+     * Take back a pending re-baseline request (issue #84): only the flag is cleared, so the
+     * watermark, checkpoint pointer and schema version stay exactly as they were and the client
+     * resumes ordinary delta from {@code lastAppliedSeq}. {@code updatedAt} is deliberately left
+     * alone — like {@link #requestRebaseline()}, raising or dropping a flag is not sync activity.
+     *
+     * @return {@code true} when a pending request was cleared, {@code false} when none was pending
+     */
+    public boolean cancelRebaseline() {
+        if (!rebaselineRequested) {
+            return false;
+        }
+        this.rebaselineRequested = false;
+        return true;
+    }
+
+    /**
      * Flag the site for a forced out-of-schedule checkpoint rebuild; cleared via
      * {@link #clearRebuildRequested()} once the rebuild completes.
      */

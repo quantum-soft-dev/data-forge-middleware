@@ -70,6 +70,25 @@ public class DeltaSyncStateService {
     }
 
     /**
+     * Take back a pending re-baseline request (issue #84), so {@code GetSyncState} answers PROCEED
+     * again and the client resumes ordinary delta from its watermark. Only the flag is cleared —
+     * watermark, checkpoints and segments are untouched. Idempotent: a site with no pending request
+     * (or no sync state row at all, which already means PROCEED) is left alone.
+     *
+     * @param siteId site identifier
+     * @return {@code true} when a pending request was cleared, {@code false} when none was pending
+     */
+    @Transactional
+    public boolean cancelRebaseline(UUID siteId) {
+        SiteSyncState state = repository.findBySiteId(siteId).orElse(null);
+        if (state == null || !state.cancelRebaseline()) {
+            return false;
+        }
+        repository.save(state);
+        return true;
+    }
+
+    /**
      * Flag a site for a forced out-of-schedule checkpoint rebuild (creating the sync state row
      * if absent); cleared via {@link #clearRebuildRequested} once the rebuild completes.
      * Idempotent: an already-flagged site is left untouched.

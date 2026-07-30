@@ -541,12 +541,22 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session starts |
+| `.../delta/rebaseline` | DELETE | owner · admin | Takes a pending request back (issue #84): clears `rebaseline_requested` only — watermark, checkpoints and segments untouched → `GetSyncState` answers `PROCEED` again. Idempotent: `200 {"status": "cancelled"}` when a request was pending, `200 {"status": "not-requested"}` otherwise |
 | `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
 
 All endpoints are documented in the OpenAPI spec (`/v3/api-docs`, Swagger UI).
 
 **Client-visible effect**: the "Request full re-baseline" UI action is now the public trigger for
 the `NEED_REBASELINE` recovery path described above — previously the flag had no public writer.
+
+**Cancelling a re-baseline (issue #84)**: the request is no longer a one-way switch. While
+`rebaselineRequested` is set, the Delta Sync widget shows a **Cancel request** button next to the
+"Full snapshot scheduled on next connect" pill; confirming it issues the `DELETE` above and the
+site returns to ordinary delta from its existing watermark — nothing else in `site_sync_state` moves,
+and no checkpoint or segment is touched. This only helps *before* the client starts its
+FULL_SNAPSHOT session; once the session starts, `resetForRebaseline` has already dropped the old
+baseline and the snapshot must run to completion. The request dialog now spells out that cost
+(the whole dataset is re-uploaded) and that the request can be taken back until the client starts.
 
 **Delta Parquet in the UI (feature 025)**: the delta Batch Detail's "Table changes" card carries a
 per-table **Parquet** pill for completed sessions — one click presigns and opens the segment's

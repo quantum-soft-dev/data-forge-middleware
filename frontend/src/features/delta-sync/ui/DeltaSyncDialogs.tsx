@@ -61,8 +61,9 @@ export function RebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialo
             >
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.5} />
               <span>
-                The client will re-send a full snapshot on next connect. This may take a while for
-                large datasets and cannot be cancelled once the client starts.
+                On its next connect the client re-uploads the entire dataset as one full snapshot —
+                every row of every table, which on a large site can take hours. You can take the
+                request back until the client starts; once it starts, it must run to completion.
               </span>
             </div>
           </AlertDialogDescription>
@@ -71,6 +72,33 @@ export function RebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialo
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={onConfirm} className="bg-danger-solid hover:bg-danger-solid-hover">
             Request re-baseline
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Takes a pending re-baseline request back (#84). Both footer buttons say what they do —
+ * a bare "Cancel" would be ambiguous in a dialog whose subject is a cancellation.
+ */
+export function CancelRebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialogProps) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Cancel the re-baseline request?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The pending full snapshot is called off: the watermark and checkpoints are left as they
+            are and the client resumes ordinary delta from where it stopped. This has no effect once
+            the client has already started the snapshot.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep request</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm} className="bg-brand hover:bg-brand-hover">
+            Cancel re-baseline
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -9,15 +9,17 @@ import {
   presignBatchTableParquet,
   requestCheckpointRebuild,
   requestRebaseline,
+  cancelRebaseline,
   getDeltaSyncHealth,
 } from './deltaSyncApi';
 
 vi.mock('@/shared/api/client', () => ({
-  apiClient: { get: vi.fn(), post: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 
 const mockedGet = vi.mocked(apiClient.get);
 const mockedPost = vi.mocked(apiClient.post);
+const mockedDelete = vi.mocked(apiClient.delete);
 
 const syncStatePayload = {
   lastAppliedSeq: 4821,
@@ -117,6 +119,16 @@ describe('admin-only and action endpoints', () => {
 
     await requestRebaseline('s1', { admin: false });
     expect(mockedPost).toHaveBeenCalledWith('/v1/account/sites/s1/delta/rebaseline');
+  });
+
+  it('takes a re-baseline request back with DELETE on the scoped namespace', async () => {
+    mockedDelete.mockResolvedValue({ data: { status: 'cancelled' } });
+
+    await cancelRebaseline('s1', { admin: false });
+    expect(mockedDelete).toHaveBeenCalledWith('/v1/account/sites/s1/delta/rebaseline');
+
+    await cancelRebaseline('s1', { admin: true });
+    expect(mockedDelete).toHaveBeenCalledWith('/v1/sites/s1/delta/rebaseline');
   });
 
   it('selects the owner or admin bulk-health endpoint', async () => {

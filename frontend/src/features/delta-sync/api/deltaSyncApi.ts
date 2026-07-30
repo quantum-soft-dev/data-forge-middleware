@@ -108,6 +108,14 @@ export async function requestRebaseline(siteId: string, scope: DeltaApiScope): P
 }
 
 /**
+ * Take a pending re-baseline request back (#84) — the watermark, checkpoints and segments are
+ * untouched, so the client resumes ordinary delta. Idempotent server-side.
+ */
+export async function cancelRebaseline(siteId: string, scope: DeltaApiScope): Promise<void> {
+  await apiClient.delete(`${deltaBasePath(siteId, scope)}/rebaseline`);
+}
+
+/**
  * Bulk sync health for all V2 sites of an account — one request per poll.
  * Owner form when accountId is omitted; admin form otherwise.
  */

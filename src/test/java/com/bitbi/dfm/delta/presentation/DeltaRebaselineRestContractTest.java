@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.UUID;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -19,6 +20,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * POST /api/v1/account/sites/{siteId}/delta/rebaseline (owner) and
  * POST /api/v1/sites/{siteId}/delta/rebaseline (admin). Sets the persistent
  * rebaseline_requested flag (B2) so GetSyncState answers NEED_REBASELINE on next connect.
+ * <p>
+ * DELETE on the same paths takes the request back while the client has not started its
+ * FULL_SNAPSHOT session yet (issue #84).
  */
 @DisplayName("Delta Rebaseline REST Contract Tests")
 class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
@@ -98,6 +102,82 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
     @DisplayName("returns 401 without authentication")
     void unauthenticated401() throws Exception {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // --- #84: cancelling a requested re-baseline ---
+
+    @Test
+    @DisplayName("owner cancel clears the flag and leaves the rest of the row as it was")
+    void ownerCancelRestoresPreviousState() throws Exception {
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("cancelled"));
+
+        mockMvc.perform(get(USER_SYNC_STATE_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rebaselineRequested").value(false))
+                .andExpect(jsonPath("$.lastAppliedSeq").value(100))
+                .andExpect(jsonPath("$.lastCheckpointSeq").value(50))
+                .andExpect(jsonPath("$.schemaVersion").value(1));
+    }
+
+    @Test
+    @DisplayName("cancelling with no pending request is a no-op (200 not-requested)")
+    void cancelWithoutPendingRequestIsNoOp() throws Exception {
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("not-requested"));
+    }
+
+    @Test
+    @DisplayName("admin cancel returns 200 for any site")
+    void adminCancelClearsFlag() throws Exception {
+        mockMvc.perform(post(ADMIN_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                .andExpect(status().isAccepted());
+
+        mockMvc.perform(delete(ADMIN_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("cancelled"));
+    }
+
+    @Test
+    @DisplayName("owner cannot cancel a foreign site's re-baseline (403)")
+    void ownerCancelForeignSiteForbidden() throws Exception {
+        mockMvc.perform(delete(USER_URL.formatted(FOREIGN_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("non-admin on the admin cancel route gets 403")
+    void userOnAdminCancelRouteForbidden() throws Exception {
+        mockMvc.perform(delete(ADMIN_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("cancel returns 404 for an unknown site")
+    void cancelUnknownSite404() throws Exception {
+        mockMvc.perform(delete(USER_URL.formatted(UUID.randomUUID()))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("cancel returns 401 without authentication")
+    void cancelUnauthenticated401() throws Exception {
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE)))
                 .andExpect(status().isUnauthorized());
     }
 }
