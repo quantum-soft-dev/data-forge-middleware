@@ -444,7 +444,19 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         return;
                     }
                 } else {
-                    stagedSessions.remove(siteId);
+                    // A non-DELTA start deliberately abandons any staged session. Its batch was left
+                    // IN_PROGRESS so a DELTA reconnect could re-attach; nothing will now, and leaving
+                    // it active would reject this session with ACTIVE_SESSION_EXISTS until the staged
+                    // sweeper runs (~50 min). That made a re-baseline that dropped mid-snapshot
+                    // unretryable for the best part of an hour — precisely the case 033 exists to fix.
+                    StagedSession superseded = stagedSessions.remove(siteId);
+                    if (superseded != null) {
+                        try {
+                            batchLifecycleService.failBatch(superseded.batchId());
+                        } catch (RuntimeException ignored) {
+                            // Already terminal (e.g. timed out) — best-effort.
+                        }
+                    }
                 }
 
                 SyncStateView state = syncStateService.getSyncState(siteId);

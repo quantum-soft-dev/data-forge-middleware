@@ -1409,6 +1409,42 @@ class DeltaIngestionStreamChangesContractTest {
     }
 
     @Test
+    void fullSnapshotSupersedesAStagedSessionInsteadOfCollidingWithItsBatch() throws Exception {
+        // A staged session's batch is deliberately left IN_PROGRESS so a DELTA reconnect can
+        // re-attach. A FULL_SNAPSHOT will not re-attach — it abandons the staged session — so
+        // leaving that batch active rejected the retry with ACTIVE_SESSION_EXISTS until the staged
+        // sweeper ran (~50 min). That made a re-baseline that dropped mid-snapshot unretryable for
+        // the best part of an hour, exactly the case 033 exists to fix.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID droppedBatch = UUID.randomUUID();
+        UUID retryBatch = UUID.randomUUID();
+        Batch dropped1 = mockBatch(droppedBatch);
+        Batch retry1 = mockBatch(retryBatch);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(dropped1, retry1);
+
+        // First attempt drops mid-stream without SessionEnd — staged for resume.
+        List<ServerEvent> dropped = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> first =
+                asyncStub.streamChanges(collect(dropped, new CountDownLatch(1)));
+        first.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+        first.onNext(change("t", Op.INSERT, 1L));
+        first.onError(new RuntimeException("transport drop"));
+
+        // The retry opens a fresh snapshot and must be admitted.
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(1L)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(1L).build()).build()).build());
+        });
+
+        assertTrue(received.stream().noneMatch(ServerEvent::hasError),
+                "a snapshot retry must not be rejected by the abandoned session's batch");
+        verify(batchLifecycle).failBatch(droppedBatch);
+        verify(batchLifecycle).completeBatch(retryBatch);
+    }
+
+    @Test
     void deltaAndContinuousSessionsNeverSealProvisionally() throws Exception {
         // Regression pin: only a re-baseline seals provisionally. A CONTINUOUS session still
         // announces every seal and publishes each segment immediately.
