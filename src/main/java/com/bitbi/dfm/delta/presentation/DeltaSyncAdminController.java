@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointRebuildService;
+import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
@@ -53,17 +54,20 @@ public class DeltaSyncAdminController {
     private static final int MAX_SEGMENTS_LIMIT = 100;
 
     private final DeltaSyncStateService syncStateService;
+    private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final DeltaCheckpointRebuildService checkpointRebuildService;
     private final ChangelogSegmentService changelogSegmentService;
     private final SiteService siteService;
 
     public DeltaSyncAdminController(DeltaSyncStateService syncStateService,
+                                    DeltaRebaselineCancellationService cancellationService,
                                     DeltaCheckpointQueryService checkpointQueryService,
                                     DeltaCheckpointRebuildService checkpointRebuildService,
                                     ChangelogSegmentService changelogSegmentService,
                                     SiteService siteService) {
         this.syncStateService = syncStateService;
+        this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
         this.checkpointRebuildService = checkpointRebuildService;
         this.changelogSegmentService = changelogSegmentService;
@@ -236,18 +240,21 @@ public class DeltaSyncAdminController {
      * </p>
      *
      * @param siteId site identifier
-     * @return 200 OK, {@code status=cancelled} when a request was pending, {@code not-requested} otherwise
+     * @return 200 OK with the cancellation outcome ({@code cancelled}, {@code session-in-progress}
+     * or {@code not-requested})
      */
     @DeleteMapping("/rebaseline")
     @Operation(
             summary = "Cancel a requested full re-baseline (admin)",
             description = "Clears the persistent rebaseline_requested flag without touching the watermark, "
                     + "checkpoints or segments: GetSyncState answers PROCEED again and the client resumes "
-                    + "ordinary delta from its watermark. Only effective while the client has not started "
-                    + "its FULL_SNAPSHOT session yet. Idempotent."
+                    + "ordinary delta from its watermark. Idempotent. Status: 'cancelled' when the pending "
+                    + "request was called off; 'session-in-progress' when the flag was cleared but the site "
+                    + "has an open ingestion session, which — if it is the FULL_SNAPSHOT — runs to completion "
+                    + "and replaces the baseline anyway; 'not-requested' when nothing was pending."
     )
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, or none was pending",
+            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, too late, or none was pending",
                     content = @Content(mediaType = "application/json")),
             @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
@@ -256,8 +263,7 @@ public class DeltaSyncAdminController {
     })
     public ResponseEntity<Map<String, String>> cancelRebaseline(@PathVariable UUID siteId) {
         siteService.getSite(siteId); // 404 when the site does not exist
-        boolean cancelled = syncStateService.cancelRebaseline(siteId);
-        return ResponseEntity.ok(Map.of("status", cancelled ? "cancelled" : "not-requested"));
+        return ResponseEntity.ok(Map.of("status", cancellationService.cancel(siteId).status()));
     }
 
     /**

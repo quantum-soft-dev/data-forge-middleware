@@ -75,6 +75,10 @@ public class DeltaSyncStateService {
      * watermark, checkpoints and segments are untouched. Idempotent: a site with no pending request
      * (or no sync state row at all, which already means PROCEED) is left alone.
      *
+     * <p>Clearing the flag says nothing about a FULL_SNAPSHOT already in flight (it keeps its own
+     * intent until it commits) — callers that report the outcome to a user go through
+     * {@link DeltaRebaselineCancellationService} instead.</p>
+     *
      * @param siteId site identifier
      * @return {@code true} when a pending request was cleared, {@code false} when none was pending
      */

@@ -49,6 +49,25 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
                 INSERT INTO site_sync_state (site_id, last_applied_seq, last_checkpoint_seq, schema_version, updated_at)
                 VALUES (?, 100, 50, 1, CURRENT_TIMESTAMP)
                 """, OWNED_SITE);
+        // The seed data leaves an IN_PROGRESS batch on the owned site; a cancellation reports
+        // "session-in-progress" while one is open (#84), so close it unless a test wants it.
+        closeActiveSession();
+    }
+
+    private void closeActiveSession() {
+        jdbc.update("""
+                UPDATE batches SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+                WHERE site_id = ? AND status = 'IN_PROGRESS'
+                """, OWNED_SITE);
+    }
+
+    private void openSession() {
+        jdbc.update("""
+                INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count,
+                                     total_size, has_errors, started_at, created_at)
+                SELECT ?, ?, account_id, 'IN_PROGRESS', 'test/', 0, 0, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                FROM sites WHERE id = ?
+                """, UUID.randomUUID(), OWNED_SITE, OWNED_SITE);
     }
 
     @Test
@@ -126,6 +145,28 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.lastAppliedSeq").value(100))
                 .andExpect(jsonPath("$.lastCheckpointSeq").value(50))
                 .andExpect(jsonPath("$.schemaVersion").value(1));
+    }
+
+    @Test
+    @DisplayName("cancel reports session-in-progress while the site is ingesting (#84)")
+    void cancelWhileSessionOpenReportsSessionInProgress() throws Exception {
+        // The flag outlives the whole FULL_SNAPSHOT session (the wipe runs at commit), so an open
+        // session may be the very snapshot being called off — the answer must not claim success.
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+        openSession();
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("session-in-progress"));
+
+        // The flag is still cleared, so the site is not ordered to re-baseline all over again.
+        mockMvc.perform(get(USER_SYNC_STATE_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rebaselineRequested").value(false));
     }
 
     @Test

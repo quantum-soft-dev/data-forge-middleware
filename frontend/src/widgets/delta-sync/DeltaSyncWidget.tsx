@@ -79,16 +79,24 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
     });
   };
 
-  // The pill can be up to one poll (20s) stale, so the request may already be gone by the time
-  // the user confirms — `not-requested` means the client started the snapshot and nothing was
-  // called off. Reporting that as a success would tell the user the re-upload was averted (#84).
+  // Only `cancelled` averts the full re-upload: a snapshot already in flight keeps its own
+  // re-baseline intent (the server consumes the flag at commit, not at session start), and the
+  // pill is up to one poll (20s) stale, so the request may be gone entirely. Reporting either as
+  // a success would tell the user a re-upload was called off that is still coming (#84).
   const handleCancelRebaselineConfirm = () => {
     setCancelRebaselineDialogOpen(false);
     cancelRebaselineMutation.mutate(undefined, {
-      onSuccess: (status) =>
-        status === 'cancelled'
-          ? toast.success('Re-baseline request cancelled')
-          : toast.warning('The client already started the full snapshot — it can no longer be cancelled'),
+      onSuccess: (status) => {
+        if (status === 'cancelled') {
+          toast.success('Re-baseline request cancelled');
+        } else if (status === 'session-in-progress') {
+          toast.warning(
+            'Request cleared, but the site is already ingesting — a full snapshot in flight still runs to completion',
+          );
+        } else {
+          toast.warning('No re-baseline was pending — nothing to cancel');
+        }
+      },
       onError: () => toast.error('Something went wrong. Please try again.'),
     });
   };

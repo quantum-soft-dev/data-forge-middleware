@@ -1,6 +1,7 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
+import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
@@ -55,17 +56,20 @@ public class DeltaSyncUserController {
     private static final Logger logger = LoggerFactory.getLogger(DeltaSyncUserController.class);
 
     private final DeltaSyncStateService syncStateService;
+    private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final DeltaSegmentParquetQueryService segmentParquetQueryService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
 
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
+                                   DeltaRebaselineCancellationService cancellationService,
                                    DeltaCheckpointQueryService checkpointQueryService,
                                    DeltaSegmentParquetQueryService segmentParquetQueryService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
+        this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
         this.segmentParquetQueryService = segmentParquetQueryService;
         this.siteService = siteService;
@@ -207,18 +211,21 @@ public class DeltaSyncUserController {
      * </p>
      *
      * @param siteId site identifier
-     * @return 200 OK, {@code status=cancelled} when a request was pending, {@code not-requested} otherwise
+     * @return 200 OK with the cancellation outcome ({@code cancelled}, {@code session-in-progress}
+     * or {@code not-requested})
      */
     @DeleteMapping("/rebaseline")
     @Operation(
             summary = "Cancel a requested full re-baseline",
             description = "Clears the persistent rebaseline_requested flag without touching the watermark, "
                     + "checkpoints or segments: GetSyncState answers PROCEED again and the client resumes "
-                    + "ordinary delta from its watermark. Only effective while the client has not started "
-                    + "its FULL_SNAPSHOT session yet. Idempotent."
+                    + "ordinary delta from its watermark. Idempotent. Status: 'cancelled' when the pending "
+                    + "request was called off; 'session-in-progress' when the flag was cleared but the site "
+                    + "has an open ingestion session, which — if it is the FULL_SNAPSHOT — runs to completion "
+                    + "and replaces the baseline anyway; 'not-requested' when nothing was pending."
     )
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, or none was pending",
+            @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, too late, or none was pending",
                     content = @Content(mediaType = "application/json")),
             @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
@@ -227,9 +234,9 @@ public class DeltaSyncUserController {
     })
     public ResponseEntity<Map<String, String>> cancelRebaseline(@PathVariable UUID siteId) {
         requireOwnedSite(siteId);
-        boolean cancelled = syncStateService.cancelRebaseline(siteId);
-        logger.info("Full re-baseline cancelled by owner: siteId={}, wasPending={}", siteId, cancelled);
-        return ResponseEntity.ok(Map.of("status", cancelled ? "cancelled" : "not-requested"));
+        DeltaRebaselineCancellationService.Outcome outcome = cancellationService.cancel(siteId);
+        logger.info("Full re-baseline cancellation by owner: siteId={}, outcome={}", siteId, outcome.status());
+        return ResponseEntity.ok(Map.of("status", outcome.status()));
     }
 
 

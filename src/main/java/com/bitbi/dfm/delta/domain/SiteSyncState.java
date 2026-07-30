@@ -122,6 +122,8 @@ public class SiteSyncState {
      * watermark, checkpoint pointer and schema version stay exactly as they were and the client
      * resumes ordinary delta from {@code lastAppliedSeq}. {@code updatedAt} is deliberately left
      * alone — like {@link #requestRebaseline()}, raising or dropping a flag is not sync activity.
+     * A FULL_SNAPSHOT session already under way is unaffected: it consumes the flag only when it
+     * commits ({@link #resetForRebaseline(long)}) and carries its own re-baseline intent.
      *
      * @return {@code true} when a pending request was cleared, {@code false} when none was pending
      */

@@ -131,9 +131,11 @@ describe('admin-only and action endpoints', () => {
     expect(mockedDelete).toHaveBeenCalledWith('/v1/sites/s1/delta/rebaseline');
   });
 
-  it('reports a too-late cancellation as not-requested (#84)', async () => {
-    mockedDelete.mockResolvedValue({ data: { status: 'not-requested' } });
+  it('passes the too-late statuses through unchanged (#84)', async () => {
+    mockedDelete.mockResolvedValue({ data: { status: 'session-in-progress' } });
+    expect(await cancelRebaseline('s1', { admin: false })).toBe('session-in-progress');
 
+    mockedDelete.mockResolvedValue({ data: { status: 'not-requested' } });
     expect(await cancelRebaseline('s1', { admin: false })).toBe('not-requested');
   });
 

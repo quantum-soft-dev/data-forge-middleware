@@ -112,8 +112,8 @@ export async function requestRebaseline(siteId: string, scope: DeltaApiScope): P
 /**
  * Take a pending re-baseline request back (#84) — the watermark, checkpoints and segments are
  * untouched, so the client resumes ordinary delta. Idempotent server-side; the returned status
- * tells the two outcomes apart, since `not-requested` means the client already started the
- * snapshot and the cancellation changed nothing.
+ * says what the cancellation achieved, since neither a snapshot in flight (`session-in-progress`)
+ * nor an already-committed one (`not-requested`) can be called off.
  */
 export async function cancelRebaseline(
   siteId: string,

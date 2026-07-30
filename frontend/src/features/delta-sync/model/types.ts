@@ -58,11 +58,13 @@ export const deltaSegmentSchema = z.object({
 export type DeltaSegment = z.infer<typeof deltaSegmentSchema>;
 
 /**
- * DELETE .../delta/rebaseline (#84). `not-requested` means nothing was pending anymore — the
- * client has already started its full snapshot, so the cancellation came too late.
+ * DELETE .../delta/rebaseline (#84). Only `cancelled` means the full snapshot was averted:
+ * `session-in-progress` clears the flag while the site is ingesting — if that session is the
+ * snapshot, it commits and replaces the baseline regardless — and `not-requested` means nothing
+ * was pending anymore (already committed, another operator, no request at all).
  */
 export const cancelRebaselineResultSchema = z.object({
-  status: z.enum(['cancelled', 'not-requested']),
+  status: z.enum(['cancelled', 'session-in-progress', 'not-requested']),
 });
 export type CancelRebaselineStatus = z.infer<typeof cancelRebaselineResultSchema>['status'];
 

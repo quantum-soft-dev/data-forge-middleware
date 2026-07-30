@@ -245,18 +245,33 @@ describe('DeltaSyncWidget re-baseline cancellation (#84)', () => {
     expect(toast.success).toHaveBeenCalledWith('Re-baseline request cancelled')
   })
 
-  it('warns instead of confirming when nothing was pending anymore (#84)', async () => {
-    // The pill is up to one poll stale: the client may have started the snapshot in between,
-    // and a success toast would claim the full re-upload was averted.
+  it('warns instead of confirming while the site is still ingesting (#84)', async () => {
+    // The flag outlives the whole FULL_SNAPSHOT session (it is consumed at commit), so clearing it
+    // does not reach a snapshot in flight — a success toast would claim the re-upload was averted.
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) =>
+      options?.onSuccess?.('session-in-progress'),
+    )
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Request cleared, but the site is already ingesting — a full snapshot in flight still runs to completion',
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('warns without naming a cause when nothing was pending anymore (#84)', async () => {
+    // `not-requested` has several causes (snapshot already committed, another operator, stale
+    // pill), so the message must not assert one of them.
     mockQuery({ data: { ...state, rebaselineRequested: true } })
     cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('not-requested'))
     render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
 
     await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
     await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
-    expect(toast.warning).toHaveBeenCalledWith(
-      'The client already started the full snapshot — it can no longer be cancelled',
-    )
+    expect(toast.warning).toHaveBeenCalledWith('No re-baseline was pending — nothing to cancel')
     expect(toast.success).not.toHaveBeenCalled()
   })
 
