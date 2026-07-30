@@ -41,38 +41,18 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
     void sessionStartRecordsTheModeOnTheBatch() throws Exception {
         // #84 review: while a FULL_SNAPSHOT uploads, the persisted mode is the only thing telling it
         // apart from an ordinary delta session — the re-baseline cancellation endpoint reports on it.
-        Batch batch = mock(Batch.class);
-        when(batch.getId()).thenReturn(UUID.randomUUID());
-        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
+        openableBatch(UUID.randomUUID());
 
         for (SessionMode mode : List.of(SessionMode.FULL_SNAPSHOT, SessionMode.CONTINUOUS)) {
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
             CountDownLatch done = new CountDownLatch(1);
-            StreamObserver<ClientEvent> request = asyncStub.streamChanges(silentObserver(done));
-            request.onNext(ClientEvent.newBuilder().setStart(
-                    SessionStart.newBuilder().setMode(mode).setFirstSeq(1).build()).build());
+            StreamObserver<ClientEvent> request = asyncStub.streamChanges(collect(received, done));
+            request.onNext(start(mode, 1));
             request.onCompleted();
             assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete for " + mode);
 
             verify(batchLifecycle).startBatch(ACCOUNT, SITE, mode.name());
         }
-    }
-
-    private StreamObserver<ServerEvent> silentObserver(CountDownLatch done) {
-        return new StreamObserver<>() {
-            @Override
-            public void onNext(ServerEvent event) {
-            }
-
-            @Override
-            public void onError(Throwable t) {
-                done.countDown();
-            }
-
-            @Override
-            public void onCompleted() {
-                done.countDown();
-            }
-        };
     }
 
     @Test

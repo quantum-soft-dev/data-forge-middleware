@@ -243,8 +243,8 @@ public class DeltaSyncAdminController {
      * </p>
      *
      * @param siteId site identifier
-     * @return 200 OK with the cancellation outcome ({@code cancelled}, {@code session-in-progress}
-     * or {@code not-requested})
+     * @return 200 OK with the cancellation outcome — see
+     * {@link com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService.Outcome}
      */
     @DeleteMapping("/rebaseline")
     @Operation(

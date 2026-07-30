@@ -280,7 +280,9 @@ describe('DeltaSyncWidget re-baseline cancellation (#84)', () => {
     mockQuery({ data: { ...state, rebaselineRequested: false, snapshotInProgress: true } })
     render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
 
-    expect(screen.getByText('Full snapshot in progress')).toBeInTheDocument()
+    // Both the header chip and the card say it, and they say the same thing (#84 review).
+    expect(screen.getAllByText('Full snapshot in progress').length).toBe(2)
+    expect(screen.queryByText('Full snapshot scheduled on next connect')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Request full re-baseline' })).not.toBeInTheDocument()
   })
 

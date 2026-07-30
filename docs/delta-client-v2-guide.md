@@ -591,18 +591,21 @@ answers NEED_REBASELINE, cleared with the flag). `DeltaRebaselineCancellationSer
 | status | meaning |
 |---|---|
 | `cancelled` | The request was taken back before the client was ever told — it cannot act on it. |
-| `snapshot-in-progress` | A FULL_SNAPSHOT session is uploading. It keeps its own intent and replaces the baseline when it commits; reported even when the flag was already cleared, so a second operator is not told "nothing to cancel" about a running snapshot. |
-| `client-notified` | The client already holds NEED_REBASELINE but has not opened a session yet (it may be extracting its dataset). Nothing is observable — the snapshot may still arrive. |
+| `snapshot-in-progress` | A **live** FULL_SNAPSHOT session is uploading (a batch the timeout sweeper would reap does not count). It keeps its own intent and replaces the baseline when it commits, and the request is deliberately **left standing** — that is what re-arms a clean retry if the snapshot dies part-way. Reported whether or not a request was pending, so a second operator is not told "nothing to cancel" about a running snapshot. |
+| `client-notified` | The client already holds NEED_REBASELINE but has not opened a session yet (it may be extracting its dataset) — or the site has an open session whose mode the server cannot see (a batch from before V47, or one opened by the previous release mid-rollout). Nothing is observable — the snapshot may still arrive. |
 | `not-requested` | Nothing was pending and no snapshot is running. |
 
-The flag is cleared in every case, so a snapshot that finishes or drops is not followed by another
-one. A running snapshot also shows up as `snapshotInProgress` on the sync-state projection, so the
-Delta Sync card keeps saying "Full snapshot in progress" instead of leaving that in a toast that
-disappears. The cancel button is withheld while the request `POST` is still unacknowledged — the
-two calls are unordered, and a `DELETE` that wins the race would be answered `not-requested` moments
-before the flag appears. Making a cancellation actually *stop* an uploading snapshot would mean
-aborting the session (refusing the wipe at commit is unsafe — it is the silent
-FULL_SNAPSHOT-as-delta downgrade 030/T05 guards against); that is not implemented.
+The request is cleared in every case **except** a live snapshot, which is left untouched: 033 holds
+the flag to the snapshot's commit precisely so a snapshot that dies part-way is retried rather than
+silently downgraded to an ordinary delta on a baseline that was never replaced, and a cancellation
+must not quietly take that away. A running snapshot also shows up as `snapshotInProgress` on the
+sync-state projection, so both the Delta Sync card and the header chip keep saying "Full snapshot in
+progress" instead of leaving it in a toast that disappears. The cancel button is withheld while the
+request `POST` is still unacknowledged — the two calls are unordered, and a `DELETE` that wins the
+race would be answered `not-requested` moments before the flag appears. Making a cancellation
+actually *stop* an uploading snapshot would mean aborting the session (refusing the wipe at commit is
+unsafe — it is the silent FULL_SNAPSHOT-as-delta downgrade 030/T05 guards against); that is not
+implemented.
 
 **Delta Parquet in the UI (feature 025)**: the delta Batch Detail's "Table changes" card carries a
 per-table **Parquet** pill for completed sessions — one click presigns and opens the segment's
