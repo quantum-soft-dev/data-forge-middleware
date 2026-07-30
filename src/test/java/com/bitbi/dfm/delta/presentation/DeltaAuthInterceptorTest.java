@@ -1,10 +1,8 @@
 package com.bitbi.dfm.delta.presentation;
 
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.LoggerContext;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import com.bitbi.dfm.auth.application.TokenService;
+import com.bitbi.dfm.util.LogCapture;
 import io.grpc.Attributes;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
@@ -15,7 +13,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -45,21 +42,16 @@ class DeltaAuthInterceptorTest {
     private final TokenService tokenService = mock(TokenService.class);
     private final DeltaAuthInterceptor interceptor = new DeltaAuthInterceptor(tokenService);
 
-    private ListAppender<ILoggingEvent> appender;
-    private ch.qos.logback.classic.Logger logger;
+    private LogCapture capture;
 
     @BeforeEach
-    void attachAppender() {
-        logger = ((LoggerContext) LoggerFactory.getILoggerFactory()).getLogger(DeltaAuthInterceptor.class);
-        appender = new ListAppender<>();
-        appender.start();
-        logger.addAppender(appender);
+    void captureInterceptorLog() {
+        capture = LogCapture.attachTo(DeltaAuthInterceptor.class);
     }
 
     @AfterEach
-    void detachAppender() {
-        logger.detachAppender(appender);
-        appender.stop();
+    void releaseInterceptorLog() {
+        capture.close();
     }
 
     /**
@@ -94,8 +86,8 @@ class DeltaAuthInterceptorTest {
                 .build();
     }
 
-    private List<ILoggingEvent> warnings() {
-        return appender.list.stream().filter(event -> event.getLevel() == Level.WARN).toList();
+    private List<String> warnings() {
+        return capture.messagesAt(Level.WARN);
     }
 
     @Test
@@ -170,7 +162,7 @@ class DeltaAuthInterceptorTest {
         interceptor.interceptCall(mockCall(), new Metadata(), mock(ServerCallHandler.class));
 
         assertEquals(1, warnings().size(), "a rejected call must leave exactly one WARN");
-        String message = warnings().getFirst().getFormattedMessage();
+        String message = warnings().getFirst();
         assertTrue(message.contains(METHOD), "the WARN must name the gRPC method: " + message);
         assertTrue(message.contains("Missing Bearer token"), "the WARN must carry the reason: " + message);
     }
@@ -185,7 +177,7 @@ class DeltaAuthInterceptorTest {
         interceptor.interceptCall(mockCall(), headers, mock(ServerCallHandler.class));
 
         assertEquals(1, warnings().size(), "a rejected call must leave exactly one WARN");
-        String message = warnings().getFirst().getFormattedMessage();
+        String message = warnings().getFirst();
         assertTrue(message.contains(METHOD), "the WARN must name the gRPC method: " + message);
         assertTrue(message.contains("Invalid or expired token"), "the WARN must carry the reason: " + message);
     }

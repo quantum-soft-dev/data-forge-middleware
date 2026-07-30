@@ -2,28 +2,20 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
-import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.DeltaMetrics;
-import com.bitbi.dfm.delta.application.DeltaRebaselineService;
 import com.bitbi.dfm.delta.application.DeltaSessionCommitService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
-import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
-import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.delta.grpc.v2.*;
 import io.grpc.*;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.stub.StreamObserver;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,49 +32,7 @@ import static org.mockito.Mockito.*;
  * T1.4 — contract test for the bidirectional {@code StreamChanges} session: SessionStart opens a
  * batch and emits SessionOpened; SessionEnd completes the batch and emits SessionCommitted.
  */
-class DeltaIngestionStreamChangesContractTest {
-
-    private static final UUID SITE = UUID.randomUUID();
-    private static final UUID ACCOUNT = UUID.randomUUID();
-
-    private final SiteSyncStateRepository syncRepo = mock(SiteSyncStateRepository.class);
-    private final BatchLifecycleService batchLifecycle = mock(BatchLifecycleService.class);
-    private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
-    private final SiteSchemaService siteSchemaService = mock(SiteSchemaService.class);
-    private final DeltaRebaselineService rebaselineService = mock(DeltaRebaselineService.class);
-    private Server server;
-    private ManagedChannel channel;
-    private DeltaIngestionGrpc.DeltaIngestionStub asyncStub;
-
-    @BeforeEach
-    void setUp() throws IOException {
-        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
-        ChangelogSegment segment = mock(ChangelogSegment.class);
-        when(segment.getS3Key()).thenReturn("delta/site/segments/batch.pb.gz");
-        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(segment);
-        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
-        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
-                changelogSegmentService, syncStateService, batchLifecycle,
-                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
-        DeltaIngestionService service = new DeltaIngestionService(
-                syncStateService, batchLifecycle,
-                siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
-        String name = InProcessServerBuilder.generateName();
-        server = InProcessServerBuilder.forName(name)
-                .directExecutor()
-                .addService(ServerInterceptors.intercept(service, authContext(SITE, ACCOUNT)))
-                .build()
-                .start();
-        channel = InProcessChannelBuilder.forName(name).directExecutor().build();
-        asyncStub = DeltaIngestionGrpc.newStub(channel);
-    }
-
-    @AfterEach
-    void tearDown() {
-        channel.shutdownNow();
-        server.shutdownNow();
-    }
+class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTestSupport {
 
     @Test
     void happyPathSessionOpensAndCommitsBatch() throws Exception {
@@ -206,6 +156,25 @@ class DeltaIngestionStreamChangesContractTest {
         assertEquals(ErrorCode.SCHEMA_MISMATCH, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction(),
                 "SubmitSchema then retry — a re-baseline would hit the same wall");
+    }
+
+    /**
+     * A site can be hard-deleted while a stream is open — the token was validated once, at stream
+     * open. {@code startBatch} rejects that before any of the other four, so leaving it unmapped
+     * would have made the typed set inconsistent: the same mid-stream window is typed for a
+     * deactivated site but not for a deleted one.
+     */
+    @Test
+    void deletedSiteIsRejectedWithTypedUnauthorizedInsteadOfStatusInternal() throws Exception {
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenThrow(new BatchLifecycleService.SiteNotFoundException("Site not found: " + SITE));
+
+        List<ServerEvent> received = runSession(req -> req.onNext(start(SessionMode.DELTA, 1L)));
+
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError(), "a deleted site must produce a typed ServerError");
+        assertEquals(ErrorCode.UNAUTHORIZED, received.get(0).getError().getCode());
+        assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction());
     }
 
     @Test
@@ -1276,36 +1245,6 @@ class DeltaIngestionStreamChangesContractTest {
         }
     }
 
-    private static Batch mockBatch(UUID id) {
-        Batch batch = mock(Batch.class);
-        when(batch.getId()).thenReturn(id);
-        return batch;
-    }
-
-    private static StreamObserver<ServerEvent> collect(List<ServerEvent> sink, CountDownLatch done) {
-        return new StreamObserver<>() {
-            @Override
-            public void onNext(ServerEvent event) {
-                sink.add(event);
-            }
-
-            @Override
-            public void onError(Throwable t) {
-                done.countDown();
-            }
-
-            @Override
-            public void onCompleted() {
-                done.countDown();
-            }
-        };
-    }
-
-    private static ClientEvent change(String table, Op op, long seq) {
-        return ClientEvent.newBuilder().setChange(
-                ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq).build()).build();
-    }
-
     private List<ServerEvent> runSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {
         List<ServerEvent> received = new CopyOnWriteArrayList<>();
         CountDownLatch done = new CountDownLatch(1);
@@ -1330,24 +1269,5 @@ class DeltaIngestionStreamChangesContractTest {
         request.onCompleted(); // half-close so a still-open session completes for assertion
         assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
         return received;
-    }
-
-    private static ClientEvent start(SessionMode mode, long firstSeq) {
-        return ClientEvent.newBuilder()
-                .setStart(SessionStart.newBuilder().setMode(mode).setFirstSeq(firstSeq).build())
-                .build();
-    }
-
-    private static ServerInterceptor authContext(UUID siteId, UUID accountId) {
-        return new ServerInterceptor() {
-            @Override
-            public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
-                    ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
-                Context context = Context.current()
-                        .withValue(DeltaAuthInterceptor.SITE_ID, siteId)
-                        .withValue(DeltaAuthInterceptor.ACCOUNT_ID, accountId);
-                return Contexts.interceptCall(context, call, headers, next);
-            }
-        };
     }
 }

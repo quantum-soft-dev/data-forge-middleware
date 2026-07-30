@@ -156,9 +156,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 try {
                     batchLifecycleService.failBatch(staged.batchId());
                 } catch (RuntimeException e) {
-                    // batch may already be terminal (timed out) — best-effort
-                    logger.debug("Delta staged session eviction could not fail its batch: batchId={}, error={}",
-                            staged.batchId(), e.getMessage());
+                    // Best-effort, but rarely benign here: the staged TTL sits below
+                    // batch.timeout.minutes, so at eviction the batch is normally still IN_PROGRESS
+                    // and a failure leaves it stranded — blocking the site with ACTIVE_SESSION_EXISTS
+                    // until the timeout sweeper. WARN with the stack trace, not DEBUG.
+                    logger.warn("Delta staged session eviction could not fail its batch, it may stay "
+                            + "IN_PROGRESS until the timeout sweeper: batchId={}", staged.batchId(), e);
                 }
             }
         });
@@ -271,6 +274,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private boolean committed;
             private boolean continuous;
             private boolean rebaseline;
+            /** Bounds the "records with no open session" warning to one per stream. */
+            private boolean reportedRecordsWithNoSession;
             private int sinceAck;
             /** Wall-clock of the last continuous seal, for the time-based seal trigger. */
             private long lastSealMillis = System.currentTimeMillis();
@@ -306,6 +311,15 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             private void onChange(ChangeRecord change) {
                 if (buffer == null) {
+                    // #83: discarding these silently was the last way a session could end with no
+                    // trace at all — no ServerError, no batch, a clean half-close, and a client that
+                    // believes it uploaded. Reported once per session, never per record.
+                    if (!reportedRecordsWithNoSession) {
+                        reportedRecordsWithNoSession = true;
+                        logger.warn("Delta change records discarded, no open session on this stream — "
+                                        + "SessionStart was never accepted: siteId={}, firstSeq={}, table={}",
+                                siteId, change.getSeq(), change.getTable());
+                    }
                     return; // no open session
                 }
                 try {
@@ -400,13 +414,17 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private Batch openBatch() {
                 try {
                     return batchLifecycleService.startBatch(accountId, siteId);
-                } catch (BatchLifecycleService.ActiveBatchExistsException e) {
-                    // One active session per site (mirrors one-active-batch).
+                } catch (BatchLifecycleService.ActiveBatchExistsException
+                         | BatchLifecycleService.ConcurrentBatchLimitException e) {
+                    // One active session per site (mirrors one-active-batch), or the account-wide
+                    // concurrency cap. Different rules, same move for the client: the site is not
+                    // free to open a session yet, so serialize and retry.
                     emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
-                } catch (BatchLifecycleService.ConcurrentBatchLimitException e) {
-                    // Account-wide rather than per-site, but the client's move is the same: the site
-                    // is not free to open a session yet, so serialize and retry.
-                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
+                } catch (BatchLifecycleService.SiteNotFoundException e) {
+                    // The site was deleted while this stream was open — the token was validated once,
+                    // at stream open. Same answer as a deactivated site: the credentials are fine,
+                    // the site is not.
+                    emitError(ErrorCode.UNAUTHORIZED, e.getMessage(), RecoveryAction.PROCEED);
                 } catch (BatchLifecycleService.SiteInactiveException e) {
                     // The site's credentials are still valid, the site itself is not — the same
                     // "token/site problem" UNAUTHORIZED already means on this protocol.
@@ -630,10 +648,6 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void sealSegment() {
                 long committedSeq = buffer.lastSeq();
-                // Captured before the buffer is replaced below — this is the only record of how big
-                // the sealed segment actually was.
-                int sealedRecords = buffer.acceptedCount();
-                long sealedBytes = buffer.acceptedBytes();
                 long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
                 String segmentKey = commitService.commitSegment(
                         siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
@@ -641,7 +655,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 metrics.recordSeqLag(committedSeq - checkpointSeq);
                 logger.info("Delta segment sealed: siteId={}, batchId={}, segment={}, records={}, bytes={}, "
                                 + "firstSeq={}, committedSeq={}",
-                        siteId, batchId, segmentKey, sealedRecords, sealedBytes, firstSeq, committedSeq);
+                        siteId, batchId, segmentKey, buffer.acceptedCount(), buffer.acceptedBytes(),
+                        firstSeq, committedSeq);
                 responseObserver.onNext(ServerEvent.newBuilder()
                         .setCommitted(SessionCommitted.newBuilder()
                                 .setCommittedSeq(committedSeq)

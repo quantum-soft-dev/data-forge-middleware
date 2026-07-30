@@ -71,7 +71,9 @@ public class BatchLifecycleService {
      * @param siteId    site identifier
      * @param domain    site domain
      * @return started batch
+     * @throws SiteNotFoundException if the site no longer exists
      * @throws SiteInactiveException if site is deactivated
+     * @throws SchemaRequiredException if a POSTGRES_CDC site has no schema on file
      * @throws ActiveBatchExistsException   if site has active batch
      * @throws ConcurrentBatchLimitException if account exceeded concurrent batch limit
      */
@@ -80,7 +82,7 @@ public class BatchLifecycleService {
 
         // Validate site is active
         Site site = siteRepository.findById(siteId)
-                .orElseThrow(() -> new IllegalArgumentException("Site not found: " + siteId));
+                .orElseThrow(() -> new SiteNotFoundException("Site not found: " + siteId));
 
         if (!site.getIsActive()) {
             logger.warn("Attempted to start batch for inactive site: siteId={}", siteId);
@@ -404,6 +406,21 @@ public class BatchLifecycleService {
             throw new InvalidBatchStatusException(
                     String.format("Cannot %s batch in status %s (expected %s): batchId=%s",
                                 operation, batch.getStatus(), expectedStatus, batch.getId()));
+        }
+    }
+
+    /**
+     * Exception thrown when the site a batch is being started for no longer exists.
+     * <p>
+     * Extends {@link IllegalArgumentException} so callers that only distinguish "bad request" keep
+     * working, while the one caller that maps rejections onto a typed protocol
+     * ({@code DeltaIngestionService}) can single it out without catching every
+     * {@code IllegalArgumentException} the call might raise.
+     * </p>
+     */
+    public static class SiteNotFoundException extends IllegalArgumentException {
+        public SiteNotFoundException(String message) {
+            super(message);
         }
     }
 
