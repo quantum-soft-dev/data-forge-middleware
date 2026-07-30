@@ -1,6 +1,5 @@
 package com.bitbi.dfm.delta.application;
 
-import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.TableStats;
 
@@ -25,18 +24,10 @@ public final class SessionReconciler {
      * @return {@code true} if the actual records exactly match the declared counts
      */
     public static boolean reconcile(List<ChangeRecord> accepted, Map<String, TableStats> declared) {
-        Map<String, TableChangeStats> actual = ChangeRecordStats.computeByTable(accepted);
-
-        if (!actual.keySet().equals(declared.keySet())) {
-            return false;
-        }
-        for (Map.Entry<String, TableStats> entry : declared.entrySet()) {
-            TableChangeStats a = actual.get(entry.getKey());
-            TableStats d = entry.getValue();
-            if (a.inserts() != d.getInserts() || a.updates() != d.getUpdates() || a.deletes() != d.getDeletes()) {
-                return false;
-            }
-        }
-        return true;
+        // 033: the counting rule lives in SessionTotals, which also serves sessions whose records
+        // were already drained by a mid-stream seal. Kept here as the whole-list convenience form.
+        SessionTotals totals = new SessionTotals();
+        totals.add(accepted);
+        return totals.reconcile(declared);
     }
 }
