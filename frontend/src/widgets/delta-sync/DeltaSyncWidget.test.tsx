@@ -203,7 +203,7 @@ describe('DeltaSyncWidget actions (F9)', () => {
     expect(screen.getByText('Request full re-baseline?')).toBeInTheDocument()
     // The dialog must state the cost: the whole dataset is re-sent (#84).
     expect(screen.getByText(/re-uploads the entire dataset/i)).toBeInTheDocument()
-    expect(screen.getByText(/take the request back until the client starts/i)).toBeInTheDocument()
+    expect(screen.getByText(/only reliably until the client picks it up/i)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Request re-baseline' }))
     expect(rebaselineMutate).toHaveBeenCalled()

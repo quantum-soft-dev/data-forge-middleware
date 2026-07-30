@@ -63,7 +63,8 @@ export function RebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialo
               <span>
                 On its next connect the client re-uploads the entire dataset as one full snapshot —
                 every row of every table, which on a large site can take hours. You can take the
-                request back until the client starts; once it starts, it must run to completion.
+                request back, but only reliably until the client picks it up; once it starts
+                uploading, it must run to completion.
               </span>
             </div>
           </AlertDialogDescription>

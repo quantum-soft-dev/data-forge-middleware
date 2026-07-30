@@ -120,7 +120,8 @@ public class SiteSyncState {
 
     /**
      * Flag the site for a full re-baseline: {@code GetSyncState} answers NEED_REBASELINE until the
-     * client starts its FULL_SNAPSHOT session (which clears the flag via {@link #resetForRebaseline}).
+     * client's FULL_SNAPSHOT session <em>commits</em> (which clears the flag via
+     * {@link #resetForRebaseline}) — the flag therefore outlives the whole snapshot upload.
      */
     public void requestRebaseline() {
         this.rebaselineRequested = true;

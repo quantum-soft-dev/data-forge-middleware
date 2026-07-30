@@ -56,8 +56,9 @@ public class DeltaSyncStateService {
 
     /**
      * Flag a site for a full re-baseline (creating the sync state row if absent): the next
-     * {@code GetSyncState} answers NEED_REBASELINE; the flag is consumed when the client starts
-     * its FULL_SNAPSHOT session ({@link SiteSyncState#resetForRebaseline}).
+     * {@code GetSyncState} answers NEED_REBASELINE; the flag is consumed when the client's
+     * FULL_SNAPSHOT session <em>commits</em> ({@link SiteSyncState#resetForRebaseline}), so it stays
+     * raised for the whole snapshot upload.
      *
      * @param siteId site identifier
      */
