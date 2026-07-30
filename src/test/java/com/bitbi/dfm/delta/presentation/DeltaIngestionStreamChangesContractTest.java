@@ -1045,6 +1045,9 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
     void sessionExceedingRecordCapRejectedInsteadOfBufferingUnbounded() throws Exception {
         // A tiny cap makes the OOM guard observable: past the cap, the session is rejected rather
         // than accumulating the whole dataset in heap (review r4).
+        // 033: driven as DELTA. FULL_SNAPSHOT and CONTINUOUS now seal mid-stream, so their buffers
+        // never reach the caps — a periodic DELTA session is the remaining unbounded case, and the
+        // one this guard still protects.
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         Batch batch = mockBatch(UUID.randomUUID());
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
@@ -1053,8 +1056,8 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 changelogSegmentService, syncStateService, batchLifecycle,
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
-                syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L); // cap = 2 records
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L, 500, 100); // cap = 2 records
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -1063,7 +1066,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
             DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(capChannel);
             List<ServerEvent> received = new CopyOnWriteArrayList<>();
             StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
-            s.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            s.onNext(start(SessionMode.DELTA, 1L));
             s.onNext(change("t", Op.INSERT, 1L));
             s.onNext(change("t", Op.INSERT, 2L));
             s.onNext(change("t", Op.INSERT, 3L)); // past the cap
@@ -1083,6 +1086,8 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         // The record cap counts rows, not bytes: a 439k-row full snapshot OOMed a 1536Mi pod while
         // far under the 2M-row limit. Past the byte budget the session must degrade into a clean
         // SESSION-level error (and a failed batch) instead of killing the JVM.
+        // 033: driven as DELTA for the same reason as the record-cap test above — a re-baseline now
+        // seals on this very byte threshold, so it can no longer reach the budget.
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
         Batch batch = mockBatch(UUID.randomUUID());
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
@@ -1094,8 +1099,9 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaIngestionService capped = new DeltaIngestionService(
-                syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 1L); // seal < tiny budget
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
+                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 1L,
+                500, 100); // seal < tiny budget
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -1104,7 +1110,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
             DeltaIngestionGrpc.DeltaIngestionStub stub = DeltaIngestionGrpc.newStub(capChannel);
             List<ServerEvent> received = new CopyOnWriteArrayList<>();
             StreamObserver<ClientEvent> s = stub.streamChanges(collect(received, new CountDownLatch(1)));
-            s.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            s.onNext(start(SessionMode.DELTA, 1L));
             s.onNext(change("t", Op.INSERT, 1L));
             s.onNext(change("t", Op.INSERT, 2L));
             s.onNext(change("t", Op.INSERT, 3L)); // past the byte budget
@@ -1132,8 +1138,9 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> new DeltaIngestionService(
                         mock(DeltaSyncStateService.class), batchLifecycle, siteSchemaService,
-                        mock(DeltaSessionCommitService.class), new DeltaMetrics(new SimpleMeterRegistry()),
-                        2000000, 100L, 3900000L, 300000L, 100L)); // seal == budget
+                        mock(DeltaSessionCommitService.class), rebaselineService,
+                        new DeltaMetrics(new SimpleMeterRegistry()),
+                        2000000, 100L, 3900000L, 300000L, 100L, 500, 100)); // seal == budget
         assertTrue(e.getMessage().contains("continuous-seal-bytes"), e.getMessage());
         assertTrue(e.getMessage().contains("max-session-bytes"), e.getMessage());
     }
@@ -1156,8 +1163,8 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 changelogSegmentService, syncStateService, batchLifecycle,
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService tight = new DeltaIngestionService(
-                syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes);
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes, 500, 100);
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(tight, authContext(SITE, ACCOUNT))).build().start();
@@ -1213,8 +1220,8 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 changelogSegmentService, syncStateService, batchLifecycle,
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService timed = new DeltaIngestionService(
-                syncStateService, batchLifecycle, siteSchemaService, commitService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L); // seal on every record
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L, 500, 100); // seal on every record
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(timed, authContext(SITE, ACCOUNT))).build().start();
@@ -1255,9 +1262,9 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 changelogSegmentService, syncStateService, batchLifecycle,
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService sized = new DeltaIngestionService(
-                syncStateService, batchLifecycle, siteSchemaService, commitService,
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L,
-                sealBytes);
+                sealBytes, 500, 100);
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(sized, authContext(SITE, ACCOUNT))).build().start();
@@ -1284,6 +1291,253 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
             ch.shutdownNow();
             srv.shutdownNow();
         }
+    }
+
+    // ── 033: a re-baseline larger than the session buffer (issue #82) ────────────────────────────
+
+    @Test
+    void fullSnapshotSealsSilentlyAndReportsOneTerminalCommit() throws Exception {
+        // For a periodic session SessionCommitted is documented as terminal ("the server replies
+        // SessionCommitted and closes its side"). A snapshot now seals mid-stream to bound the
+        // buffer, but announcing those seals would tell a conforming client the session is over —
+        // so seals are silent and the client sees exactly the same event sequence as before.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty()); // watermark 0
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        long total = 250L;
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            for (long seq = 1; seq <= total; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(total)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(total).build()).build()).build());
+        });
+
+        List<ServerEvent> committed = received.stream().filter(ServerEvent::hasCommitted).toList();
+        assertEquals(1, committed.size(), "a snapshot reports exactly one, terminal SessionCommitted");
+        assertEquals(total, committed.get(0).getCommitted().getCommittedSeq());
+        assertTrue(received.get(received.size() - 1).hasCommitted(), "and it is the last event");
+        assertTrue(received.stream().noneMatch(ServerEvent::hasError));
+
+        // Two silent seals drained the buffer at the 100-record threshold; the tail commits normally.
+        verify(changelogSegmentService).persistProvisional(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
+                eq(1L), argThat((List<ChangeRecord> r) -> r.size() == 100));
+        verify(changelogSegmentService).persistProvisional(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
+                eq(101L), argThat((List<ChangeRecord> r) -> r.size() == 100));
+        verify(changelogSegmentService).persist(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
+                eq(201L), argThat((List<ChangeRecord> r) -> r.size() == 50));
+
+        // One batch, completed once; the baseline is reset from the session's first seq, not the
+        // tail segment's, and the whole snapshot is published in the same commit.
+        verify(batchLifecycle, times(1)).startBatch(eq(ACCOUNT), eq(SITE), any());
+        verify(batchLifecycle, times(1)).completeBatch(batchId);
+        verify(rebaselineService).reset(SITE, 1L);
+        verify(changelogSegmentService).publishProvisional(batchId);
+    }
+
+    @Test
+    void fullSnapshotBeyondTheRecordCapCommitsInsteadOfOverflowing() throws Exception {
+        // Issue #82: before 033 the snapshot buffered whole, so a dataset above
+        // max-session-records was rejected with INTERNAL + NEED_REBASELINE — which sent the client
+        // straight back into FULL_SNAPSHOT. Seals keep the buffer bounded, so the cap is never
+        // reached and the re-baseline completes.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        // A cap well below the dataset, but above the 100-record seal threshold.
+        DeltaSyncStateService syncStateService = new DeltaSyncStateService(syncRepo);
+        DeltaSessionCommitService commitService = new DeltaSessionCommitService(
+                changelogSegmentService, syncStateService, batchLifecycle,
+                mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
+        DeltaIngestionService capped = new DeltaIngestionService(
+                syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
+                new DeltaMetrics(new SimpleMeterRegistry()), 150, Long.MAX_VALUE, 3900000L, 300000L,
+                16777216L, 500, 100);
+        String name = InProcessServerBuilder.generateName();
+        Server capServer = InProcessServerBuilder.forName(name).directExecutor()
+                .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
+        ManagedChannel capChannel = InProcessChannelBuilder.forName(name).directExecutor().build();
+        try {
+            long total = 450L; // 3x the cap
+            List<ServerEvent> received = new CopyOnWriteArrayList<>();
+            CountDownLatch done = new CountDownLatch(1);
+            StreamObserver<ClientEvent> s =
+                    DeltaIngestionGrpc.newStub(capChannel).streamChanges(collect(received, done));
+            s.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            for (long seq = 1; seq <= total; seq++) {
+                s.onNext(change("t", Op.INSERT, seq));
+            }
+            s.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(total)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(total).build()).build()).build());
+            assertTrue(done.await(5, TimeUnit.SECONDS), "stream must terminate");
+
+            assertTrue(received.stream().noneMatch(ServerEvent::hasError),
+                    "a snapshot 3x the record cap must commit, not overflow");
+            ServerEvent last = received.get(received.size() - 1);
+            assertTrue(last.hasCommitted());
+            assertEquals(total, last.getCommitted().getCommittedSeq());
+            verify(batchLifecycle, never()).failBatch(any());
+        } finally {
+            capChannel.shutdownNow();
+            capServer.shutdownNow();
+        }
+    }
+
+    @Test
+    void fullSnapshotReconcilesOverTheWholeSessionNotTheTailSegment() throws Exception {
+        // After seals the buffer holds only the tail, so counts and content_hash must come from
+        // session-scoped totals — otherwise a 250-record snapshot would reconcile against 50.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch sessionBatch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        long total = 250L;
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            for (long seq = 1; seq <= total; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+            // Declaring only the tail segment's 50 records must be rejected.
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(total)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(50L).build()).build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasError(), "declared counts covering only the last segment must fail");
+        assertEquals(ErrorCode.RECONCILIATION_FAILED, last.getError().getCode());
+        verify(batchLifecycle, never()).completeBatch(any());
+    }
+
+    @Test
+    void fullSnapshotContentHashCoversEveryRecordAcrossSeals() throws Exception {
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch sessionBatch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        long total = 150L; // one seal at 100 + a 50-record tail
+        List<ChangeRecord> all = new java.util.ArrayList<>();
+        for (long seq = 1; seq <= total; seq++) {
+            all.add(ChangeRecord.newBuilder().setTable("t").setOp(Op.INSERT).setSeq(seq).build());
+        }
+        String wholeSessionHash = com.bitbi.dfm.delta.application.ChangelogContentHash.compute(all);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            all.forEach(r -> req.onNext(ClientEvent.newBuilder().setChange(r).build()));
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(total)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(total).build())
+                    .setContentHash(wholeSessionHash).build()).build());
+        });
+
+        ServerEvent last = received.get(received.size() - 1);
+        assertTrue(last.hasCommitted(),
+                "a hash over all 150 records must verify even though only 50 are still buffered");
+    }
+
+    @Test
+    void fullSnapshotStartCollectsProvisionalLeftoversOfAnAbandonedAttempt() throws Exception {
+        // A snapshot that dropped before SessionEnd leaves invisible segments holding
+        // UNIQUE (site_id, first_seq) slots the retry needs.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch sessionBatch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(1L)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(1L).build()).build()).build());
+        });
+
+        verify(rebaselineService, never()).deleteProvisionalByBatch(any());
+    }
+
+    @Test
+    void abortedSnapshotDropsItsOwnProvisionalSegments() throws Exception {
+        // A snapshot rejected at SessionEnd (here: mismatched declared counts) must not leave its
+        // sealed segments lying around until some future attempt sweeps them.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        Batch sessionBatch = mockBatch(UUID.randomUUID());
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            for (long seq = 1; seq <= 150L; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(150L)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(999L).build()).build()).build());
+        });
+
+        verify(batchLifecycle).failBatch(any());
+        // Scoped to this session's own batch — never site-wide, or an aborting stream could delete a
+        // concurrent session's in-flight snapshot.
+        verify(rebaselineService).deleteProvisionalByBatch(any());
+        verify(changelogSegmentService, never()).publishProvisional(any());
+    }
+
+    @Test
+    void fullSnapshotSupersedesAStagedSessionInsteadOfCollidingWithItsBatch() throws Exception {
+        // A staged session's batch is deliberately left IN_PROGRESS so a DELTA reconnect can
+        // re-attach. A FULL_SNAPSHOT will not re-attach — it abandons the staged session — so
+        // leaving that batch active rejected the retry with ACTIVE_SESSION_EXISTS until the staged
+        // sweeper ran (~50 min). That made a re-baseline that dropped mid-snapshot unretryable for
+        // the best part of an hour, exactly the case 033 exists to fix.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID droppedBatch = UUID.randomUUID();
+        UUID retryBatch = UUID.randomUUID();
+        Batch dropped1 = mockBatch(droppedBatch);
+        Batch retry1 = mockBatch(retryBatch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(dropped1, retry1);
+
+        // First attempt drops mid-stream without SessionEnd — staged for resume.
+        List<ServerEvent> dropped = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> first =
+                asyncStub.streamChanges(collect(dropped, new CountDownLatch(1)));
+        first.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+        first.onNext(change("t", Op.INSERT, 1L));
+        first.onError(new RuntimeException("transport drop"));
+
+        // The retry opens a fresh snapshot and must be admitted.
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));
+            req.onNext(change("t", Op.INSERT, 1L));
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder().setLastSeq(1L)
+                    .putPerTable("t", TableStats.newBuilder().setInserts(1L).build()).build()).build());
+        });
+
+        assertTrue(received.stream().noneMatch(ServerEvent::hasError),
+                "a snapshot retry must not be rejected by the abandoned session's batch");
+        verify(batchLifecycle).failBatch(droppedBatch);
+        verify(batchLifecycle).completeBatch(retryBatch);
+    }
+
+    @Test
+    void deltaAndContinuousSessionsNeverSealProvisionally() throws Exception {
+        // Regression pin: only a re-baseline seals provisionally. A CONTINUOUS session still
+        // announces every seal and publishes each segment immediately.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        UUID batchId = UUID.randomUUID();
+        Batch sessionBatch = mockBatch(batchId);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(sessionBatch);
+
+        List<ServerEvent> received = runSession(req -> {
+            req.onNext(start(SessionMode.CONTINUOUS, 1L));
+            for (long seq = 1; seq <= 150L; seq++) {
+                req.onNext(change("t", Op.INSERT, seq));
+            }
+        });
+
+        assertEquals(2, received.stream().filter(ServerEvent::hasCommitted).count(),
+                "continuous still announces the threshold seal and the closing flush");
+        verify(changelogSegmentService, never()).persistProvisional(any(), any(), any(), anyLong(), any());
+        verify(changelogSegmentService, never()).publishProvisional(any());
+        verify(rebaselineService, never()).deleteProvisionalByBatch(any());
     }
 
     private List<ServerEvent> runSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {

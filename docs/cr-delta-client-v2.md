@@ -111,7 +111,7 @@ CDC v1's schema model (`site_schemas`, `POST /api/dfc/schema`, columns/PK/unique
 
 A session is a bidirectional gRPC stream. Client sends exactly one `SessionStart`, then `ChangeRecord`s with strictly increasing `seq`, then exactly one `SessionEnd`. Server replies with `SessionOpened`, progressive `Ack`s, and a final `SessionCommitted` (or `ServerError`).
 
-- **Start** (`SessionStart`): `mode` (`DELTA` | `FULL_SNAPSHOT`), `first_seq`, `schema_version`, `client_session_id`. Server validates `first_seq == server_last_seq + 1`, opens a batch, returns `SessionOpened` with `server_last_seq` and a `RecoveryAction`.
+- **Start** (`SessionStart`): `mode` (`DELTA` | `FULL_SNAPSHOT` | `CONTINUOUS`, the last added in T5.4), `first_seq`, `schema_version`, `client_session_id`. Server validates `first_seq <= server_last_seq + 1` (a lower value is a replay and is de-duplicated; only a forward gap is rejected), opens a batch, returns `SessionOpened` with `server_last_seq` and a `RecoveryAction`.
 - **Body** (`ChangeRecord`): see §6. Server stages records, may emit `Ack(acked_seq)` for backpressure/progress.
 - **End** (`SessionEnd`): `last_seq`, per-table counts, `content_hash`. Server reconciles (§10), commits the batch, appends the changelog segment, returns `SessionCommitted(committed_seq, segment_s3_key)`. Client advances its watermark.
 
@@ -316,15 +316,16 @@ Bit BI (unchanged):
 One protocol, two modes, selected by `SessionStart.mode`.
 
 - **Periodic session (default, recommended first):** `mode = DELTA` (or `FULL_SNAPSHOT` to bootstrap/re-baseline). Client opens `StreamChanges` on a schedule (hourly/daily), drains accumulated deltas, sends `SessionEnd`. One session = one segment, reconciled at `SessionEnd`. Matches the freshness requirement and the batch model; lowest risk.
-- **Continuous stream:** `mode = CONTINUOUS`. Client keeps the stream open and pushes changes as they occur, never sending `SessionEnd`; the **server seals** a segment once it reaches a size threshold (`CONTINUOUS_SEAL_RECORDS`; a time threshold is a follow-up) and emits `SessionCommitted` per sealed segment, opening the next segment under a fresh batch. The final partial segment is flushed on stream close. Near-real-time, same contract.
-  - **Implementation note (T5.4):** continuous is signalled by the explicit `SessionMode.CONTINUOUS` enum value (not merely the absence of `SessionEnd`), so the server knows to seal on threshold without conflicting with periodic `SessionEnd` reconciliation. Periodic `DELTA`/`FULL_SNAPSHOT` behaviour is unchanged. A continuous session that drops mid-segment loses its unsealed tail; the client reconnects and continues from the committed watermark (resume/`RESUME_FROM` is implemented for periodic `DELTA` only — see §10/T5.1).
+- **Continuous stream:** `mode = CONTINUOUS`. Client keeps the stream open and pushes changes as they occur, never sending `SessionEnd`; the **server seals** a segment once it reaches a size threshold (`CONTINUOUS_SEAL_RECORDS`; byte and time thresholds were added later) and emits `SessionCommitted` per sealed segment, opening the next segment **under the same batch** (029 — a seal is a durability event, not a batch boundary). The final partial segment is flushed on stream close. Near-real-time, same contract.
+  - **Implementation note (T5.4):** continuous is signalled by the explicit `SessionMode.CONTINUOUS` enum value (not merely the absence of `SessionEnd`), so the server knows to seal on threshold without conflicting with periodic `SessionEnd` reconciliation. A continuous session that drops mid-segment has its unsealed tail durably sealed by the server, which then closes the batch; the client reconnects and continues from the committed watermark (resume/`RESUME_FROM` is implemented for periodic `DELTA` only — see §10/T5.1).
+  - **Superseded (033):** "periodic `FULL_SNAPSHOT` behaviour is unchanged" no longer holds. A re-baseline now seals on the same thresholds, because buffering a whole snapshot made any site above `max-session-records` impossible to re-baseline ([#82](https://github.com/quantum-soft-dev/data-forge-middleware/issues/82), `docs/cr-delta-rebaseline-segmented.md`). Those seals emit no `SessionCommitted` and the segments stay invisible until `SessionEnd`, so the wire contract is untouched. Periodic `DELTA` is genuinely unchanged.
 
 ---
 
 ## 10. Reconciliation, gap detection & recovery
 
 - **Ordering / idempotency:** records carry strictly increasing per-site `seq`. The server dedups by `(site_id, seq)`; re-delivery of an already-applied `seq` is ignored (at-least-once safe).
-- **Gap detection:** at `SessionStart`, `first_seq` must equal `server_last_seq + 1`. Otherwise `SEQUENCE_GAP` → `NEED_REBASELINE` (or `RESUME_FROM` for a partial replay the server can satisfy from staged data).
+- **Gap detection:** at `SessionStart`, `first_seq` must be **at most** `server_last_seq + 1`. A forward gap is `SEQUENCE_GAP` → `NEED_REBASELINE` (or `RESUME_FROM` for a partial replay the server can satisfy from staged data); a `first_seq` at or below the watermark is a replay of an already-committed session, de-duplicated by the buffer, so a lost ack costs a cheap replay rather than a full snapshot.
 - **End-of-session reconciliation:** `SessionEnd` carries per-table counts and a `content_hash`. On mismatch the server **refuses to commit** (`RECONCILIATION_FAILED`) and requests recovery. Decision: **hard-fail** — integrity of the composed base outweighs a lenient skip (contrast CDC v1, which skips malformed JSONL lines with a warning).
 - **Self-healing:** any `FULL_SNAPSHOT` session re-establishes a clean checkpoint floor, erasing accumulated drift.
 

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -23,22 +24,14 @@ class ChangelogContentHashTest {
     private static final String GS = String.valueOf((char) 0x1D);
 
     @Test
-    void blankDeclaredHashAlwaysMatches() {
-        List<ChangeRecord> records = List.of(rec("t", Op.INSERT, 1, intKey(1), strData("city", "NY")));
-        assertTrue(ChangelogContentHash.matches(records, ""));
-        assertTrue(ChangelogContentHash.matches(records, "   "));
-        assertTrue(ChangelogContentHash.matches(records, null));
-    }
-
-    @Test
     void matchesComputedHashCaseInsensitively() {
         List<ChangeRecord> records = List.of(
                 rec("t", Op.INSERT, 1, intKey(1), strData("city", "NY")),
                 rec("t", Op.UPDATE, 2, intKey(1), strData("city", "LA")));
 
         String hash = ChangelogContentHash.compute(records);
-        assertTrue(ChangelogContentHash.matches(records, hash));
-        assertTrue(ChangelogContentHash.matches(records, hash.toUpperCase()));
+        assertEquals(hash, ChangelogContentHash.compute(records));
+        assertTrue(hash.equalsIgnoreCase(hash.toUpperCase()));
     }
 
     @Test
@@ -47,7 +40,7 @@ class ChangelogContentHashTest {
         String declared = ChangelogContentHash.compute(sent);
 
         List<ChangeRecord> tampered = List.of(rec("t", Op.INSERT, 1, intKey(1), strData("city", "LA")));
-        assertFalse(ChangelogContentHash.matches(tampered, declared), "a changed value must fail the hash");
+        assertNotEquals(declared, ChangelogContentHash.compute(tampered), "a changed value must fail the hash");
     }
 
     @Test
@@ -80,7 +73,7 @@ class ChangelogContentHashTest {
         long bits = Double.doubleToLongBits(1e7);
         ChangeRecord viaBits = rec("t", Op.INSERT, 1,
                 Map.of("v", Value.newBuilder().setDoubleValue(Double.longBitsToDouble(bits)).build()), Map.of());
-        assertTrue(ChangelogContentHash.matches(List.of(viaBits), ChangelogContentHash.compute(List.of(r))));
+        assertEquals(ChangelogContentHash.compute(List.of(r)), ChangelogContentHash.compute(List.of(viaBits)));
     }
 
     @Test
@@ -95,6 +88,48 @@ class ChangelogContentHashTest {
         assertNotEquals(ChangelogContentHash.compute(List.of(oneCol)),
                 ChangelogContentHash.compute(List.of(twoCol)),
                 "separator bytes in a value must not collide with a structurally different record");
+    }
+
+    @Test
+    void incrementalHasherMatchesWholeListDigest() {
+        // 033: a segmented re-baseline seals mid-session, so the whole record list is never in
+        // memory at SessionEnd. Feeding the hasher chunk by chunk must reproduce the canonical
+        // digest byte-for-byte, or every client's declared content_hash breaks.
+        List<ChangeRecord> all = List.of(
+                rec("t", Op.INSERT, 1, intKey(1), strData("city", "NY")),
+                rec("t", Op.UPDATE, 2, intKey(1), strData("city", "LA")),
+                rec("u", Op.DELETE, 3, intKey(2), Map.of()));
+
+        ChangelogContentHash.Hasher hasher = new ChangelogContentHash.Hasher();
+        hasher.update(all.subList(0, 1));
+        hasher.update(all.subList(1, 3));
+
+        assertEquals(ChangelogContentHash.compute(all), hasher.hex());
+    }
+
+    @Test
+    void incrementalHasherIsChunkBoundaryIndependent() {
+        List<ChangeRecord> all = List.of(
+                rec("t", Op.INSERT, 1, intKey(1), strData("c", "a")),
+                rec("t", Op.INSERT, 2, intKey(2), strData("c", "b")),
+                rec("t", Op.INSERT, 3, intKey(3), strData("c", "c")),
+                rec("t", Op.INSERT, 4, intKey(4), strData("c", "d")));
+
+        ChangelogContentHash.Hasher oneAtATime = new ChangelogContentHash.Hasher();
+        all.forEach(r -> oneAtATime.update(List.of(r)));
+
+        ChangelogContentHash.Hasher lopsided = new ChangelogContentHash.Hasher();
+        lopsided.update(all.subList(0, 3));
+        lopsided.update(List.of());
+        lopsided.update(all.subList(3, 4));
+
+        assertEquals(ChangelogContentHash.compute(all), oneAtATime.hex());
+        assertEquals(ChangelogContentHash.compute(all), lopsided.hex());
+    }
+
+    @Test
+    void incrementalHasherOfNothingEqualsEmptyDigest() {
+        assertEquals(ChangelogContentHash.compute(List.of()), new ChangelogContentHash.Hasher().hex());
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {

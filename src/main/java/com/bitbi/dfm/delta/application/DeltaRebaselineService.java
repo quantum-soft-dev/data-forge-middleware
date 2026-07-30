@@ -62,6 +62,9 @@ public class DeltaRebaselineService {
      */
     @Transactional
     public void reset(UUID siteId, long firstSeq) {
+        // 033: findBySiteIdOrderByFirstSeq returns committed segments only. A large re-baseline seals
+        // its own segments as provisional before SessionEnd gets here, so they are excluded by
+        // construction — this deletes the baseline being replaced, never the snapshot replacing it.
         // Delete the metadata rows in-transaction, but defer the S3 object deletes to afterCommit:
         // if the enclosing commit (the new snapshot segment persist + watermark advance) rolls back,
         // the old rows are restored and their S3 objects must still exist. Deferring keeps the old
@@ -89,6 +92,58 @@ public class DeltaRebaselineService {
 
         log.info("Re-baselined site {}: cleared {} segment(s), {} checkpoint(s); watermark reset to {}",
                 siteId, segments, checkpoints, firstSeq - 1);
+    }
+
+    /**
+     * Collect the invisible remains of a re-baseline that never reached {@code SessionEnd} (033).
+     *
+     * <p>Scoped to the batch that wrote them, never to the site. A site-wide sweep would let one
+     * session destroy another's in-flight snapshot the moment the one-active-batch rule has a gap —
+     * an aborting stream and a legitimately-started replacement can overlap — and the loss would be
+     * silent, because provisional segments are invisible to every reader.</p>
+     *
+     * <p>Deliberately narrower than {@link #reset}: no checkpoint or watermark change, because
+     * nothing these segments contain was ever published.</p>
+     *
+     * @param batchId the session's batch
+     * @return number of orphaned provisional segments deleted
+     */
+    @Transactional
+    public int deleteProvisionalByBatch(UUID batchId) {
+        return purge(segmentRepository.findProvisionalByBatchId(batchId),
+                "batch " + batchId);
+    }
+
+    /**
+     * Sweep provisional segments whose owning batch is no longer running (033).
+     *
+     * <p>The batch-scoped deletes above only fire when the server is still alive to run them. A pod
+     * that is OOM-killed or rescheduled mid-snapshot leaves rows behind that no reader can see, that
+     * retention cannot reach (it enumerates published segments only), and that no session will
+     * revisit. A staged session keeps its batch {@code IN_PROGRESS} on purpose, so "batch not
+     * running" is exactly the set that can never be resumed.</p>
+     *
+     * @param limit maximum segments to collect in one pass
+     * @return number of orphaned provisional segments deleted
+     */
+    @Transactional
+    public int sweepOrphanedProvisional(int limit) {
+        return purge(segmentRepository.findProvisionalWithoutRunningBatch(limit), "dead batches");
+    }
+
+    /** Delete the rows in-transaction and their S3 objects after commit; returns the count. */
+    private int purge(List<ChangelogSegment> segments, String scope) {
+        List<String> s3Keys = new ArrayList<>();
+        for (ChangelogSegment segment : segments) {
+            s3Keys.add(segment.getS3Key());
+            segmentRepository.deleteById(segment.getId());
+        }
+        if (s3Keys.isEmpty()) {
+            return 0;
+        }
+        deleteOldObjectsAfterCommit(s3Keys);
+        log.info("Collected {} orphaned provisional segment(s) ({})", s3Keys.size(), scope);
+        return s3Keys.size();
     }
 
     /**

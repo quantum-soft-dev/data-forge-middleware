@@ -45,6 +45,26 @@ public class ChangelogSegmentService {
      */
     @Transactional
     public ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq, List<ChangeRecord> records) {
+        return persist(siteId, batchId, mode, firstSeq, records, false);
+    }
+
+    /**
+     * Persist a mid-snapshot seal of a re-baseline session (033). The segment is durable but
+     * {@code provisional}: invisible to the checkpoint fold, the delta-Parquet egress queue and the
+     * Bit BI SQL queue until {@code SessionEnd} publishes the whole batch. This is what lets a
+     * snapshot larger than the session buffer stream at all, without exposing a half-replaced
+     * dataset to readers.
+     *
+     * @return the persisted, still-invisible segment metadata
+     */
+    @Transactional
+    public ChangelogSegment persistProvisional(UUID siteId, UUID batchId, String mode, long firstSeq,
+                                               List<ChangeRecord> records) {
+        return persist(siteId, batchId, mode, firstSeq, records, true);
+    }
+
+    private ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq,
+                                     List<ChangeRecord> records, boolean provisional) {
         byte[] content = ChangelogCodec.serialize(records);
         String contentHash = sha256Hex(content);
         // Segment id is minted before the upload so the storage key carries the segment's own
@@ -57,7 +77,36 @@ public class ChangelogSegmentService {
 
         ChangelogSegment segment = ChangelogSegment.create(
                 segmentId, siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, stats);
+        if (provisional) {
+            segment.markProvisional();
+        }
         return repository.save(segment);
+    }
+
+    /**
+     * Publish a completed re-baseline: clear {@code provisional} on every segment of the snapshot's
+     * batch, so the fold and both work queues see the whole new baseline at once (033). Runs inside
+     * the commit transaction, right after the previous baseline is discarded.
+     *
+     * @param batchId the snapshot session's batch
+     * @return number of segments published
+     */
+    @Transactional
+    public int publishProvisional(UUID batchId) {
+        return repository.flipProvisionalByBatchId(batchId);
+    }
+
+    /**
+     * Move a session's provisional segments onto a different batch (033 review) — used when a resume
+     * runs under a replacement batch, so publication (which is batch-keyed) still covers them.
+     *
+     * @param fromBatchId batch the segments were sealed under
+     * @param toBatchId   batch the resumed session now owns
+     * @return number of segments moved
+     */
+    @Transactional
+    public int reassignProvisionalBatch(UUID fromBatchId, UUID toBatchId) {
+        return repository.reassignProvisionalBatch(fromBatchId, toBatchId);
     }
 
     /**
