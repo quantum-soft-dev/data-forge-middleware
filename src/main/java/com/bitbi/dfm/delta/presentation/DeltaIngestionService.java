@@ -167,7 +167,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     public void getSyncState(SyncStateRequest request, StreamObserver<SyncStateResponse> responseObserver) {
         UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
         if (siteId == null) {
-            logger.warn("auth_failure: Delta call reached the handler with no authenticated site on context");
+            logger.warn("auth_failure: GetSyncState reached the handler with no authenticated site on context");
             responseObserver.onError(Status.UNAUTHENTICATED
                     .withDescription("No authenticated site on context").asRuntimeException());
             return;
@@ -190,7 +190,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     public void submitSchema(SchemaRequest request, StreamObserver<SchemaResponse> responseObserver) {
         UUID siteId = DeltaAuthInterceptor.SITE_ID.get();
         if (siteId == null) {
-            logger.warn("auth_failure: Delta call reached the handler with no authenticated site on context");
+            logger.warn("auth_failure: SubmitSchema reached the handler with no authenticated site on context");
             responseObserver.onError(Status.UNAUTHENTICATED
                     .withDescription("No authenticated site on context").asRuntimeException());
             return;
