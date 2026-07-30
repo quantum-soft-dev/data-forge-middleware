@@ -42,9 +42,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>Observability (#83).</b> Since client API v1 was retired this is the only path that creates
  * a batch, and it used to carry no logger at all — a rejected session left no trace anywhere, so an
  * incident could only be investigated by proving the <em>absence</em> of log lines. Every session
- * now records its start, its opening, each seal and its commit at INFO; every typed rejection at
- * WARN with its {@code ErrorCode} and {@code RecoveryAction}; every unexpected fault at ERROR with
- * its stack trace. Deliberately bounded — per session and per seal, never per record.</p>
+ * now records its start, its opening, each seal, its commit and — when it ends abnormally — the gRPC
+ * status that broke its transport, all at INFO; every typed rejection at WARN with its
+ * {@code ErrorCode} and {@code RecoveryAction}; every unexpected fault at ERROR with its stack
+ * trace. Deliberately bounded — per session and per seal, never per record.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -710,6 +711,15 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
 
             @Override
             public void onError(Throwable t) {
+                // #83: the branches below record what was done about the drop, only this line records
+                // what caused it — a client cancel, a deadline, a TLS reset and an oversized message
+                // are otherwise the same "staged for resume". It is also the only trace when both
+                // branches no-op (a client that connects, sends nothing and drops). INFO and without
+                // a stack trace on purpose: the server itself cancels streams at
+                // delta.grpc.max-connection-age-seconds, so a drop is an ordinary way for a long
+                // CONTINUOUS session to end, not a fault.
+                logger.info("Delta session transport drop: siteId={}, batchId={}, status={}, cause={}",
+                        siteId, batchId, Status.fromThrowable(t).getCode(), String.valueOf(t));
                 if (continuous) {
                     // A continuous session has no SessionEnd, so a transport drop must not leave its
                     // batch IN_PROGRESS (which would block reconnect with ACTIVE_SESSION_EXISTS).

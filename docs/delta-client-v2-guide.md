@@ -670,6 +670,7 @@ the lines to grep in the backend pod. All are bounded **per session and per seal
 | `Delta session opened` | INFO | `batchId`, `action`, `serverLastSeq` (or `resumeFromSeq` + `stagedRecords` on a resume), `rebaseline` |
 | `Delta segment sealed` | INFO | `segment` S3 key, `records`, `bytes`, `firstSeq`, `committedSeq` — one per continuous seal |
 | `Delta session committed` | INFO | `committedSeq`, `records`, `segment`, `rebaseline` |
+| `Delta session transport drop` | INFO | **why** the stream broke: the gRPC `status` and the cause. One per abnormal ending, including one with no session open at all |
 | `Delta session staged for resume` | INFO | a mid-stream drop parked for reconnect: `stagedRecords`, `resumeFromSeq` |
 | `Delta session rejected` | WARN | **every** in-band `ServerError`: `ErrorCode`, `RecoveryAction`, `batchId`, message |
 | `Delta staged session evicted` | WARN | a client that dropped and never came back; its buffered records are discarded |
@@ -677,7 +678,10 @@ the lines to grep in the backend pod. All are bounded **per session and per seal
 
 A session that opens and commits normally produces three lines (`start`, `opened`, `committed`) plus
 one per seal. If a client claims it uploaded and you see no `Delta session start` for its site, the
-request never reached the handler — look for `auth_failure` next.
+request never reached the handler — look for `auth_failure` next. A session that ends on
+`transport drop` instead of `committed` broke below the protocol; the `status` on that line says
+whether the client cancelled, a deadline expired, or the server itself closed the stream at
+`delta.grpc.max-connection-age-seconds` (routine for a long `CONTINUOUS` session).
 
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
 `delta.sessions.overflow`, `delta.reconciliation.failures`, `delta.seq.lag`) are exposed on `/actuator/metrics` and

@@ -224,6 +224,44 @@ class DeltaIngestionSessionLoggingContractTest {
                         + " lines: " + atLevel(Level.INFO));
     }
 
+    /**
+     * A transport drop is how a session most often ends abnormally, and the branches under
+     * {@code onError} record only its <em>outcome</em>: a cancel, a deadline, a TLS reset and an
+     * oversized message all produce the same "staged for resume" line. The cause has to be logged
+     * too, or the drop is the one ending the observability tables cannot explain.
+     */
+    @Test
+    void aTransportDropRecordsWhyTheStreamBroke() throws Exception {
+        openableBatch(UUID.randomUUID());
+
+        dropSession(req -> {
+            req.onNext(start(SessionMode.DELTA, 1L));
+            req.onNext(change(1L));
+        });
+
+        List<String> drops = atLevel(Level.INFO).stream()
+                .filter(line -> line.contains("transport drop")).toList();
+        assertEquals(1, drops.size(), "a dropped session must leave exactly one line: " + atLevel(Level.INFO));
+        assertTrue(drops.getFirst().contains(SITE.toString()), "the drop must name the site: " + drops);
+        assertTrue(drops.getFirst().contains("status=CANCELLED"),
+                "the drop must name the gRPC status that broke the stream: " + drops);
+    }
+
+    /**
+     * The case with no other trace at all: {@code stageForResume()} no-ops when no session was ever
+     * opened, so a client that connects, sends nothing and drops used to be indistinguishable from
+     * one that never called.
+     */
+    @Test
+    void aDropBeforeAnySessionOpensStillLeavesATrace() throws Exception {
+        dropSession(req -> {
+        });
+
+        assertTrue(atLevel(Level.INFO).stream().anyMatch(line -> line.contains("transport drop")),
+                "a connect-and-drop must still be traceable: " + appender.list);
+        verify(batchLifecycle, never()).startBatch(any(), any());
+    }
+
     private void openableBatch(UUID batchId) {
         Batch batch = mock(Batch.class);
         when(batch.getId()).thenReturn(batchId);
@@ -258,6 +296,30 @@ class DeltaIngestionSessionLoggingContractTest {
         client.accept(request);
         request.onCompleted();
         assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not complete");
+    }
+
+    /** Like {@link #runSession}, but the client breaks the transport instead of half-closing. */
+    private void dropSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ServerEvent> responses = new StreamObserver<>() {
+            @Override
+            public void onNext(ServerEvent event) {
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                done.countDown();
+            }
+
+            @Override
+            public void onCompleted() {
+                done.countDown();
+            }
+        };
+        StreamObserver<ClientEvent> request = asyncStub.streamChanges(responses);
+        client.accept(request);
+        request.onError(new RuntimeException("transport drop"));
+        assertTrue(done.await(5, TimeUnit.SECONDS), "stream did not terminate");
     }
 
     private static ClientEvent start(SessionMode mode, long firstSeq) {
