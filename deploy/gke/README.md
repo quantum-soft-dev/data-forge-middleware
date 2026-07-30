@@ -131,9 +131,14 @@ grpcurl -import-path src/main/proto -proto delta-ingestion.proto \
 `/actuator/prometheus` and `/actuator/metrics/**` are served only to the CIDRs in
 `METRICS_SCRAPE_ALLOWED_CIDRS` (`dfm.observability.metrics-scrape.allowed-cidrs`). The variable is
 **empty by default and empty means deny**, so stage/prod stay exactly as they were; the dev overlay
-sets `10.0.0.0/8,127.0.0.1/32`, which covers the cluster pod range the collector scrapes from and
-loopback for `kubectl port-forward`. Everything else under `/actuator` remains denied, and only
-`health,info,metrics,prometheus` are exposed by the app at all.
+sets `10.4.0.0/14,127.0.0.1/32,::1/128` — the cluster pod range the collector scrapes from, plus
+loopback in both address families for `kubectl port-forward` (matching is per family, so an IPv4
+entry never covers an IPv6 caller). A malformed entry is dropped with a WARN and leaves that range
+denied; it does not stop the pod from booting. Everything else under `/actuator` remains denied, and
+only `health,info,metrics,prometheus` are exposed by the app at all.
+
+The check reads the socket peer, which is why `server.forward-headers-strategy` is pinned to `none`
+in `application.yml` — turning it on would make the source address caller-supplied.
 
 Collection uses the managed Prometheus that is already running in the cluster
 (`gke-gmp-system/collector`); the dev overlay only adds a `PodMonitoring` (`podmonitoring.yaml`,
@@ -145,8 +150,14 @@ kubectl -n forge port-forward deploy/forge-backend 8080:8080 &
 curl -s localhost:8080/actuator/prometheus | grep '^delta_'   # delta_sessions_started_total …
 ```
 
-A 403 from that curl means the pod did not pick up `METRICS_SCRAPE_ALLOWED_CIDRS`; an empty grep
-with a 200 means the pod has served no ingestion session since it started.
+A 403 from that curl means the running pod has no matching CIDR. `forge-config` is a plain
+ConfigMap consumed with `envFrom`, so applying the overlay does **not** restart anything — after a
+change that only touches the ConfigMap, run `kubectl -n forge rollout restart deploy/forge-backend`.
+If the variable is right and it still 403s, check the address family the connection actually used.
+
+The `delta_*` counters are registered eagerly at startup, so a healthy pod always prints them, at
+`0.0` if it has served no session. An empty grep with a 200 therefore means the *exporter* is
+broken (registry or `micrometer-registry-prometheus` missing), not that ingestion has been idle.
 
 ## Placeholders to fill before a real deploy
 

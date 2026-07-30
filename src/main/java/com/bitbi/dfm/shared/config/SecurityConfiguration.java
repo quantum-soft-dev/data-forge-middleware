@@ -15,7 +15,9 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -72,7 +74,7 @@ public class SecurityConfiguration {
     private final ParquetExportBasicAuthFilter parquetExportBasicAuthFilter;
     private final AuthenticationAuditLogger authenticationAuditLogger;
     private final Auth0Properties auth0Properties;
-    private final MetricsScrapeAuthorizationManager metricsScrapeAuthorizationManager;
+    private final AuthorizationManager<RequestAuthorizationContext> metricsScrapeAuthorizationManager;
 
     public SecurityConfiguration(
             JwtAuthenticationFilter jwtAuthenticationFilter,
@@ -86,7 +88,7 @@ public class SecurityConfiguration {
         this.parquetExportBasicAuthFilter = parquetExportBasicAuthFilter;
         this.authenticationAuditLogger = authenticationAuditLogger;
         this.auth0Properties = auth0Properties;
-        this.metricsScrapeAuthorizationManager = new MetricsScrapeAuthorizationManager(metricsScrapeAllowedCidrs);
+        this.metricsScrapeAuthorizationManager = MetricsScrapeAccess.authorizationManager(metricsScrapeAllowedCidrs);
     }
 
     /**
@@ -332,7 +334,7 @@ public class SecurityConfiguration {
      * <b>CIDR-restricted access</b>: /actuator/prometheus and /actuator/metrics/** are served to
      * callers inside {@code dfm.observability.metrics-scrape.allowed-cidrs} (empty by default =
      * denied), so a Prometheus collector can reach the delta ingestion counters without opening
-     * them to everyone. See {@link MetricsScrapeAuthorizationManager}.
+     * them to everyone. See {@link MetricsScrapeAccess}.
      * </p>
      * <p>
      * All other requests: Denied (403 Forbidden)
@@ -346,8 +348,7 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
-                .requestMatchers("/actuator/prometheus", "/actuator/metrics", "/actuator/metrics/**")
-                    .access(metricsScrapeAuthorizationManager)
+                .requestMatchers(MetricsScrapeAccess.PATHS).access(metricsScrapeAuthorizationManager)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()
             );

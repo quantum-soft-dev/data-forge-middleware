@@ -20,7 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * the managed-Prometheus collector scrapes from.
  * </p>
  *
- * @see com.bitbi.dfm.shared.config.MetricsScrapeAuthorizationManager
+ * @see com.bitbi.dfm.shared.config.MetricsScrapeAccess
  */
 @DisplayName("Metrics Scrape Contract Tests")
 // Spring Boot disables metrics export under test, which would leave /actuator/prometheus absent
@@ -30,14 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class MetricsScrapeContractTest extends BaseIntegrationTest {
 
     @Test
-    @DisplayName("Should serve /actuator/prometheus to a caller inside an allowed CIDR")
-    void shouldServePrometheusToAllowedCaller() throws Exception {
-        mockMvc.perform(get("/actuator/prometheus"))
-                .andExpect(status().isOk());
-    }
-
-    @Test
-    @DisplayName("Should expose the delta ingestion counters in the scrape payload")
+    @DisplayName("Should serve /actuator/prometheus with the delta counters to an allowed caller")
     void shouldExposeDeltaCountersInScrapePayload() throws Exception {
         mockMvc.perform(get("/actuator/prometheus"))
                 .andExpect(status().isOk())

@@ -716,12 +716,15 @@ opened #83. They are now served to the source addresses listed in
 `dfm.observability.metrics-scrape.allowed-cidrs` (`METRICS_SCRAPE_ALLOWED_CIDRS`, comma-separated):
 
 - **Empty is the default**, and empty means nobody — an environment that does not set the variable
-  keeps the old 403, so nothing is opened by merging this.
-- On GKE dev the value is `10.0.0.0/8,127.0.0.1/32`: the managed-Prometheus collector scrapes the
-  pod from the cluster pod range (`10.4.0.0/14`), and loopback keeps `kubectl port-forward` usable.
-  Nothing outside the cluster can present such a source address — the frontend nginx only proxies
-  `/api`, so `/actuator` has no external route at all, and load-balancer traffic would arrive from a
-  Google front-end range.
+  keeps the old 403, so nothing is opened by merging this. A malformed entry is dropped with a WARN
+  (that range stays denied) rather than failing the application context.
+- On GKE dev the value is `10.4.0.0/14,127.0.0.1/32,::1/128`: the pod range the managed-Prometheus
+  collector scrapes from, plus loopback in both address families for `kubectl port-forward`.
+  Matching is per address family, so an IPv4 entry never covers an IPv6 caller. Nothing outside the
+  cluster can present such a source address — the frontend nginx only proxies `/api`, so
+  `/actuator` has no external route at all, and load-balancer traffic would arrive from a Google
+  front-end range. The decision reads the socket peer, which is why
+  `server.forward-headers-strategy` is pinned to `none`.
 - The rest of the actuator surface (`/actuator/env`, `/actuator/beans`, …) stays denied to everyone,
   and is not exposed by `management.endpoints.web.exposure.include` in the first place.
 
