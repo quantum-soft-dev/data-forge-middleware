@@ -129,6 +129,7 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
     @Test
     @DisplayName("owner cancel clears the flag and leaves the rest of the row as it was")
     void ownerCancelRestoresPreviousState() throws Exception {
+        closeActiveSession(); // the seeded batch predates V47: an unknown mode is not a clean success
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isAccepted());
@@ -162,13 +163,55 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("snapshot-in-progress"));
 
-        // The flag is still cleared (no second snapshot is ordered), and the running one stays
-        // visible in the projection instead of only in the one-shot response.
+        // The request is deliberately LEFT STANDING: it is what re-arms a clean retry if the
+        // snapshot dies before it commits (033/#87). The running snapshot is also visible in the
+        // projection, instead of living only in the one-shot response.
         mockMvc.perform(get(USER_SYNC_STATE_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rebaselineRequested").value(false))
+                .andExpect(jsonPath("$.rebaselineRequested").value(true))
                 .andExpect(jsonPath("$.snapshotInProgress").value(true));
+    }
+
+    @Test
+    @DisplayName("a snapshot batch the sweeper will reap does not block cancellation (#84)")
+    void staleSnapshotBatchDoesNotBlockCancellation() throws Exception {
+        // stageForResume leaves a dropped snapshot's batch IN_PROGRESS so a reconnect can re-attach;
+        // without a liveness cutoff a dead session would answer "still uploading" for ~an hour.
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+        setOpenSessionMode("FULL_SNAPSHOT");
+        // Well beyond batch.timeout.minutes and any container/JVM timezone skew.
+        jdbc.update("""
+                UPDATE batches SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 days',
+                                   last_activity_at = CURRENT_TIMESTAMP - INTERVAL '2 days'
+                WHERE site_id = ? AND status = 'IN_PROGRESS'
+                """, OWNED_SITE);
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("cancelled"));
+
+        mockMvc.perform(get(USER_SYNC_STATE_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(jsonPath("$.snapshotInProgress").value(false));
+    }
+
+    @Test
+    @DisplayName("an open session of unknown mode is not reported as a clean cancellation (#84)")
+    void unknownModeSessionIsNotReportedAsCancelled() throws Exception {
+        // A batch opened before V47, or by the previous release during a rolling deploy.
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+        setOpenSessionMode(null);
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("client-notified"));
     }
 
     @Test
@@ -184,7 +227,7 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.status").value("snapshot-in-progress"));
 
         // Another operator, whose pill was up to one poll stale: "nothing to cancel" would be the
-        // opposite conclusion about the very same running snapshot.
+        // opposite conclusion about the very same running snapshot (and the request still stands).
         mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isOk())
@@ -240,6 +283,7 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
     @Test
     @DisplayName("admin cancel returns 200 for any site")
     void adminCancelClearsFlag() throws Exception {
+        closeActiveSession();
         mockMvc.perform(post(ADMIN_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
                 .andExpect(status().isAccepted());

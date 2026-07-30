@@ -258,9 +258,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         }
 
         SyncStateView view = syncStateService.getSyncState(siteId);
-        if (view.needRebaseline()) {
+        if (view.needRebaseline() && !view.rebaselineNotified()) {
             // The client now knows it must re-baseline, so a cancellation from here on may lose the
-            // race against the snapshot it is about to send (issue #84). Recorded once per request.
+            // race against the snapshot it is about to send (issue #84). Recorded once per request:
+            // the view already tells us whether the stamp is there, so a poll during the (hours
+            // long) snapshot upload costs no extra write.
             syncStateService.markRebaselineNotified(siteId);
         }
 

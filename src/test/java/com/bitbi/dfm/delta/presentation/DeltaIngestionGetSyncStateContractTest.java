@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -104,8 +106,21 @@ class DeltaIngestionGetSyncStateContractTest {
         SyncStateResponse response = stub.getSyncState(SyncStateRequest.newBuilder().build());
 
         assertEquals(RecoveryAction.NEED_REBASELINE, response.getAction());
-        assertNotNull(state.getRebaselineNotifiedAt());
-        verify(repository).save(state);
+        verify(repository).markRebaselineNotified(eq(SITE), any(LocalDateTime.class));
+    }
+
+    @Test
+    void alreadyNotifiedRequestDoesNotRestampOnEveryPoll() {
+        // The flag stays raised for the whole snapshot upload, so without this guard each poll of a
+        // pending request would pay a write.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        state.markRebaselineNotified();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        stub.getSyncState(SyncStateRequest.newBuilder().build());
+
+        verify(repository, never()).markRebaselineNotified(any(), any());
     }
 
     @Test
@@ -115,7 +130,7 @@ class DeltaIngestionGetSyncStateContractTest {
 
         stub.getSyncState(SyncStateRequest.newBuilder().build());
 
-        assertNull(state.getRebaselineNotifiedAt());
+        verify(repository, never()).markRebaselineNotified(any(), any());
         verify(repository, never()).save(any());
     }
 

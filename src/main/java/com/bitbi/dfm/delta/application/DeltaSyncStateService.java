@@ -5,6 +5,8 @@ import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,8 +40,9 @@ public class DeltaSyncStateService {
                         state.getLastAppliedSeq(),
                         state.getLastCheckpointSeq(),
                         state.getSchemaVersion(),
-                        state.isRebaselineRequested()))
-                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false));
+                        state.isRebaselineRequested(),
+                        state.getRebaselineNotifiedAt() != null))
+                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false));
     }
 
     /**
@@ -123,16 +126,15 @@ public class DeltaSyncStateService {
     /**
      * Remember that {@code GetSyncState} answered NEED_REBASELINE for a site's pending request
      * (issue #84), so a later cancellation can tell "the client has not been told yet" from "the
-     * client may already be preparing the snapshot". No-op once recorded, so the continuous
-     * GetSyncState polling costs one write per request, not one per poll.
+     * client may already be preparing the snapshot". A single conditional statement: no entity
+     * load, no lost update against a concurrent cancellation, and a no-op once recorded — so the
+     * continuous GetSyncState polling costs one write per request, not one per poll.
      *
      * @param siteId site identifier
      */
     @Transactional
     public void markRebaselineNotified(UUID siteId) {
-        repository.findBySiteId(siteId)
-                .filter(SiteSyncState::markRebaselineNotified)
-                .ifPresent(repository::save);
+        repository.markRebaselineNotified(siteId, LocalDateTime.now(ZoneOffset.UTC));
     }
 
     /**
@@ -236,7 +238,10 @@ public class DeltaSyncStateService {
      * @param lastCheckpointSeq sequence of the latest materialized checkpoint
      * @param schemaVersion     schema version the server currently holds
      * @param needRebaseline    whether the client must re-baseline (full snapshot)
+     * @param rebaselineNotified whether the pending request has already been handed to the client
+     *                           (issue #84) — lets the caller skip a redundant stamping round-trip
      */
-    public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion, boolean needRebaseline) {
+    public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion,
+                                boolean needRebaseline, boolean rebaselineNotified) {
     }
 }
