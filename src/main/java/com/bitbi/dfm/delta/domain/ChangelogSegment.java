@@ -75,6 +75,18 @@ public class ChangelogSegment {
     private LocalDateTime egressAt;
 
     /**
+     * Whether this segment belongs to a re-baseline snapshot that is still streaming (033).
+     *
+     * <p>A snapshot too large to buffer is sealed into bounded segments as it arrives. Those
+     * segments are durable but must not be acted on: the checkpoint fold, the delta-Parquet egress
+     * queue and the Bit BI SQL queue all skip them. {@code SessionEnd} flips the whole batch to
+     * {@code false} in the same transaction that discards the previous baseline, so the new baseline
+     * appears atomically and a drop mid-snapshot leaves the old one intact.</p>
+     */
+    @Column(name = "provisional", nullable = false)
+    private boolean provisional = false;
+
+    /**
      * Create a changelog segment record.
      *
      * @param stats per-table insert/update/delete counts, or {@code null} if not computed
@@ -129,6 +141,14 @@ public class ChangelogSegment {
      */
     public void markPluginSqlProcessed() {
         this.pluginSqlAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Hold the segment back from the fold and both work queues until its re-baseline session
+     * commits (033). Set at creation; cleared in bulk for the whole batch at {@code SessionEnd}.
+     */
+    public void markProvisional() {
+        this.provisional = true;
     }
 
     @PrePersist

@@ -18,7 +18,32 @@ public interface ChangelogSegmentRepository {
 
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
 
+    /**
+     * A site's committed segments in sequence order — the checkpoint fold's input and the set a
+     * re-baseline discards. Excludes provisional segments (033): a snapshot still streaming must not
+     * be folded on top of the baseline it is about to replace.
+     */
     List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
+
+    /**
+     * A site's provisional segments — leftovers of a re-baseline that never reached
+     * {@code SessionEnd} (033). Garbage-collected before the next snapshot attempt streams, both to
+     * reclaim storage and to free the {@code UNIQUE (site_id, first_seq)} slots they hold.
+     *
+     * @param siteId site identifier
+     * @return provisional segments of the site (any batch)
+     */
+    List<ChangelogSegment> findProvisionalBySiteId(UUID siteId);
+
+    /**
+     * Publish a completed re-baseline: clear {@code provisional} for every segment of the batch, so
+     * the whole snapshot becomes visible to the fold and both work queues at once (033). Runs in the
+     * commit transaction, right after the previous baseline is discarded.
+     *
+     * @param batchId the snapshot session's batch
+     * @return number of segments published
+     */
+    int flipProvisionalByBatchId(UUID batchId);
 
     List<ChangelogSegment> findByBatchId(UUID batchId);
 

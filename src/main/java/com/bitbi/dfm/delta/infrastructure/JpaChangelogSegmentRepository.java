@@ -24,8 +24,20 @@ public interface JpaChangelogSegmentRepository
     Optional<ChangelogSegment> findBySiteIdAndFirstSeq(UUID siteId, long firstSeq);
 
     @Override
-    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId ORDER BY s.firstSeq")
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = false "
+            + "ORDER BY s.firstSeq")
     java.util.List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
+
+    @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.siteId = :siteId AND s.provisional = true "
+            + "ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findProvisionalBySiteId(UUID siteId);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.provisional = false WHERE s.batchId = :batchId")
+    int flipProvisionalByBatchId(UUID batchId);
 
     @Override
     @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId = :batchId")
@@ -66,9 +78,11 @@ public interface JpaChangelogSegmentRepository
     @Query(value = """
             SELECT * FROM changelog_segments s
             WHERE s.egress_at IS NULL
+              AND s.provisional = FALSE
               AND NOT EXISTS (SELECT 1 FROM changelog_segments e
                               WHERE e.site_id = s.site_id
                                 AND e.egress_at IS NULL
+                                AND e.provisional = FALSE
                                 AND e.first_seq < s.first_seq)
             ORDER BY s.created_at
             LIMIT :limit
@@ -80,9 +94,11 @@ public interface JpaChangelogSegmentRepository
     @Query(value = """
             SELECT * FROM changelog_segments s
             WHERE s.plugin_sql_at IS NULL
+              AND s.provisional = FALSE
               AND NOT EXISTS (SELECT 1 FROM changelog_segments p
                               WHERE p.site_id = s.site_id
                                 AND p.plugin_sql_at IS NULL
+                                AND p.provisional = FALSE
                                 AND p.first_seq < s.first_seq)
             ORDER BY s.created_at
             LIMIT :limit

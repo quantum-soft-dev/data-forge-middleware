@@ -45,6 +45,26 @@ public class ChangelogSegmentService {
      */
     @Transactional
     public ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq, List<ChangeRecord> records) {
+        return persist(siteId, batchId, mode, firstSeq, records, false);
+    }
+
+    /**
+     * Persist a mid-snapshot seal of a re-baseline session (033). The segment is durable but
+     * {@code provisional}: invisible to the checkpoint fold, the delta-Parquet egress queue and the
+     * Bit BI SQL queue until {@code SessionEnd} publishes the whole batch. This is what lets a
+     * snapshot larger than the session buffer stream at all, without exposing a half-replaced
+     * dataset to readers.
+     *
+     * @return the persisted, still-invisible segment metadata
+     */
+    @Transactional
+    public ChangelogSegment persistProvisional(UUID siteId, UUID batchId, String mode, long firstSeq,
+                                               List<ChangeRecord> records) {
+        return persist(siteId, batchId, mode, firstSeq, records, true);
+    }
+
+    private ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq,
+                                     List<ChangeRecord> records, boolean provisional) {
         byte[] content = ChangelogCodec.serialize(records);
         String contentHash = sha256Hex(content);
         // Segment id is minted before the upload so the storage key carries the segment's own
@@ -57,6 +77,9 @@ public class ChangelogSegmentService {
 
         ChangelogSegment segment = ChangelogSegment.create(
                 segmentId, siteId, batchId, firstSeq, lastSeq, records.size(), contentHash, s3Key, mode, stats);
+        if (provisional) {
+            segment.markProvisional();
+        }
         return repository.save(segment);
     }
 
