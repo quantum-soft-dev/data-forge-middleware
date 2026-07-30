@@ -245,21 +245,56 @@ describe('DeltaSyncWidget re-baseline cancellation (#84)', () => {
     expect(toast.success).toHaveBeenCalledWith('Re-baseline request cancelled')
   })
 
-  it('warns instead of confirming while the site is still ingesting (#84)', async () => {
+  it('warns instead of confirming while the snapshot is uploading (#84)', async () => {
     // The flag outlives the whole FULL_SNAPSHOT session (it is consumed at commit), so clearing it
     // does not reach a snapshot in flight — a success toast would claim the re-upload was averted.
     mockQuery({ data: { ...state, rebaselineRequested: true } })
     cancelRebaselineMutate.mockImplementation((_vars, options) =>
-      options?.onSuccess?.('session-in-progress'),
+      options?.onSuccess?.('snapshot-in-progress'),
     )
     render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
 
     await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
     await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
     expect(toast.warning).toHaveBeenCalledWith(
-      'Request cleared, but the site is already ingesting — a full snapshot in flight still runs to completion',
+      'The client is already uploading the full snapshot — it runs to completion and replaces the baseline',
     )
     expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('warns when the client already holds the order but has not started (#84)', async () => {
+    // No session exists yet, so nothing is observable — `cancelled` would promise too much.
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('client-notified'))
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Request cleared, but the client already has the order — it may still send the snapshot',
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('keeps showing a running snapshot after the toast is gone (#84)', () => {
+    mockQuery({ data: { ...state, rebaselineRequested: false, snapshotInProgress: true } })
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    expect(screen.getByText('Full snapshot in progress')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Request full re-baseline' })).not.toBeInTheDocument()
+  })
+
+  it('withholds the cancel action while the request POST is unacknowledged (#84)', () => {
+    mockedUseRequestRebaseline.mockReturnValue({
+      mutate: rebaselineMutate,
+      isPending: true,
+    } as unknown as ReturnType<typeof useRequestRebaseline>)
+    mockQuery({ data: { ...state, rebaselineRequested: false } })
+
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    expect(screen.getAllByText('Full snapshot scheduled on next connect').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('button', { name: /cancel request/i })).not.toBeInTheDocument()
   })
 
   it('warns without naming a cause when nothing was pending anymore (#84)', async () => {

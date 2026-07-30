@@ -1,6 +1,8 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.application.DeltaSyncStateService.RebaselineCancellation;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -10,22 +12,25 @@ import java.util.UUID;
  * Takes back a pending full re-baseline request and reports whether the full snapshot was actually
  * averted (issue #84).
  *
- * <p>The {@code rebaseline_requested} flag alone cannot answer that. A FULL_SNAPSHOT session
- * consumes it only when it <em>commits</em> ({@link DeltaRebaselineService#reset} runs inside the
- * commit transaction so a dropped snapshot leaves the old baseline intact), and the session carries
- * its own re-baseline intent for its whole lifetime. So the flag stays raised for the hours a large
- * snapshot is uploading, and clearing it in that window changes nothing for the running session:
- * it still wipes the baseline when it commits.</p>
+ * <p>Neither input answers that alone. The {@code rebaseline_requested} flag survives the whole
+ * FULL_SNAPSHOT session — {@link DeltaRebaselineService#reset} runs inside the commit transaction so
+ * a dropped snapshot leaves the old baseline intact — and the session carries its own re-baseline
+ * intent, so clearing the flag mid-upload changes nothing for it. Conversely an open batch is just
+ * as likely to be an ordinary delta session, which a cancellation does reach.</p>
  *
- * <p>The open-session check closes that hole. The server cannot see an open session's mode, so an
- * ordinary delta session (or an abandoned batch awaiting the timeout sweeper) reports the same
- * {@link Outcome#SESSION_IN_PROGRESS} — the outcome means "may still be running", not "is".</p>
+ * <p>So the outcome combines three facts: whether a request was pending, whether the client had
+ * already been handed NEED_REBASELINE (V47's {@code rebaseline_notified_at}), and whether the site's
+ * open session is a FULL_SNAPSHOT (V47's {@code batches.session_mode}). The flag is cleared in every
+ * case — once a running snapshot ends or drops, the site must not be ordered to send another.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
  */
 @Service
 public class DeltaRebaselineCancellationService {
+
+    /** {@code SessionMode.FULL_SNAPSHOT} as recorded on the batch by the ingestion service. */
+    private static final String FULL_SNAPSHOT_MODE = "FULL_SNAPSHOT";
 
     private final DeltaSyncStateService syncStateService;
     private final BatchRepository batchRepository;
@@ -45,15 +50,34 @@ public class DeltaRebaselineCancellationService {
      */
     @Transactional
     public Outcome cancel(UUID siteId) {
-        if (!syncStateService.cancelRebaseline(siteId)) {
-            return Outcome.NOT_REQUESTED;
+        RebaselineCancellation cleared = syncStateService.cancelRebaseline(siteId);
+        // Probed after clearing, and regardless of what was cleared: a snapshot opened before this
+        // call is unreachable either way, and a second operator whose request was already taken
+        // back by the first must still be told that the snapshot is running.
+        if (isSnapshotSessionOpen(siteId)) {
+            return Outcome.SNAPSHOT_IN_PROGRESS;
         }
-        // Checked after clearing the flag: a session opened before the clear may be the snapshot
-        // being called off, and clearing the flag never reaches it. Clearing is still right — once
-        // that session ends or drops, GetSyncState must not order yet another full snapshot.
-        return batchRepository.findActiveBySiteId(siteId).isPresent()
-                ? Outcome.SESSION_IN_PROGRESS
-                : Outcome.CANCELLED;
+        return switch (cleared) {
+            case NOT_PENDING -> Outcome.NOT_REQUESTED;
+            case CLEARED_AFTER_NOTICE -> Outcome.CLIENT_NOTIFIED;
+            case CLEARED_BEFORE_NOTICE -> Outcome.CANCELLED;
+        };
+    }
+
+    /**
+     * Whether the site's open ingestion session (if any) is a FULL_SNAPSHOT — i.e. a full re-upload
+     * is running right now and will replace the baseline when it commits. Surfaced on the sync-state
+     * projection so the UI can keep showing it instead of relying on a one-shot message.
+     *
+     * @param siteId site identifier
+     * @return {@code true} when a FULL_SNAPSHOT session is in progress
+     */
+    @Transactional(readOnly = true)
+    public boolean isSnapshotSessionOpen(UUID siteId) {
+        return batchRepository.findActiveBySiteId(siteId)
+                .map(Batch::getSessionMode)
+                .filter(FULL_SNAPSHOT_MODE::equals)
+                .isPresent();
     }
 
     /**
@@ -61,18 +85,28 @@ public class DeltaRebaselineCancellationService {
      */
     public enum Outcome {
 
-        /** The request was pending and no session is open: the full snapshot is called off. */
+        /**
+         * The request was pending, the client had not been told yet and no snapshot is running:
+         * the full re-upload is called off.
+         */
         CANCELLED("cancelled"),
 
         /**
-         * The request was cleared, but the site has an ingestion session open. If that session is
-         * the FULL_SNAPSHOT, it runs to completion and replaces the baseline regardless.
+         * A FULL_SNAPSHOT session is uploading right now. It keeps its own re-baseline intent and
+         * replaces the baseline when it commits, so it cannot be called off.
          */
-        SESSION_IN_PROGRESS("session-in-progress"),
+        SNAPSHOT_IN_PROGRESS("snapshot-in-progress"),
 
         /**
-         * Nothing was pending — the snapshot already committed (which consumes the flag), another
-         * operator got there first, or no request was ever made.
+         * The request was cleared, but {@code GetSyncState} had already answered NEED_REBASELINE:
+         * the client may open its snapshot session at any moment, and the server cannot tell
+         * whether it will.
+         */
+        CLIENT_NOTIFIED("client-notified"),
+
+        /**
+         * Nothing was pending and no snapshot is running — the request was never made, already
+         * committed, or another operator took it back first.
          */
         NOT_REQUESTED("not-requested");
 

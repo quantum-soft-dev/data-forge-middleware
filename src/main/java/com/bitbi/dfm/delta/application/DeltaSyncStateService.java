@@ -80,16 +80,43 @@ public class DeltaSyncStateService {
      * {@link DeltaRebaselineCancellationService} instead.</p>
      *
      * @param siteId site identifier
-     * @return {@code true} when a pending request was cleared, {@code false} when none was pending
+     * @return whether a request was cleared, and whether the client had already been told about it
      */
     @Transactional
-    public boolean cancelRebaseline(UUID siteId) {
+    public RebaselineCancellation cancelRebaseline(UUID siteId) {
         SiteSyncState state = repository.findBySiteId(siteId).orElse(null);
-        if (state == null || !state.cancelRebaseline()) {
-            return false;
+        if (state == null) {
+            return RebaselineCancellation.NOT_PENDING;
+        }
+        boolean notified = state.getRebaselineNotifiedAt() != null;
+        if (!state.cancelRebaseline()) {
+            return RebaselineCancellation.NOT_PENDING;
         }
         repository.save(state);
-        return true;
+        return notified
+                ? RebaselineCancellation.CLEARED_AFTER_NOTICE
+                : RebaselineCancellation.CLEARED_BEFORE_NOTICE;
+    }
+
+    /**
+     * What clearing the {@code rebaseline_requested} flag achieved (issue #84).
+     */
+    public enum RebaselineCancellation {
+
+        /** No request was pending — nothing was cleared. */
+        NOT_PENDING,
+
+        /**
+         * Cleared before {@code GetSyncState} ever answered NEED_REBASELINE: the client never
+         * learned of the request, so it cannot act on it.
+         */
+        CLEARED_BEFORE_NOTICE,
+
+        /**
+         * Cleared after the client had already been told to re-baseline: it may already be
+         * preparing or sending the snapshot, which this cancellation cannot reach.
+         */
+        CLEARED_AFTER_NOTICE
     }
 
     /**

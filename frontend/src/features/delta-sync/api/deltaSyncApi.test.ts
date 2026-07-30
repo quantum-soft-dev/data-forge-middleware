@@ -132,11 +132,10 @@ describe('admin-only and action endpoints', () => {
   });
 
   it('passes the too-late statuses through unchanged (#84)', async () => {
-    mockedDelete.mockResolvedValue({ data: { status: 'session-in-progress' } });
-    expect(await cancelRebaseline('s1', { admin: false })).toBe('session-in-progress');
-
-    mockedDelete.mockResolvedValue({ data: { status: 'not-requested' } });
-    expect(await cancelRebaseline('s1', { admin: false })).toBe('not-requested');
+    for (const status of ['snapshot-in-progress', 'client-notified', 'not-requested']) {
+      mockedDelete.mockResolvedValue({ data: { status } });
+      expect(await cancelRebaseline('s1', { admin: false })).toBe(status);
+    }
   });
 
   it('selects the owner or admin bulk-health endpoint', async () => {

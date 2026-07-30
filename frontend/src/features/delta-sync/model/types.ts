@@ -16,6 +16,9 @@ export const deltaSyncStateSchema = z.object({
   updatedAt: z.string(),
   rebaselineRequested: z.boolean(),
   rebuildRequested: z.boolean(),
+  /** A FULL_SNAPSHOT session is uploading right now (#84) — outlives rebaselineRequested, which the
+   * snapshot only consumes when it commits. Optional so an older backend still parses. */
+  snapshotInProgress: z.boolean().optional().default(false),
 });
 export type DeltaSyncState = z.infer<typeof deltaSyncStateSchema>;
 
@@ -58,13 +61,13 @@ export const deltaSegmentSchema = z.object({
 export type DeltaSegment = z.infer<typeof deltaSegmentSchema>;
 
 /**
- * DELETE .../delta/rebaseline (#84). Only `cancelled` means the full snapshot was averted:
- * `session-in-progress` clears the flag while the site is ingesting — if that session is the
- * snapshot, it commits and replaces the baseline regardless — and `not-requested` means nothing
- * was pending anymore (already committed, another operator, no request at all).
+ * DELETE .../delta/rebaseline (#84). Only `cancelled` means the full re-upload was averted:
+ * `snapshot-in-progress` means one is uploading right now and keeps its own intent,
+ * `client-notified` means the client already holds NEED_REBASELINE and may start at any moment,
+ * and `not-requested` means nothing was pending (already committed, another operator, never asked).
  */
 export const cancelRebaselineResultSchema = z.object({
-  status: z.enum(['cancelled', 'session-in-progress', 'not-requested']),
+  status: z.enum(['cancelled', 'snapshot-in-progress', 'client-notified', 'not-requested']),
 });
 export type CancelRebaselineStatus = z.infer<typeof cancelRebaselineResultSchema>['status'];
 

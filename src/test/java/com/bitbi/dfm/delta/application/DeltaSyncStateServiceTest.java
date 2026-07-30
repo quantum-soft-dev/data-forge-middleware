@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.application.DeltaSyncStateService.RebaselineCancellation;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.junit.jupiter.api.Test;
@@ -133,7 +134,8 @@ class DeltaSyncStateServiceTest {
         state.requestRebaseline();
         when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
 
-        assertTrue(service.cancelRebaseline(SITE), "cancelling a pending request must report true");
+        assertEquals(RebaselineCancellation.CLEARED_BEFORE_NOTICE, service.cancelRebaseline(SITE),
+                "a request the client was never told about is provably called off");
 
         assertFalse(state.isRebaselineRequested());
         verify(repository).save(state);
@@ -163,7 +165,8 @@ class DeltaSyncStateServiceTest {
     void cancelRebaselineIsNoOpWhenNothingPending() {
         when(repository.findBySiteId(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
 
-        assertFalse(service.cancelRebaseline(SITE), "cancelling with no pending request must report false");
+        assertEquals(RebaselineCancellation.NOT_PENDING, service.cancelRebaseline(SITE),
+                "cancelling with no pending request must report NOT_PENDING");
         verify(repository, never()).save(any());
     }
 
@@ -172,7 +175,7 @@ class DeltaSyncStateServiceTest {
         // Never-synced site: no row means PROCEED already — do not materialize one just to clear a flag.
         when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
 
-        assertFalse(service.cancelRebaseline(SITE));
+        assertEquals(RebaselineCancellation.NOT_PENDING, service.cancelRebaseline(SITE));
         verify(repository, never()).save(any());
     }
 
@@ -192,7 +195,8 @@ class DeltaSyncStateServiceTest {
         service.markRebaselineNotified(SITE);
         verify(repository, times(1)).save(state);
 
-        service.cancelRebaseline(SITE);
+        assertEquals(RebaselineCancellation.CLEARED_AFTER_NOTICE, service.cancelRebaseline(SITE),
+                "the client already had the order, so the cancellation may lose the race");
         assertNull(state.getRebaselineNotifiedAt(), "cancelling must forget the notification too");
     }
 

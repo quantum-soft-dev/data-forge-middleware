@@ -87,7 +87,8 @@ public class DeltaSyncAdminController {
     @Operation(
             summary = "Get delta sync state (admin)",
             description = "Returns the site's Delta v2 sync watermark, checkpoint pointer, schema version and pending "
-                    + "rebaseline/rebuild flags. 404 when the Delta client has never connected (no sync state row)."
+                    + "rebaseline/rebuild flags, plus snapshotInProgress when a FULL_SNAPSHOT session is uploading. "
+                    + "404 when the Delta client has never connected (no sync state row)."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Sync state retrieved",
@@ -99,8 +100,9 @@ public class DeltaSyncAdminController {
     })
     public ResponseEntity<DeltaSyncStateResponseDto> getSyncState(@PathVariable UUID siteId) {
         siteService.getSite(siteId); // 404 when the site does not exist
+        boolean snapshotInProgress = cancellationService.isSnapshotSessionOpen(siteId);
         return syncStateService.findSyncState(siteId)
-                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state)))
+                .map(state -> ResponseEntity.ok(DeltaSyncStateResponseDto.fromEntity(state, snapshotInProgress)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -216,8 +218,8 @@ public class DeltaSyncAdminController {
     @Operation(
             summary = "Request full re-baseline (admin)",
             description = "Raises the persistent rebaseline_requested flag: on its next connect the Delta client is "
-                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is cleared when the "
-                    + "FULL_SNAPSHOT session actually starts."
+                    + "answered NEED_REBASELINE and re-sends a full snapshot. The flag is consumed when that "
+                    + "FULL_SNAPSHOT session commits, so it stays raised while the snapshot uploads."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "202", description = "Re-baseline requested",
@@ -248,10 +250,11 @@ public class DeltaSyncAdminController {
             summary = "Cancel a requested full re-baseline (admin)",
             description = "Clears the persistent rebaseline_requested flag without touching the watermark, "
                     + "checkpoints or segments: GetSyncState answers PROCEED again and the client resumes "
-                    + "ordinary delta from its watermark. Idempotent. Status: 'cancelled' when the pending "
-                    + "request was called off; 'session-in-progress' when the flag was cleared but the site "
-                    + "has an open ingestion session, which — if it is the FULL_SNAPSHOT — runs to completion "
-                    + "and replaces the baseline anyway; 'not-requested' when nothing was pending."
+                    + "ordinary delta from its watermark. Idempotent. Status: 'cancelled' when the request was "
+                    + "called off before the client was ever told; 'snapshot-in-progress' when a FULL_SNAPSHOT "
+                    + "session is uploading, which keeps its own intent and replaces the baseline regardless; "
+                    + "'client-notified' when the client already holds NEED_REBASELINE and may start at any "
+                    + "moment; 'not-requested' when nothing was pending."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Re-baseline cancelled, too late, or none was pending",

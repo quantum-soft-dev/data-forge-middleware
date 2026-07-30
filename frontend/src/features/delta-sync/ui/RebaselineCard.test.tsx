@@ -42,4 +42,36 @@ describe('RebaselineCard (F9)', () => {
 
     expect(screen.getByRole('button', { name: /cancel request/i })).toBeDisabled()
   })
+
+  it('hides the cancel action while the request itself is unacknowledged (#84)', () => {
+    // The pill is optimistic; cancelling now would race the POST and be answered "nothing pending".
+    render(
+      <RebaselineCard
+        rebaselineRequested={true}
+        onRequest={vi.fn()}
+        onCancel={vi.fn()}
+        cancellable={false}
+      />,
+    )
+
+    expect(screen.getByText('Full snapshot scheduled on next connect')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /cancel request/i })).not.toBeInTheDocument()
+  })
+
+  it('shows a running snapshot instead of the cancellable pill (#84)', () => {
+    // Once the client is uploading, nothing can call it off — and the state must survive a reload,
+    // not live only in the toast that reported it.
+    render(
+      <RebaselineCard
+        rebaselineRequested={false}
+        snapshotInProgress={true}
+        onRequest={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Full snapshot in progress')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Request full re-baseline' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /cancel request/i })).not.toBeInTheDocument()
+  })
 })

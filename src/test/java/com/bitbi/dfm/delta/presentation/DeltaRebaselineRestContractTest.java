@@ -49,9 +49,12 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
                 INSERT INTO site_sync_state (site_id, last_applied_seq, last_checkpoint_seq, schema_version, updated_at)
                 VALUES (?, 100, 50, 1, CURRENT_TIMESTAMP)
                 """, OWNED_SITE);
-        // The seed data leaves an IN_PROGRESS batch on the owned site; a cancellation reports
-        // "session-in-progress" while one is open (#84), so close it unless a test wants it.
-        closeActiveSession();
+    }
+
+    /** Turn the seeded open batch into a session of the given Delta v2 mode (null = pre-V47 batch). */
+    private void setOpenSessionMode(String sessionMode) {
+        jdbc.update("UPDATE batches SET session_mode = ? WHERE site_id = ? AND status = 'IN_PROGRESS'",
+                sessionMode, OWNED_SITE);
     }
 
     private void closeActiveSession() {
@@ -61,13 +64,10 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
                 """, OWNED_SITE);
     }
 
-    private void openSession() {
-        jdbc.update("""
-                INSERT INTO batches (id, site_id, account_id, status, s3_path, uploaded_files_count,
-                                     total_size, has_errors, started_at, created_at)
-                SELECT ?, ?, account_id, 'IN_PROGRESS', 'test/', 0, 0, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                FROM sites WHERE id = ?
-                """, UUID.randomUUID(), OWNED_SITE, OWNED_SITE);
+    /** Pretend GetSyncState has already handed NEED_REBASELINE to the client. */
+    private void markClientNotified() {
+        jdbc.update("UPDATE site_sync_state SET rebaseline_notified_at = CURRENT_TIMESTAMP WHERE site_id = ?",
+                OWNED_SITE);
     }
 
     @Test
@@ -148,25 +148,84 @@ class DeltaRebaselineRestContractTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("cancel reports session-in-progress while the site is ingesting (#84)")
-    void cancelWhileSessionOpenReportsSessionInProgress() throws Exception {
-        // The flag outlives the whole FULL_SNAPSHOT session (the wipe runs at commit), so an open
-        // session may be the very snapshot being called off — the answer must not claim success.
+    @DisplayName("cancel reports snapshot-in-progress while a FULL_SNAPSHOT uploads, and the state shows it")
+    void cancelDuringSnapshotReportsSnapshotInProgress() throws Exception {
+        // The flag outlives the whole FULL_SNAPSHOT session (the wipe runs at commit), so the
+        // running snapshot keeps its own intent — the answer must not claim success.
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isAccepted());
-        openSession();
+        setOpenSessionMode("FULL_SNAPSHOT");
 
         mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("session-in-progress"));
+                .andExpect(jsonPath("$.status").value("snapshot-in-progress"));
 
-        // The flag is still cleared, so the site is not ordered to re-baseline all over again.
+        // The flag is still cleared (no second snapshot is ordered), and the running one stays
+        // visible in the projection instead of only in the one-shot response.
         mockMvc.perform(get(USER_SYNC_STATE_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rebaselineRequested").value(false));
+                .andExpect(jsonPath("$.rebaselineRequested").value(false))
+                .andExpect(jsonPath("$.snapshotInProgress").value(true));
+    }
+
+    @Test
+    @DisplayName("a second cancel during the same snapshot still reports snapshot-in-progress")
+    void secondCancelDuringSnapshotDoesNotReportNotRequested() throws Exception {
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+        setOpenSessionMode("FULL_SNAPSHOT");
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(jsonPath("$.status").value("snapshot-in-progress"));
+
+        // Another operator, whose pill was up to one poll stale: "nothing to cancel" would be the
+        // opposite conclusion about the very same running snapshot.
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("snapshot-in-progress"));
+    }
+
+    @Test
+    @DisplayName("an ordinary delta session does not mask a successful cancellation")
+    void cancelDuringContinuousSessionStillReportsCancelled() throws Exception {
+        // 029: a CONTINUOUS session holds its batch IN_PROGRESS for hours, and the one-active-batch
+        // rule means no FULL_SNAPSHOT can be running behind it.
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+        setOpenSessionMode("CONTINUOUS");
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("cancelled"));
+
+        mockMvc.perform(get(USER_SYNC_STATE_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(jsonPath("$.snapshotInProgress").value(false));
+    }
+
+    @Test
+    @DisplayName("cancel reports client-notified once NEED_REBASELINE has gone out")
+    void cancelAfterClientWasNotifiedIsNotReportedAsSuccess() throws Exception {
+        // The client holds the order and may open its snapshot at any moment — no batch exists yet,
+        // so nothing is observable and `cancelled` would promise a re-upload was averted.
+        mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isAccepted());
+        closeActiveSession();
+        markClientNotified();
+
+        mockMvc.perform(delete(USER_URL.formatted(OWNED_SITE))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("client-notified"));
     }
 
     @Test

@@ -79,19 +79,23 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
     });
   };
 
-  // Only `cancelled` averts the full re-upload: a snapshot already in flight keeps its own
-  // re-baseline intent (the server consumes the flag at commit, not at session start), and the
-  // pill is up to one poll (20s) stale, so the request may be gone entirely. Reporting either as
-  // a success would tell the user a re-upload was called off that is still coming (#84).
+  // Only `cancelled` averts the full re-upload. A snapshot already uploading keeps its own
+  // re-baseline intent (the server consumes the flag at commit, not at session start), and a client
+  // that already holds NEED_REBASELINE may open its session at any moment — reporting either as a
+  // success would tell the user a re-upload was called off that is still coming (#84).
   const handleCancelRebaselineConfirm = () => {
     setCancelRebaselineDialogOpen(false);
     cancelRebaselineMutation.mutate(undefined, {
       onSuccess: (status) => {
         if (status === 'cancelled') {
           toast.success('Re-baseline request cancelled');
-        } else if (status === 'session-in-progress') {
+        } else if (status === 'snapshot-in-progress') {
           toast.warning(
-            'Request cleared, but the site is already ingesting — a full snapshot in flight still runs to completion',
+            'The client is already uploading the full snapshot — it runs to completion and replaces the baseline',
+          );
+        } else if (status === 'client-notified') {
+          toast.warning(
+            'Request cleared, but the client already has the order — it may still send the snapshot',
           );
         } else {
           toast.warning('No re-baseline was pending — nothing to cancel');
@@ -163,9 +167,13 @@ export function DeltaSyncWidget({ siteId, admin, canManage }: DeltaSyncWidgetPro
         ))}
       <RebaselineCard
         rebaselineRequested={state.rebaselineRequested || rebaselineMutation.isPending}
+        snapshotInProgress={state.snapshotInProgress}
         onRequest={() => setRebaselineDialogOpen(true)}
         onCancel={() => setCancelRebaselineDialogOpen(true)}
         cancelling={cancelRebaselineMutation.isPending}
+        // Cancelling while the request POST is still unacknowledged races it: the DELETE can be
+        // answered "nothing was pending" moments before the flag appears (#84 review).
+        cancellable={!rebaselineMutation.isPending}
       />
       <RebuildCheckpointDialog
         open={rebuildDialogOpen}
