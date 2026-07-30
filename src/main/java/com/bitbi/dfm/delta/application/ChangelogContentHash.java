@@ -31,8 +31,8 @@ import java.util.TreeMap;
  * </ul>
  *
  * <p>Result is lowercase hex SHA-256. Clients implementing this algorithm get end-to-end integrity;
- * a client that cannot yet compute it may send an empty {@code content_hash} (see
- * {@link #matches(List, String)}).</p>
+ * a client that cannot yet compute it may send an empty {@code content_hash}, which
+ * {@link SessionTotals#hashMatches(String)} treats as an opt-out.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -44,17 +44,6 @@ public final class ChangelogContentHash {
     private static final char GROUP_SEPARATOR = '\u001D';
 
     private ChangelogContentHash() {
-    }
-
-    /**
-     * @return whether the declared hash matches the records; a blank {@code declaredHex} (client did
-     *         not provide one) is treated as a match so optional integrity is not a hard requirement
-     */
-    public static boolean matches(List<ChangeRecord> records, String declaredHex) {
-        if (declaredHex == null || declaredHex.isBlank()) {
-            return true;
-        }
-        return compute(records).equalsIgnoreCase(declaredHex.trim());
     }
 
     /**
@@ -89,20 +78,31 @@ public final class ChangelogContentHash {
          * @throws IllegalStateException if the digest was already finalized by {@link #hex()}
          */
         public void update(List<ChangeRecord> records) {
+            for (ChangeRecord record : records) {
+                update(record);
+            }
+        }
+
+        /**
+         * Fold a single record into the running digest — the per-record form used by the ingestion
+         * path, avoiding a singleton list and its iterator per accepted record.
+         *
+         * @param record the accepted change record
+         * @throws IllegalStateException if the digest was already finalized by {@link #hex()}
+         */
+        public void update(ChangeRecord record) {
             if (hex != null) {
                 throw new IllegalStateException("Hasher already finalized — cannot accept more records");
             }
-            for (ChangeRecord record : records) {
-                sb.setLength(0);
-                sb.append(record.getOp().name()).append(UNIT_SEPARATOR);
-                appendPrefixed(sb, record.getTable());
-                sb.append(record.getSeq()).append(UNIT_SEPARATOR);
-                appendColumns(sb, record.getKeyMap());
-                sb.append(UNIT_SEPARATOR);
-                appendColumns(sb, record.getDataMap());
-                sb.append(RECORD_SEPARATOR);
-                digest.update(sb.toString().getBytes(StandardCharsets.UTF_8));
-            }
+            sb.setLength(0);
+            sb.append(record.getOp().name()).append(UNIT_SEPARATOR);
+            appendPrefixed(sb, record.getTable());
+            sb.append(record.getSeq()).append(UNIT_SEPARATOR);
+            appendColumns(sb, record.getKeyMap());
+            sb.append(UNIT_SEPARATOR);
+            appendColumns(sb, record.getDataMap());
+            sb.append(RECORD_SEPARATOR);
+            digest.update(sb.toString().getBytes(StandardCharsets.UTF_8));
         }
 
         /**

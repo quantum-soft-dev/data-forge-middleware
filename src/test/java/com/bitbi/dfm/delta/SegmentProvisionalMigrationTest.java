@@ -45,22 +45,32 @@ class SegmentProvisionalMigrationTest {
     }
 
     @Test
-    @DisplayName("narrows the egress and plugin-sql pending indexes to non-provisional segments")
-    void shouldNarrowPendingIndexesToNonProvisional() throws IOException {
+    @DisplayName("enforces (site_id, first_seq) uniqueness over published rows only")
+    void shouldScopeUniquenessToPublishedRows() throws IOException {
         String sql = sql();
 
         assertThat(sql)
-                .as("both queue lookups must skip provisional segments at the index level")
-                .contains("idx_changelog_segments_egress_pending")
-                .contains("idx_changelog_segments_plugin_sql_pending");
+                .as("the all-rows table constraint must go: a provisional segment competed for slots "
+                        + "with the baseline it is replacing, which is only deleted at SessionEnd")
+                .contains("drop constraint uk_segment_site_first_seq");
 
-        for (String statement : sql.split(";")) {
-            if (statement.contains("create index") && statement.contains("_pending")) {
-                assertThat(statement)
-                        .as("pending index %s must exclude provisional rows", statement.strip())
-                        .contains("provisional = false");
-            }
-        }
+        String uniqueIndex = statementContaining(sql, "create unique index");
+        assertThat(uniqueIndex).contains("site_id, first_seq");
+        assertThat(uniqueIndex)
+                .as("uniqueness must be partial on published rows")
+                .contains("where provisional = false");
+    }
+
+    @Test
+    @DisplayName("leaves the queue pending indexes alone — provisional rows park outside them")
+    void shouldNotTouchTheQueuePendingIndexes() throws IOException {
+        String sql = sql();
+
+        assertThat(sql)
+                .as("a replica on the previous release has no notion of `provisional`; visibility is "
+                        + "achieved by parking egress_at/plugin_sql_at, not by changing its indexes")
+                .doesNotContain("idx_changelog_segments_egress_pending")
+                .doesNotContain("idx_changelog_segments_plugin_sql_pending");
     }
 
     @Test

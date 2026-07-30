@@ -26,9 +26,17 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findBySiteIdOrderByFirstSeq(UUID siteId);
 
     /**
-     * A site's provisional segments — leftovers of a re-baseline that never reached
-     * {@code SessionEnd} (033). Garbage-collected before the next snapshot attempt streams, both to
-     * reclaim storage and to free the {@code UNIQUE (site_id, first_seq)} slots they hold.
+     * A batch's provisional segments — the leftovers of one re-baseline session that never reached
+     * {@code SessionEnd} (033). Batch-scoped on purpose: a site-wide sweep would let one session
+     * delete another's in-flight snapshot.
+     *
+     * @param batchId the session's batch
+     * @return provisional segments written by that batch
+     */
+    List<ChangelogSegment> findProvisionalByBatchId(UUID batchId);
+
+    /**
+     * A site's provisional segments — used by tests and diagnostics to assert invisibility.
      *
      * @param siteId site identifier
      * @return provisional segments of the site (any batch)
@@ -36,14 +44,39 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findProvisionalBySiteId(UUID siteId);
 
     /**
-     * Publish a completed re-baseline: clear {@code provisional} for every segment of the batch, so
-     * the whole snapshot becomes visible to the fold and both work queues at once (033). Runs in the
-     * commit transaction, right after the previous baseline is discarded.
+     * Publish a completed re-baseline: clear {@code provisional} for every segment of the batch and
+     * un-park its queue markers, so the whole snapshot becomes visible to the fold and enters both
+     * work queues at once (033). Runs in the commit transaction, right after the previous baseline
+     * is discarded.
      *
      * @param batchId the snapshot session's batch
      * @return number of segments published
      */
     int flipProvisionalByBatchId(UUID batchId);
+
+    /**
+     * Move a staged session's provisional segments onto the batch it is being resumed under (033).
+     *
+     * <p>A resume whose original batch was already reaped runs under a replacement batch. Publication
+     * is keyed on the batch, so without this the segments sealed before the drop would never be
+     * published — the snapshot would commit a baseline missing everything it streamed first, with the
+     * watermark advanced and the client told it succeeded.</p>
+     *
+     * @param fromBatchId the reaped batch the segments were sealed under
+     * @param toBatchId   the replacement batch the resumed session runs under
+     * @return number of segments moved
+     */
+    int reassignProvisionalBatch(UUID fromBatchId, UUID toBatchId);
+
+    /**
+     * Provisional segments whose owning batch is no longer running — the crash/eviction backstop
+     * (033). A staged session deliberately keeps its batch {@code IN_PROGRESS}, so a session that
+     * may still resume is never swept; anything else is unreachable garbage.
+     *
+     * @param limit maximum segments to return
+     * @return orphaned provisional segments, oldest first
+     */
+    List<ChangelogSegment> findProvisionalWithoutRunningBatch(int limit);
 
     List<ChangelogSegment> findByBatchId(UUID batchId);
 

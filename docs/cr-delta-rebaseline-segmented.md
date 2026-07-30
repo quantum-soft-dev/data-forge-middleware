@@ -146,6 +146,52 @@ multi-million-record snapshot takes long enough that a mid-stream drop is likely
 dead time per attempt would undo the fix. A non-`DELTA` `SessionStart` now fails the session it
 supersedes.
 
+## Review round (post-implementation)
+
+A high-effort review found three data-loss/wedge bugs, all rooted in the same mistake: provisional
+segments were written into an unpartitioned unique keyspace, and published by a key (the batch) that
+the session can change under them. The fixes:
+
+1. **Uniqueness is now partial** (`WHERE provisional = FALSE`). A provisional segment was competing
+   for `(site_id, first_seq)` slots with the baseline it is replacing — which is only deleted at
+   `SessionEnd` — so a snapshot re-bootstrapping at an already-used sequence died on its first seal.
+   The same collision let an abandoned snapshot's orphan wedge every later session at that sequence.
+2. **A resume onto a replacement batch re-points its already-sealed segments** to that batch.
+   Publication is batch-keyed and `reset()` cannot see provisional rows, so segments left under a
+   reaped batch were neither published nor deleted: the snapshot committed a baseline missing
+   everything streamed before the drop, watermark advanced, client told it succeeded. Reconciliation
+   did not catch it — the totals travel with the staged session and still matched.
+3. **Garbage collection is batch-scoped, with a scheduled backstop.** The site-wide sweep let one
+   session delete another's in-flight snapshot; and no path at all collected a snapshot whose pod
+   died. `sweepOrphanedProvisionalSegments` collects provisional rows whose batch is no longer
+   running — a staged session keeps its batch `IN_PROGRESS`, so a resumable one is never swept.
+
+Four more, lower-severity:
+
+4. **`flushAutomatically = true`** on both `@Modifying` bulk updates. `clearAutomatically` alone
+   detached `reset()`'s still-unflushed `SiteSyncState` and checkpoint deletes whenever the query
+   spaces did not intersect — leaving `rebaseline_requested` set after a *successful* snapshot.
+5. **Provisional segments park their queue markers** instead of relying on a `provisional` predicate
+   in the pollers. A replica on the previous release has no notion of the column and would otherwise
+   claim a half-streamed snapshot during a rolling deploy and stamp it processed for good.
+6. **A snapshot seals on `delta.ingestion.snapshot-seal-records` (25,000), not 100.** The continuous
+   threshold bounds staleness for a trickle stream; on a 5M-row snapshot it produced 50,000 segments,
+   each seal stalling record intake for a full S3 round trip.
+7. **Cross-pod retry** — the in-memory supersede is a no-op when the retry lands on another replica,
+   so a non-DELTA start now also reclaims an active batch that has been silent past the staged TTL,
+   using the same conditional update the timeout sweeper uses.
+
+Also: the Bit BI reinit signal now fires once per re-baseline rather than once per segment that
+introduces a new table; the lag metric is emitted for snapshot seals (it went silent for the whole
+duration of a large one); the checkpoint-seq read moved out of the per-seal path; and
+`SessionTotals`/`ChangelogContentHash` gained per-record overloads to drop the per-record wrapper
+allocations.
+
+**Known, not fixed here:** the per-batch Parquet download (`.../batches/{batchId}/tables/{table}/parquet`)
+returns the first matching segment's file. That is pre-existing — a `CONTINUOUS` batch has had many
+segments since 029 — and correcting it means changing the endpoint's shape and the UI that consumes
+it, so it belongs in its own change.
+
 ## Downstream contract change
 
 `docs/delta-client-v2-guide.md` claimed a `FULL_SNAPSHOT` egress file *"is a full table — so

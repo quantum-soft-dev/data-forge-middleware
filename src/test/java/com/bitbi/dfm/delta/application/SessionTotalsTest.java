@@ -33,10 +33,10 @@ class SessionTotalsTest {
                 rec("orders", Op.UPDATE, 4),
                 rec("items", Op.DELETE, 5)));
 
-        assertEquals(Map.of(
-                        "orders", new com.bitbi.dfm.delta.domain.TableChangeStats(2, 1, 0),
-                        "items", new com.bitbi.dfm.delta.domain.TableChangeStats(1, 0, 1)),
-                totals.statsByTable());
+        // Counts are observable only through reconcile — the production contract.
+        assertTrue(totals.reconcile(Map.of(
+                "orders", stats(2, 1, 0),
+                "items", stats(1, 0, 1))));
     }
 
     @Test
@@ -65,7 +65,6 @@ class SessionTotalsTest {
     void emptySessionReconcilesAgainstEmptyDeclaration() {
         SessionTotals totals = new SessionTotals();
         assertTrue(totals.reconcile(Map.of()));
-        assertTrue(totals.statsByTable().isEmpty());
     }
 
     @Test

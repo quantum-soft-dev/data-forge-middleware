@@ -68,7 +68,11 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService service = new DeltaIngestionService(
                 syncStateService, batchLifecycle,
                 siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
+                // snapshot seal threshold pinned to 100 here so seal behaviour is observable in a
+                // 250-record test; the shipped default is far higher (see
+                // DeltaIngestionSnapshotSealConfigTest).
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L,
+                16777216L, 500, 100);
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name)
                 .directExecutor()
@@ -963,7 +967,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L); // cap = 2 records
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L, 500, 25000); // cap = 2 records
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -1006,7 +1010,7 @@ class DeltaIngestionStreamChangesContractTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 1L); // seal < tiny budget
+                new DeltaMetrics(registry), 2000000, budget, 3900000L, 300000L, 1L, 500, 25000); // seal < tiny budget
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -1044,7 +1048,7 @@ class DeltaIngestionStreamChangesContractTest {
                 () -> new DeltaIngestionService(
                         mock(DeltaSyncStateService.class), batchLifecycle, siteSchemaService,
                         mock(DeltaSessionCommitService.class), mock(com.bitbi.dfm.delta.application.DeltaRebaselineService.class), new DeltaMetrics(new SimpleMeterRegistry()),
-                        2000000, 100L, 3900000L, 300000L, 100L)); // seal == budget
+                        2000000, 100L, 3900000L, 300000L, 100L, 500, 25000)); // seal == budget
         assertTrue(e.getMessage().contains("continuous-seal-bytes"), e.getMessage());
         assertTrue(e.getMessage().contains("max-session-bytes"), e.getMessage());
     }
@@ -1068,7 +1072,7 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService tight = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes);
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, budget, 3900000L, 300000L, sealBytes, 500, 25000);
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(tight, authContext(SITE, ACCOUNT))).build().start();
@@ -1125,7 +1129,8 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService timed = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L); // seal on every record
+                new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 0L, 16777216L,
+                500, 25000); // seal on every record
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(timed, authContext(SITE, ACCOUNT))).build().start();
@@ -1168,7 +1173,7 @@ class DeltaIngestionStreamChangesContractTest {
         DeltaIngestionService sized = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
                 new DeltaMetrics(new SimpleMeterRegistry()), 2000000, Long.MAX_VALUE, 3900000L, 300000L,
-                sealBytes);
+                sealBytes, 500, 25000);
         String name = InProcessServerBuilder.generateName();
         Server srv = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(sized, authContext(SITE, ACCOUNT))).build().start();
@@ -1285,7 +1290,8 @@ class DeltaIngestionStreamChangesContractTest {
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 150, Long.MAX_VALUE, 3900000L, 300000L, 16777216L);
+                new DeltaMetrics(new SimpleMeterRegistry()), 150, Long.MAX_VALUE, 3900000L, 300000L,
+                16777216L, 500, 100);
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
@@ -1382,7 +1388,7 @@ class DeltaIngestionStreamChangesContractTest {
                     .putPerTable("t", TableStats.newBuilder().setInserts(1L).build()).build()).build());
         });
 
-        verify(rebaselineService).deleteProvisional(SITE);
+        verify(rebaselineService, never()).deleteProvisionalByBatch(any());
     }
 
     @Test
@@ -1403,8 +1409,9 @@ class DeltaIngestionStreamChangesContractTest {
         });
 
         verify(batchLifecycle).failBatch(any());
-        // Once when the session opened, once when it was aborted.
-        verify(rebaselineService, times(2)).deleteProvisional(SITE);
+        // Scoped to this session's own batch — never site-wide, or an aborting stream could delete a
+        // concurrent session's in-flight snapshot.
+        verify(rebaselineService).deleteProvisionalByBatch(any());
         verify(changelogSegmentService, never()).publishProvisional(any());
     }
 
@@ -1464,7 +1471,7 @@ class DeltaIngestionStreamChangesContractTest {
                 "continuous still announces the threshold seal and the closing flush");
         verify(changelogSegmentService, never()).persistProvisional(any(), any(), any(), anyLong(), any());
         verify(changelogSegmentService, never()).publishProvisional(any());
-        verify(rebaselineService, never()).deleteProvisional(any());
+        verify(rebaselineService, never()).deleteProvisionalByBatch(any());
     }
 
     private static ClientEvent change(String table, Op op, long seq) {

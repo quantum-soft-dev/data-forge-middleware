@@ -1,10 +1,8 @@
 package com.bitbi.dfm.delta.application;
 
-import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.TableStats;
 
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,25 +38,32 @@ public final class SessionTotals {
      */
     public void add(List<ChangeRecord> records) {
         for (ChangeRecord record : records) {
-            long[] c = counts.computeIfAbsent(record.getTable(), k -> new long[3]);
-            switch (record.getOp()) {
-                case INSERT -> c[0]++;
-                case UPDATE -> c[1]++;
-                case DELETE -> c[2]++;
-                default -> {
-                }
-            }
+            count(record);
         }
         hasher.update(records);
     }
 
     /**
-     * @return per-table insert/update/delete counts accumulated over the whole session
+     * Fold a single accepted record into the running totals. The per-record form of
+     * {@link #add(List)} — the ingestion path calls this once per accepted record, and wrapping each
+     * one in a singleton list allocated a list plus two iterators per record for nothing.
+     *
+     * @param record the accepted change record
      */
-    public Map<String, TableChangeStats> statsByTable() {
-        Map<String, TableChangeStats> result = new LinkedHashMap<>();
-        counts.forEach((table, c) -> result.put(table, new TableChangeStats(c[0], c[1], c[2])));
-        return Collections.unmodifiableMap(result);
+    public void add(ChangeRecord record) {
+        count(record);
+        hasher.update(record);
+    }
+
+    private void count(ChangeRecord record) {
+        long[] c = counts.computeIfAbsent(record.getTable(), k -> new long[3]);
+        switch (record.getOp()) {
+            case INSERT -> c[0]++;
+            case UPDATE -> c[1]++;
+            case DELETE -> c[2]++;
+            default -> {
+            }
+        }
     }
 
     /**

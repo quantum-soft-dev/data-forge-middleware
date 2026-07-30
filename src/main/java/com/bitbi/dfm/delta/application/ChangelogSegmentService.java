@@ -97,6 +97,19 @@ public class ChangelogSegmentService {
     }
 
     /**
+     * Move a session's provisional segments onto a different batch (033 review) — used when a resume
+     * runs under a replacement batch, so publication (which is batch-keyed) still covers them.
+     *
+     * @param fromBatchId batch the segments were sealed under
+     * @param toBatchId   batch the resumed session now owns
+     * @return number of segments moved
+     */
+    @Transactional
+    public int reassignProvisionalBatch(UUID fromBatchId, UUID toBatchId) {
+        return repository.reassignProvisionalBatch(fromBatchId, toBatchId);
+    }
+
+    /**
      * Read back the change records of a persisted segment.
      *
      * @param s3Key segment key

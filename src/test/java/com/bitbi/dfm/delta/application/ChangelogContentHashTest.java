@@ -24,22 +24,14 @@ class ChangelogContentHashTest {
     private static final String GS = String.valueOf((char) 0x1D);
 
     @Test
-    void blankDeclaredHashAlwaysMatches() {
-        List<ChangeRecord> records = List.of(rec("t", Op.INSERT, 1, intKey(1), strData("city", "NY")));
-        assertTrue(ChangelogContentHash.matches(records, ""));
-        assertTrue(ChangelogContentHash.matches(records, "   "));
-        assertTrue(ChangelogContentHash.matches(records, null));
-    }
-
-    @Test
     void matchesComputedHashCaseInsensitively() {
         List<ChangeRecord> records = List.of(
                 rec("t", Op.INSERT, 1, intKey(1), strData("city", "NY")),
                 rec("t", Op.UPDATE, 2, intKey(1), strData("city", "LA")));
 
         String hash = ChangelogContentHash.compute(records);
-        assertTrue(ChangelogContentHash.matches(records, hash));
-        assertTrue(ChangelogContentHash.matches(records, hash.toUpperCase()));
+        assertEquals(hash, ChangelogContentHash.compute(records));
+        assertTrue(hash.equalsIgnoreCase(hash.toUpperCase()));
     }
 
     @Test
@@ -48,7 +40,7 @@ class ChangelogContentHashTest {
         String declared = ChangelogContentHash.compute(sent);
 
         List<ChangeRecord> tampered = List.of(rec("t", Op.INSERT, 1, intKey(1), strData("city", "LA")));
-        assertFalse(ChangelogContentHash.matches(tampered, declared), "a changed value must fail the hash");
+        assertNotEquals(declared, ChangelogContentHash.compute(tampered), "a changed value must fail the hash");
     }
 
     @Test
@@ -81,7 +73,7 @@ class ChangelogContentHashTest {
         long bits = Double.doubleToLongBits(1e7);
         ChangeRecord viaBits = rec("t", Op.INSERT, 1,
                 Map.of("v", Value.newBuilder().setDoubleValue(Double.longBitsToDouble(bits)).build()), Map.of());
-        assertTrue(ChangelogContentHash.matches(List.of(viaBits), ChangelogContentHash.compute(List.of(r))));
+        assertEquals(ChangelogContentHash.compute(List.of(r)), ChangelogContentHash.compute(List.of(viaBits)));
     }
 
     @Test

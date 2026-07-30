@@ -118,9 +118,17 @@ public class DeltaSqlQueueService {
     private void suspendBaselines(ChangelogSegment segment, Site site, AccountPlugin activation) {
         Set<String> covered = new HashSet<>();
         Set<String> newlySuspended = new HashSet<>();
-        for (PluginDeltaBaseline baseline : baselineRepository
-                .findByAccountPluginIdAndSiteId(activation.getId(), site.getId())) {
-            if (baseline.getBaselineSeq() != Long.MAX_VALUE) {
+        List<PluginDeltaBaseline> existing = baselineRepository
+                .findByAccountPluginIdAndSiteId(activation.getId(), site.getId());
+        // Whether the site was ALREADY in the suspended state before this segment. A re-baseline now
+        // arrives as N segments (033), and tables are spread across them, so "did this segment
+        // suspend anything" is not the same question as "is this a new re-baseline": a table first
+        // seen in segment 7 would otherwise raise a second reinit signal for the same snapshot.
+        boolean alreadySuspended = !existing.isEmpty()
+                && existing.stream().allMatch(b -> b.getBaselineSeq() != null
+                        && b.getBaselineSeq() == Long.MAX_VALUE);
+        for (PluginDeltaBaseline baseline : existing) {
+            if (baseline.getBaselineSeq() == null || baseline.getBaselineSeq() != Long.MAX_VALUE) {
                 baseline.suspend();
                 baselineRepository.save(baseline);
                 newlySuspended.add(baseline.getTableName());
@@ -140,9 +148,9 @@ public class DeltaSqlQueueService {
             }
         }
 
-        if (newlySuspended.isEmpty()) {
-            log.debug("Site {} already suspended for rebaseline — segment {} carries no new table",
-                    site.getId(), segment.getId());
+        if (alreadySuspended || newlySuspended.isEmpty()) {
+            log.debug("Site {} is already suspended for this re-baseline — segment {} raises no "
+                    + "second reinit signal", site.getId(), segment.getId());
             return;
         }
 

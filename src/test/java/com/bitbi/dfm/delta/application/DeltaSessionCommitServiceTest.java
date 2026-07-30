@@ -193,6 +193,28 @@ class DeltaSessionCommitServiceTest {
     }
 
     @Test
+    void resumeOntoAReplacementBatchMovesTheAlreadySealedSegments() {
+        // 033 review: publication is batch-keyed and reset() cannot see provisional rows, so
+        // segments sealed under a reaped batch would be neither published nor deleted — the snapshot
+        // would commit a baseline missing everything streamed before the drop, with the watermark
+        // advanced and the client told it succeeded.
+        UUID reaped = UUID.randomUUID();
+        when(segmentService.reassignProvisionalBatch(reaped, BATCH)).thenReturn(3);
+
+        assertEquals(3, commit.reassignProvisionalSegments(reaped, BATCH));
+
+        verify(segmentService).reassignProvisionalBatch(reaped, BATCH);
+    }
+
+    @Test
+    void reassignIsANoOpWhenTheSessionKeptItsBatch() {
+        assertEquals(0, commit.reassignProvisionalSegments(BATCH, BATCH));
+        assertEquals(0, commit.reassignProvisionalSegments(null, BATCH));
+
+        verify(segmentService, never()).reassignProvisionalBatch(any(), any());
+    }
+
+    @Test
     void nonRebaselineCommitDoesNotTouchTheBaseline() {
         when(segmentService.persist(any(), any(), any(), anyLong(), any())).thenReturn(mock(ChangelogSegment.class));
         commit.commit(SITE, BATCH, "DELTA", 1L, 1L, List.of(ChangeRecord.newBuilder().setSeq(1L).build()));

@@ -113,6 +113,28 @@ public class DeltaSessionCommitService {
     }
 
     /**
+     * Move a resumed session's provisional segments onto the batch it now runs under (033 review).
+     *
+     * <p>A resume whose original batch had already been reaped continues under a replacement batch.
+     * Publication is keyed on the batch, and {@link DeltaRebaselineService#reset} cannot see
+     * provisional rows, so segments left under the old batch would be neither published nor deleted:
+     * the snapshot would commit a baseline missing everything it streamed before the drop, with the
+     * watermark advanced and the client told it succeeded. Reconciliation does not catch it — the
+     * totals travel with the staged session and still match.</p>
+     *
+     * @param fromBatchId the reaped batch the segments were sealed under
+     * @param toBatchId   the replacement batch
+     * @return number of segments moved
+     */
+    @Transactional
+    public int reassignProvisionalSegments(UUID fromBatchId, UUID toBatchId) {
+        if (fromBatchId == null || fromBatchId.equals(toBatchId)) {
+            return 0;
+        }
+        return changelogSegmentService.reassignProvisionalBatch(fromBatchId, toBatchId);
+    }
+
+    /**
      * Seal a mid-snapshot segment of a re-baseline (033): durable, but {@code provisional} — hidden
      * from the checkpoint fold and both work queues, and deliberately <em>not</em> advancing the
      * watermark.

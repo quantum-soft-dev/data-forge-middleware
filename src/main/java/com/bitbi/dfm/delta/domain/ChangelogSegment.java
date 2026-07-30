@@ -146,9 +146,18 @@ public class ChangelogSegment {
     /**
      * Hold the segment back from the fold and both work queues until its re-baseline session
      * commits (033). Set at creation; cleared in bulk for the whole batch at {@code SessionEnd}.
+     *
+     * <p>Both queue markers are <em>parked</em> at the same time. The queues treat {@code NULL} as
+     * "pending", so parking them takes the segment out of every poller — including one running the
+     * previous release, which has no notion of {@code provisional} and would otherwise claim a
+     * half-streamed snapshot during a rolling deploy and stamp it processed for good. Publication
+     * puts both back to {@code NULL}, which is what actually enqueues the work.</p>
      */
     public void markProvisional() {
         this.provisional = true;
+        LocalDateTime parked = LocalDateTime.now(ZoneOffset.UTC);
+        this.egressAt = parked;
+        this.pluginSqlAt = parked;
     }
 
     @PrePersist

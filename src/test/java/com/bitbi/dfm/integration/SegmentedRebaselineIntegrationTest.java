@@ -45,7 +45,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The cap is lowered to 150 here (seals fire every 100 records) so a 250-record snapshot is
  * genuinely over the limit that used to reject it.</p>
  */
-@TestPropertySource(properties = "delta.ingestion.max-session-records=150")
+@TestPropertySource(properties = {
+        "delta.ingestion.max-session-records=150",
+        // Production seals a snapshot every 25,000 records; pinned low here so a 250-record snapshot
+        // actually exercises the seal path.
+        "delta.ingestion.snapshot-seal-records=100"
+})
 class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
 
     /** store-01.example.com — test-data.sql clears its segments before every test method. */
@@ -192,6 +197,123 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         assertEquals(SNAPSHOT_RECORDS, checkpointService.buildCheckpoint(SITE).get("customers").size());
     }
 
+    @Test
+    void snapshotOverlappingTheOldBaselineSequenceRangeStillCompletes() {
+        // Review finding: provisional seals INSERT while the old baseline is still present. With the
+        // (site_id, first_seq) uniqueness spanning all rows, a client re-bootstrapping at a sequence
+        // the old baseline already owns collided on its first seal and could never re-baseline.
+        seedSchema();
+        releaseActiveBatch();
+        seedOldBaseline();                       // committed segment at first_seq = 1
+        requestRebaseline();
+
+        List<ServerEvent> events = runSession(req -> {
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 1L));   // re-bootstrap over the same range
+            for (long i = 0; i < SNAPSHOT_RECORDS; i++) {
+                req.onNext(customer(1L + i, 2000L + i));
+            }
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder()
+                    .setLastSeq(SNAPSHOT_RECORDS)
+                    .putPerTable("customers", TableStats.newBuilder().setInserts(SNAPSHOT_RECORDS).build())
+                    .build()).build());
+        });
+
+        assertNoTransportError();
+        assertTrue(events.stream().noneMatch(ServerEvent::hasError),
+                "a snapshot may reuse sequences the baseline it replaces still occupies");
+        assertTrue(events.get(events.size() - 1).hasCommitted());
+        assertTrue(segmentRepository.findProvisionalBySiteId(SITE).isEmpty());
+        assertEquals(SNAPSHOT_RECORDS, checkpointService.buildCheckpoint(SITE).get("customers").size());
+    }
+
+    @Test
+    void abandonedSnapshotDoesNotBlockAnOrdinaryDeltaSessionAtTheSameSequence() {
+        // Review finding: the watermark deliberately does not move during a snapshot, so an
+        // abandoned attempt's first provisional segment sits exactly where the next ordinary session
+        // starts. While uniqueness spanned all rows that wedged the site on every later session.
+        seedSchema();
+        releaseActiveBatch();
+        // No committed baseline here on purpose: this pins the orphaned PROVISIONAL row as the
+        // blocker. A committed segment at the same first_seq would collide legitimately.
+        long watermark = syncStateService.getSyncState(SITE).lastAppliedSeq();
+
+        Context ctx = Context.current()
+                .withValue(DeltaAuthInterceptor.SITE_ID, SITE)
+                .withValue(DeltaAuthInterceptor.ACCOUNT_ID, ACCOUNT);
+        ctx.run(() -> {
+            StreamObserver<ClientEvent> req = ingestionService.streamChanges(sink(new ArrayList<>()));
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, watermark + 1));
+            for (long i = 0; i < 150L; i++) {
+                req.onNext(customer(watermark + 1 + i, 3000L + i));
+            }
+            req.onError(new RuntimeException("transport drop"));
+        });
+        assertFalse(segmentRepository.findProvisionalBySiteId(SITE).isEmpty(),
+                "the abandoned attempt left provisional segments at the next free sequence");
+
+        // A plain CONTINUOUS reconnect starts at exactly that sequence.
+        List<ServerEvent> events = runSession(req -> {
+            req.onNext(start(SessionMode.CONTINUOUS, watermark + 1));
+            req.onNext(customer(watermark + 1, 4000L));
+            req.onCompleted();   // continuous sends no SessionEnd; the half-close flushes the tail
+        });
+
+        assertNoTransportError();
+        assertTrue(events.stream().noneMatch(ServerEvent::hasError),
+                "an orphaned provisional segment must not block the next ordinary session");
+        assertEquals(watermark + 1, syncStateService.getSyncState(SITE).lastAppliedSeq());
+    }
+
+    @Test
+    void resumeOntoAReplacementBatchStillPublishesEverythingItSealed() {
+        // Review finding: publication is batch-keyed. A resume whose batch was reaped runs under a
+        // replacement, and the segments sealed before the drop stayed provisional forever — the
+        // snapshot committed a baseline missing them while telling the client it succeeded.
+        seedSchema();
+        releaseActiveBatch();
+        seedOldBaseline();
+        requestRebaseline();
+
+        Context ctx = Context.current()
+                .withValue(DeltaAuthInterceptor.SITE_ID, SITE)
+                .withValue(DeltaAuthInterceptor.ACCOUNT_ID, ACCOUNT);
+        ctx.run(() -> {
+            StreamObserver<ClientEvent> req = ingestionService.streamChanges(sink(new ArrayList<>()));
+            req.onNext(start(SessionMode.FULL_SNAPSHOT, 100L));
+            for (long i = 0; i < 150L; i++) {
+                req.onNext(customer(100L + i, 1000L + i));
+            }
+            req.onError(new RuntimeException("transport drop"));
+        });
+        int sealedBeforeDrop = segmentRepository.findProvisionalBySiteId(SITE).size();
+        assertTrue(sealedBeforeDrop > 0);
+
+        // Reap the staged session's batch, exactly as the timeout sweeper would.
+        jdbc.update("UPDATE batches SET status = 'NOT_COMPLETED', completed_at = now() "
+                + "WHERE site_id = ? AND status = 'IN_PROGRESS'", SITE);
+
+        // The client resumes as DELTA; the server must open a replacement batch and carry the
+        // already-sealed segments across to it.
+        List<ServerEvent> events = runSession(req -> {
+            req.onNext(start(SessionMode.DELTA, 250L));
+            for (long i = 0; i < 50L; i++) {
+                req.onNext(customer(250L + i, 1150L + i));
+            }
+            req.onNext(ClientEvent.newBuilder().setEnd(SessionEnd.newBuilder()
+                    .setLastSeq(299L)
+                    .putPerTable("customers", TableStats.newBuilder().setInserts(200L).build())
+                    .build()).build());
+        });
+
+        assertNoTransportError();
+        assertTrue(events.stream().noneMatch(ServerEvent::hasError), "the resumed snapshot must commit");
+        assertTrue(segmentRepository.findProvisionalBySiteId(SITE).isEmpty(),
+                "nothing sealed before the drop may be left behind as provisional");
+        assertEquals(200L, segmentRepository.findBySiteIdOrderByFirstSeq(SITE).stream()
+                        .mapToLong(seg -> seg.getRecordCount()).sum(),
+                "the published baseline carries every record the session streamed, not just the tail");
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -228,7 +350,10 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         return received;
     }
 
-    private static StreamObserver<ServerEvent> sink(List<ServerEvent> received) {
+    /** Collected transport errors — a session that dies inside onNext reports here, not as a ServerEvent. */
+    private final List<Throwable> transportErrors = new ArrayList<>();
+
+    private StreamObserver<ServerEvent> sink(List<ServerEvent> received) {
         return new StreamObserver<>() {
             @Override
             public void onNext(ServerEvent event) {
@@ -237,12 +362,19 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
 
             @Override
             public void onError(Throwable t) {
+                transportErrors.add(t);
             }
 
             @Override
             public void onCompleted() {
             }
         };
+    }
+
+    /** Fail loudly on a stream that died in onNext; otherwise event assertions pass vacuously. */
+    private void assertNoTransportError() {
+        assertTrue(transportErrors.isEmpty(),
+                () -> "stream failed: " + transportErrors.get(0));
     }
 
     private static ClientEvent start(SessionMode mode, long firstSeq) {

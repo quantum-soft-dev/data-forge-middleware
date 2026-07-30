@@ -24,6 +24,7 @@ import static org.mockito.Mockito.*;
 class DeltaRebaselineServiceTest {
 
     private static final UUID SITE = UUID.randomUUID();
+    private static final UUID BATCH = UUID.randomUUID();
 
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final S3ChangelogSegmentStorage segmentStorage = mock(S3ChangelogSegmentStorage.class);
@@ -87,9 +88,9 @@ class DeltaRebaselineServiceTest {
         ChangelogSegment orphan = mock(ChangelogSegment.class);
         when(orphan.getId()).thenReturn(orphanId);
         when(orphan.getS3Key()).thenReturn("delta/site/segments/orphan.pb.gz");
-        when(segmentRepository.findProvisionalBySiteId(SITE)).thenReturn(List.of(orphan));
+        when(segmentRepository.findProvisionalByBatchId(BATCH)).thenReturn(List.of(orphan));
 
-        int deleted = service.deleteProvisional(SITE);
+        int deleted = service.deleteProvisionalByBatch(BATCH);
 
         assertEquals(1, deleted);
         verify(segmentRepository).deleteById(orphanId);
@@ -100,9 +101,9 @@ class DeltaRebaselineServiceTest {
 
     @Test
     void deleteProvisionalIsANoOpWhenNothingWasLeftBehind() {
-        when(segmentRepository.findProvisionalBySiteId(SITE)).thenReturn(List.of());
+        when(segmentRepository.findProvisionalByBatchId(BATCH)).thenReturn(List.of());
 
-        assertEquals(0, service.deleteProvisional(SITE));
+        assertEquals(0, service.deleteProvisionalByBatch(BATCH));
 
         verify(segmentRepository, never()).deleteById(any());
         verifyNoInteractions(segmentStorage);

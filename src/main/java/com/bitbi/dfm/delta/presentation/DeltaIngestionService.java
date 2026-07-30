@@ -18,6 +18,8 @@ import com.google.protobuf.Timestamp;
 import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -43,6 +45,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImplBase {
 
+    private static final Logger log = LoggerFactory.getLogger(DeltaIngestionService.class);
+
     /** Emit a progressive {@link Ack} every this many accepted records (backpressure watermark). */
     private static final int ACK_INTERVAL = 100;
 
@@ -65,6 +69,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
     private final long continuousSealMillis;
     /** In CONTINUOUS mode, also seal once this many serialized bytes have accumulated (byte trigger). */
     private final long continuousSealBytes;
+    /** Max orphaned provisional segments collected per scheduled sweep pass. */
+    private final int provisionalSweepBatch;
+    /**
+     * Records after which a re-baseline seals (033 review). Deliberately far above
+     * {@link #CONTINUOUS_SEAL_RECORDS}: 100 is a staleness threshold for a trickle stream, but for a
+     * bulk snapshot it would cut a 5M-row dataset into 50,000 segments — 50,000 transactions, S3
+     * objects and downstream queue items, each stalling record intake for a full S3 round trip. A
+     * snapshot is bounded by the byte trigger instead; this only caps very narrow rows.
+     */
+    private final int snapshotSealRecords;
 
     /**
      * Sessions that dropped mid-stream (before {@code SessionEnd}), retained by site so a reconnect
@@ -90,7 +104,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${delta.ingestion.continuous-seal-millis:300000}") long continuousSealMillis,
                                  @org.springframework.beans.factory.annotation.Value(
-                                         "${delta.ingestion.continuous-seal-bytes:16777216}") long continuousSealBytes) {
+                                         "${delta.ingestion.continuous-seal-bytes:16777216}") long continuousSealBytes,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.provisional-sweep-batch:500}") int provisionalSweepBatch,
+                                 @org.springframework.beans.factory.annotation.Value(
+                                         "${delta.ingestion.snapshot-seal-records:25000}") int snapshotSealRecords) {
         this.syncStateService = syncStateService;
         this.batchLifecycleService = batchLifecycleService;
         this.siteSchemaService = siteSchemaService;
@@ -102,6 +120,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
         this.stagedTtlMillis = stagedTtlMillis;
         this.continuousSealMillis = continuousSealMillis;
         this.continuousSealBytes = continuousSealBytes;
+        this.provisionalSweepBatch = provisionalSweepBatch;
+        this.snapshotSealRecords = snapshotSealRecords;
         // Fail fast: with the seal threshold at or above the budget, a fat CONTINUOUS stream would
         // hit OVERFLOW_BYTES before the byte seal ever fires. Reachable when the auto budget
         // (maxHeap/8) drops to <= 16MiB on a heap of <= 128MiB.
@@ -146,8 +166,69 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 } catch (RuntimeException ignored) {
                     // batch may already be terminal (timed out) — best-effort
                 }
+                // 033 review: an evicted session will never resume, so its provisional segments are
+                // now unreachable garbage. Without this they survive until the scheduled sweep.
+                collectProvisional(staged.batchId());
             }
         });
+    }
+
+    /**
+     * Sweep provisional segments whose owning batch is no longer running (033 review).
+     *
+     * <p>The batch-scoped collections elsewhere only fire while this server is alive to run them. A
+     * pod that is OOM-killed or rescheduled mid-snapshot leaves rows no reader can see, that
+     * retention cannot reach (it enumerates published segments only), and that no session will
+     * revisit. A staged session keeps its batch {@code IN_PROGRESS} on purpose, so it is never
+     * swept here.</p>
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString =
+            "${delta.ingestion.provisional-sweep-millis:900000}")
+    public void sweepOrphanedProvisionalSegments() {
+        try {
+            int collected = rebaselineService.sweepOrphanedProvisional(provisionalSweepBatch);
+            if (collected > 0) {
+                log.info("Swept {} orphaned provisional segment(s) left by dead sessions", collected);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Orphaned-provisional sweep failed; will retry on the next tick", e);
+        }
+    }
+
+    /**
+     * Reclaim a site's active batch when it has been silent for longer than the staged-session TTL —
+     * i.e. past the point at which the pod holding it would itself have given up on a resume. Being
+     * DB-driven this works across replicas, unlike the in-memory staged map.
+     *
+     * @return true when a batch was reclaimed and the caller may retry startBatch
+     */
+    private boolean reclaimAbandonedBatch(UUID siteId) {
+        try {
+            java.time.LocalDateTime cutoff = java.time.LocalDateTime.now()
+                    .minus(java.time.Duration.ofMillis(stagedTtlMillis));
+            boolean reclaimed = batchLifecycleService.reclaimAbandonedBatch(siteId, cutoff);
+            if (reclaimed) {
+                log.info("Reclaimed an abandoned batch for site {} (silent for over {} ms) so a new "
+                        + "session could start", siteId, stagedTtlMillis);
+            }
+            return reclaimed;
+        } catch (RuntimeException e) {
+            log.warn("Could not reclaim an abandoned batch for site {}", siteId, e);
+            return false;
+        }
+    }
+
+    /** Best-effort, batch-scoped collection of a dead session's provisional segments. */
+    private void collectProvisional(UUID batchId) {
+        if (batchId == null) {
+            return;
+        }
+        try {
+            rebaselineService.deleteProvisionalByBatch(batchId);
+        } catch (RuntimeException e) {
+            // The scheduled sweep is the backstop — never let cleanup break the session path.
+            log.warn("Could not collect provisional segments of batch {}", batchId, e);
+        }
     }
 
     @Override
@@ -264,6 +345,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             private int sinceAck;
             /** Wall-clock of the last continuous seal, for the time-based seal trigger. */
             private long lastSealMillis = System.currentTimeMillis();
+            /** Checkpoint seq cached for this session's lag metric; -1 until first read. */
+            private long sessionCheckpointSeq = -1L;
             /** Per-table key model for this site, lazily loaded on the first change record. */
             private Map<String, TableSchema> schemas;
 
@@ -340,7 +423,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 RecoveryAction.NEED_REBASELINE);
                         return;
                     }
-                    case ACCEPTED -> totals.add(List.of(change));
+                    case ACCEPTED -> totals.add(change);
                 }
                 if (++sinceAck >= ACK_INTERVAL) {
                     sinceAck = 0;
@@ -355,7 +438,8 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 // since the last seal (T5.4). The time trigger bounds staleness for low-throughput
                 // streams that would never reach the record count — otherwise a trickle client's
                 // watermark/egress/UI could sit stale for hours (review r4).
-                boolean sizeReached = buffer.acceptedCount() >= CONTINUOUS_SEAL_RECORDS;
+                int sealRecords = rebaseline ? snapshotSealRecords : CONTINUOUS_SEAL_RECORDS;
+                boolean sizeReached = buffer.acceptedCount() >= sealRecords;
                 boolean timeReached = buffer.acceptedCount() > 0
                         && System.currentTimeMillis() - lastSealMillis >= continuousSealMillis;
                 // Byte trigger: 100 fat records can weigh as much as thousands of thin ones (each may
@@ -410,6 +494,19 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 return;
                             }
                             resumeBatchId = replacement.getId();
+                            // 033 review: publication is keyed on the batch. Segments this session
+                            // already sealed carry the reaped batch's id, and reset() cannot see
+                            // them (it enumerates published segments only) — so without moving them
+                            // the snapshot would commit a baseline missing everything streamed
+                            // before the drop, with the watermark advanced and the client told it
+                            // succeeded. Reconciliation would not catch it: the totals travel with
+                            // the staged session and still match.
+                            int moved = commitService.reassignProvisionalSegments(
+                                    resume.batchId(), resumeBatchId);
+                            if (moved > 0) {
+                                log.info("Resumed session moved {} provisional segment(s) from reaped "
+                                        + "batch {} to {}", moved, resume.batchId(), resumeBatchId);
+                            }
                         }
                         batchId = resumeBatchId;
                         buffer = resume.buffer();
@@ -456,6 +553,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         } catch (RuntimeException ignored) {
                             // Already terminal (e.g. timed out) — best-effort.
                         }
+                        collectProvisional(superseded.batchId());
                     }
                 }
 
@@ -493,9 +591,23 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 try {
                     batch = batchLifecycleService.startBatch(accountId, siteId);
                 } catch (BatchLifecycleService.ActiveBatchExistsException e) {
-                    // One active session per site (mirrors one-active-batch).
-                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
-                    return;
+                    // One active session per site (mirrors one-active-batch). Before giving up, try
+                    // to reclaim a batch nobody is driving any more: a session that dropped is staged
+                    // in the SERVING pod's memory, so with more than one replica the retry usually
+                    // lands elsewhere and the in-memory supersede above cannot see it. The reclaim is
+                    // DB-driven and conditional on the same cutoff the timeout sweeper uses, so a
+                    // merely quiet session survives (033 review).
+                    if (!reclaimAbandonedBatch(siteId)) {
+                        emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
+                        return;
+                    }
+                    try {
+                        batch = batchLifecycleService.startBatch(accountId, siteId);
+                    } catch (BatchLifecycleService.ActiveBatchExistsException retry) {
+                        emitError(ErrorCode.ACTIVE_SESSION_EXISTS, retry.getMessage(),
+                                RecoveryAction.PROCEED);
+                        return;
+                    }
                 }
                 batchId = batch.getId();
                 // First liveness touch: the activity-based timeout (029) measures from last session
@@ -509,10 +621,6 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     // before the snapshot's first record.
                     rebaseline = true;
                     serverLastSeq = start.getFirstSeq() - 1;
-                    // 033: collect the invisible remains of an earlier snapshot that never reached
-                    // SessionEnd. They are harmless to readers but hold UNIQUE (site_id, first_seq)
-                    // slots this attempt may need.
-                    rebaselineService.deleteProvisional(siteId);
                 }
                 buffer = new SessionChangeBuffer(serverLastSeq, maxSessionRecords, maxSessionBytes);
                 totals = new SessionTotals();
@@ -604,7 +712,16 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
              */
             private void sealSegment() {
                 long committedSeq = buffer.lastSeq();
-                long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
+                // Read once per session, not once per seal: a checkpoint build is a nightly job, so
+                // this cannot move mid-session, and a snapshot seals often enough that the query was
+                // pure waste on the ingestion thread.
+                if (sessionCheckpointSeq < 0) {
+                    sessionCheckpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
+                }
+                // Emitted for snapshots too: otherwise the lag gauge goes silent for the whole
+                // duration of a large re-baseline — exactly when the site is furthest behind and an
+                // operator most needs to tell "streaming" from "stalled".
+                metrics.recordSeqLag(committedSeq - sessionCheckpointSeq);
                 if (rebaseline) {
                     // 033: a snapshot seal is durable but invisible — no watermark move and no
                     // SessionCommitted. Announcing it would break the periodic-session contract
@@ -617,7 +734,6 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 } else {
                     String segmentKey = commitService.commitSegment(
                             siteId, batchId, sessionMode, firstSeq, committedSeq, buffer.accepted());
-                    metrics.recordSeqLag(committedSeq - checkpointSeq);
                     responseObserver.onNext(ServerEvent.newBuilder()
                             .setCommitted(SessionCommitted.newBuilder()
                                     .setCommittedSeq(committedSeq)
@@ -677,15 +793,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // Batch may already be terminal (e.g. timed out); failing it is best-effort.
                     }
                     if (rebaseline) {
-                        // 033: drop this snapshot's provisional segments now rather than leaving them
-                        // for the next attempt's start-of-session sweep. They were never published,
-                        // so nothing observable changes — this only shortens how long the storage and
-                        // the UNIQUE (site_id, first_seq) slots stay occupied.
-                        try {
-                            rebaselineService.deleteProvisional(siteId);
-                        } catch (RuntimeException ignored) {
-                            // Best-effort: the next FULL_SNAPSHOT start collects whatever is left.
-                        }
+                        // 033: drop this snapshot's own provisional segments now. Batch-scoped, so a
+                        // concurrent session's in-flight snapshot is never touched; the scheduled
+                        // sweep is the backstop if this best-effort call does not run.
+                        collectProvisional(toFail);
                     }
                 }
             }
