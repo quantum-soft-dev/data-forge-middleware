@@ -67,15 +67,20 @@ Commit: `feat(delta): provisional changelog segments and V46 migration (T02)`
 
 ## T03 — Rebaseline reset keeps the current session's segments
 
-**Tests first**: `DeltaRebaselineServiceTest` — `reset(siteId, firstSeq, keepBatchId)` deletes other
-segments and all checkpoints but leaves the keep-batch's segments and their S3 objects alone;
-S3 deletes still fire only `afterCommit`; `deleteProvisional(siteId)` removes rows **and** objects.
+**Simplification found while implementing:** the planned `keepBatchId` parameter is unnecessary.
+`findBySiteIdOrderByFirstSeq` — the query `reset` already sources its delete set from — excludes
+provisional rows as of T02, so the in-flight snapshot's own segments are out of scope by
+construction. T03 therefore only adds the GC entry point and pins the guarantee with tests.
 
-**Implementation**
-- `reset(UUID siteId, long firstSeq, UUID keepBatchId)`; the two-arg form delegates with `null`.
-- `deleteProvisional(UUID siteId)` for the start-of-snapshot GC.
+**Tests first**: `DeltaRebaselineServiceTest` — `reset` sources its delete set from the
+committed-only query and never touches provisional segments; `deleteProvisional(siteId)` removes
+rows **and** (after commit) objects, without touching checkpoints or the watermark; it is a no-op
+when nothing was left behind.
 
-Commit: `feat(delta): scope rebaseline reset to segments outside the committing session (T03)`
+**Implementation**: `DeltaRebaselineService.deleteProvisional(UUID siteId)` for the
+start-of-snapshot GC, reusing the deferred-S3-delete path.
+
+Commit: `feat(delta): collect orphaned provisional segments before a retry (T03)`
 
 ---
 

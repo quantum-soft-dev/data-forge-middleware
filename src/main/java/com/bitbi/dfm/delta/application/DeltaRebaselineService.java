@@ -62,6 +62,9 @@ public class DeltaRebaselineService {
      */
     @Transactional
     public void reset(UUID siteId, long firstSeq) {
+        // 033: findBySiteIdOrderByFirstSeq returns committed segments only. A large re-baseline seals
+        // its own segments as provisional before SessionEnd gets here, so they are excluded by
+        // construction — this deletes the baseline being replaced, never the snapshot replacing it.
         // Delete the metadata rows in-transaction, but defer the S3 object deletes to afterCommit:
         // if the enclosing commit (the new snapshot segment persist + watermark advance) rolls back,
         // the old rows are restored and their S3 objects must still exist. Deferring keeps the old
@@ -89,6 +92,35 @@ public class DeltaRebaselineService {
 
         log.info("Re-baselined site {}: cleared {} segment(s), {} checkpoint(s); watermark reset to {}",
                 siteId, segments, checkpoints, firstSeq - 1);
+    }
+
+    /**
+     * Collect the invisible remains of a re-baseline that never reached {@code SessionEnd} (033).
+     *
+     * <p>Provisional segments are excluded from the fold and both work queues, so they are harmless
+     * to readers — but they consume storage and hold {@code UNIQUE (site_id, first_seq)} slots that a
+     * retry may need. Called when a fresh {@code FULL_SNAPSHOT} session starts, before it streams.</p>
+     *
+     * <p>Deliberately narrower than {@link #reset}: no checkpoint or watermark change, because
+     * nothing these segments contain was ever published.</p>
+     *
+     * @param siteId site identifier
+     * @return number of orphaned provisional segments deleted
+     */
+    @Transactional
+    public int deleteProvisional(UUID siteId) {
+        List<String> s3Keys = new ArrayList<>();
+        for (ChangelogSegment segment : segmentRepository.findProvisionalBySiteId(siteId)) {
+            s3Keys.add(segment.getS3Key());
+            segmentRepository.deleteById(segment.getId());
+        }
+        if (s3Keys.isEmpty()) {
+            return 0;
+        }
+        deleteOldObjectsAfterCommit(s3Keys);
+        log.info("Collected {} orphaned provisional segment(s) for site {} before a new snapshot",
+                s3Keys.size(), siteId);
+        return s3Keys.size();
     }
 
     /**
