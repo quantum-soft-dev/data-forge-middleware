@@ -84,6 +84,19 @@ public class ChangelogSegmentService {
     }
 
     /**
+     * Publish a completed re-baseline: clear {@code provisional} on every segment of the snapshot's
+     * batch, so the fold and both work queues see the whole new baseline at once (033). Runs inside
+     * the commit transaction, right after the previous baseline is discarded.
+     *
+     * @param batchId the snapshot session's batch
+     * @return number of segments published
+     */
+    @Transactional
+    public int publishProvisional(UUID batchId) {
+        return repository.flipProvisionalByBatchId(batchId);
+    }
+
+    /**
      * Read back the change records of a persisted segment.
      *
      * @param s3Key segment key
