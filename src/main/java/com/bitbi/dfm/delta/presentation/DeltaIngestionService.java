@@ -355,6 +355,42 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             /**
+             * Open the session's batch, mapping every business rejection
+             * {@link BatchLifecycleService#startBatch} documents onto the typed stream protocol.
+             * <p>
+             * #83: only {@code ActiveBatchExistsException} was ever mapped. The other three escaped
+             * to the generic {@code catch (RuntimeException)} in {@link #onNext(ClientEvent)}, which
+             * closed the call with a bare {@code Status.INTERNAL} carrying no {@code ErrorCode} — so
+             * a deactivated site, a CDC site with no schema on file, and a real server fault were
+             * indistinguishable to the client, and invisible to us.
+             * </p>
+             *
+             * @return the opened batch, or {@code null} when the session was rejected (the caller
+             *         must return; the {@code ServerError} is already on the wire)
+             */
+            private Batch openBatch() {
+                try {
+                    return batchLifecycleService.startBatch(accountId, siteId);
+                } catch (BatchLifecycleService.ActiveBatchExistsException e) {
+                    // One active session per site (mirrors one-active-batch).
+                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
+                } catch (BatchLifecycleService.ConcurrentBatchLimitException e) {
+                    // Account-wide rather than per-site, but the client's move is the same: the site
+                    // is not free to open a session yet, so serialize and retry.
+                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
+                } catch (BatchLifecycleService.SiteInactiveException e) {
+                    // The site's credentials are still valid, the site itself is not — the same
+                    // "token/site problem" UNAUTHORIZED already means on this protocol.
+                    emitError(ErrorCode.UNAUTHORIZED, e.getMessage(), RecoveryAction.PROCEED);
+                } catch (BatchLifecycleService.SchemaRequiredException e) {
+                    // PROCEED, not NEED_REBASELINE: a FULL_SNAPSHOT would hit the same wall. The
+                    // client must SubmitSchema first, which is what SCHEMA_MISMATCH already asks for.
+                    emitError(ErrorCode.SCHEMA_MISMATCH, e.getMessage(), RecoveryAction.PROCEED);
+                }
+                return null;
+            }
+
+            /**
              * Whether the record's table has a declared primary/unique key. A table with no schema on
              * file is treated as keyed so this guard never over-rejects (unknown tables fail elsewhere).
              */
@@ -382,14 +418,11 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // lost and the client still replays only from the staged watermark.
                         UUID resumeBatchId = resume.batchId();
                         if (!batchLifecycleService.isBatchInProgress(resumeBatchId)) {
-                            Batch replacement;
-                            try {
-                                replacement = batchLifecycleService.startBatch(accountId, siteId);
-                            } catch (BatchLifecycleService.ActiveBatchExistsException e) {
-                                // Same rule as a fresh session start: one active session per site.
-                                emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(),
-                                        RecoveryAction.PROCEED);
-                                return;
+                            // Same rules as a fresh session start — including a site deactivated
+                            // while this session was parked.
+                            Batch replacement = openBatch();
+                            if (replacement == null) {
+                                return; // rejected; a typed ServerError was already emitted
                             }
                             resumeBatchId = replacement.getId();
                         }
@@ -454,13 +487,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     return;
                 }
 
-                Batch batch;
-                try {
-                    batch = batchLifecycleService.startBatch(accountId, siteId);
-                } catch (BatchLifecycleService.ActiveBatchExistsException e) {
-                    // One active session per site (mirrors one-active-batch).
-                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
-                    return;
+                Batch batch = openBatch();
+                if (batch == null) {
+                    return; // rejected; a typed ServerError was already emitted
                 }
                 batchId = batch.getId();
                 // First liveness touch: the activity-based timeout (029) measures from last session

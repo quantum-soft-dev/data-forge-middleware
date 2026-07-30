@@ -171,6 +171,57 @@ class DeltaIngestionStreamChangesContractTest {
         verify(batchLifecycle, never()).completeBatch(any());
     }
 
+    /**
+     * #83: the other three documented {@code startBatch} rejections used to escape the typed
+     * protocol entirely — the generic {@code catch (RuntimeException)} in {@code onNext} turned them
+     * into a bare {@code Status.INTERNAL} with no {@code ErrorCode}, so the client could not tell an
+     * inactive site from a missing schema from a server crash.
+     */
+    @Test
+    void inactiveSiteIsRejectedWithTypedUnauthorizedInsteadOfStatusInternal() throws Exception {
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenThrow(new BatchLifecycleService.SiteInactiveException(
+                        "Cannot start batch for inactive site. Please activate the site first."));
+
+        List<ServerEvent> received = runSession(req -> req.onNext(start(SessionMode.DELTA, 1L)));
+
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError(), "an inactive site must produce a typed ServerError");
+        assertEquals(ErrorCode.UNAUTHORIZED, received.get(0).getError().getCode());
+        assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction());
+        assertTrue(received.get(0).getError().getMessage().contains("inactive site"),
+                "the rejection must carry the reason the client can act on");
+    }
+
+    @Test
+    void cdcSiteWithoutSchemaIsRejectedWithTypedSchemaMismatch() throws Exception {
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenThrow(new BatchLifecycleService.SchemaRequiredException(
+                        "Schema required for POSTGRES_CDC sites. Submit it through Delta gRPC SubmitSchema first."));
+
+        List<ServerEvent> received = runSession(req -> req.onNext(start(SessionMode.DELTA, 1L)));
+
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError(), "a missing schema must produce a typed ServerError");
+        assertEquals(ErrorCode.SCHEMA_MISMATCH, received.get(0).getError().getCode());
+        assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction(),
+                "SubmitSchema then retry — a re-baseline would hit the same wall");
+    }
+
+    @Test
+    void accountConcurrencyLimitIsRejectedWithTypedActiveSessionExists() throws Exception {
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenThrow(new BatchLifecycleService.ConcurrentBatchLimitException(
+                        "Account exceeded concurrent batch limit: 5/5"));
+
+        List<ServerEvent> received = runSession(req -> req.onNext(start(SessionMode.DELTA, 1L)));
+
+        assertEquals(1, received.size());
+        assertTrue(received.get(0).hasError(), "the concurrency limit must produce a typed ServerError");
+        assertEquals(ErrorCode.ACTIVE_SESSION_EXISTS, received.get(0).getError().getCode());
+        assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction());
+    }
+
     @Test
     void deltaSessionWithSequenceGapRejected() throws Exception {
         SiteSyncState state = SiteSyncState.initial(SITE);
@@ -586,6 +637,40 @@ class DeltaIngestionStreamChangesContractTest {
         ServerEvent last = second.get(second.size() - 1);
         assertTrue(last.hasError(), "resume is rejected, not silently re-attached");
         assertEquals(ErrorCode.ACTIVE_SESSION_EXISTS, last.getError().getCode());
+    }
+
+    @Test
+    void resumeOntoReapedBatchAlsoSurfacesTheSiteBecomingInactive() throws Exception {
+        // #83: the resume path opens a replacement batch too, so it must map the same rejections.
+        // A site deactivated while its session was parked used to blow up as Status.INTERNAL.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(120L);
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        UUID reapedBatchId = UUID.randomUUID();
+        Batch reapedBatch = mockBatch(reapedBatchId);
+        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+                .thenReturn(reapedBatch)
+                .thenThrow(new BatchLifecycleService.SiteInactiveException(
+                        "Cannot start batch for inactive site. Please activate the site first."));
+        when(batchLifecycle.isBatchInProgress(any())).thenReturn(true);
+
+        StreamObserver<ClientEvent> s1 = asyncStub.streamChanges(
+                collect(new CopyOnWriteArrayList<>(), new CountDownLatch(1)));
+        s1.onNext(start(SessionMode.DELTA, 121L));
+        s1.onNext(change("t", Op.INSERT, 121L));
+        s1.onError(new RuntimeException("transport drop"));
+
+        when(batchLifecycle.isBatchInProgress(reapedBatchId)).thenReturn(false);
+
+        List<ServerEvent> second = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        StreamObserver<ClientEvent> s2 = asyncStub.streamChanges(collect(second, done));
+        s2.onNext(start(SessionMode.DELTA, 121L));
+
+        assertTrue(done.await(5, TimeUnit.SECONDS), "rejected resume did not complete");
+        ServerEvent last = second.get(second.size() - 1);
+        assertTrue(last.hasError(), "resume onto an inactive site is rejected, not re-attached");
+        assertEquals(ErrorCode.UNAUTHORIZED, last.getError().getCode());
     }
 
     @Test
