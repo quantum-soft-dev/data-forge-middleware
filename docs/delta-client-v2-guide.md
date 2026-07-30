@@ -704,8 +704,33 @@ shows `Delta change records discarded` and nothing else never opened a session a
 streamed records past a `SessionStart` that was rejected or never sent, and the server dropped
 every one of them.
 
+### Metrics
+
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
-`delta.sessions.overflow`, `delta.reconciliation.failures`, `delta.seq.lag`) are exposed on `/actuator/metrics` and
-`/actuator/prometheus`. **Those endpoints are not reachable on dev** — the default security chain
-denies everything it does not explicitly permit, so scraping the delta metrics needs a deployment
-change that is still open (issue #83, point 5).
+`delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
+`delta.checkpoint.duration`, `delta.egress.segments`) are exposed on `/actuator/prometheus` and
+`/actuator/metrics/**`.
+
+Both used to be denied outright, which is why the counters were unreadable during the incident that
+opened #83. They are now served to the source addresses listed in
+`dfm.observability.metrics-scrape.allowed-cidrs` (`METRICS_SCRAPE_ALLOWED_CIDRS`, comma-separated):
+
+- **Empty is the default**, and empty means nobody — an environment that does not set the variable
+  keeps the old 403, so nothing is opened by merging this.
+- On GKE dev the value is `10.0.0.0/8,127.0.0.1/32`: the managed-Prometheus collector scrapes the
+  pod from the cluster pod range (`10.4.0.0/14`), and loopback keeps `kubectl port-forward` usable.
+  Nothing outside the cluster can present such a source address — the frontend nginx only proxies
+  `/api`, so `/actuator` has no external route at all, and load-balancer traffic would arrive from a
+  Google front-end range.
+- The rest of the actuator surface (`/actuator/env`, `/actuator/beans`, …) stays denied to everyone,
+  and is not exposed by `management.endpoints.web.exposure.include` in the first place.
+
+Collection on dev is a `PodMonitoring` (`k8s/overlays/dev/podmonitoring.yaml`, 30 s interval) picked
+up by the managed-Prometheus collector that already runs in the cluster; the samples land in Cloud
+Monitoring under `prometheus.googleapis.com/delta_sessions_started/counter` and friends and are
+queryable with PromQL. Read them by hand with:
+
+```bash
+kubectl -n forge port-forward deploy/forge-backend 8080:8080
+curl -s localhost:8080/actuator/prometheus | grep '^delta_'
+```

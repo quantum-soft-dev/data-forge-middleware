@@ -4,6 +4,7 @@ import com.auth0.client.mgmt.ManagementAPI;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import com.bitbi.dfm.shared.config.MetricsScrapeAuthorizationManager;
 import com.bitbi.dfm.shared.config.SecurityConfiguration;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -77,10 +78,19 @@ public class TestSecurityConfig {
     /** Mirrors auth0.api.claims-namespace, the same knob production derives its roles claim from. */
     private final String claimsNamespace;
 
+    /**
+     * The production authorization manager, not a copy — the scrape rule is a security boundary
+     * and a mirrored reimplementation here would be free to drift from the real one.
+     */
+    private final MetricsScrapeAuthorizationManager metricsScrapeAuthorizationManager;
+
     public TestSecurityConfig(
             @org.springframework.beans.factory.annotation.Value("${auth0.api.claims-namespace}")
-            String claimsNamespace) {
+            String claimsNamespace,
+            @org.springframework.beans.factory.annotation.Value("${dfm.observability.metrics-scrape.allowed-cidrs:}")
+            List<String> metricsScrapeAllowedCidrs) {
         this.claimsNamespace = claimsNamespace;
+        this.metricsScrapeAuthorizationManager = new MetricsScrapeAuthorizationManager(metricsScrapeAllowedCidrs);
     }
 
     @Autowired(required = false)
@@ -407,6 +417,8 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                .requestMatchers("/actuator/prometheus", "/actuator/metrics", "/actuator/metrics/**")
+                    .access(metricsScrapeAuthorizationManager)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()
             );

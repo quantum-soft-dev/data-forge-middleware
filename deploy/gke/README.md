@@ -126,6 +126,28 @@ grpcurl -import-path src/main/proto -proto delta-ingestion.proto \
   -d '{}' test.dfm.bitbi.io:443 com.bitbi.dfm.delta.v2.DeltaIngestion/GetSyncState
 ```
 
+## Metrics scraping (dev)
+
+`/actuator/prometheus` and `/actuator/metrics/**` are served only to the CIDRs in
+`METRICS_SCRAPE_ALLOWED_CIDRS` (`dfm.observability.metrics-scrape.allowed-cidrs`). The variable is
+**empty by default and empty means deny**, so stage/prod stay exactly as they were; the dev overlay
+sets `10.0.0.0/8,127.0.0.1/32`, which covers the cluster pod range the collector scrapes from and
+loopback for `kubectl port-forward`. Everything else under `/actuator` remains denied, and only
+`health,info,metrics,prometheus` are exposed by the app at all.
+
+Collection uses the managed Prometheus that is already running in the cluster
+(`gke-gmp-system/collector`); the dev overlay only adds a `PodMonitoring` (`podmonitoring.yaml`,
+30 s). Verify after a deploy:
+
+```bash
+kubectl -n forge get podmonitoring forge-backend -o jsonpath='{.status.conditions[*].type}'
+kubectl -n forge port-forward deploy/forge-backend 8080:8080 &
+curl -s localhost:8080/actuator/prometheus | grep '^delta_'   # delta_sessions_started_total …
+```
+
+A 403 from that curl means the pod did not pick up `METRICS_SCRAPE_ALLOWED_CIDRS`; an empty grep
+with a 200 means the pod has served no ingestion session since it started.
+
 ## Placeholders to fill before a real deploy
 
 Overlay ConfigMaps contain `REPLACE_*` / `dev-dfm.us.auth0.com` placeholders for Auth0

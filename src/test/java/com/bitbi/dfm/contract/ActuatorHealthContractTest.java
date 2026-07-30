@@ -41,4 +41,13 @@ class ActuatorHealthContractTest extends BaseIntegrationTest {
         mockMvc.perform(get("/actuator/health/readiness"))
                 .andExpect(status().isOk());
     }
+
+    @Test
+    @DisplayName("Should deny the scrape endpoints when no allowed CIDR is configured")
+    void shouldDenyScrapeEndpointsByDefault() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/actuator/metrics"))
+                .andExpect(status().isForbidden());
+    }
 }

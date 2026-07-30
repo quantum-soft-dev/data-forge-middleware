@@ -5,6 +5,7 @@ import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
 import com.bitbi.dfm.plugin.presentation.ParquetExportBasicAuthFilter;
 import com.bitbi.dfm.plugin.presentation.PluginApiKeyAuthenticationFilter;
 import com.bitbi.dfm.shared.auth.AuthenticationAuditLogger;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -71,18 +72,21 @@ public class SecurityConfiguration {
     private final ParquetExportBasicAuthFilter parquetExportBasicAuthFilter;
     private final AuthenticationAuditLogger authenticationAuditLogger;
     private final Auth0Properties auth0Properties;
+    private final MetricsScrapeAuthorizationManager metricsScrapeAuthorizationManager;
 
     public SecurityConfiguration(
             JwtAuthenticationFilter jwtAuthenticationFilter,
             PluginApiKeyAuthenticationFilter pluginApiKeyAuthenticationFilter,
             ParquetExportBasicAuthFilter parquetExportBasicAuthFilter,
             AuthenticationAuditLogger authenticationAuditLogger,
-            Auth0Properties auth0Properties) {
+            Auth0Properties auth0Properties,
+            @Value("${dfm.observability.metrics-scrape.allowed-cidrs:}") List<String> metricsScrapeAllowedCidrs) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.pluginApiKeyAuthenticationFilter = pluginApiKeyAuthenticationFilter;
         this.parquetExportBasicAuthFilter = parquetExportBasicAuthFilter;
         this.authenticationAuditLogger = authenticationAuditLogger;
         this.auth0Properties = auth0Properties;
+        this.metricsScrapeAuthorizationManager = new MetricsScrapeAuthorizationManager(metricsScrapeAllowedCidrs);
     }
 
     /**
@@ -325,6 +329,12 @@ public class SecurityConfiguration {
      *   <li>/swagger-ui/**, /v3/api-docs/** - API documentation</li>
      * </ul>
      * <p>
+     * <b>CIDR-restricted access</b>: /actuator/prometheus and /actuator/metrics/** are served to
+     * callers inside {@code dfm.observability.metrics-scrape.allowed-cidrs} (empty by default =
+     * denied), so a Prometheus collector can reach the delta ingestion counters without opening
+     * them to everyone. See {@link MetricsScrapeAuthorizationManager}.
+     * </p>
+     * <p>
      * All other requests: Denied (403 Forbidden)
      * </p>
      */
@@ -336,6 +346,8 @@ public class SecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                .requestMatchers("/actuator/prometheus", "/actuator/metrics", "/actuator/metrics/**")
+                    .access(metricsScrapeAuthorizationManager)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()
             );
