@@ -31,6 +31,22 @@ public interface SiteSyncStateRepository {
     List<SiteSyncState> findBySiteIdIn(Collection<UUID> siteIds);
 
     /**
+     * Record that {@code GetSyncState} has answered NEED_REBASELINE for a site's pending request
+     * (issue #84), as one conditional statement rather than a load-modify-save.
+     * <p>
+     * {@link SiteSyncState} is {@code @DynamicUpdate} with no {@code @Version}, so a read-then-write
+     * stamp can land after a concurrent cancellation has cleared the request and leave the row
+     * claiming the client was told about a request that no longer exists. The predicate makes the
+     * write self-cancelling instead, and self-idempotent: 0 rows when already stamped.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @param now    stamp to record
+     * @return number of rows stamped (0 when no request is pending or it was already recorded)
+     */
+    int markRebaselineNotified(UUID siteId, java.time.LocalDateTime now);
+
+    /**
      * Save (insert or update) the sync state.
      *
      * @param state sync state entity

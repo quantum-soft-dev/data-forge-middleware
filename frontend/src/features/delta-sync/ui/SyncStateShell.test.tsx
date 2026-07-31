@@ -57,6 +57,20 @@ describe('SyncStateShell (F5)', () => {
     expect(screen.getByText('Full snapshot scheduled on next connect')).toBeInTheDocument()
   })
 
+  it('says "in progress", not "scheduled", once the snapshot is uploading (#84)', () => {
+    // The request flag is only consumed at commit, so it is still set during the upload — the
+    // header must not contradict the card below it.
+    render(
+      <SyncStateShell
+        state={{ ...baseState, rebaselineRequested: true, snapshotInProgress: true }}
+        now={NOW}
+      />,
+    )
+
+    expect(screen.getByText('Full snapshot in progress')).toBeInTheDocument()
+    expect(screen.queryByText('Full snapshot scheduled on next connect')).not.toBeInTheDocument()
+  })
+
   it('renders schema version and checkpoint value', () => {
     render(<SyncStateShell state={baseState} now={NOW} />)
     expect(screen.getByText('v 12')).toBeInTheDocument()

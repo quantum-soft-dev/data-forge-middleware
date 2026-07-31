@@ -5,6 +5,8 @@ import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,8 +40,9 @@ public class DeltaSyncStateService {
                         state.getLastAppliedSeq(),
                         state.getLastCheckpointSeq(),
                         state.getSchemaVersion(),
-                        state.isRebaselineRequested()))
-                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false));
+                        state.isRebaselineRequested(),
+                        state.getRebaselineNotifiedAt() != null))
+                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false));
     }
 
     /**
@@ -56,8 +59,9 @@ public class DeltaSyncStateService {
 
     /**
      * Flag a site for a full re-baseline (creating the sync state row if absent): the next
-     * {@code GetSyncState} answers NEED_REBASELINE; the flag is consumed when the client starts
-     * its FULL_SNAPSHOT session ({@link SiteSyncState#resetForRebaseline}).
+     * {@code GetSyncState} answers NEED_REBASELINE; the flag is consumed when the client's
+     * FULL_SNAPSHOT session <em>commits</em> ({@link SiteSyncState#resetForRebaseline}), so it stays
+     * raised for the whole snapshot upload.
      *
      * @param siteId site identifier
      */
@@ -67,6 +71,70 @@ public class DeltaSyncStateService {
                 .orElseGet(() -> SiteSyncState.initial(siteId));
         state.requestRebaseline();
         repository.save(state);
+    }
+
+    /**
+     * Take back a pending re-baseline request (issue #84), so {@code GetSyncState} answers PROCEED
+     * again and the client resumes ordinary delta from its watermark. Only the flag is cleared —
+     * watermark, checkpoints and segments are untouched. Idempotent: a site with no pending request
+     * (or no sync state row at all, which already means PROCEED) is left alone.
+     *
+     * <p>Clearing the flag says nothing about a FULL_SNAPSHOT already in flight (it keeps its own
+     * intent until it commits) — callers that report the outcome to a user go through
+     * {@link DeltaRebaselineCancellationService} instead.</p>
+     *
+     * @param siteId site identifier
+     * @return whether a request was cleared, and whether the client had already been told about it
+     */
+    @Transactional
+    public RebaselineCancellation cancelRebaseline(UUID siteId) {
+        SiteSyncState state = repository.findBySiteId(siteId).orElse(null);
+        if (state == null) {
+            return RebaselineCancellation.NOT_PENDING;
+        }
+        boolean notified = state.getRebaselineNotifiedAt() != null;
+        if (!state.cancelRebaseline()) {
+            return RebaselineCancellation.NOT_PENDING;
+        }
+        repository.save(state);
+        return notified
+                ? RebaselineCancellation.CLEARED_AFTER_NOTICE
+                : RebaselineCancellation.CLEARED_BEFORE_NOTICE;
+    }
+
+    /**
+     * What clearing the {@code rebaseline_requested} flag achieved (issue #84).
+     */
+    public enum RebaselineCancellation {
+
+        /** No request was pending — nothing was cleared. */
+        NOT_PENDING,
+
+        /**
+         * Cleared before {@code GetSyncState} ever answered NEED_REBASELINE: the client never
+         * learned of the request, so it cannot act on it.
+         */
+        CLEARED_BEFORE_NOTICE,
+
+        /**
+         * Cleared after the client had already been told to re-baseline: it may already be
+         * preparing or sending the snapshot, which this cancellation cannot reach.
+         */
+        CLEARED_AFTER_NOTICE
+    }
+
+    /**
+     * Remember that {@code GetSyncState} answered NEED_REBASELINE for a site's pending request
+     * (issue #84), so a later cancellation can tell "the client has not been told yet" from "the
+     * client may already be preparing the snapshot". A single conditional statement: no entity
+     * load, no lost update against a concurrent cancellation, and a no-op once recorded — so the
+     * continuous GetSyncState polling costs one write per request, not one per poll.
+     *
+     * @param siteId site identifier
+     */
+    @Transactional
+    public void markRebaselineNotified(UUID siteId) {
+        repository.markRebaselineNotified(siteId, LocalDateTime.now(ZoneOffset.UTC));
     }
 
     /**
@@ -170,7 +238,10 @@ public class DeltaSyncStateService {
      * @param lastCheckpointSeq sequence of the latest materialized checkpoint
      * @param schemaVersion     schema version the server currently holds
      * @param needRebaseline    whether the client must re-baseline (full snapshot)
+     * @param rebaselineNotified whether the pending request has already been handed to the client
+     *                           (issue #84) — lets the caller skip a redundant stamping round-trip
      */
-    public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion, boolean needRebaseline) {
+    public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion,
+                                boolean needRebaseline, boolean rebaselineNotified) {
     }
 }

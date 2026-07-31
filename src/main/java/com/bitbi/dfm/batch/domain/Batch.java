@@ -69,6 +69,15 @@ public class Batch {
     @Column(name = "last_activity_at")
     private LocalDateTime lastActivityAt;
 
+    /**
+     * Delta v2 session mode of this batch (029: batch = one session); {@code null} for batches
+     * started without one. Recorded at session start so a FULL_SNAPSHOT can be told apart from an
+     * ordinary delta session while it is still uploading (issue #84) — the mode used to live only
+     * in the gRPC stream's heap.
+     */
+    @Column(name = "session_mode", length = 20)
+    private String sessionMode;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
@@ -101,6 +110,18 @@ public class Batch {
      * @return new batch in IN_PROGRESS status
      */
     public static Batch start(UUID accountId, UUID siteId) {
+        return start(accountId, siteId, null);
+    }
+
+    /**
+     * Start a new batch for a Delta v2 session, recording the session mode (issue #84).
+     *
+     * @param accountId   account identifier
+     * @param siteId      site identifier (used in S3 path)
+     * @param sessionMode Delta v2 session mode (FULL_SNAPSHOT, DELTA, CONTINUOUS), may be null
+     * @return new batch in IN_PROGRESS status
+     */
+    public static Batch start(UUID accountId, UUID siteId, String sessionMode) {
         Objects.requireNonNull(siteId, "SiteId cannot be null");
         Objects.requireNonNull(accountId, "AccountId cannot be null");
 
@@ -108,16 +129,10 @@ public class Batch {
         LocalDateTime now = LocalDateTime.now();
         String s3Path = generateS3Path(accountId, siteId, now);
 
-        return new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
+        Batch batch = new Batch(id, accountId, siteId, BatchStatus.IN_PROGRESS, s3Path,
                 0, 0L, false, now, null, now);
-    }
-
-    /**
-     * @deprecated Use {@link #start(UUID, UUID)} instead
-     */
-    @Deprecated
-    public static Batch start(UUID accountId, UUID siteId, String domain) {
-        return start(accountId, siteId);
+        batch.sessionMode = sessionMode;
+        return batch;
     }
 
     private static String generateS3Path(UUID accountId, UUID siteId, LocalDateTime timestamp) {

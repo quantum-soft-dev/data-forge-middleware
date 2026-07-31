@@ -28,6 +28,7 @@ import java.util.concurrent.CountDownLatch;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -110,7 +111,7 @@ abstract class DeltaIngestionContractTestSupport {
      */
     protected void openableBatch(UUID batchId) {
         Batch batch = mockBatch(batchId);
-        when(batchLifecycle.startBatch(ACCOUNT, SITE)).thenReturn(batch);
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any())).thenReturn(batch);
     }
 
     protected static ClientEvent start(SessionMode mode, long firstSeq) {

@@ -20,6 +20,7 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -95,7 +96,7 @@ class DeltaIngestionSessionLoggingContractTest extends DeltaIngestionContractTes
 
     @Test
     void everyRejectionNamesItsCodeAndRecoveryActionAtWarn() throws Exception {
-        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new BatchLifecycleService.SiteInactiveException("Cannot start batch for inactive site."));
 
         runSession(req -> req.onNext(start(SessionMode.DELTA, 1L)));
@@ -109,7 +110,7 @@ class DeltaIngestionSessionLoggingContractTest extends DeltaIngestionContractTes
 
     @Test
     void anUnexpectedFaultIsLoggedWithItsStackTraceInsteadOfVanishingIntoStatusInternal() throws Exception {
-        when(batchLifecycle.startBatch(ACCOUNT, SITE))
+        when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new IllegalStateException("site row vanished"));
 
         runSession(req -> req.onNext(start(SessionMode.DELTA, 1L)));
@@ -202,7 +203,7 @@ class DeltaIngestionSessionLoggingContractTest extends DeltaIngestionContractTes
 
         assertFalse(capture.messagesContaining(Level.INFO, "transport drop").isEmpty(),
                 "a connect-and-drop must still be traceable: " + capture.events());
-        verify(batchLifecycle, never()).startBatch(any(), any());
+        verify(batchLifecycle, never()).startBatch(any(), any(), any());
     }
 
     /**
@@ -226,7 +227,7 @@ class DeltaIngestionSessionLoggingContractTest extends DeltaIngestionContractTes
         assertTrue(warnings.getFirst().contains("no open session"),
                 "the WARN must say why the records were dropped: " + warnings);
         assertTrue(warnings.getFirst().contains(SITE.toString()), "the WARN must name the site: " + warnings);
-        verify(batchLifecycle, never()).startBatch(any(), any());
+        verify(batchLifecycle, never()).startBatch(any(), any(), any());
     }
 
     private void runSession(Consumer<StreamObserver<ClientEvent>> client) throws InterruptedException {

@@ -1,17 +1,22 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.application.DeltaSyncStateService.RebaselineCancellation;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -123,6 +128,107 @@ class DeltaSyncStateServiceTest {
 
         assertFalse(service.requestRebuild(SITE), "already-flagged request must report false");
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void cancelRebaselineClearsFlagAndPersists() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        assertEquals(RebaselineCancellation.CLEARED_BEFORE_NOTICE, service.cancelRebaseline(SITE),
+                "a request the client was never told about is provably called off");
+
+        assertFalse(state.isRebaselineRequested());
+        verify(repository).save(state);
+    }
+
+    @Test
+    void cancelRebaselineLeavesTheRestOfTheRowUntouched() {
+        // Issue #84 acceptance: cancelling must leave site_sync_state exactly as it was before the
+        // request — only the flag moves, so the client resumes ordinary delta from lastAppliedSeq.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.advanceWatermark(100L);
+        state.recordCheckpoint(50L);
+        state.recordSchemaVersion(3);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        service.cancelRebaseline(SITE);
+
+        assertEquals(100L, state.getLastAppliedSeq());
+        assertEquals(50L, state.getLastCheckpointSeq());
+        assertNotNull(state.getLastCheckpointAt());
+        assertEquals(3, state.getSchemaVersion());
+        assertFalse(service.getSyncState(SITE).needRebaseline(), "GetSyncState must answer PROCEED again");
+    }
+
+    @Test
+    void cancelRebaselineIsNoOpWhenNothingPending() {
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+
+        assertEquals(RebaselineCancellation.NOT_PENDING, service.cancelRebaseline(SITE),
+                "cancelling with no pending request must report NOT_PENDING");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void cancelRebaselineIsNoOpWhenRowAbsent() {
+        // Never-synced site: no row means PROCEED already — do not materialize one just to clear a flag.
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.empty());
+
+        assertEquals(RebaselineCancellation.NOT_PENDING, service.cancelRebaseline(SITE));
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void markRebaselineNotifiedIsOneConditionalStatement() {
+        // #84 review: a load-modify-save stamp can land after a concurrent cancellation cleared the
+        // request, leaving the row claiming the client was told about a request that is gone. The
+        // predicate lives in the UPDATE instead, so the write cancels itself.
+        service.markRebaselineNotified(SITE);
+
+        verify(repository).markRebaselineNotified(eq(SITE), any(LocalDateTime.class));
+        verify(repository, never()).findBySiteId(SITE);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void syncStateViewCarriesTheNotificationSoPollsDoNotRestamp() {
+        // The flag stays raised for the whole snapshot upload, so GetSyncState must be able to tell
+        // "already stamped" without a second round-trip on every poll.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        assertFalse(service.getSyncState(SITE).rebaselineNotified());
+
+        state.markRebaselineNotified();
+        assertTrue(service.getSyncState(SITE).rebaselineNotified());
+    }
+
+    @Test
+    void cancelReportsWhetherTheClientHadAlreadyBeenTold() {
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        state.markRebaselineNotified();
+        when(repository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+
+        assertEquals(RebaselineCancellation.CLEARED_AFTER_NOTICE, service.cancelRebaseline(SITE),
+                "the client already had the order, so the cancellation may lose the race");
+        assertNull(state.getRebaselineNotifiedAt(), "cancelling must forget the notification too");
+    }
+
+    @Test
+    void resetForRebaselineForgetsTheNotification() {
+        // The snapshot committed: the next request starts from a clean slate.
+        SiteSyncState state = SiteSyncState.initial(SITE);
+        state.requestRebaseline();
+        state.markRebaselineNotified();
+
+        state.resetForRebaseline(41L);
+
+        assertFalse(state.isRebaselineRequested());
+        assertNull(state.getRebaselineNotifiedAt());
     }
 
     @Test

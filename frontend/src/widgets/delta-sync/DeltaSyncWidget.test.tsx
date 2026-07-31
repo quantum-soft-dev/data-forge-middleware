@@ -4,6 +4,7 @@ import { DeltaSyncWidget } from './DeltaSyncWidget'
 import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
 import {
+  useCancelRebaseline,
   useDeltaCheckpoints,
   useDeltaSegments,
   useDeltaSyncState,
@@ -21,11 +22,12 @@ vi.mock('@/features/delta-sync/api/queries', async (importOriginal) => {
     useDeltaCheckpoints: vi.fn(),
     useRebuildCheckpoint: vi.fn(),
     useRequestRebaseline: vi.fn(),
+    useCancelRebaseline: vi.fn(),
   }
 })
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
 const mockedUseDeltaSyncState = vi.mocked(useDeltaSyncState)
@@ -33,8 +35,10 @@ const mockedUseDeltaSegments = vi.mocked(useDeltaSegments)
 const mockedUseDeltaCheckpoints = vi.mocked(useDeltaCheckpoints)
 const mockedUseRebuildCheckpoint = vi.mocked(useRebuildCheckpoint)
 const mockedUseRequestRebaseline = vi.mocked(useRequestRebaseline)
+const mockedUseCancelRebaseline = vi.mocked(useCancelRebaseline)
 const rebuildMutate = vi.fn()
 const rebaselineMutate = vi.fn()
+const cancelRebaselineMutate = vi.fn()
 
 const state: DeltaSyncState = {
   lastAppliedSeq: 4821,
@@ -75,6 +79,10 @@ beforeEach(() => {
     mutate: rebaselineMutate,
     isPending: false,
   } as unknown as ReturnType<typeof useRequestRebaseline>)
+  mockedUseCancelRebaseline.mockReturnValue({
+    mutate: cancelRebaselineMutate,
+    isPending: false,
+  } as unknown as ReturnType<typeof useCancelRebaseline>)
 })
 
 describe('DeltaSyncWidget (F5)', () => {
@@ -193,7 +201,9 @@ describe('DeltaSyncWidget actions (F9)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Request full re-baseline' }))
     expect(screen.getByText('Request full re-baseline?')).toBeInTheDocument()
-    expect(screen.getByText(/cannot be cancelled once the client starts/i)).toBeInTheDocument()
+    // The dialog must state the cost: the whole dataset is re-sent (#84).
+    expect(screen.getByText(/re-uploads the entire dataset/i)).toBeInTheDocument()
+    expect(screen.getByText(/only reliably until the client picks it up/i)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Request re-baseline' }))
     expect(rebaselineMutate).toHaveBeenCalled()
@@ -217,5 +227,125 @@ describe('DeltaSyncWidget actions (F9)', () => {
     expect(screen.queryByRole('button', { name: 'Request full re-baseline' })).not.toBeInTheDocument()
     // Pill appears in both the rebaseline card and the lag-card header
     expect(screen.getAllByText('Full snapshot scheduled on next connect').length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('DeltaSyncWidget re-baseline cancellation (#84)', () => {
+  it('confirms the cancellation via AlertDialog and toasts on success', async () => {
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('cancelled'))
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    expect(screen.getByText('Cancel the re-baseline request?')).toBeInTheDocument()
+    expect(screen.getByText(/watermark and checkpoints are left as they are/i)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(cancelRebaselineMutate).toHaveBeenCalled()
+    expect(toast.success).toHaveBeenCalledWith('Re-baseline request cancelled')
+  })
+
+  it('warns instead of confirming while the snapshot is uploading (#84)', async () => {
+    // The flag outlives the whole FULL_SNAPSHOT session (it is consumed at commit), so clearing it
+    // does not reach a snapshot in flight — a success toast would claim the re-upload was averted.
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) =>
+      options?.onSuccess?.('snapshot-in-progress'),
+    )
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.warning).toHaveBeenCalledWith(
+      'The client is already uploading the full snapshot — it runs to completion and replaces the baseline',
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('warns when the client already holds the order but has not started (#84)', async () => {
+    // No session exists yet, so nothing is observable — `cancelled` would promise too much.
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('client-notified'))
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Request cleared, but the client already has the order — it may still send the snapshot',
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('keeps showing a running snapshot after the toast is gone (#84)', () => {
+    mockQuery({ data: { ...state, rebaselineRequested: false, snapshotInProgress: true } })
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    // Both the header chip and the card say it, and they say the same thing (#84 review).
+    expect(screen.getAllByText('Full snapshot in progress').length).toBe(2)
+    expect(screen.queryByText('Full snapshot scheduled on next connect')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Request full re-baseline' })).not.toBeInTheDocument()
+  })
+
+  it('withholds the cancel action while the request POST is unacknowledged (#84)', () => {
+    mockedUseRequestRebaseline.mockReturnValue({
+      mutate: rebaselineMutate,
+      isPending: true,
+    } as unknown as ReturnType<typeof useRequestRebaseline>)
+    mockQuery({ data: { ...state, rebaselineRequested: false } })
+
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    expect(screen.getAllByText('Full snapshot scheduled on next connect').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('button', { name: /cancel request/i })).not.toBeInTheDocument()
+  })
+
+  it('warns without naming a cause when nothing was pending anymore (#84)', async () => {
+    // `not-requested` has several causes (snapshot already committed, another operator, stale
+    // pill), so the message must not assert one of them.
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onSuccess?.('not-requested'))
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.warning).toHaveBeenCalledWith('No re-baseline was pending — nothing to cancel')
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('keeps the request when the dialog is dismissed', async () => {
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Keep request' }))
+    expect(cancelRebaselineMutate).not.toHaveBeenCalled()
+  })
+
+  it('uses the standard error toast when the cancellation fails', async () => {
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    cancelRebaselineMutate.mockImplementation((_vars, options) => options?.onError?.(new Error('500')))
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /cancel request/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel re-baseline' }))
+    expect(toast.error).toHaveBeenCalledWith('Something went wrong. Please try again.')
+  })
+
+  it('passes the admin scope to the cancel mutation', () => {
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    render(<DeltaSyncWidget siteId="s1" admin={true} canManage={true} />)
+    expect(mockedUseCancelRebaseline).toHaveBeenCalledWith('s1', { admin: true })
+  })
+
+  it('holds the cancel button while the cancellation is in flight', () => {
+    mockQuery({ data: { ...state, rebaselineRequested: true } })
+    mockedUseCancelRebaseline.mockReturnValue({
+      mutate: cancelRebaselineMutate,
+      isPending: true,
+    } as unknown as ReturnType<typeof useCancelRebaseline>)
+
+    render(<DeltaSyncWidget siteId="s1" admin={false} canManage={false} />)
+
+    expect(screen.getByRole('button', { name: /cancel request/i })).toBeDisabled()
   })
 })

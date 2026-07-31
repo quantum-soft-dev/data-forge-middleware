@@ -30,7 +30,7 @@ class BatchTimeoutPolicyTest {
     @DisplayName("Should not be expired when batch is not IN_PROGRESS")
     void shouldNotBeExpiredWhenNotInProgress() {
         // Given
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
         batch.complete();
 
         // When
@@ -44,7 +44,7 @@ class BatchTimeoutPolicyTest {
     @DisplayName("Should not be expired when batch is within timeout window")
     void shouldNotBeExpiredWhenWithinTimeout() {
         // Given - freshly started batch
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
 
         // When
         boolean expired = policy.isExpired(batch);
@@ -59,7 +59,7 @@ class BatchTimeoutPolicyTest {
         // Given - batch started more than timeout minutes ago
         UUID siteId = UUID.randomUUID();
         UUID accountId = UUID.randomUUID();
-        Batch batch = Batch.start(siteId, accountId, "example.com");
+        Batch batch = Batch.start(siteId, accountId);
 
         // When - check if batch would be expired (using batch's own method)
         boolean expired = batch.isExpired(TIMEOUT_MINUTES);
@@ -74,7 +74,7 @@ class BatchTimeoutPolicyTest {
         // Given
         int customTimeout = 30;
         BatchTimeoutPolicy customPolicy = new BatchTimeoutPolicy(customTimeout);
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
 
         // When
         boolean expired = customPolicy.isExpired(batch);
@@ -100,7 +100,7 @@ class BatchTimeoutPolicyTest {
     @DisplayName("Should return false for completed batch regardless of start time")
     void shouldReturnFalseForCompletedBatch() {
         // Given
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
         batch.complete();
 
         // When
@@ -114,7 +114,7 @@ class BatchTimeoutPolicyTest {
     @DisplayName("Should return false for failed batch")
     void shouldReturnFalseForFailedBatch() {
         // Given
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
         batch.fail();
 
         // When
@@ -128,7 +128,7 @@ class BatchTimeoutPolicyTest {
     @DisplayName("Should return false for cancelled batch")
     void shouldReturnFalseForCancelledBatch() {
         // Given
-        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID(), "example.com");
+        Batch batch = Batch.start(UUID.randomUUID(), UUID.randomUUID());
         batch.cancel();
 
         // When

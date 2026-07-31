@@ -7,7 +7,9 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { DeltaSyncState } from '../model/types';
 import {
+  cancelRebaseline,
   getDeltaCheckpoints,
   getDeltaSegments,
   getDeltaSyncHealth,
@@ -77,6 +79,27 @@ export function useRequestRebaseline(siteId: string, scope: DeltaApiScope) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.syncState(siteId) });
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.checkpoints(siteId) });
+    },
+  });
+}
+
+/**
+ * Takes a pending re-baseline request back (#84). On a real cancellation the cached flag is cleared
+ * straight away: the request path shows its pill optimistically, so without this the card would
+ * still offer "Cancel request" after the success toast and a second click would be answered
+ * "nothing to cancel". Checkpoints are untouched by a cancellation, so they are not invalidated.
+ */
+export function useCancelRebaseline(siteId: string, scope: DeltaApiScope) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => cancelRebaseline(siteId, scope),
+    onSuccess: (status) => {
+      if (status === 'cancelled' || status === 'client-notified') {
+        queryClient.setQueryData(deltaSyncKeys.syncState(siteId), (previous?: DeltaSyncState | null) =>
+          previous ? { ...previous, rebaselineRequested: false } : previous,
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: deltaSyncKeys.syncState(siteId) });
     },
   });
 }

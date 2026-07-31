@@ -562,12 +562,50 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
+| `.../delta/rebaseline` | DELETE | owner · admin | Takes a pending request back (issue #84): clears `rebaseline_requested` only — watermark, checkpoints and segments untouched → `GetSyncState` answers `PROCEED` again. Idempotent, always `200`, `status` says what it achieved: `cancelled` (called off before the client was told), `snapshot-in-progress` (a FULL_SNAPSHOT is uploading and still replaces the baseline), `client-notified` (the client already holds NEED_REBASELINE and may start at any moment), `not-requested` (nothing was pending) |
 | `/api/v1/account/sites/delta/health` · `/api/v1/accounts/{accountId}/sites/delta/health` | GET | owner · admin | Bulk health inputs for all V2 sites of an account (site-list badge, one query per poll) |
 
 All endpoints are documented in the OpenAPI spec (`/v3/api-docs`, Swagger UI).
 
 **Client-visible effect**: the "Request full re-baseline" UI action is now the public trigger for
 the `NEED_REBASELINE` recovery path described above — previously the flag had no public writer.
+
+**Cancelling a re-baseline (issue #84)**: the request is no longer a one-way switch. While
+`rebaselineRequested` is set, the Delta Sync widget shows a **Cancel request** button next to the
+"Full snapshot scheduled on next connect" pill; confirming it issues the `DELETE` above and the
+site returns to ordinary delta from its existing watermark — nothing else in `site_sync_state` moves,
+and no checkpoint or segment is touched. This only helps *before* the client starts its
+FULL_SNAPSHOT session: the cancellation never reaches a session already in flight, which keeps its
+own re-baseline intent and wipes the old baseline when it commits (`DeltaRebaselineService.reset`
+runs inside the commit transaction, not at session start — review r4). The request dialog now
+spells out that cost (the whole dataset is re-uploaded) and that the request can be taken back
+until the client starts.
+
+Because the flag is consumed at commit, it stays raised for the whole snapshot upload, so clearing
+it says nothing on its own — and neither does "some batch is open", since a CONTINUOUS session holds
+its batch `IN_PROGRESS` for hours (029: batch = session). V47 records the two facts that do answer
+it: `batches.session_mode` (stamped at SessionStart, carried onto the replacement batch a resumed
+session mints) and `site_sync_state.rebaseline_notified_at` (stamped once when `GetSyncState` first
+answers NEED_REBASELINE, cleared with the flag). `DeltaRebaselineCancellationService` then reports:
+
+| status | meaning |
+|---|---|
+| `cancelled` | The request was taken back before the client was ever told — it cannot act on it. |
+| `snapshot-in-progress` | A **live** FULL_SNAPSHOT session is uploading (a batch the timeout sweeper would reap does not count). It keeps its own intent and replaces the baseline when it commits, and the request is deliberately **left standing** — that is what re-arms a clean retry if the snapshot dies part-way. Reported whether or not a request was pending, so a second operator is not told "nothing to cancel" about a running snapshot. |
+| `client-notified` | The client already holds NEED_REBASELINE but has not opened a session yet (it may be extracting its dataset) — or the site has an open session whose mode the server cannot see (a batch from before V47, or one opened by the previous release mid-rollout). Nothing is observable — the snapshot may still arrive. |
+| `not-requested` | Nothing was pending and no snapshot is running. |
+
+The request is cleared in every case **except** a live snapshot, which is left untouched: 033 holds
+the flag to the snapshot's commit precisely so a snapshot that dies part-way is retried rather than
+silently downgraded to an ordinary delta on a baseline that was never replaced, and a cancellation
+must not quietly take that away. A running snapshot also shows up as `snapshotInProgress` on the
+sync-state projection, so both the Delta Sync card and the header chip keep saying "Full snapshot in
+progress" instead of leaving it in a toast that disappears. The cancel button is withheld while the
+request `POST` is still unacknowledged — the two calls are unordered, and a `DELETE` that wins the
+race would be answered `not-requested` moments before the flag appears. Making a cancellation
+actually *stop* an uploading snapshot would mean aborting the session (refusing the wipe at commit is
+unsafe — it is the silent FULL_SNAPSHOT-as-delta downgrade 030/T05 guards against); that is not
+implemented.
 
 **Delta Parquet in the UI (feature 025)**: the delta Batch Detail's "Table changes" card carries a
 per-table **Parquet** pill for completed sessions — one click presigns and opens the segment's

@@ -210,6 +210,36 @@ class BatchLifecycleServiceTest {
             assertThat(result).isNotNull();
             verify(eventPublisher).publishEvent(any(Object.class));
         }
+
+        @Test
+        @DisplayName("should persist the v2 session mode so a running FULL_SNAPSHOT is recognizable (#84)")
+        void shouldPersistSessionMode() {
+            mockActiveSite(SiteType.DBF);
+            setupNoActiveBatchForSite();
+            setupConcurrentBatchCount(0);
+            when(batchRepository.save(any(Batch.class))).thenAnswer(call -> call.getArgument(0));
+
+            service.startBatch(accountId, siteId, "FULL_SNAPSHOT");
+
+            ArgumentCaptor<Batch> saved = ArgumentCaptor.forClass(Batch.class);
+            verify(batchRepository).save(saved.capture());
+            assertThat(saved.getValue().getSessionMode()).isEqualTo("FULL_SNAPSHOT");
+        }
+
+        @Test
+        @DisplayName("should leave the session mode null for batches started without one")
+        void shouldLeaveSessionModeNullWhenNotGiven() {
+            mockActiveSite(SiteType.DBF);
+            setupNoActiveBatchForSite();
+            setupConcurrentBatchCount(0);
+            when(batchRepository.save(any(Batch.class))).thenAnswer(call -> call.getArgument(0));
+
+            service.startBatch(accountId, siteId);
+
+            ArgumentCaptor<Batch> saved = ArgumentCaptor.forClass(Batch.class);
+            verify(batchRepository).save(saved.capture());
+            assertThat(saved.getValue().getSessionMode()).isNull();
+        }
     }
 
     @Nested
