@@ -853,8 +853,52 @@ shows `Delta change records discarded` and nothing else never opened a session a
 streamed records past a `SessionStart` that was rejected or never sent, and the server dropped
 every one of them.
 
+### Metrics
+
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
-`delta.sessions.overflow`, `delta.reconciliation.failures`, `delta.seq.lag`) are exposed on `/actuator/metrics` and
-`/actuator/prometheus`. **Those endpoints are not reachable on dev** — the default security chain
-denies everything it does not explicitly permit, so scraping the delta metrics needs a deployment
-change that is still open (issue #83, point 5).
+`delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
+`delta.checkpoint.duration`, `delta.egress.segments`) are exposed on `/actuator/prometheus` and
+`/actuator/metrics/**`.
+
+Both used to be denied outright, which is why the counters were unreadable during the incident that
+opened #83. They are now served to the source addresses listed in
+`dfm.observability.metrics-scrape.allowed-cidrs` (`METRICS_SCRAPE_ALLOWED_CIDRS`, comma-separated):
+
+- **Empty is the default**, and empty means nobody — an environment that does not set the variable
+  keeps the old 403, so nothing is opened by merging this. A malformed entry is dropped with a WARN
+  (that range stays denied) rather than failing the application context.
+- On GKE dev the value is `10.4.0.0/14,127.0.0.1/32,::1/128`: the pod range the managed-Prometheus
+  collector scrapes from, plus loopback in both address families for `kubectl port-forward`.
+  Matching is per address family, so an IPv4 entry never covers an IPv6 caller. Nothing outside the
+  cluster can present such a source address — the frontend nginx only proxies `/api`, so
+  `/actuator` has no external route at all, and load-balancer traffic would arrive from a Google
+  front-end range. The decision reads the socket peer, which is why
+  `server.forward-headers-strategy` is pinned to `none`.
+- The rest of the actuator surface (`/actuator/env`, `/actuator/beans`, …) stays denied to everyone,
+  and is not exposed by `management.endpoints.web.exposure.include` in the first place.
+
+Collection on dev is a `PodMonitoring` (`k8s/overlays/dev/podmonitoring.yaml`, 30 s interval) picked
+up by the managed-Prometheus collector that already runs in the cluster; the samples land in Cloud
+Monitoring under `prometheus.googleapis.com/<exported name>/counter` and are queryable with PromQL.
+
+**Use the exported name, not the Micrometer one** — a query written as `delta.sessions.started` or
+even `delta_sessions_started` selects no series. Dots become underscores and every counter gains a
+`_total` suffix:
+
+| Micrometer meter | Prometheus / Cloud Monitoring |
+|---|---|
+| `delta.sessions.started` | `delta_sessions_started_total` |
+| `delta.sessions.committed` | `delta_sessions_committed_total` |
+| `delta.sessions.overflow{reason=records\|bytes}` | `delta_sessions_overflow_total{reason=...}` |
+| `delta.reconciliation.failures` | `delta_reconciliation_failures_total` |
+| `delta.egress.segments` | `delta_egress_segments_total` |
+| `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
+| `delta.checkpoint.duration` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
+
+So the Cloud Monitoring type for the session counter is
+`prometheus.googleapis.com/delta_sessions_started_total/counter`. Read the raw values by hand with:
+
+```bash
+kubectl -n forge port-forward deploy/forge-backend 8080:8080
+curl -s localhost:8080/actuator/prometheus | grep '^delta_'
+```

@@ -14,7 +14,7 @@ class TestSecurityConfigTest {
 
     @Test
     void testAdminTokenDecoding() {
-        TestSecurityConfig config = new TestSecurityConfig(CLAIMS_NAMESPACE);
+        TestSecurityConfig config = new TestSecurityConfig(CLAIMS_NAMESPACE, java.util.List.of());
 
         // Decode admin token
         Jwt jwt = config.jwtDecoder().decode("mock.admin.jwt.token");
@@ -35,7 +35,7 @@ class TestSecurityConfigTest {
 
     @Test
     void testUserTokenDecoding() {
-        TestSecurityConfig config = new TestSecurityConfig(CLAIMS_NAMESPACE);
+        TestSecurityConfig config = new TestSecurityConfig(CLAIMS_NAMESPACE, java.util.List.of());
 
         // Decode user token
         Jwt jwt = config.jwtDecoder().decode("mock.user.jwt.token");
