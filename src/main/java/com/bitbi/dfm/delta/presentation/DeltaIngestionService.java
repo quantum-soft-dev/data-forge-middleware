@@ -140,6 +140,20 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                             + "resolved to " + this.maxSessionBytes
                             + "), or the budget rejects a continuous stream before the seal fires");
         }
+        // The same shape on the record axis, and a worse outcome (dbf-data-extractor#130). OVERFLOW
+        // tells a DELTA session to retry in CONTINUOUS mode, but a FULL_SNAPSHOT has nowhere to go:
+        // a CONTINUOUS snapshot would lose the atomic replace-on-SessionEnd that makes it a snapshot.
+        // So a snapshot that can reach the cap before its seal fires is not a session that failed —
+        // it is a site that cannot be re-baselined at all, and the misconfiguration would only
+        // surface as an unrecoverable OVERFLOW on whichever site first grew past the cap. The
+        // shipped pair (25k against 2M) is safe; nothing but this check kept it that way.
+        if (snapshotSealRecords >= maxSessionRecords) {
+            throw new IllegalArgumentException(
+                    "delta.ingestion.snapshot-seal-records (" + snapshotSealRecords
+                            + ") must be below delta.ingestion.max-session-records (" + maxSessionRecords
+                            + "), or a full snapshot overflows before it seals and the site can never "
+                            + "be re-baselined");
+        }
     }
 
     /**

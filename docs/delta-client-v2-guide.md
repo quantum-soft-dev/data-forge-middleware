@@ -463,8 +463,8 @@ message ServerError { ErrorCode code = 1; string message = 2; RecoveryAction act
 | `UNAUTHORIZED` | 4 | `PROCEED` | token problem | Re-authenticate. |
 | `ACTIVE_SESSION_EXISTS` | 5 | `PROCEED` | another session is live **for this site** | Serialize your own runs; retry after the other ends/times out. |
 | `INTERNAL` | 6 | `NEED_REBASELINE` | unexpected server fault | Retry with backoff. Never read as overflow — overflow is typed. |
-| `OVERFLOW` | 7 | `NEED_REBASELINE` | per-session record cap exceeded | Retry the session in CONTINUOUS mode. |
-| `OVERFLOW_BYTES` | 8 | `NEED_REBASELINE` | per-session byte budget exceeded | Retry in CONTINUOUS mode. |
+| `OVERFLOW` | 7 | `NEED_REBASELINE` | per-session record cap exceeded | From `DELTA`: retry in CONTINUOUS mode. From `CONTINUOUS` or `FULL_SNAPSHOT`: **terminal**, see below. |
+| `OVERFLOW_BYTES` | 8 | `NEED_REBASELINE` | per-session byte budget exceeded | Same rule as `OVERFLOW`. |
 | `SITE_INACTIVE` | 9 | `PROCEED` | site **deactivated or deleted** while the stream was open | Stop the run; an operator must reactivate it. |
 | `SCHEMA_REQUIRED` | 10 | `PROCEED` | no schema on file yet | `SubmitSchema`, then retry. A snapshot hits the same wall. |
 | `CONCURRENT_BATCH_LIMIT` | 11 | `PROCEED` | the **account** is at its concurrent-session cap | Back off and retry later; another site is holding the slot. |
@@ -474,6 +474,13 @@ gRPC transport-level `UNAUTHENTICATED` (closed call, no `ServerError`) means the
 missing/invalid before the handler ran. That — not `SITE_INACTIVE` — is the usual symptom of a deactivated or
 deleted site, because the token is checked when the stream opens. The in-band `SITE_INACTIVE` covers the
 narrower case where the site changed *after* that check and before `SessionStart`.
+
+**Overflow is only retryable from `DELTA`.** A `CONTINUOUS` session is already the escape hatch, and a
+`FULL_SNAPSHOT` must not degrade into one — CONTINUOUS publishes as it goes and cannot offer the atomic
+replace-on-`SessionEnd` that makes a snapshot a snapshot. Overflow in either mode therefore means the server's
+caps are misconfigured for this deployment, not that the session should be retried differently. The server
+refuses to start when `delta.ingestion.snapshot-seal-records` is not below `delta.ingestion.max-session-records`,
+which is the one pairing that could otherwise make a site permanently un-re-baselineable.
 
 Rows 9–11 widened in #83, when a deactivated site, a schema-less site and the account concurrency limit stopped
 escaping the typed protocol as a bare `Status.INTERNAL`. They took their numbers in
