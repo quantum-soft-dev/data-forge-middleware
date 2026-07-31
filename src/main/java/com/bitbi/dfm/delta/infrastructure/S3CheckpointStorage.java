@@ -123,10 +123,35 @@ public class S3CheckpointStorage {
         return exists(deltaKey(siteId, tableName, firstSeq, lastSeq));
     }
 
+    /** @return the prefix holding every delta Parquet file of a site (feature 025). */
+    public static String egressPrefix(UUID siteId) {
+        return String.format("egress/%s/", siteId);
+    }
+
     /** @return the keys of all objects under a prefix (single page is sufficient for test/egress sizes). */
     public List<String> listKeys(String prefix) {
         try {
             return s3Client.listObjectsV2(ListObjectsV2Request.builder()
+                            .bucket(bucketName).prefix(prefix).build())
+                    .contents().stream().map(S3Object::key).toList();
+        } catch (S3Exception e) {
+            throw new CheckpointStorageException("Failed to list objects under prefix: " + prefix, e);
+        }
+    }
+
+    /**
+     * Every key under a prefix, following continuation tokens.
+     *
+     * <p>Unlike {@link #listKeys}, this one is meant for whole-site prefixes (issue #89 — the
+     * history wipe walks {@code egress/{siteId}/}), where a single 1000-key page truncates
+     * silently and would leave most of the objects behind.</p>
+     *
+     * @param prefix the prefix to enumerate
+     * @return all keys under it
+     */
+    public List<String> listAllKeys(String prefix) {
+        try {
+            return s3Client.listObjectsV2Paginator(ListObjectsV2Request.builder()
                             .bucket(bucketName).prefix(prefix).build())
                     .contents().stream().map(S3Object::key).toList();
         } catch (S3Exception e) {

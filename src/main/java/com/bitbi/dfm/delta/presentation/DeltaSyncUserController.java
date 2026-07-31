@@ -22,6 +22,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -286,11 +287,12 @@ public class DeltaSyncUserController {
                     content = @Content(mediaType = "application/json"))
     })
     public ResponseEntity<Object> wipeHistory(@PathVariable UUID siteId,
-                                              @RequestBody(required = false) SiteHistoryWipeRequestDto request) {
+                                              @RequestBody(required = false) SiteHistoryWipeRequestDto request,
+                                              HttpServletRequest httpRequest) {
         Site site = requireOwnedSite(siteId);
         logger.warn("Site history wipe requested by owner: siteId={}", siteId);
         return SiteHistoryWipeEndpoints.wipe(wipeService, site, request,
-                DeltaSiteWipeService.Initiator.OWNER);
+                DeltaSiteWipeService.Initiator.OWNER, httpRequest);
     }
 
     /**

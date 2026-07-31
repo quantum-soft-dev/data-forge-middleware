@@ -139,7 +139,8 @@ export class SiteHistoryWipeConflictError extends Error {
 
 /**
  * Irreversibly destroy a site's server-side history (issue #89). `confirm` must equal the site's
- * domain — the backend rejects anything else with 400, so the dialog's gate is enforced twice.
+ * name — the same string the page title shows; `sites.domain` is the legacy `{accountId}_{siteName}`
+ * composite and is rejected. The backend re-checks it, so the dialog's gate is enforced twice.
  */
 export async function wipeSiteHistory(
   siteId: string,

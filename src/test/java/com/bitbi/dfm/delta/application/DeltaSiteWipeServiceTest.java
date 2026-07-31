@@ -10,6 +10,7 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
@@ -70,6 +71,7 @@ class DeltaSiteWipeServiceTest {
     private final ErrorLogRepository errorLogRepository = mock(ErrorLogRepository.class);
     private final SiteSchemaService siteSchemaService = mock(SiteSchemaService.class);
     private final S3FileStorageService s3FileStorageService = mock(S3FileStorageService.class);
+    private final S3CheckpointStorage checkpointStorage = mock(S3CheckpointStorage.class);
     private final AdminActionLogRepository adminActionLogRepository = mock(AdminActionLogRepository.class);
 
     private DeltaSiteWipeService service;
@@ -79,7 +81,7 @@ class DeltaSiteWipeServiceTest {
         service = new DeltaSiteWipeService(directTransactionTemplate(), syncStateRepository, batchRepository,
                 uploadedFileRepository, sqlGenerationRepository, baselineRepository, accountPluginRepository,
                 segmentRepository, checkpointRepository, errorLogRepository, siteSchemaService,
-                s3FileStorageService, adminActionLogRepository, BATCH_TIMEOUT_MINUTES);
+                s3FileStorageService, checkpointStorage, adminActionLogRepository, BATCH_TIMEOUT_MINUTES);
 
         when(syncStateRepository.findBySiteIdForUpdate(SITE_ID))
                 .thenReturn(Optional.of(SiteSyncState.initial(SITE_ID)));
@@ -89,6 +91,7 @@ class DeltaSiteWipeServiceTest {
         when(segmentRepository.findAllS3KeysBySiteId(SITE_ID)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of());
         when(s3FileStorageService.deleteObjects(anyList())).thenReturn(new DeleteObjectsResult(0, List.of()));
+        when(checkpointStorage.listAllKeys(any())).thenReturn(List.of());
         when(batchRepository.countBySiteId(SITE_ID)).thenReturn(0L);
     }
 
@@ -242,6 +245,51 @@ class DeltaSiteWipeServiceTest {
     }
 
     @Test
+    @DisplayName("deletes the site's egress Parquet objects, which no row names")
+    void shouldDeleteEgressObjects() {
+        // The wipe resets the sequence counter, so these keys — derived from seq alone — are reused
+        // by the new epoch. A survivor would be served as a post-wipe batch's delta by
+        // DeltaSegmentParquetQueryService whenever egress does not overwrite it.
+        when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/")).thenReturn(List.of(
+                "egress/" + SITE_ID + "/orders/delta/seq=1-1000.parquet",
+                "egress/" + SITE_ID + "/items/delta/seq=1-1000.parquet"));
+
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(s3FileStorageService).deleteObjects(keys.capture());
+        assertThat(keys.getValue()).containsExactlyInAnyOrder(
+                "egress/" + SITE_ID + "/orders/delta/seq=1-1000.parquet",
+                "egress/" + SITE_ID + "/items/delta/seq=1-1000.parquet");
+    }
+
+    @Test
+    @DisplayName("does not enumerate egress objects for a wipe that rolled back")
+    void shouldNotTouchEgressWhenRolledBack() {
+        when(batchRepository.countBySiteId(SITE_ID)).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN))
+                .isInstanceOf(DeltaSiteWipeService.ConcurrentSessionException.class);
+
+        verify(checkpointStorage, never()).listAllKeys(any());
+    }
+
+    @Test
+    @DisplayName("a failed egress listing leaves orphans but does not fail a committed wipe")
+    void shouldSurviveEgressListingFailure() {
+        when(checkpointStorage.listAllKeys(any()))
+                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
+        when(batchRepository.deleteBySiteId(SITE_ID)).thenReturn(7);
+
+        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        // The rows are already committed as gone; reporting a completed wipe as a 500 would be worse.
+        assertThat(summary.deletedBatches()).isEqualTo(7);
+        verify(s3FileStorageService).deleteObjects(anyList());
+    }
+
+    @Test
     @DisplayName("bumps the generation and re-arms the rebaseline request")
     void shouldResetSyncStateForWipe() {
         SiteSyncState state = SiteSyncState.initial(SITE_ID);
@@ -334,5 +382,19 @@ class DeltaSiteWipeServiceTest {
                 .containsEntry("deletedBatches", 7)
                 .containsEntry("generation", 1L)
                 .containsEntry("baselineBatchDetached", false);
+    }
+
+    @Test
+    @DisplayName("audits the caller's IP and user agent — the only attribution this action has")
+    void shouldAuditTheRequestContext() {
+        // admin_account_id is always NULL here (admins are Auth0 users with no accounts row), so the
+        // IP and user agent are the only things in admin_action_logs that name the machine behind
+        // the most destructive operation in the product.
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN, "203.0.113.7", "Mozilla/5.0");
+
+        ArgumentCaptor<AdminActionLog> entry = ArgumentCaptor.forClass(AdminActionLog.class);
+        verify(adminActionLogRepository).save(entry.capture());
+        assertThat(entry.getValue().getIpAddress()).isEqualTo("203.0.113.7");
+        assertThat(entry.getValue().getUserAgent()).isEqualTo("Mozilla/5.0");
     }
 }

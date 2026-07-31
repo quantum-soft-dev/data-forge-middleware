@@ -7,6 +7,7 @@ import com.bitbi.dfm.delta.application.SiteHistoryWipeSummary;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
@@ -57,6 +58,9 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
     private SiteService siteService;
 
     @Autowired
+    private S3CheckpointStorage checkpointStorage;
+
+    @Autowired
     private JdbcTemplate jdbc;
 
     private Site site;
@@ -76,6 +80,9 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         // plugin_audit_logs is partitioned and deliberately not cleaned by test-data.sql, so the
         // auto-reinit entries of the previous test in this class would otherwise be counted too.
         jdbc.update("DELETE FROM plugin_audit_logs WHERE metadata->>'siteId' = ?", SITE_ID.toString());
+        // The LocalStack bucket is shared across the suite and the egress prefix is keyed on seq
+        // alone, so leftovers from another class would decide these assertions.
+        purgeEgressPrefix(SITE_ID);
         declareCustomersSchema();
         site = siteService.getSite(SITE_ID);
     }
@@ -121,6 +128,22 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 "SELECT COUNT(*) FROM account_plugins WHERE baseline_batch_id IS NOT NULL AND account_id = ?",
                 Long.class, ACCOUNT_ID);
         assertThat(detachedBaselines).isZero();
+    }
+
+    @Test
+    @DisplayName("takes the site's egress Parquet objects with it")
+    void wipeDeletesEgressObjects() {
+        // No row names these: the key is derived from the sequence range alone. Since the wipe
+        // sends seqs back to zero, a survivor is what a post-wipe segment covering the same range
+        // resolves to — pre-wipe rows served as the new batch's delta.
+        checkpointStorage.uploadDelta(SITE_ID, "customers", 1L, 2L, new byte[]{1, 2, 3});
+        checkpointStorage.uploadDelta(SITE_ID, "orders", 3L, 4L, new byte[]{4, 5, 6});
+        assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).hasSize(2);
+
+        SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.s3DeleteErrors()).isZero();
+        assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).isEmpty();
     }
 
     @Test

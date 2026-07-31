@@ -717,9 +717,19 @@ baselines, so no SQL is produced while there is nothing consistent to base it on
 `DELTA_AUTO_REINIT` entry lands in `plugin_audit_logs`. **An ordinary re-baseline is unchanged** and
 still needs a manual reinit.
 
-**Non-goal**: the egress Parquet objects under `egress/{siteId}/…` are not deleted — nothing in the
-database tracks them and removing them would need a paginated prefix walk that does not exist. They
-are left as orphans, as checkpoint objects already are after a re-baseline.
+**Egress Parquet goes too.** Nothing in the database names the objects under `egress/{siteId}/…`, so
+they are enumerated with a paginated prefix walk after the transaction commits and deleted with the
+rest. This is correctness, not housekeeping: the egress key is derived from sequence numbers alone
+(`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe is the one operation that
+sends those numbers back to zero, so a surviving pre-wipe file whose `(first, last)` pair recurs in
+the new epoch would be served as the new batch's delta by the Parquet download endpoint — and listed
+by the Parquet Export catalog — for any table egress does not overwrite (a table absent from the new
+segment, or skipped by the per-table coercion guard). A listing failure is logged and the wipe still
+reports success: the rows are already gone.
+
+**Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are
+after a re-baseline. They are addressed by key from the live `checkpoints` rows, so no stale read is
+possible through them.
 
 **Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
 request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full

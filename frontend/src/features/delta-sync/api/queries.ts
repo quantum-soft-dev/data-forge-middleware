@@ -7,6 +7,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { batchKeys } from '@/entities/batch/api/queries';
 import type { DeltaSyncState } from '../model/types';
 import {
   cancelRebaseline,
@@ -108,6 +109,10 @@ export function useCancelRebaseline(siteId: string, scope: DeltaApiScope) {
 /**
  * Wipes a site's history (issue #89). Everything the Delta Sync tab shows describes state that no
  * longer exists afterwards, so every query for the site is invalidated rather than patched.
+ *
+ * The batch queries go with them: the wipe deletes the site's batches, and the "Upload history"
+ * tab — the default tab of the very page the Danger zone sits on — would otherwise keep listing
+ * them, with every row leading to a 404 detail page.
  */
 export function useWipeSiteHistory(siteId: string, scope: DeltaApiScope) {
   const queryClient = useQueryClient();
@@ -118,6 +123,10 @@ export function useWipeSiteHistory(siteId: string, scope: DeltaApiScope) {
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.checkpoints(siteId) });
       queryClient.invalidateQueries({ queryKey: [...deltaSyncKeys.all, 'segments', siteId] });
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.health() });
+      // Whole prefix: the history list, its pages and any open batch detail all describe batches
+      // that no longer exist. The list is account-wide and filtered to the site client-side, so
+      // there is no site-scoped key to be more surgical with.
+      queryClient.invalidateQueries({ queryKey: batchKeys.all });
     },
   });
 }

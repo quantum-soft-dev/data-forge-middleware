@@ -10,6 +10,7 @@ import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
@@ -83,6 +84,7 @@ public class DeltaSiteWipeService {
     private final ErrorLogRepository errorLogRepository;
     private final SiteSchemaService siteSchemaService;
     private final S3FileStorageService s3FileStorageService;
+    private final S3CheckpointStorage checkpointStorage;
     private final AdminActionLogRepository adminActionLogRepository;
     private final int batchTimeoutMinutes;
 
@@ -98,6 +100,7 @@ public class DeltaSiteWipeService {
                                 ErrorLogRepository errorLogRepository,
                                 SiteSchemaService siteSchemaService,
                                 S3FileStorageService s3FileStorageService,
+                                S3CheckpointStorage checkpointStorage,
                                 AdminActionLogRepository adminActionLogRepository,
                                 @Value("${batch.timeout.minutes:60}") int batchTimeoutMinutes) {
         this.transactionTemplate = transactionTemplate;
@@ -112,6 +115,7 @@ public class DeltaSiteWipeService {
         this.errorLogRepository = errorLogRepository;
         this.siteSchemaService = siteSchemaService;
         this.s3FileStorageService = s3FileStorageService;
+        this.checkpointStorage = checkpointStorage;
         this.adminActionLogRepository = adminActionLogRepository;
         this.batchTimeoutMinutes = batchTimeoutMinutes;
     }
@@ -126,9 +130,36 @@ public class DeltaSiteWipeService {
      * @throws ConcurrentSessionException when a batch committed while the wipe was running
      */
     public SiteHistoryWipeSummary wipe(Site site, Initiator initiator) {
-        WipedRows wiped = transactionTemplate.execute(status -> wipeRows(site, initiator));
+        return wipe(site, initiator, null, null);
+    }
 
-        DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(wiped.s3Keys());
+    /**
+     * Wipe every trace of a site's history and give it a fresh epoch, recording the caller's request
+     * context in the audit trail.
+     *
+     * <p>The context is not decoration. {@code admin_account_id} is always NULL for this action —
+     * admins are Auth0 users with no {@code accounts} row — so the IP and user agent are the only
+     * things in {@code admin_action_logs} that can attribute the single most destructive operation
+     * in the product to a machine. Every other site-level audited action records them
+     * ({@code SiteAdminController}, {@code BatchCleanupAdminController}) and this one must not be
+     * the exception.</p>
+     *
+     * @param site      the site to wipe (already resolved and authorized by the caller)
+     * @param initiator who asked for it — recorded in the audit trail
+     * @param ipAddress caller's IP address, or {@code null} when there is no request context
+     * @param userAgent caller's user agent, or {@code null} when there is no request context
+     * @return what was destroyed
+     * @throws SessionInProgressException when an ingestion session is live for the site
+     * @throws ConcurrentSessionException when a batch committed while the wipe was running
+     */
+    public SiteHistoryWipeSummary wipe(Site site, Initiator initiator, String ipAddress, String userAgent) {
+        WipedRows wiped = transactionTemplate.execute(
+                status -> wipeRows(site, initiator, ipAddress, userAgent));
+
+        List<String> objects = new ArrayList<>(wiped.s3Keys());
+        objects.addAll(egressKeys(site.getId()));
+
+        DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(objects);
         if (!deleted.errors().isEmpty()) {
             log.warn("Site history wipe left {} orphaned S3 object(s) for site {}: {}",
                     deleted.errors().size(), site.getId(), deleted.errors());
@@ -150,10 +181,36 @@ public class DeltaSiteWipeService {
     }
 
     /**
+     * The site's delta Parquet objects, which no row names.
+     *
+     * <p>Egress writes to {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}, a key
+     * derived from sequence numbers alone — and a wipe is the one operation that sends those
+     * numbers back to zero. Left in place, a pre-wipe file whose {@code (firstSeq, lastSeq)} pair
+     * happens to recur in the new epoch is served as the new batch's delta by
+     * {@code DeltaSegmentParquetQueryService} (and listed by {@code ParquetExportCatalogDao}) unless
+     * egress overwrites it, which it does not for a table missing from the new segment or skipped by
+     * the per-table coercion guard. So this is a correctness step, not housekeeping.</p>
+     *
+     * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
+     * and the objects are only reachable through keys the rows never held. A listing failure is
+     * logged and swallowed — the rows are already gone, and failing here would report a completed
+     * wipe as a 500.</p>
+     */
+    private List<String> egressKeys(UUID siteId) {
+        try {
+            return checkpointStorage.listAllKeys(S3CheckpointStorage.egressPrefix(siteId));
+        } catch (RuntimeException e) {
+            log.warn("Could not enumerate the egress objects of site {}; they are left as orphans "
+                    + "and a later segment reusing their sequence range may resolve to one", siteId, e);
+            return List.of();
+        }
+    }
+
+    /**
      * The transactional phase: bulk deletes in FK order, with every S3 key collected before the row
      * naming it disappears.
      */
-    private WipedRows wipeRows(Site site, Initiator initiator) {
+    private WipedRows wipeRows(Site site, Initiator initiator, String ipAddress, String userAgent) {
         UUID siteId = site.getId();
 
         // 1. Per-site mutex. Every ingestion commit touches this row, so locking it serializes the
@@ -249,7 +306,7 @@ public class DeltaSiteWipeService {
         details.put("baselineBatchDetached", baselineBatchDetached);
         adminActionLogRepository.save(AdminActionLog
                 .successForSite(AdminActionType.SITE_HISTORY_WIPE, site.getAccountId(), siteId,
-                        null, null, null)
+                        null, ipAddress, userAgent)
                 .withDetails(details));
 
         // 14. Last look. A client that reconnected while this ran could have committed a batch after

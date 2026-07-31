@@ -4,6 +4,7 @@ import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
 import com.bitbi.dfm.delta.presentation.dto.SiteHistoryWipeRequestDto;
 import com.bitbi.dfm.delta.presentation.dto.SiteHistoryWipeResponseDto;
 import com.bitbi.dfm.site.domain.Site;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -31,13 +32,15 @@ final class SiteHistoryWipeEndpoints {
      * @param site        the site whose history to destroy
      * @param request     the confirmation body
      * @param initiator   who asked, for the audit trail
+     * @param httpRequest the HTTP request, for the audited IP and user agent
      * @return 200 with the summary, or 409 with a retry-or-stop-the-client status
      * @throws IllegalArgumentException when the confirmation does not match the site's name (400)
      */
     static ResponseEntity<Object> wipe(DeltaSiteWipeService wipeService,
                                        Site site,
                                        SiteHistoryWipeRequestDto request,
-                                       DeltaSiteWipeService.Initiator initiator) {
+                                       DeltaSiteWipeService.Initiator initiator,
+                                       HttpServletRequest httpRequest) {
         // Matched against siteName, not domain. The issue's example used a hostname-shaped domain,
         // but `sites.domain` is the legacy composite `{accountId}_{siteName}` that no API exposes
         // and no operator could type — siteName is the identity the UI shows and the client
@@ -53,8 +56,8 @@ final class SiteHistoryWipeEndpoints {
         }
 
         try {
-            return ResponseEntity.ok(SiteHistoryWipeResponseDto.fromSummary(
-                    wipeService.wipe(site, initiator)));
+            return ResponseEntity.ok(SiteHistoryWipeResponseDto.fromSummary(wipeService.wipe(
+                    site, initiator, ipAddress(httpRequest), userAgent(httpRequest))));
         } catch (DeltaSiteWipeService.SessionInProgressException e) {
             logger.info("Site history wipe refused, session live: siteId={}", site.getId());
             return ResponseEntity.status(HttpStatus.CONFLICT)
@@ -65,5 +68,24 @@ final class SiteHistoryWipeEndpoints {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("status", "concurrent-session"));
         }
+    }
+
+    /**
+     * Caller's IP, preferring the first hop of {@code X-Forwarded-For} — the app sits behind a
+     * proxy, where {@code getRemoteAddr()} is the proxy. Mirrors {@code SiteAdminController}.
+     */
+    private static String ipAddress(HttpServletRequest request) {
+        if (request == null) {
+            return null;
+        }
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        if (forwardedFor != null && !forwardedFor.isEmpty()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
+    }
+
+    private static String userAgent(HttpServletRequest request) {
+        return request == null ? null : request.getHeader("User-Agent");
     }
 }

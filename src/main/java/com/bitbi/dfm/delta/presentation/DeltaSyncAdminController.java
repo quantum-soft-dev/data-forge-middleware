@@ -23,6 +23,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -313,10 +314,11 @@ public class DeltaSyncAdminController {
                     content = @Content(mediaType = "application/json"))
     })
     public ResponseEntity<Object> wipeHistory(@PathVariable UUID siteId,
-                                              @RequestBody(required = false) SiteHistoryWipeRequestDto request) {
+                                              @RequestBody(required = false) SiteHistoryWipeRequestDto request,
+                                              HttpServletRequest httpRequest) {
         Site site = siteService.getSite(siteId); // 404 when the site does not exist
         return SiteHistoryWipeEndpoints.wipe(wipeService, site, request,
-                DeltaSiteWipeService.Initiator.ADMIN);
+                DeltaSiteWipeService.Initiator.ADMIN, httpRequest);
     }
 
     /**
