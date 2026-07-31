@@ -60,6 +60,9 @@ jacoco/
 # Claude
 .claude/settings.local.json
 
+# per-issue git worktrees (/github-issue, /github-issue-runner)
+.worktrees/
+
 # Gemini
 .gemini/settings.json
 

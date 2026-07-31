@@ -1,0 +1,47 @@
+# Conductor repository settings — shared with the team.
+# The Mac app reads this file from the default branch on the remote, so it only takes effect
+# after it is merged into `develop`; cloud workspaces read it from their base branch.
+# Schema: https://conductor.build/schemas/settings.repo.schema.json
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+# A fresh workspace is a fresh worktree: `frontend/node_modules` is gitignored and therefore
+# absent, so the very first frontend gate (`tsc --noEmit` / lint / vitest) would fail on a clean
+# tree. `core.hooksPath` is shared with the root checkout for local worktrees but has to be set
+# in a fresh cloud clone, and setting it twice costs nothing.
+setup = "npm --prefix frontend ci && git config core.hooksPath .githooks"
+
+# The backend binds a fixed 8080, and postgres/redis/localstack come from one docker-compose
+# stack on fixed host ports (5432/6379/4566). Two workspaces cannot run these at once.
+run_mode = "nonconcurrent"
+
+# Runs when the workspace is archived. Only stale registrations are dropped — a nested
+# `.worktrees/<n>-<slug>` (the fallback isolation in /github-issue) registers in the root
+# checkout's .git and would otherwise outlive the workspace directory.
+# Deliberately NOT `docker compose down`: the stack is shared, and another workspace may be
+# using it at that moment.
+archive = "git worktree prune"
+
+[scripts.run.deps]
+# Start this first: the backend, the integration suite and ~30 contract tests all need it.
+command = "docker compose up postgres redis localstack"
+available_in = [ "local" ]
+icon = "database"
+
+[scripts.run.backend]
+command = "./gradlew bootRun --args='--spring.profiles.active=dev'"
+available_in = [ "local" ]
+icon = "server"
+
+[scripts.run.frontend]
+# Vite pins 3000 in vite.config.ts; override it so several workspaces can at least serve the UI.
+# Its /api proxy still points at the single backend on 8080 — that one is not per-workspace.
+command = "npm --prefix frontend run dev -- --port $CONDUCTOR_PORT"
+available_in = [ "local" ]
+default = true
+icon = "play"
+
+[scripts.run.test]
+# The per-task gate. Not "no Docker": ~30 contract tests start a PostgreSQL container.
+command = "./gradlew test -PexcludeIntegration"
+icon = "test-tube"

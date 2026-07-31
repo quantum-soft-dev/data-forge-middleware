@@ -151,6 +151,198 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 - **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V48**, next is **V49**.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
+### «The current PR» — one resolution rule for every command
+
+Whenever a command takes a PR number and none was given — `/merge`, `/code-review`, the `review`
+skill, anything else — it means **the PR of the current session**, resolved in this order:
+
+1. **From the branch you are on** — the normal case, since a session working an issue sits in its
+   own worktree: `git rev-parse --abbrev-ref HEAD`, then
+   `gh pr list --head <branch> --state open --json number,title`. Exactly one open PR → that is
+   the target, no need to ask.
+2. **On `develop`** (session working in the main tree, no branch of its own) → the PR this session
+   actually worked on during the conversation. Name it and say where it came from.
+3. **Still ambiguous** → do not guess. List the candidates and ask which one.
+4. **Branch found but no open PR** → say so plainly: the work never reached a PR, there is nothing
+   to review or merge.
+
+Several open PRs on one branch is abnormal — show them and ask. And when *our* commands call
+`/code-review` or `review`, they resolve the number first and pass it **explicitly**, so the
+reviewer never has to guess.
+
+### Working from a GitHub issue
+
+Run `/github-issue <number>` (`.claude/commands/github-issue.md`). It drives the full lifecycle:
+
+`Ready` (`status: ready`) → `In Progress` (`status: in progress`) + assignee + sprint milestone →
+work in an **isolated tree** → TDD with the green per-task gate → docs in the same PR →
+`./gradlew integrationTest` → PR into `develop` with `Closes #<n>` and `status: in review` → code
+review loop until nothing is left open → merge `origin/develop` in, resolve conflicts, re-run the
+gates → `status: ready to merge` → **stop and ask the human**. `/code-review ultra` is a deeper
+cloud review only a human can launch.
+
+"Isolated tree" is usually the Conductor workspace the session already sits in — that *is* a
+worktree on its own branch off a freshly fetched `origin/develop`, so the command works in place
+and does **not** nest a second worktree inside it. Nesting would hide the work from the diff
+viewer, the Checks panel and `GetWorkspaceDiff`, which all show the *workspace branch*. Only
+outside Conductor (a bare clone) does the command create `.worktrees/<n>-<slug>` on a branch
+`<type>/<n>-<slug>` (`bug` → `fix/`, `enhancement` → `feature/`, else `chore/`; a spec-kit feature
+keeps `feature/NNN-name`). The Conductor-generated branch name (`plissb/<workspace>`) is left
+alone: PRs resolve by `--head <branch>`, and the issue number lives in the PR title and
+`Closes #<n>`.
+
+**Finding and fixing are separate for behaviour, and may be joined for mechanics.** A reviewer
+offering `--fix` may be run with it, confined to the **mechanical** class — findings whose correct
+edit is objective and settles nothing: formatting and line length, unused imports/locals, Java
+naming **on private/local and new unpublished symbols only**, `var` → explicit type (Code Style
+above), Javadoc on new public members, and `eslint --fix` within formatting-class rules (the
+`--max-warnings 0` lint gate plus `tsc --noEmit` catch a bad one immediately).
+
+Everything else is fixed by hand with a decision per finding. The carve-outs that matter here all
+break a contract **the compiler and CI will not catch**: renaming a field/record component of a
+DTO or JSONB model (Jackson binds by name), renaming a JPA entity field (the naming strategy maps
+it to a column), anything in `src/main/proto/delta-ingestion.proto` (an already-shipped Windows
+client is on the other end — see 035 and its taken field numbers), Micrometer metric names, cache
+names, config keys and headers, SQL inside `@Query`, `@Transactional` semantics, an **applied**
+Flyway migration, and on the frontend TanStack Query keys, route paths and Zod/API field names.
+The test to apply to any future candidate: *can the edit break a contract in a way the compiler
+and CI will not catch?* If yes, it is behavioural whatever style rule it cites. Where the line
+runs is a human decision: an agent that thinks the mechanical class should move stops and says so.
+
+**The review loop is visible in the PR.** The reviewer posts findings as a PR comment; after
+fixing, post a reply comment answering every finding — fixed (sha + what changed), closed by the
+reviewer's own `--fix` (`outcome: fixed` + sha), not fixed (reasoning + the issue filed for it),
+or not applicable (why it was a false positive) — before the next round. `/code-review` is
+single-shot per PR (it stops if it already reviewed that PR), so later rounds use the `review`
+skill; silence is never "no findings". A fourth surface exists inside Conductor: the comments on
+the workspace diff (`GetDiffComments`), which the human leaves in the Changes panel and which
+exist before any PR — they block readiness like an unresolved thread, and `gh` cannot see them.
+Findings *you* raise before the PR go to `DiffComment`, not GitHub. Review cleanliness is derived
+from **all** review surfaces: `gh pr view --comments` omits inline `reviewThreads`, any thread with
+`isResolved == false` blocks (even when `isOutdated`), a `PENDING` review visible to the acting
+identity blocks, and a current `reviewDecision == CHANGES_REQUESTED` blocks. Closing an inline
+finding is reply → ensure published → `resolveReviewThread`, with a state read after each
+mutation. The ready-to-run GraphQL lives in `/github-issue` (step 8).
+
+CI on a PR from a feature branch is `backend-test` + `frontend-test` only — `code-quality` and
+`dependency-analysis` gate on `run_full_pipeline`, which is true for `develop`/`release`/`main`
+alone, so their absence is not a failure. `./gradlew test -PexcludeIntegration` still needs Docker
+(~30 contract tests use Testcontainers); without it the gate dies inside `Unsafe.java`. The
+`SqlGenerationService` concurrency tests are known-flaky and fail on a clean tree too — re-run
+before blaming your change, but never write off a red check without checking which one it is.
+
+The merge into `develop` never happens without a human go-ahead. Normally that go-ahead is per PR,
+via `/merge <pr>` (invoking it is the authorization). That command re-checks readiness, merges
+with **squash** (one issue = one commit, as the whole current history), closes the issue, moves
+the card to `Done` and strips the `status: *` labels. `deleteBranchOnMerge` is off in the repo
+settings, so `--delete-branch` is passed explicitly. Cleanup removes only what the command
+created: a nested worktree is removed, a **Conductor workspace is never touched** — the human
+archives it (or the "Auto-archive on PR close" setting does).
+
+**Docs ship with the code** (Rule 1). The living journal is **"Recent Changes" in this file** plus
+`docs/` (`cr-*.md` and the client guides); root `CHANGELOG.md` is deliberately frozen and carries
+an "out of date" banner — do not resurrect it on your own initiative. Say "needed" or "not needed"
+for each documentation surface rather than skipping silently.
+
+**Follow-ups are tickets, not notes — but search before filing.** Anything out of scope worth
+doing later: first search **open and closed** issues (`gh issue list --state all --search …`) and
+grep `CLAUDE.md`/`docs/`, because several workspaces work this repo in parallel. An open match
+gets your evidence as a comment; a closed match means either a regression (new issue linking the
+old one and the fixing commit) or a stale observation (the fix is already in `develop` — no ticket
+needed). Only if nothing matched, file the issue (described, labelled, milestoned, `Backlog` on
+the board) — and do not start work on it in the current cycle.
+
+### Running several issues at once
+
+`/github-issue-runner` (`.claude/commands/github-issue-runner.md`) is a **dispatcher**: it keeps
+up to **three** issues in flight and picks up the next as a slot frees. Invoking it gives the
+merge go-ahead **for that run** — the one exception to the per-PR gate above. Nothing else
+relaxes: every readiness condition and every `/merge` check is still verified, merges stay
+serialized one at a time, the dispatcher writes no code itself, and an executor's report is
+re-verified against GitHub before anything is merged.
+
+**No agent can create a Conductor workspace** (local ones open on a human's click; the `conductor`
+CLI covers cloud workspaces only and needs its own API token), so the dispatcher runs in one of
+two modes. **Mode A (default under Conductor)**: it plans the order, hands the human a ready list
+— issue, workspace name, the `/github-issue <n>` to type — then watches GitHub and merges. The
+work stays visible in the app and each task keeps a real session. **Mode B (`agents`, or outside
+Conductor)**: background subagents in `.worktrees/<n>-<slug>`, fully autonomous but invisible in
+the sidebar. In mode A the dispatcher cannot read another workspace's Changes panel, so the
+executor must confirm its own panel is clear before its PR counts as ready.
+
+The pool is the `Backlog` and `Ready` columns of project 16, any milestone. Order is **logical,
+not chronological** — dependencies (contract, refactor, migration, infrastructure before their
+consumers) and, separately, overlap in the code touched: two issues editing the same product files
+never run in parallel. Three overlaps here are invisible to git and must be sequenced by hand: the
+next **Flyway migration number** (two branches both taking `V{N}` merge cleanly and break startup),
+**field numbers in `delta-ingestion.proto`**, and `specs/NNN-*` directory numbers. Accumulating
+files (`CLAUDE.md`, `specs/**/tasks.md`, `docs/`) are not overlap — both sides get merged.
+
+The run stops for the human on an agent reporting blocked, a second dispatcher touching an issue
+in this run's window, an unclear conflict, red CI on `develop`, a missing `project` scope, an issue
+that turned out wider than written, or the same issue coming back blocked twice. Findings mid-run
+become issues for a later run, never additions to the current window. The run scripts are
+`nonconcurrent` (one shared docker-compose stack and a fixed 8080), so only one workspace can hold
+the live stand at a time — sequence the tasks that need it.
+
+#### Board identifiers — the single source, do not copy them elsewhere
+
+Project **16** `Data Forge Middleware — Sprints`, owner `quantum-soft-dev`.
+Project id `PVT_kwDOB7LEnM4BeGrE`, `Status` field id `PVTSSF_lADOB7LEnM4BeGrEzhYjWtc`.
+
+| Column | option-id |
+|---|---|
+| Backlog | `f75ad846` |
+| Ready | `8a89f088` |
+| In Progress | `47fc9ee4` |
+| Blocked | `3a5c4fbe` |
+| In Review | `a34edc01` |
+| Done | `98236657` |
+
+```bash
+gh project item-list 16 --owner quantum-soft-dev --format json --limit 100   # find by content.number
+gh project item-add  16 --owner quantum-soft-dev --url <issue-url>           # if not on the board
+gh project item-edit --project-id <project-id> --id <PVTI_...> \
+    --field-id <status-field-id> --single-select-option-id <option-id>
+```
+
+If `item-edit` fails, never invent ids — re-read them with
+`gh project field-list 16 --owner quantum-soft-dev --format json`; the board may have changed.
+`/github-issue`, `/github-issue-runner` and `/merge` all read these ids from here, so they stay in
+one place: a copy in each command would drift silently and start moving cards into a column that
+no longer exists.
+
+**Status lives in two places and both must be moved on every transition:** the Kanban board
+(Projects v2 `Status`, project **16**) and the repo `status: *` labels. The ticket walks the
+columns in order — jumping is not allowed:
+
+`Backlog` → `Ready` (`status: ready`) → `In Progress` (`status: in progress`) → `In Review`
+(`status: in review`, then `status: ready to merge` while awaiting the human) → `Done`.
+`Blocked` (`status: blocked`) is the side exit at any point.
+
+Moving the board needs the `project` token scope — if `gh project` fails with
+`INSUFFICIENT_SCOPES`, run `gh auth refresh -s project` and say so instead of silently updating
+only the label. Always re-read the board after a transition: a command that exited 0 is not proof
+the state moved.
+
+> `.specify/memory/constitution.md` is an **unfilled spec-kit template** (`[PRINCIPLE_1_NAME]`
+> placeholders) and is intentionally unused. This file is the normative source for the process;
+> do not cite the constitution as if it contained rules.
+
+### Conductor workspaces
+
+`.conductor/settings.toml` (shared, read from `develop` on the remote — it only takes effect once
+merged) gives every new workspace `npm --prefix frontend ci` + `core.hooksPath`, run scripts for
+the compose stack / backend / Vite (`--port $CONDUCTOR_PORT`, since `vite.config.ts` pins 3000)
+and the per-task test gate, `run_mode = "nonconcurrent"` (one shared stack, fixed 8080/5432/6379/
+4566), and `archive = "git worktree prune"` so a nested worktree does not outlive its workspace —
+deliberately not `docker compose down`, which would kill a stack another workspace is using.
+`.worktreeinclude` copies the gitignored `frontend/.env.local` and `local-dev/auth0.env` into each
+new workspace; listing that file at all **replaces** Conductor's default `.env*` pattern, so
+anything else needed must be added there too. If `frontend/node_modules` is missing in a fresh
+workspace, the setup script did not run: run it by hand and say so rather than skipping the
+frontend gate.
+
 ## Key Implementation Patterns
 
 ### Auth0 Integration
