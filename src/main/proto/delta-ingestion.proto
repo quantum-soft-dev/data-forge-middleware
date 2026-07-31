@@ -112,10 +112,16 @@ message SessionStart {
   uint64      first_seq         = 2; // seq of the first ChangeRecord in this session
   int32       schema_version    = 3; // schema the records were produced against
   string      client_session_id = 4; // client-generated; idempotency + resume key
+  // Field 5 is NOT free. The dbf-data-extractor client ships a `bool snapshot = 5` (its
+  // CONTINUOUS re-baseline intent) that this server has never declared and therefore never reads.
+  // bool and uint64 share the varint wire type, so putting `generation` on 5 would silently
+  // reinterpret `snapshot = true` as `generation = 1` and reject legitimate sessions. Reserved so
+  // nobody reclaims it before the two protos are reconciled — see dbf-data-extractor#124.
+  reserved 5;
   // Last generation the client saw (issue #89). 0 = unknown / old client, which skips the check.
   // Any other value must equal the server's, otherwise the session carries sequence numbers from
   // a history that no longer exists and is refused with GENERATION_MISMATCH.
-  uint64      generation        = 5;
+  uint64      generation        = 6;
 }
 
 enum SessionMode {
@@ -205,7 +211,19 @@ enum ErrorCode {
   UNAUTHORIZED         = 4;
   ACTIVE_SESSION_EXISTS= 5; // one active session per site (mirrors active-batch rule)
   INTERNAL             = 6;
-  GENERATION_MISMATCH  = 7; // session generation != server generation (site history was wiped)
+  // 7..11 are NOT free. The dbf-data-extractor client ships five codes there that this server has
+  // never declared and never emits — OVERFLOW, OVERFLOW_BYTES, SITE_INACTIVE, SCHEMA_REQUIRED,
+  // CONCURRENT_BATCH_LIMIT — and it dispatches on them code-first, ahead of ServerError.action.
+  // Emitting 7 for anything would therefore be read as OVERFLOW and answered by opening a
+  // CONTINUOUS session carrying pre-wipe sequence numbers: exactly the corruption the epoch echo
+  // exists to prevent, and silent on both sides. Reserved until the two enums are reconciled
+  // (dbf-data-extractor#124). What this server actually sends for those five conditions:
+  //   record/byte overflow  -> INTERNAL(6)              + NEED_REBASELINE
+  //   site inactive/deleted -> UNAUTHORIZED(4)          + PROCEED
+  //   schema required       -> SCHEMA_MISMATCH(2)       + PROCEED
+  //   concurrent batch cap  -> ACTIVE_SESSION_EXISTS(5) + PROCEED
+  reserved 7, 8, 9, 10, 11;
+  GENERATION_MISMATCH  = 12; // session generation != server generation (site history was wiped)
 }
 
 // Typed scalar value. Mirrors the JSONL value typing of CDC v1, but typed on the

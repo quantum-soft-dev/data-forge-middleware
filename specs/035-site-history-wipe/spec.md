@@ -63,8 +63,16 @@ deleted**, so the counter stays monotonic across wipes.
 `GetSyncState` answers `NEED_REBASELINE` with no new code and the wipe inherits the
 retry-until-snapshot-committed semantics of an ordinary re-baseline.
 
-**FR-09 — Proto surface.** `generation` on `SyncStateResponse`, `SessionOpened` and `SessionStart`
-(field 5 on each), plus `ErrorCode.GENERATION_MISMATCH = 7`. All additive/backward-compatible.
+**FR-09 — Proto surface.** `generation` on `SyncStateResponse` (5), `SessionOpened` (5) and
+`SessionStart` (**6**), plus `ErrorCode.GENERATION_MISMATCH = **12**`. All additive/backward-compatible.
+
+> **Field numbers corrected against the shipped client** (dbf-data-extractor#124). The issue
+> assigned `SessionStart.generation = 5` and `GENERATION_MISMATCH = 7`; both are taken in the
+> client's copy of the proto, which carries five private `ErrorCode` values at 7–11 and a
+> `bool snapshot = 5` on `SessionStart` that this server has never declared. Neither collision is
+> catchable at decode time — enum 7 and a varint bool both parse cleanly — so the failures would be
+> silent. `SessionStart` field 5 and `ErrorCode` 7–11 are therefore `reserved` here rather than
+> reused. See "Enum divergence" below.
 
 **FR-10 — Generation guard.** `start.generation != 0 && start.generation != state.generation` →
 `ServerError(GENERATION_MISMATCH, NEED_REBASELINE)`. Without it a client that saw epoch N+1 but
@@ -144,6 +152,26 @@ The client persists per-site `last_seen_generation` (uint64, initially 0/absent)
 4. Every subsequent `SessionStart` echoes the stored generation. On
    `ServerError{GENERATION_MISMATCH}` or any `NEED_REBASELINE` → re-run from step 1. A mismatch
    observed in `SessionOpened.generation` → abort the session, re-run from step 1.
+
+### Enum divergence with the shipped client (found while implementing)
+
+The client's proto declares `OVERFLOW = 7`, `OVERFLOW_BYTES = 8`, `SITE_INACTIVE = 9`,
+`SCHEMA_REQUIRED = 10`, `CONCURRENT_BATCH_LIMIT = 11`, and dispatches on them *code-first*, ahead
+of `ServerError.action`. **This server has never declared or emitted any of them.** The same
+conditions arrive as:
+
+| Condition | What the server actually sends |
+|---|---|
+| session record/byte overflow | `INTERNAL (6)` + `NEED_REBASELINE` |
+| site inactive or deleted | `UNAUTHORIZED (4)` + `PROCEED` |
+| schema required before first session | `SCHEMA_MISMATCH (2)` + `PROCEED` |
+| account concurrent-batch cap | `ACTIVE_SESSION_EXISTS (5)` + `PROCEED` |
+
+Consequence beyond this feature: the client's `#65 §2.4` fix (on `OVERFLOW`, switch to a CONTINUOUS
+session instead of re-baselining an oversized dataset forever) has never fired, because the trigger
+never arrives. Likewise `SessionStart.snapshot = 5` is not read here, so a CONTINUOUS session's
+re-baseline intent never reaches the server — only `mode == FULL_SNAPSHOT` sets it. Both are
+out of scope for #89 and want their own issue.
 
 ### Old client degradation
 

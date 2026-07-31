@@ -148,14 +148,23 @@ public interface JpaChangelogSegmentRepository
     @Query("DELETE FROM ChangelogSegment s WHERE s.siteId = :siteId")
     int deleteBySiteId(UUID siteId);
 
-    // flushAutomatically for the same reason as flipProvisionalByBatchId: clearAutomatically alone
-    // detaches whatever the caller's transaction has not yet flushed.
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = CURRENT_TIMESTAMP "
+            + "WHERE s.siteId = :siteId AND s.provisional = false "
+            + "AND s.mode = 'FULL_SNAPSHOT' AND s.pluginSqlAt IS NULL")
+    int markFullSnapshotPluginSqlProcessed(UUID siteId);
+
+    // flushAutomatically for the same reason as flipProvisionalByBatchId: clearAutomatically alone
+    // detaches whatever the caller's transaction has not yet flushed.
+    //
     // FULL_SNAPSHOT is excluded on purpose (issue #89): DeltaSqlQueueService routes every snapshot
     // segment it claims to suspendBaselines, so re-enqueueing them suspends the very baselines this
     // requeue exists to apply. Snapshot segments never render as SQL anyway.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL "
             + "WHERE s.siteId = :siteId AND s.provisional = false AND s.mode <> 'FULL_SNAPSHOT'")
     int clearPluginSqlBySiteId(UUID siteId);

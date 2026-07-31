@@ -141,6 +141,22 @@ public interface ChangelogSegmentRepository {
     int deleteBySiteId(UUID siteId);
 
     /**
+     * Mark a site's still-pending {@code FULL_SNAPSHOT} segments as processed for plugin SQL,
+     * without generating any (issue #89).
+     *
+     * <p>Claimed by a baseline recapture as its first act. {@code DeltaSqlQueueService} suspends the
+     * site's baselines for every snapshot segment it claims, so a snapshot still sitting in the
+     * queue would undo the recapture the moment the next sweep ran. Taking the rows first also takes
+     * their locks: a sweep that has not started skips them (SKIP LOCKED), and one already holding
+     * them makes the recapture wait until its suspension has committed — either way the recapture
+     * has the last word.</p>
+     *
+     * @param siteId site identifier
+     * @return number of snapshot segments taken out of the queue
+     */
+    int markFullSnapshotPluginSqlProcessed(UUID siteId);
+
+    /**
      * Re-enqueue all of a site's segments for plugin SQL generation (plugin reinit: the
      * checkpoint-lag gap is regenerated under freshly captured baselines).
      *

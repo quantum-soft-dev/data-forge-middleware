@@ -50,7 +50,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   Tests: recapture is site-scoped, flag consumed exactly once, absent/inactive activation still
   clears the flag, requeue excludes FULL_SNAPSHOT segments.
 
-- [ ] **T06 — Integration (Testcontainers).**
+- [x] **T06 — Integration (Testcontainers).**
   Seed a full site (batches, files, segments incl. provisional, checkpoints, error logs, schema,
   plugin SQL + baselines, `baseline_batch_id`) → wipe → every site-scoped table empty, S3 objects
   gone, generation bumped, audit rows present. Then the post-wipe client cycle → baselines

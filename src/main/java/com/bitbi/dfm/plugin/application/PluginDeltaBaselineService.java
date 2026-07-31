@@ -84,6 +84,14 @@ public class PluginDeltaBaselineService {
      */
     @Transactional
     public void recaptureForSite(AccountPlugin activation, Site site) {
+        // First, and deliberately so: a FULL_SNAPSHOT segment still in the queue would suspend the
+        // baselines this method is about to capture. Taking those rows out of the queue up front
+        // also takes their locks, which is what orders this against a sweep already in flight.
+        int claimed = segmentRepository.markFullSnapshotPluginSqlProcessed(site.getId());
+        if (claimed > 0) {
+            log.info("Recapture took {} pending FULL_SNAPSHOT segment(s) out of the SQL queue: siteId={}",
+                    claimed, site.getId());
+        }
         capture(activation, site);
         int requeued = segmentRepository.clearPluginSqlBySiteId(site.getId());
         log.info("Recapture re-enqueued {} segments for delta SQL: siteId={}", requeued, site.getId());
