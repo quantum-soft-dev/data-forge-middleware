@@ -1,0 +1,29 @@
+# Google Managed Prometheus scrape of the backend (issue #83, item 5).
+#
+# The Delta v2 ingestion counters — delta_sessions_started_total,
+# delta_sessions_overflow_total{reason="records"|"bytes"},
+# delta_reconciliation_failures_total, delta_sessions_committed_total — only ever existed in the
+# pod's Micrometer registry: /actuator/prometheus was denied by the default security chain, so
+# during the 2026-07-30 incident there was no way to read them. Managed collection is already
+# running in this cluster (gke-gmp-system/collector DaemonSet); it only needed a PodMonitoring.
+#
+# The collector reaches the pod directly on the pod IP, which is why the backend is configured
+# with METRICS_SCRAPE_ALLOWED_CIDRS covering the cluster pod range (see configmap-patch.yaml).
+# Without that env var the scrape gets a 403 and this resource is inert.
+#
+# Metrics land in Cloud Monitoring as prometheus.googleapis.com/<metric>/counter and are
+# queryable from the Managed Service for Prometheus / PromQL page in the console.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: forge-backend
+  namespace: forge
+spec:
+  selector:
+    matchLabels:
+      app: forge-backend
+  endpoints:
+    - port: http          # the named container port 8080 (base deployment)
+      path: /actuator/prometheus
+      interval: 30s
+      timeout: 10s

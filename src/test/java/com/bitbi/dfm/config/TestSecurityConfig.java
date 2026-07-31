@@ -4,6 +4,7 @@ import com.auth0.client.mgmt.ManagementAPI;
 import com.bitbi.dfm.account.application.AccountSyncService;
 import com.bitbi.dfm.auth.application.TokenService;
 import com.bitbi.dfm.auth.infrastructure.JwtAuthenticationFilter;
+import com.bitbi.dfm.shared.config.MetricsScrapeAccess;
 import com.bitbi.dfm.shared.config.SecurityConfiguration;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -77,10 +78,21 @@ public class TestSecurityConfig {
     /** Mirrors auth0.api.claims-namespace, the same knob production derives its roles claim from. */
     private final String claimsNamespace;
 
+    /**
+     * The production rule, not a copy — both the paths and the manager come from
+     * {@link MetricsScrapeAccess}, so this chain cannot drift from the real one on a security
+     * boundary.
+     */
+    private final org.springframework.security.authorization.AuthorizationManager<
+            org.springframework.security.web.access.intercept.RequestAuthorizationContext> metricsScrapeAuthorizationManager;
+
     public TestSecurityConfig(
             @org.springframework.beans.factory.annotation.Value("${auth0.api.claims-namespace}")
-            String claimsNamespace) {
+            String claimsNamespace,
+            @org.springframework.beans.factory.annotation.Value("${dfm.observability.metrics-scrape.allowed-cidrs:}")
+            List<String> metricsScrapeAllowedCidrs) {
         this.claimsNamespace = claimsNamespace;
+        this.metricsScrapeAuthorizationManager = MetricsScrapeAccess.authorizationManager(metricsScrapeAllowedCidrs);
     }
 
     @Autowired(required = false)
@@ -407,6 +419,7 @@ public class TestSecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                .requestMatchers(MetricsScrapeAccess.PATHS).access(metricsScrapeAuthorizationManager)
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/api-docs/**").permitAll()
                 .anyRequest().denyAll()
             );

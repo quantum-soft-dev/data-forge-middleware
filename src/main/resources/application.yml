@@ -105,6 +105,25 @@ management:
     tags:
       application: ${spring.application.name}
 
+server:
+  # Spring Boot's default, stated explicitly because the metrics allowlist below depends on it:
+  # the CIDR check reads the socket peer, and switching this to FRAMEWORK/NATIVE would let a
+  # caller name its own source address in X-Forwarded-For and walk into the allowlist. Anything
+  # that needs the forwarded client IP (see AuthenticationAuditLogger) parses the header itself.
+  forward-headers-strategy: none
+
+# Observability
+dfm:
+  observability:
+    metrics-scrape:
+      # Source addresses allowed to read /actuator/prometheus and /actuator/metrics/**.
+      # Empty (the default) denies everyone, which is what every environment did before
+      # issue #83 — an environment must opt in explicitly. In GKE this is the cluster pod
+      # range the managed-Prometheus collector scrapes from, plus loopback so that
+      # `kubectl port-forward` still works for a human. Comma-separated; matching is per
+      # address family, so IPv6 forms (::1/128) must be listed in their own right.
+      allowed-cidrs: ${METRICS_SCRAPE_ALLOWED_CIDRS:}
+
 # Logging Configuration
 logging:
   level:

@@ -126,6 +126,42 @@ grpcurl -import-path src/main/proto -proto delta-ingestion.proto \
   -d '{}' test.dfm.bitbi.io:443 com.bitbi.dfm.delta.v2.DeltaIngestion/GetSyncState
 ```
 
+## Metrics scraping (dev)
+
+`/actuator/prometheus` and `/actuator/metrics/**` are served only to the CIDRs in
+`METRICS_SCRAPE_ALLOWED_CIDRS` (`dfm.observability.metrics-scrape.allowed-cidrs`). The variable is
+**empty by default and empty means deny**, so stage/prod stay exactly as they were; the dev overlay
+sets `10.4.0.0/14,127.0.0.1/32,::1/128` — the cluster pod range the collector scrapes from, plus
+loopback in both address families for `kubectl port-forward` (matching is per family, so an IPv4
+entry never covers an IPv6 caller). A malformed entry is dropped with a WARN and leaves that range
+denied; it does not stop the pod from booting. Everything else under `/actuator` remains denied, and
+only `health,info,metrics,prometheus` are exposed by the app at all.
+
+The check reads the socket peer, which is why `server.forward-headers-strategy` is pinned to `none`
+in `application.yml` — turning it on would make the source address caller-supplied.
+
+Collection uses the managed Prometheus that is already running in the cluster
+(`gke-gmp-system/collector`); the dev overlay only adds a `PodMonitoring` (`podmonitoring.yaml`,
+30 s). Verify after a deploy:
+
+```bash
+kubectl -n forge get podmonitoring forge-backend -o jsonpath='{.status.conditions[*].type}'
+kubectl -n forge port-forward deploy/forge-backend 8080:8080 &
+curl -s localhost:8080/actuator/prometheus | grep '^delta_'   # delta_sessions_started_total …
+```
+
+A 403 from that curl means the running pod has no matching CIDR. `forge-config` is a plain
+ConfigMap consumed with `envFrom`, so applying the overlay does **not** restart anything — after a
+change that only touches the ConfigMap, run `kubectl -n forge rollout restart deploy/forge-backend`.
+If the variable is right and it still 403s, check the address family the connection actually used.
+
+The `delta_*` counters are registered eagerly at startup, so a healthy pod always prints them, at
+`0.0` if it has served no session. An empty grep with a **200** therefore does not mean ingestion
+has been idle — it means the response came from something other than a current backend pod (the
+port-forward landed on another workload, or the image predates the meters), or a meter filter is
+dropping them. It does *not* indicate a missing `micrometer-registry-prometheus`: without that
+dependency the endpoint is not mapped at all and the curl returns **404**, not an empty 200.
+
 ## Placeholders to fill before a real deploy
 
 Overlay ConfigMaps contain `REPLACE_*` / `dev-dfm.us.auth0.com` placeholders for Auth0
