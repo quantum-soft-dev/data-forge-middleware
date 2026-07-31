@@ -4,7 +4,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`, `npm run lint`,
 `vitest` when the frontend is touched). Before the PR: `./gradlew integrationTest`.
 
-- [ ] **T01 — Migration V48 + epoch on the sync state.**
+- [x] **T01 — Migration V48 + epoch on the sync state.**
   `V48__site_history_wipe.sql`: `site_sync_state.generation BIGINT NOT NULL DEFAULT 0`,
   `site_sync_state.wipe_pending BOOLEAN NOT NULL DEFAULT FALSE`, `admin_action_logs.details JSONB`,
   CHECK extension `chk_action_type` (+`SITE_HISTORY_WIPE`), CHECK extension

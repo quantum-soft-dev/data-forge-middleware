@@ -1,11 +1,14 @@
 package com.bitbi.dfm.account.domain;
 
+import io.hypersistence.utils.hibernate.type.json.JsonBinaryType;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Type;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -64,6 +67,16 @@ public class AdminActionLog {
     private Instant createdAt;
 
     /**
+     * Structured outcome of the action (JSONB, V48). {@code error_message} is constrained to NULL on
+     * SUCCESS, so an action that succeeds and still has something to report — a site history wipe's
+     * counts, bytes and new generation (issue #89) — had nowhere to put it. NULL for the actions
+     * that report nothing.
+     */
+    @Type(JsonBinaryType.class)
+    @Column(name = "details", columnDefinition = "jsonb")
+    private Map<String, Object> details;
+
+    /**
      * Private constructor for building log entries.
      * Parameter order matches factory methods for consistency.
      */
@@ -113,6 +126,17 @@ public class AdminActionLog {
                                                  String ipAddress, String userAgent) {
         return new AdminActionLog(actionType, targetAccountId, targetSiteId,
                 adminAccountId, ActionStatus.SUCCESS, null, ipAddress, userAgent);
+    }
+
+    /**
+     * Attach the structured outcome of the action (V48).
+     *
+     * @param details what the action did — counts, sizes, identifiers
+     * @return this entry, for chaining
+     */
+    public AdminActionLog withDetails(Map<String, Object> details) {
+        this.details = details;
+        return this;
     }
 
     /**
