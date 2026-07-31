@@ -59,7 +59,12 @@ message SyncStateResponse {
   // A change means "everything you know about this site is void": the client drops its local
   // journal, resets its seq counter to 0 and re-submits its schema. NEED_REBASELINE alone
   // cannot say that — it asks for a full snapshot, not for a counter reset.
-  uint64 generation         = 5;
+  //
+  // `optional` for explicit presence (dbf-data-extractor#130 Q1): a site starts at epoch 0, and
+  // proto3 implicit presence does not put a zero on the wire at all — so without this the client
+  // cannot tell "server too old to know about epochs" from "server says epoch 0". Absent means the
+  // former, and only the former.
+  optional uint64 generation = 5;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,10 +123,12 @@ message SessionStart {
   // reinterpret `snapshot = true` as `generation = 1` and reject legitimate sessions. Reserved so
   // nobody reclaims it before the two protos are reconciled — see dbf-data-extractor#124.
   reserved 5;
-  // Last generation the client saw (issue #89). 0 = unknown / old client, which skips the check.
-  // Any other value must equal the server's, otherwise the session carries sequence numbers from
-  // a history that no longer exists and is refused with GENERATION_MISMATCH.
-  uint64      generation        = 6;
+  // Last generation the client saw (issue #89). `optional` for explicit presence
+  // (dbf-data-extractor#130 Q1/Q2): ABSENT means "client too old to track epochs" and skips the
+  // check; PRESENT must equal the server's, zero included. Without presence the very first wipe of
+  // a site (0 -> 1) was unguarded, because a client faithfully echoing epoch 0 was indistinguishable
+  // from one that had never heard of the field.
+  optional uint64 generation   = 6;
 }
 
 enum SessionMode {
@@ -174,7 +181,8 @@ message SessionOpened {
   uint64         resume_from_seq   = 4; // valid when action == RESUME_FROM
   // Current epoch of the site (issue #89), so a long-lived client that never re-polls
   // GetSyncState still observes a wipe. A mismatch here means: abort the session and reset.
-  uint64         generation        = 5;
+  // `optional` for the same presence reason as SyncStateResponse.generation.
+  optional uint64 generation       = 5;
 }
 
 message Ack {
@@ -211,18 +219,15 @@ enum ErrorCode {
   UNAUTHORIZED         = 4;
   ACTIVE_SESSION_EXISTS= 5; // one active session per site (mirrors active-batch rule)
   INTERNAL             = 6;
-  // 7..11 are NOT free. The dbf-data-extractor client ships five codes there that this server has
-  // never declared and never emits — OVERFLOW, OVERFLOW_BYTES, SITE_INACTIVE, SCHEMA_REQUIRED,
-  // CONCURRENT_BATCH_LIMIT — and it dispatches on them code-first, ahead of ServerError.action.
-  // Emitting 7 for anything would therefore be read as OVERFLOW and answered by opening a
-  // CONTINUOUS session carrying pre-wipe sequence numbers: exactly the corruption the epoch echo
-  // exists to prevent, and silent on both sides. Reserved until the two enums are reconciled
-  // (dbf-data-extractor#124). What this server actually sends for those five conditions:
-  //   record/byte overflow  -> INTERNAL(6)              + NEED_REBASELINE
-  //   site inactive/deleted -> UNAUTHORIZED(4)          + PROCEED
-  //   schema required       -> SCHEMA_MISMATCH(2)       + PROCEED
-  //   concurrent batch cap  -> ACTIVE_SESSION_EXISTS(5) + PROCEED
-  reserved 7, 8, 9, 10, 11;
+  // 7..11 adopt the numbers the shipped dbf-data-extractor client already carries, and the server
+  // now emits them (dbf-data-extractor#130 Q4/Q5/Q6). Until this reconciliation the server answered
+  // these five with generic codes the client could not act on — an overflow arrived as INTERNAL,
+  // which may equally be a bug, so the client could not safely switch to CONTINUOUS on it.
+  OVERFLOW             = 7;  // per-session record cap exceeded; retry the session in CONTINUOUS mode
+  OVERFLOW_BYTES       = 8;  // per-session byte budget exceeded; retry in CONTINUOUS mode
+  SITE_INACTIVE        = 9;  // site deactivated or deleted; credentials are fine, operator action needed
+  SCHEMA_REQUIRED      = 10; // no schema on file; SubmitSchema and retry (a snapshot hits the same wall)
+  CONCURRENT_BATCH_LIMIT = 11; // account-wide session cap reached; back off and retry later
   GENERATION_MISMATCH  = 12; // session generation != server generation (site history was wiped)
 }
 

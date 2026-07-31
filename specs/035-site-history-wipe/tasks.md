@@ -21,9 +21,9 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   `generation = 5` on `SyncStateResponse` / `SessionOpened` / `SessionStart`,
   `ErrorCode.GENERATION_MISMATCH = 7`. `DeltaSyncStateService.SyncStateView` carries `generation`;
   `DeltaIngestionService` emits it in `getSyncState` and both `SessionOpened` paths (PROCEED and
-  RESUME_FROM) and rejects a mismatched non-zero client generation with
+  RESUME_FROM) and rejects a mismatched *present* client generation with
   `ServerError(GENERATION_MISMATCH, NEED_REBASELINE)`.
-  Tests: handler tests for each of the four emissions, the rejection, and `generation = 0` skipping
+  Tests: handler tests for each of the four emissions, the rejection, and an absent `generation` skipping
   the guard.
 
 - [x] **T03 — `DeltaSiteWipeService`.**

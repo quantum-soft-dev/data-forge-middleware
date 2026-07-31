@@ -103,7 +103,7 @@ class DeltaIngestionSessionLoggingContractTest extends DeltaIngestionContractTes
 
         List<String> warnings = capture.messagesAt(Level.WARN);
         assertEquals(1, warnings.size(), "a rejected session must leave exactly one WARN: " + warnings);
-        assertTrue(warnings.getFirst().contains("UNAUTHORIZED"), "the WARN must name the code: " + warnings);
+        assertTrue(warnings.getFirst().contains("SITE_INACTIVE"), "the WARN must name the code: " + warnings);
         assertTrue(warnings.getFirst().contains("PROCEED"), "the WARN must name the action: " + warnings);
         assertTrue(warnings.getFirst().contains(SITE.toString()), "the WARN must name the site: " + warnings);
     }

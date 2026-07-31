@@ -149,10 +149,10 @@ class DeltaIngestionGenerationContractTest extends DeltaIngestionContractTestSup
     }
 
     @Test
-    @DisplayName("generation 0 (old client) skips the guard")
+    @DisplayName("an absent generation (old client) skips the guard")
     void shouldSkipGuardForOldClient() {
-        // An old client never sends the field. It must keep working: it recovers through
-        // NEED_REBASELINE, which the wipe raises anyway.
+        // An old client never sends the field, and absence — not a zero — is what identifies it.
+        // It must keep working: it recovers through NEED_REBASELINE, which the wipe raises anyway.
         when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(atGeneration(2)));
         openableBatch(UUID.randomUUID());
 
@@ -178,6 +178,44 @@ class DeltaIngestionGenerationContractTest extends DeltaIngestionContractTestSup
 
         assertTrue(events.get(0).hasOpened(), "session opened");
         assertEquals(0L, events.get(0).getOpened().getGeneration());
+    }
+
+    @Test
+    @DisplayName("the FIRST wipe of a site is guarded: an explicit generation 0 against server 1 is refused")
+    void shouldRejectExplicitZeroAgainstFirstWipe() {
+        // The hole presence exists to close (#130 Q2). Every site starts at epoch 0, so the first
+        // wipe moves it 0 -> 1 — and a client that correctly echoes the 0 it last saw used to be
+        // waved through by a guard that read "0 means old client", precisely when its sequence
+        // numbers had just become meaningless.
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.of(atGeneration(1)));
+
+        List<ServerEvent> events = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> session =
+                asyncStub.streamChanges(collect(events, new CountDownLatch(1)));
+        session.onNext(startAtGeneration(SessionMode.DELTA, 121L, 0L));
+
+        assertTrue(events.get(0).hasError(), "an explicit stale zero is refused");
+        assertEquals(ErrorCode.GENERATION_MISMATCH, events.get(0).getError().getCode());
+        assertEquals(RecoveryAction.NEED_REBASELINE, events.get(0).getError().getAction());
+    }
+
+    @Test
+    @DisplayName("generation is present on the wire even when it is 0")
+    void shouldSetPresenceOnZeroGeneration() {
+        // Implicit presence would drop a zero from the encoding entirely, leaving the client unable
+        // to tell this server from one too old to know about epochs (#130 Q1).
+        when(syncRepo.findBySiteId(SITE)).thenReturn(Optional.empty());
+        openableBatch(UUID.randomUUID());
+
+        SyncStateResponse response = blockingStub.getSyncState(SyncStateRequest.newBuilder().build());
+        assertTrue(response.hasGeneration(), "GetSyncState states the epoch explicitly");
+
+        List<ServerEvent> events = new CopyOnWriteArrayList<>();
+        StreamObserver<ClientEvent> session =
+                asyncStub.streamChanges(collect(events, new CountDownLatch(1)));
+        session.onNext(startAtGeneration(SessionMode.DELTA, 1L, 0L));
+
+        assertTrue(events.get(0).getOpened().hasGeneration(), "SessionOpened states it too");
     }
 
     @Test

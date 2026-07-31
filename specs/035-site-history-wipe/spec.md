@@ -63,21 +63,30 @@ deleted**, so the counter stays monotonic across wipes.
 `GetSyncState` answers `NEED_REBASELINE` with no new code and the wipe inherits the
 retry-until-snapshot-committed semantics of an ordinary re-baseline.
 
-**FR-09 — Proto surface.** `generation` on `SyncStateResponse` (5), `SessionOpened` (5) and
-`SessionStart` (**6**), plus `ErrorCode.GENERATION_MISMATCH = **12**`. All additive/backward-compatible.
+**FR-09 — Proto surface.** `optional uint64 generation` on `SyncStateResponse` (5), `SessionOpened`
+(5) and `SessionStart` (**6**), plus `ErrorCode.GENERATION_MISMATCH = **12**`. All
+additive/backward-compatible.
 
 > **Field numbers corrected against the shipped client** (dbf-data-extractor#124). The issue
 > assigned `SessionStart.generation = 5` and `GENERATION_MISMATCH = 7`; both are taken in the
 > client's copy of the proto, which carries five private `ErrorCode` values at 7–11 and a
 > `bool snapshot = 5` on `SessionStart` that this server has never declared. Neither collision is
 > catchable at decode time — enum 7 and a varint bool both parse cleanly — so the failures would be
-> silent. `SessionStart` field 5 and `ErrorCode` 7–11 are therefore `reserved` here rather than
-> reused. See "Enum divergence" below.
+> silent. `SessionStart` field 5 stays `reserved`; `ErrorCode` 7–11 were reserved in the first draft
+> and are now **declared and emitted** with the client's meanings (dbf-data-extractor#130). See
+> "Enum divergence" below.
 
-**FR-10 — Generation guard.** `start.generation != 0 && start.generation != state.generation` →
+**FR-09a — Explicit presence** (dbf-data-extractor#130). The three `generation` fields are
+`optional`. Proto3 implicit presence omits a zero from the encoding entirely, so a plain `uint64`
+cannot separate "peer predates epochs" from "peer says epoch 0" — and every site's **first** wipe is
+exactly the 0 → 1 transition. The server always sets the field on both response messages, zero
+included; absent means an older server and nothing else.
+
+**FR-10 — Generation guard.** `start.hasGeneration() && start.generation != state.generation` →
 `ServerError(GENERATION_MISMATCH, NEED_REBASELINE)`. Without it a client that saw epoch N+1 but
-crashed before resetting could open a DELTA session carrying epoch-N sequence numbers. A `0`
-(old/unknown client) skips the guard.
+crashed before resetting could open a DELTA session carrying epoch-N sequence numbers. Keyed on
+**presence**: an absent field is an old client and skips the guard, while a present `0` against a
+server at `1` is a mismatch and is refused.
 
 **FR-11 — Bit BI auto-reinit.** The trigger is the **first post-wipe checkpoint build**, not the
 FULL_SNAPSHOT commit: at commit time `DeltaRebaselineService.reset` has just deleted every
@@ -160,21 +169,25 @@ The client persists per-site `last_seen_generation` (uint64, initially 0/absent)
 
 The client's proto declares `OVERFLOW = 7`, `OVERFLOW_BYTES = 8`, `SITE_INACTIVE = 9`,
 `SCHEMA_REQUIRED = 10`, `CONCURRENT_BATCH_LIMIT = 11`, and dispatches on them *code-first*, ahead
-of `ServerError.action`. **This server has never declared or emitted any of them.** The same
-conditions arrive as:
+of `ServerError.action`. This server had never declared or emitted any of them; the first draft of
+this feature reserved 7–11 to keep the mismatch from becoming silent.
 
-| Condition | What the server actually sends |
-|---|---|
-| session record/byte overflow | `INTERNAL (6)` + `NEED_REBASELINE` |
-| site inactive or deleted | `UNAUTHORIZED (4)` + `PROCEED` |
-| schema required before first session | `SCHEMA_MISMATCH (2)` + `PROCEED` |
-| account concurrent-batch cap | `ACTIVE_SESSION_EXISTS (5)` + `PROCEED` |
+**Resolved in dbf-data-extractor#130**: the server now declares and emits the client's numbers.
 
-Consequence beyond this feature: the client's `#65 §2.4` fix (on `OVERFLOW`, switch to a CONTINUOUS
-session instead of re-baselining an oversized dataset forever) has never fired, because the trigger
-never arrives. Likewise `SessionStart.snapshot = 5` is not read here, so a CONTINUOUS session's
-re-baseline intent never reaches the server — only `mode == FULL_SNAPSHOT` sets it. Both are
-out of scope for #89 and want their own issue.
+| Condition | Was | Now |
+|---|---|---|
+| session record overflow | `INTERNAL (6)` | `OVERFLOW (7)` + `NEED_REBASELINE` |
+| session byte overflow | `INTERNAL (6)` | `OVERFLOW_BYTES (8)` + `NEED_REBASELINE` |
+| site inactive or deleted | `UNAUTHORIZED (4)` | `SITE_INACTIVE (9)` + `PROCEED` |
+| schema required before first session | `SCHEMA_MISMATCH (2)` | `SCHEMA_REQUIRED (10)` + `PROCEED` |
+| account concurrent-batch cap | `ACTIVE_SESSION_EXISTS (5)` | `CONCURRENT_BATCH_LIMIT (11)` + `PROCEED` |
+
+`ACTIVE_SESSION_EXISTS (5)` narrows to its literal meaning: this site already has a live session.
+The client's `#65 §2.4` fix (on `OVERFLOW`, switch to a CONTINUOUS session instead of re-baselining
+an oversized dataset forever) can now fire — its trigger finally arrives, and the two overflow
+causes are distinguishable, which `INTERNAL` never made them. `SessionStart.snapshot = 5` stays
+unread and `reserved`: bootstrap and re-baseline both travel as `mode == FULL_SNAPSHOT`, and the
+client is dropping the flag. Full matrix and delivery order: `docs/delta-v2-wire-contract-answers.md`.
 
 ### Old client degradation
 

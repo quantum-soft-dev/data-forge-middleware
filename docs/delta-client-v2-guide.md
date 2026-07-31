@@ -455,24 +455,33 @@ message Ack { uint64 acked_seq = 1; } // server has durably staged records up to
 message ServerError { ErrorCode code = 1; string message = 2; RecoveryAction action = 3; uint64 resume_from_seq = 4; }
 ```
 
-| `ErrorCode` | Meaning | What to do |
-|---|---|---|
-| `SEQUENCE_GAP` | `first_seq != server_last_seq + 1` | Open a `FULL_SNAPSHOT` (action = `NEED_REBASELINE`). |
-| `RECONCILIATION_FAILED` | `SessionEnd` counts ≠ accepted records | Fix your counts; re-baseline. Nothing was committed. |
-| `ACTIVE_SESSION_EXISTS` | another session is live for this site, **or** the account is at its concurrent-batch limit | Serialize sessions; retry after the other ends/times out. |
-| `SCHEMA_MISMATCH` | `schema_version` unknown/stale, **or** a `POSTGRES_CDC` site has no schema on file yet | `SubmitSchema`, then retry. |
-| `UNAUTHORIZED` | token/site problem — including a site **deactivated or deleted** while the stream was open | Re-authenticate; if the site was deactivated, an operator must reactivate it. |
-| `INTERNAL` | server error | Retry with backoff. |
+| `ErrorCode` | № | `action` | Meaning | What to do |
+|---|---|---|---|---|
+| `SEQUENCE_GAP` | 1 | `NEED_REBASELINE` | `first_seq != server_last_seq + 1` | Open a `FULL_SNAPSHOT`. |
+| `SCHEMA_MISMATCH` | 2 | `NEED_REBASELINE` | declared `schema_version` is stale, or a keyless table sent an UPDATE | `SubmitSchema` / declare a key, then snapshot. |
+| `RECONCILIATION_FAILED` | 3 | `NEED_REBASELINE` | `SessionEnd` counts, hash or `last_seq` ≠ accepted records | Fix your counts; re-baseline. Nothing was committed. |
+| `UNAUTHORIZED` | 4 | `PROCEED` | token problem | Re-authenticate. |
+| `ACTIVE_SESSION_EXISTS` | 5 | `PROCEED` | another session is live **for this site** | Serialize your own runs; retry after the other ends/times out. |
+| `INTERNAL` | 6 | `NEED_REBASELINE` | unexpected server fault | Retry with backoff. Never read as overflow — overflow is typed. |
+| `OVERFLOW` | 7 | `NEED_REBASELINE` | per-session record cap exceeded | Retry the session in CONTINUOUS mode. |
+| `OVERFLOW_BYTES` | 8 | `NEED_REBASELINE` | per-session byte budget exceeded | Retry in CONTINUOUS mode. |
+| `SITE_INACTIVE` | 9 | `PROCEED` | site **deactivated or deleted** while the stream was open | Stop the run; an operator must reactivate it. |
+| `SCHEMA_REQUIRED` | 10 | `PROCEED` | no schema on file yet | `SubmitSchema`, then retry. A snapshot hits the same wall. |
+| `CONCURRENT_BATCH_LIMIT` | 11 | `PROCEED` | the **account** is at its concurrent-session cap | Back off and retry later; another site is holding the slot. |
+| `GENERATION_MISMATCH` | 12 | `NEED_REBASELINE` | session epoch ≠ server epoch (the site's history was wiped) | Re-read sync state, drop the local journal, send a snapshot. |
 
 gRPC transport-level `UNAUTHENTICATED` (closed call, no `ServerError`) means the `authorization` metadata was
-missing/invalid before the handler ran. That — not `UNAUTHORIZED` — is the usual symptom of a deactivated or
-deleted site, because the token is checked when the stream opens. The in-band `UNAUTHORIZED` covers the
+missing/invalid before the handler ran. That — not `SITE_INACTIVE` — is the usual symptom of a deactivated or
+deleted site, because the token is checked when the stream opens. The in-band `SITE_INACTIVE` covers the
 narrower case where the site changed *after* that check and before `SessionStart`.
 
-The last three rows widened in #83. A deactivated or deleted site, a CDC site with no schema, and the account
-concurrency limit used to escape the typed protocol entirely: they surfaced as a bare `Status.INTERNAL`
-carrying no `ErrorCode`, indistinguishable from a genuine server fault. They are now ordinary in-band
-`ServerError`s with `action = PROCEED` — none of them is fixed by a re-baseline.
+Rows 9–11 widened in #83, when a deactivated site, a schema-less site and the account concurrency limit stopped
+escaping the typed protocol as a bare `Status.INTERNAL`. They took their numbers in
+[dbf-data-extractor#130](./delta-v2-wire-contract-answers.md), which also split `OVERFLOW`/`OVERFLOW_BYTES` out
+of `INTERNAL`: a client cannot safely treat `INTERNAL` as "too big, switch to CONTINUOUS" when it may equally be
+a genuine fault. Against a server older than that reconciliation these five arrive as their pre-#130 codes
+(`UNAUTHORIZED`, `SCHEMA_MISMATCH`, `ACTIVE_SESSION_EXISTS`, `INTERNAL`) — probe with the presence of
+`SyncStateResponse.generation` if you need to know which you are talking to.
 
 ---
 
@@ -664,25 +673,31 @@ snapshot", not "your counters are meaningless now". So `site_sync_state.generati
 that a wipe bumps and **nothing else does** — an ordinary re-baseline never moves it. It is emitted
 on every surface the client reads before deciding what to send:
 
-- `SyncStateResponse.generation` (field 5)
-- `SessionOpened.generation` (field 5), on both the PROCEED and RESUME_FROM paths, so a long-lived
-  client that never re-polls `GetSyncState` still observes a wipe mid-flight
-- `SessionStart.generation` (field **6**) — the last epoch the client saw; `0` means "old client /
-  not tracked" and skips the check
+- `optional uint64 SyncStateResponse.generation` (field 5)
+- `optional uint64 SessionOpened.generation` (field 5), on both the PROCEED and RESUME_FROM paths, so
+  a long-lived client that never re-polls `GetSyncState` still observes a wipe mid-flight
+- `optional uint64 SessionStart.generation` (field **6**) — the last epoch the client saw
 
-A non-zero `SessionStart.generation` that disagrees with the server is refused with
-`ErrorCode.GENERATION_MISMATCH` (**12**) + `NEED_REBASELINE`. Without that guard a client that saw
-the new epoch but crashed before resetting could open a DELTA session carrying pre-wipe sequence
-numbers. The guard runs *ahead* of the resume branch: a staged session is heap-local and outlives a
-wipe of its own site, so a resume is exactly the path that can carry stale-epoch records back in.
+All three carry **explicit presence** (dbf-data-extractor#130). A site starts at epoch 0 and proto3
+implicit presence never puts a zero on the wire, so without `optional` "this server predates epochs"
+and "this server says epoch 0" are indistinguishable. The server always sets the field on both
+response messages, zero included; **absent means an older server, and nothing else**.
+
+The guard keys on presence, not on a zero: an **absent** `SessionStart.generation` is an old client
+and skips the check, while a **present** value that disagrees — `0` against a server at `1` included
+— is refused with `ErrorCode.GENERATION_MISMATCH` (**12**) + `NEED_REBASELINE`. That last case is not
+hypothetical: every site's first wipe moves it 0 → 1, so a "non-zero means new client" test would
+have waved a correct client through exactly when its sequence numbers had become meaningless. The
+guard runs *ahead* of the resume branch: a staged session is heap-local and outlives a wipe of its
+own site, so a resume is exactly the path that can carry stale-epoch records back in.
 
 > **Field numbers.** The obvious numbers were not free. The dbf-data-extractor client carries five
 > private `ErrorCode` values at 7–11 (`OVERFLOW`, `OVERFLOW_BYTES`, `SITE_INACTIVE`,
 > `SCHEMA_REQUIRED`, `CONCURRENT_BATCH_LIMIT`) and a `bool snapshot = 5` on `SessionStart` that this
-> server has never declared. Enum 7 and a varint bool both parse cleanly, so reusing those numbers
-> would have failed silently on the wire. `ErrorCode` 7–11 and `SessionStart` field 5 are `reserved`
-> in `delta-ingestion.proto`; see the comments there for what this server actually emits for those
-> five conditions.
+> server never declared. The two enums are now reconciled: the server **declares and emits** 7–11
+> with the client's meanings (see the error table below), and `SessionStart` field 5 stays `reserved`
+> — bootstrap and re-baseline both travel as `FULL_SNAPSHOT`, so the client's `snapshot` flag has no
+> server-side purpose. Full rationale and the delivery order: [`delta-v2-wire-contract-answers.md`](./delta-v2-wire-contract-answers.md).
 
 **Client recovery sequence.** The client persists a per-site `last_seen_generation` (initially 0):
 

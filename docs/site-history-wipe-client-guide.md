@@ -28,15 +28,26 @@ All additive; an old client that ignores them keeps working (see "Old clients" b
 
 | Message | Field | Number | Type |
 |---|---|---|---|
-| `SyncStateResponse` | `generation` | 5 | `uint64` |
-| `SessionOpened` | `generation` | 5 | `uint64` |
-| `SessionStart` | `generation` | **6** | `uint64` |
+| `SyncStateResponse` | `generation` | 5 | `optional uint64` |
+| `SessionOpened` | `generation` | 5 | `optional uint64` |
+| `SessionStart` | `generation` | **6** | `optional uint64` |
 | `ErrorCode` | `GENERATION_MISMATCH` | **12** | enum value |
+
+### Why explicit presence
+
+A site starts at epoch 0, and proto3 implicit presence never puts a zero on the wire — so a plain
+`uint64` cannot distinguish "this server predates epochs" from "this server says epoch 0". That is
+not cosmetic: the **first** wipe of any site moves it 0 → 1, and a guard reading "0 means an old
+client" waves through a correct client at exactly the moment its sequence numbers stop meaning
+anything. `optional` closes it (dbf-data-extractor#130 Q1/Q2). It changes the descriptor, not the
+encoding, so it is wire-compatible with anything already deployed.
+
+The server always sets the field on both response messages, zero included. **Absent means an older
+server, and nothing else.**
 
 ### Why 6 and 12, not 5 and 7
 
-The original design assigned `SessionStart.generation = 5` and `GENERATION_MISMATCH = 7`. Both are
-taken **on the client side**, and neither collision is catchable at decode time:
+Both 5 and 7 are taken **on the client side**, and neither collision is catchable at decode time:
 
 - The client's proto carries five private `ErrorCode` values at 7–11 (`OVERFLOW`, `OVERFLOW_BYTES`,
   `SITE_INACTIVE`, `SCHEMA_REQUIRED`, `CONCURRENT_BATCH_LIMIT`) and dispatches on them *code-first*,
@@ -46,26 +57,27 @@ taken **on the client side**, and neither collision is catchable at decode time:
 - The client's `SessionStart` carries `bool snapshot = 5`. `bool` and `uint64` share the varint wire
   type, so `snapshot = true` would decode as `generation = 1` and get a legitimate session rejected.
 
-Both are therefore `reserved` in the server's `delta-ingestion.proto` rather than reused. Nothing
-that already exists on either side moves.
+`SessionStart` field 5 therefore stays `reserved`: bootstrap and re-baseline both travel as
+`mode = FULL_SNAPSHOT`, so the flag has no server-side purpose and is being dropped client-side.
 
-### Enum divergence worth knowing about
+### Enum divergence — resolved
 
-`ErrorCode` 7–11 exist **only** in the client's proto. This server has never declared or emitted
-them; the same conditions arrive as:
+`ErrorCode` 7–11 used to exist only in the client's proto, and the same conditions reached it under
+generic codes it could not act on. The server now **declares and emits** the client's numbers
+(dbf-data-extractor#130 Q4–Q6):
 
-| Condition | What the server sends |
-|---|---|
-| session record/byte overflow | `INTERNAL (6)` + `NEED_REBASELINE` |
-| site inactive or deleted | `UNAUTHORIZED (4)` + `PROCEED` |
-| schema required before first session | `SCHEMA_MISMATCH (2)` + `PROCEED` |
-| account concurrent-batch cap | `ACTIVE_SESSION_EXISTS (5)` + `PROCEED` |
+| Condition | Was | Now |
+|---|---|---|
+| session record overflow | `INTERNAL (6)` | `OVERFLOW (7)` + `NEED_REBASELINE` |
+| session byte overflow | `INTERNAL (6)` | `OVERFLOW_BYTES (8)` + `NEED_REBASELINE` |
+| site inactive or deleted | `UNAUTHORIZED (4)` | `SITE_INACTIVE (9)` + `PROCEED` |
+| schema required before first session | `SCHEMA_MISMATCH (2)` | `SCHEMA_REQUIRED (10)` + `PROCEED` |
+| account concurrent-batch cap | `ACTIVE_SESSION_EXISTS (5)` | `CONCURRENT_BATCH_LIMIT (11)` + `PROCEED` |
 
-Two consequences outside the scope of this feature, both worth their own issue: the client's
-`OVERFLOW → switch to CONTINUOUS` recovery has never fired, because the trigger never arrives (the
-033 segmented re-baseline made overflow much rarer, but it did not remove the caps); and
-`SessionStart.snapshot` is not read here, so a CONTINUOUS session's re-baseline intent never reaches
-the server — only `mode == FULL_SNAPSHOT` sets it.
+`ACTIVE_SESSION_EXISTS (5)` keeps its narrower meaning: *this site* already has a live session. The
+client's `OVERFLOW → switch to CONTINUOUS` recovery can finally fire, because its trigger now
+arrives — previously overflow was indistinguishable from a genuine fault. Full rationale and the
+complete recovery matrix: [`delta-v2-wire-contract-answers.md`](./delta-v2-wire-contract-answers.md).
 
 ## Normative client algorithm
 
@@ -88,14 +100,19 @@ The client persists a per-site `last_seen_generation` (`uint64`, initially absen
    or any `NEED_REBASELINE`, restart from step 1. A mismatch observed in `SessionOpened.generation`
    (a wipe that landed after the session opened) → abort the session and restart from step 1.
 
-`generation = 0` in `SessionStart` means "unknown / not tracked" and skips the server's check.
+Send the field on every `SessionStart` once the client tracks epochs at all — including when the
+stored value is 0. **Omitting it** is what identifies a client too old to track them, and a client
+that omits it is not protected by the guard.
 
 ## Server-side guard
 
 ```
-start.generation != 0 && start.generation != state.generation
+start.hasGeneration() && start.generation != state.generation
   → ServerError(GENERATION_MISMATCH, NEED_REBASELINE)
 ```
+
+Presence, not a zero: a present `0` against a server at `1` — the first wipe of any site — is a
+mismatch and is refused.
 
 It runs *before* the resume branch, not beside the schema-version check: a staged session lives in
 the heap of the pod that owns it and outlives a wipe of its own site, so a resume is precisely the
@@ -113,18 +130,25 @@ updated client.
 
 ## Shipping order
 
-The client may ship before or after the server: the fields are additive and the server ignores an
-absent `SessionStart.generation`. That holds **only** with the numbers above. Shipping a client that
-uses 5 and 7 against a server that uses 6 and 12 leaves both sides internally correct while
-disagreeing on the wire — the most expensive kind of disagreement to find.
+**Server first, then the client.** Nothing breaks in the other order — the fields are additive and an
+older server simply omits `generation` while emitting the pre-#130 error codes — but a client shipped
+first runs unguarded, which is the state this feature exists to end. Detecting which server you have:
+`generation` present on `SyncStateResponse` means this release or newer, and typed error codes ship
+in the same change, so one probe answers both.
+
+That holds **only** with the numbers above. Shipping a client that uses 5 and 7 against a server that
+uses 6 and 12 leaves both sides internally correct while disagreeing on the wire — the most expensive
+kind of disagreement to find.
 
 ## Test list
 
-- `GetSyncState` returns the site's generation; 0 for a site that has never been wiped.
+- `GetSyncState` returns the site's generation; 0 for a site that has never been wiped, and the field
+  is **present** on the wire at 0.
 - `SessionOpened.generation` is emitted on both the PROCEED and RESUME_FROM paths.
-- A `SessionStart` whose non-zero generation disagrees with the server is refused with
+- A `SessionStart` whose present generation disagrees with the server is refused with
   `GENERATION_MISMATCH` + `NEED_REBASELINE`, in DELTA **and** in FULL_SNAPSHOT mode.
-- `generation = 0` skips the guard (old client opens normally).
+- A present `generation = 0` against a server at generation 1 is refused — the first-wipe case.
+- An **absent** generation skips the guard (old client opens normally).
 - A client ahead of the server (e.g. server restored from a backup) is refused as well — the two
   disagree about which history they are discussing, whichever way round.
 - Client-side: adopt-without-reset on first observation; local wipe precedes persisting the new

@@ -58,7 +58,8 @@ existing path, so it is backwards-compatible.
   checkpoint-hook listener (consumes once, tolerates no activation).
 - Contract — MockMvc for both endpoints: 200 shape, 400/403/404/409.
 - gRPC handler — `generation` emitted in `SyncStateResponse` and both `SessionOpened` paths;
-  `GENERATION_MISMATCH` rejection; `generation = 0` skips the guard.
+  `GENERATION_MISMATCH` rejection; an **absent** `generation` skips the guard, a present one is
+  checked even at 0 (dbf-data-extractor#130).
 - Integration (Testcontainers PG + LocalStack) — seed a full site → wipe → every site-scoped table
   empty, S3 keys gone, generation bumped, audit rows present; then a full client cycle
   (GetSyncState → SubmitSchema → FULL_SNAPSHOT → checkpoint build) → baselines re-captured at
