@@ -1,0 +1,6 @@
+# Gitignored local files every new Conductor workspace needs (Files to copy).
+# Listing this file at all replaces Conductor's default `.env*` pattern, so the frontend
+# dotenv has to be named explicitly too.
+# Docs: https://conductor.build/docs/reference/worktreeinclude
+frontend/.env.local
+local-dev/auth0.env
