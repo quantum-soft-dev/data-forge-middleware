@@ -16,6 +16,7 @@ import {
   getDeltaSyncState,
   requestCheckpointRebuild,
   requestRebaseline,
+  wipeSiteHistory,
   type DeltaApiScope,
 } from './deltaSyncApi';
 
@@ -100,6 +101,23 @@ export function useCancelRebaseline(siteId: string, scope: DeltaApiScope) {
         );
       }
       queryClient.invalidateQueries({ queryKey: deltaSyncKeys.syncState(siteId) });
+    },
+  });
+}
+
+/**
+ * Wipes a site's history (issue #89). Everything the Delta Sync tab shows describes state that no
+ * longer exists afterwards, so every query for the site is invalidated rather than patched.
+ */
+export function useWipeSiteHistory(siteId: string, scope: DeltaApiScope) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (confirm: string) => wipeSiteHistory(siteId, confirm, scope),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: deltaSyncKeys.syncState(siteId) });
+      queryClient.invalidateQueries({ queryKey: deltaSyncKeys.checkpoints(siteId) });
+      queryClient.invalidateQueries({ queryKey: [...deltaSyncKeys.all, 'segments', siteId] });
+      queryClient.invalidateQueries({ queryKey: deltaSyncKeys.health() });
     },
   });
 }

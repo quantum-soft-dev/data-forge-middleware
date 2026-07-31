@@ -15,6 +15,8 @@ import {
   deltaSegmentSchema,
   deltaSyncHealthSchema,
   deltaSyncStateSchema,
+  siteHistoryWipeConflictSchema,
+  siteHistoryWipeResultSchema,
   type CancelRebaselineStatus,
   type DeltaCheckpoint,
   type DeltaCheckpointDownload,
@@ -22,6 +24,8 @@ import {
   type DeltaSegment,
   type DeltaSyncHealth,
   type DeltaSyncState,
+  type SiteHistoryWipeConflict,
+  type SiteHistoryWipeResult,
 } from '../model/types';
 
 export interface DeltaApiScope {
@@ -120,6 +124,45 @@ export async function cancelRebaseline(
 ): Promise<CancelRebaselineStatus> {
   const response = await apiClient.delete(`${deltaBasePath(siteId, scope)}/rebaseline`);
   return cancelRebaselineResultSchema.parse(response.data).status;
+}
+
+/**
+ * A refused wipe (409). Carries which of the two conflicts it was, because they need opposite
+ * advice: stop the client, or simply try again.
+ */
+export class SiteHistoryWipeConflictError extends Error {
+  constructor(readonly status: SiteHistoryWipeConflict) {
+    super(`Site history wipe refused: ${status}`);
+    this.name = 'SiteHistoryWipeConflictError';
+  }
+}
+
+/**
+ * Irreversibly destroy a site's server-side history (issue #89). `confirm` must equal the site's
+ * domain — the backend rejects anything else with 400, so the dialog's gate is enforced twice.
+ */
+export async function wipeSiteHistory(
+  siteId: string,
+  confirm: string,
+  scope: DeltaApiScope,
+): Promise<SiteHistoryWipeResult> {
+  try {
+    // The 409s are expected outcomes with their own copy, not failures to report generically.
+    const response = await apiClient.post(
+      `${deltaBasePath(siteId, scope)}/wipe`,
+      { confirm },
+      { suppressErrorToast: true },
+    );
+    return siteHistoryWipeResultSchema.parse(response.data);
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 409) {
+      const conflict = siteHistoryWipeConflictSchema.safeParse(error.response.data);
+      if (conflict.success) {
+        throw new SiteHistoryWipeConflictError(conflict.data.status);
+      }
+    }
+    throw error;
+  }
 }
 
 /**

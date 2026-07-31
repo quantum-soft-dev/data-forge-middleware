@@ -9,10 +9,10 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * being destroyed. Nothing about the wipe can be undone, and its damage is invisible until a client
  * next connects, so a single click must not be enough.</p>
  *
- * @param confirm the site's domain, exactly as it appears on the site
+ * @param confirm the site's name, exactly as the UI shows it
  */
 @Schema(description = "Confirmation for an irreversible site history wipe")
 public record SiteHistoryWipeRequestDto(
-        @Schema(description = "The site's domain, typed back to confirm", example = "shop-42.example.com")
+        @Schema(description = "The site's name, typed back to confirm", example = "shop-42.example.com")
         String confirm) {
 }

@@ -57,7 +57,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   re-captured at checkpoint seqs, segments requeued, `wipe_pending` cleared, `DELTA_AUTO_REINIT`
   audited.
 
-- [ ] **T07 — Frontend.**
+- [x] **T07 — Frontend.**
   `wipeSiteHistory` on both namespaces, `useWipeSiteHistory` invalidating
   sync-state/checkpoints/segments, `WipeHistoryDialog` (confirm-gated destructive button),
   "Danger zone" on `SiteDetailShell`, 409 toast.

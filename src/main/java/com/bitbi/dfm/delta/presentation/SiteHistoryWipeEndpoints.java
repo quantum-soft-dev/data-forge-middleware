@@ -32,19 +32,24 @@ final class SiteHistoryWipeEndpoints {
      * @param request     the confirmation body
      * @param initiator   who asked, for the audit trail
      * @return 200 with the summary, or 409 with a retry-or-stop-the-client status
-     * @throws IllegalArgumentException when the confirmation does not match the site's domain (400)
+     * @throws IllegalArgumentException when the confirmation does not match the site's name (400)
      */
     static ResponseEntity<Object> wipe(DeltaSiteWipeService wipeService,
                                        Site site,
                                        SiteHistoryWipeRequestDto request,
                                        DeltaSiteWipeService.Initiator initiator) {
+        // Matched against siteName, not domain. The issue's example used a hostname-shaped domain,
+        // but `sites.domain` is the legacy composite `{accountId}_{siteName}` that no API exposes
+        // and no operator could type — siteName is the identity the UI shows and the client
+        // authenticates with.
+        //
         // Checked here rather than with bean validation: a blank body, a missing field and a typo
         // are the same mistake, and all three must be the same 400 rather than a 500 on the
         // un-deserializable case.
         String confirm = request == null ? null : request.confirm();
-        if (confirm == null || !confirm.equals(site.getDomain())) {
+        if (confirm == null || !confirm.equals(site.getSiteName())) {
             throw new IllegalArgumentException(
-                    "Confirmation must be the site's domain (" + site.getDomain() + ")");
+                    "Confirmation must be the site's name (" + site.getSiteName() + ")");
         }
 
         try {

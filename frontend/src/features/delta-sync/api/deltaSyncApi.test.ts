@@ -11,6 +11,8 @@ import {
   requestRebaseline,
   cancelRebaseline,
   getDeltaSyncHealth,
+  wipeSiteHistory,
+  SiteHistoryWipeConflictError,
 } from './deltaSyncApi';
 
 vi.mock('@/shared/api/client', () => ({
@@ -146,5 +148,96 @@ describe('admin-only and action endpoints', () => {
 
     await getDeltaSyncHealth('acc-1');
     expect(mockedGet).toHaveBeenCalledWith('/v1/accounts/acc-1/sites/delta/health');
+  });
+});
+
+describe('wipeSiteHistory (#89)', () => {
+  const summary = {
+    generation: 4,
+    deletedBatches: 123,
+    deletedSegments: 45,
+    deletedCheckpoints: 12,
+    deletedFiles: 678,
+    deletedSqlGenerations: 9,
+    deletedErrorLogs: 33,
+    deletedBytes: 123456789,
+    s3DeleteErrors: 0,
+    baselineBatchDetached: false,
+  };
+
+  it('posts the confirmation to the owner namespace and parses the summary', async () => {
+    mockedPost.mockResolvedValueOnce({ data: summary });
+
+    const result = await wipeSiteHistory('s1', 'store-01.example.com', { admin: false });
+
+    expect(mockedPost).toHaveBeenCalledWith(
+      '/v1/account/sites/s1/delta/wipe',
+      { confirm: 'store-01.example.com' },
+      { suppressErrorToast: true },
+    );
+    expect(result).toEqual(summary);
+  });
+
+  it('uses the admin namespace when scoped to admin', async () => {
+    mockedPost.mockResolvedValueOnce({ data: summary });
+
+    await wipeSiteHistory('s1', 'store-01.example.com', { admin: true });
+
+    expect(mockedPost).toHaveBeenCalledWith(
+      '/v1/sites/s1/delta/wipe',
+      { confirm: 'store-01.example.com' },
+      { suppressErrorToast: true },
+    );
+  });
+
+  it('turns a 409 into a typed conflict so the two cases can be told apart', async () => {
+    // "stop the client" and "just try again" are opposite instructions; a generic error would
+    // leave the operator guessing which one they are looking at.
+    mockedPost.mockRejectedValueOnce(
+      new AxiosError('conflict', undefined, undefined, undefined, {
+        status: 409,
+        data: { status: 'session-in-progress' },
+        statusText: 'Conflict',
+        headers: new AxiosHeaders(),
+        config: { headers: new AxiosHeaders() },
+      }),
+    );
+
+    await expect(wipeSiteHistory('s1', 'x', { admin: false })).rejects.toMatchObject({
+      name: 'SiteHistoryWipeConflictError',
+      status: 'session-in-progress',
+    });
+  });
+
+  it('reports the retryable conflict distinctly', async () => {
+    mockedPost.mockRejectedValueOnce(
+      new AxiosError('conflict', undefined, undefined, undefined, {
+        status: 409,
+        data: { status: 'concurrent-session' },
+        statusText: 'Conflict',
+        headers: new AxiosHeaders(),
+        config: { headers: new AxiosHeaders() },
+      }),
+    );
+
+    await expect(wipeSiteHistory('s1', 'x', { admin: false })).rejects.toBeInstanceOf(
+      SiteHistoryWipeConflictError,
+    );
+  });
+
+  it('lets other failures through untouched', async () => {
+    mockedPost.mockRejectedValueOnce(
+      new AxiosError('bad request', undefined, undefined, undefined, {
+        status: 400,
+        data: { message: 'Confirmation must be the site\'s name' },
+        statusText: 'Bad Request',
+        headers: new AxiosHeaders(),
+        config: { headers: new AxiosHeaders() },
+      }),
+    );
+
+    await expect(wipeSiteHistory('s1', 'wrong', { admin: false })).rejects.not.toBeInstanceOf(
+      SiteHistoryWipeConflictError,
+    );
   });
 });

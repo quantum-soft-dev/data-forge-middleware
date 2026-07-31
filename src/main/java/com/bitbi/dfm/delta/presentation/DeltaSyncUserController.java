@@ -258,7 +258,7 @@ public class DeltaSyncUserController {
      * </p>
      *
      * @param siteId  site identifier
-     * @param request confirmation body — {@code confirm} must equal the site's domain
+     * @param request confirmation body — {@code confirm} must equal the site's name
      * @return 200 with the wipe summary, or 409 when a session is running / one committed mid-wipe
      */
     @PostMapping("/wipe")
@@ -270,12 +270,12 @@ public class DeltaSyncUserController {
                     + "the Delta client to drop its local journal, reset its seq counter to zero and "
                     + "re-submit its schema; the client is answered NEED_REBASELINE as well, so an old "
                     + "client still recovers. Bit BI delta baselines are re-captured automatically after "
-                    + "the first post-wipe checkpoint. The body must echo the site's domain."
+                    + "the first post-wipe checkpoint. The body must echo the site's name."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "History wiped",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteHistoryWipeResponseDto.class))),
-            @ApiResponse(responseCode = "400", description = "Confirmation missing or not equal to the site's domain",
+            @ApiResponse(responseCode = "400", description = "Confirmation missing or not equal to the site's name",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
             @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),

@@ -106,7 +106,10 @@ fresh baselines immediately re-suspended. Exclude `FULL_SNAPSHOT` from the reque
 | Owner | `POST /api/v1/account/sites/{siteId}/delta/wipe` |
 | Admin | `POST /api/v1/sites/{siteId}/delta/wipe` |
 
-Request (GitHub-style confirmation, mismatch → 400): `{ "confirm": "shop-42.example.com" }`.
+Request (GitHub-style confirmation, mismatch → 400): `{ "confirm": "shop-42.example.com" }` — the
+**site name**, not `sites.domain`. The issue's wording said "domain", but that column is the legacy
+composite `{accountId}_{siteName}`, exposed by no API and typeable by no operator; `siteName` is the
+identity the UI shows and the client authenticates with.
 Response 200:
 
 ```json
@@ -130,7 +133,7 @@ the baseline batch was detached). One `plugin_audit_logs` row for the auto-reini
 
 **FR-17 — Frontend.** A "Danger zone" section on the site-detail shell (owner + admin) with a
 `WipeHistoryDialog` whose destructive button unlocks only when the typed text equals the site
-domain. 409 → toast "a sync session is currently running — stop the client and retry".
+name. 409 → toast "a sync session is currently running — stop the client and retry".
 
 **FR-18 — Legacy sites.** Allowed for both V2 and legacy DBF sites: the delta steps are no-ops, the
 upserted sync-state row still gives the site `generation >= 1`, so the contract holds if it later

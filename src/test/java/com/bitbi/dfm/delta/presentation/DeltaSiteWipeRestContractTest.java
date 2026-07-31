@@ -30,7 +30,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
 
     /** store-01.example.com — owned by test account 1. */
     private static final UUID OWNED_SITE = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
-    private static final String OWNED_DOMAIN = "store-01.example.com";
+    private static final String OWNED_NAME = "store-01.example.com";
     /** store-03.example.com — owned by a different account. */
     private static final UUID FOREIGN_SITE = UUID.fromString("0199bab0-ca3b-e41c-5521-2f4b33fda8b6");
 
@@ -61,7 +61,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.generation").value(1))
                 .andExpect(jsonPath("$.deletedBatches").isNumber())
@@ -81,7 +81,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isOk());
 
         Long batches = jdbc.queryForObject(
@@ -104,13 +104,13 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isOk());
 
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.generation").value(2))
                 .andExpect(jsonPath("$.deletedBatches").value(0));
@@ -122,13 +122,13 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(ADMIN_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_ADMIN_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.generation").value(1));
     }
 
     @Test
-    @DisplayName("a confirmation that does not match the site domain is rejected (400)")
+    @DisplayName("a confirmation that does not match the site name is rejected (400)")
     void wrongConfirmationRejected() throws Exception {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
@@ -172,7 +172,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value("session-in-progress"));
     }
@@ -191,7 +191,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isOk());
     }
 
@@ -211,7 +211,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(ADMIN_URL.formatted(OWNED_SITE))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isForbidden());
     }
 
@@ -221,7 +221,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
         mockMvc.perform(post(USER_URL.formatted(UUID.randomUUID()))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isNotFound());
     }
 
@@ -230,7 +230,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
     void unauthenticated401() throws Exception {
         mockMvc.perform(post(USER_URL.formatted(OWNED_SITE))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(confirm(OWNED_DOMAIN)))
+                        .content(confirm(OWNED_NAME)))
                 .andExpect(status().isUnauthorized());
     }
 }
