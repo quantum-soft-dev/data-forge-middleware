@@ -51,7 +51,7 @@ class CheckpointServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         when(metrics.timeCheckpoint(any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(0)).get());
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 0L));
 
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "FULL_SNAPSHOT", Map.of());
@@ -133,7 +133,7 @@ class CheckpointServiceTest {
         // Pointer advanced to 10, but the frame reads as absent (deleted, or an S3 HEAD denial
         // masquerading as absence) and segments below the checkpoint were pruned: a refold from
         // the surviving tail would silently publish a truncated checkpoint.
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L));
         when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
@@ -149,7 +149,7 @@ class CheckpointServiceTest {
     @Test
     void refoldsFromZeroWhenFrameAbsentButFullHistorySurvives() {
         // Frame gone but nothing was pruned (history still starts at seq 1): refold is lossless.
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L));
         when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
 

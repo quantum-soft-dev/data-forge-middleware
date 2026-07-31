@@ -55,6 +55,11 @@ message SyncStateResponse {
   int32  schema_version     = 2; // schema version the server currently holds
   uint64 last_checkpoint_seq= 3; // seq of the latest materialized checkpoint
   RecoveryAction action     = 4; // PROCEED | NEED_REBASELINE
+  // Epoch of the site's server-side history, bumped by an operator history wipe (issue #89).
+  // A change means "everything you know about this site is void": the client drops its local
+  // journal, resets its seq counter to 0 and re-submits its schema. NEED_REBASELINE alone
+  // cannot say that — it asks for a full snapshot, not for a counter reset.
+  uint64 generation         = 5;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,6 +112,10 @@ message SessionStart {
   uint64      first_seq         = 2; // seq of the first ChangeRecord in this session
   int32       schema_version    = 3; // schema the records were produced against
   string      client_session_id = 4; // client-generated; idempotency + resume key
+  // Last generation the client saw (issue #89). 0 = unknown / old client, which skips the check.
+  // Any other value must equal the server's, otherwise the session carries sequence numbers from
+  // a history that no longer exists and is refused with GENERATION_MISMATCH.
+  uint64      generation        = 5;
 }
 
 enum SessionMode {
@@ -157,6 +166,9 @@ message SessionOpened {
   uint64         server_last_seq   = 2; // last applied seq before this session
   RecoveryAction action            = 3; // PROCEED | NEED_REBASELINE | RESUME_FROM
   uint64         resume_from_seq   = 4; // valid when action == RESUME_FROM
+  // Current epoch of the site (issue #89), so a long-lived client that never re-polls
+  // GetSyncState still observes a wipe. A mismatch here means: abort the session and reset.
+  uint64         generation        = 5;
 }
 
 message Ack {
@@ -193,6 +205,7 @@ enum ErrorCode {
   UNAUTHORIZED         = 4;
   ACTIVE_SESSION_EXISTS= 5; // one active session per site (mirrors active-batch rule)
   INTERNAL             = 6;
+  GENERATION_MISMATCH  = 7; // session generation != server generation (site history was wiped)
 }
 
 // Typed scalar value. Mirrors the JSONL value typing of CDC v1, but typed on the

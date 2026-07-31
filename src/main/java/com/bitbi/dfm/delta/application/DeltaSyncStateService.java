@@ -41,8 +41,9 @@ public class DeltaSyncStateService {
                         state.getLastCheckpointSeq(),
                         state.getSchemaVersion(),
                         state.isRebaselineRequested(),
-                        state.getRebaselineNotifiedAt() != null))
-                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false));
+                        state.getRebaselineNotifiedAt() != null,
+                        state.getGeneration()))
+                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false, 0L));
     }
 
     /**
@@ -240,8 +241,11 @@ public class DeltaSyncStateService {
      * @param needRebaseline    whether the client must re-baseline (full snapshot)
      * @param rebaselineNotified whether the pending request has already been handed to the client
      *                           (issue #84) — lets the caller skip a redundant stamping round-trip
+     * @param generation        epoch of the site's server-side history (issue #89); a change tells
+     *                          the client to drop its local journal and reset its seq counter
      */
     public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion,
-                                boolean needRebaseline, boolean rebaselineNotified) {
+                                boolean needRebaseline, boolean rebaselineNotified,
+                                long generation) {
     }
 }

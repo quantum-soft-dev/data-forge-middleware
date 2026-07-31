@@ -62,6 +62,8 @@ abstract class DeltaIngestionContractTestSupport {
     private Server server;
     private ManagedChannel channel;
     protected DeltaIngestionGrpc.DeltaIngestionStub asyncStub;
+    /** Unary RPCs (GetSyncState, SubmitSchema) against the same harness. */
+    protected DeltaIngestionGrpc.DeltaIngestionBlockingStub blockingStub;
 
     @BeforeEach
     void startInProcessServer() throws IOException {
@@ -90,6 +92,7 @@ abstract class DeltaIngestionContractTestSupport {
                 .start();
         channel = InProcessChannelBuilder.forName(name).directExecutor().build();
         asyncStub = DeltaIngestionGrpc.newStub(channel);
+        blockingStub = DeltaIngestionGrpc.newBlockingStub(channel);
     }
 
     @AfterEach

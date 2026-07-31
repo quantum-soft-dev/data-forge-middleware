@@ -17,7 +17,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   increments `generation`; generation monotonic across repeated wipes; `resetForRebaseline` does
   **not** bump it; `consumeWipePending` returns true once then false.
 
-- [ ] **T02 — Proto + gRPC generation contract.**
+- [x] **T02 — Proto + gRPC generation contract.**
   `generation = 5` on `SyncStateResponse` / `SessionOpened` / `SessionStart`,
   `ErrorCode.GENERATION_MISMATCH = 7`. `DeltaSyncStateService.SyncStateView` carries `generation`;
   `DeltaIngestionService` emits it in `getSyncState` and both `SessionOpened` paths (PROCEED and

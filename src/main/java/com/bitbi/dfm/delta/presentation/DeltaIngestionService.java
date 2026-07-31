@@ -271,6 +271,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 .setLastCheckpointSeq(view.lastCheckpointSeq())
                 .setSchemaVersion(view.schemaVersion())
                 .setAction(view.needRebaseline() ? RecoveryAction.NEED_REBASELINE : RecoveryAction.PROCEED)
+                // The epoch (issue #89): a value the client has not seen before means its whole
+                // local state — journal, seq counter, cached schema ack — belongs to a history the
+                // server no longer has.
+                .setGeneration(view.generation())
                 .build();
 
         responseObserver.onNext(response);
@@ -569,8 +573,30 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onSessionStart(SessionStart start) {
-                logger.info("Delta session start: siteId={}, mode={}, firstSeq={}, schemaVersion={}",
-                        siteId, start.getMode(), start.getFirstSeq(), start.getSchemaVersion());
+                logger.info("Delta session start: siteId={}, mode={}, firstSeq={}, schemaVersion={}, "
+                                + "generation={}",
+                        siteId, start.getMode(), start.getFirstSeq(), start.getSchemaVersion(),
+                        start.getGeneration());
+
+                SyncStateView state = syncStateService.getSyncState(siteId);
+
+                // Epoch guard (issue #89): the client's sequence numbers only mean something within
+                // the generation they were produced in. A client that saw a wipe but crashed before
+                // resetting would otherwise graft pre-wipe seqs onto a site whose history is gone.
+                // Deliberately ahead of the resume branch below: a staged session is heap-local and
+                // survives a wipe of its own site, so a resume is exactly the path that can carry
+                // stale-epoch records back in. A 0 means "old client / not tracked" and skips the
+                // check — such a client decodes the unknown error code as unrecognized anyway and
+                // recovers through the NEED_REBASELINE the wipe leaves standing.
+                if (start.getGeneration() != 0 && start.getGeneration() != state.generation()) {
+                    emitError(ErrorCode.GENERATION_MISMATCH,
+                            "Session generation=" + start.getGeneration()
+                                    + " does not match server generation=" + state.generation()
+                                    + " (the site's history was wiped)",
+                            RecoveryAction.NEED_REBASELINE);
+                    return;
+                }
+
                 // Resume: a DELTA reconnect re-attaches to a session that dropped mid-stream and
                 // replays from the staged watermark, rather than re-sending everything (T5.1). A
                 // FULL_SNAPSHOT re-baseline instead discards any staged data.
@@ -638,9 +664,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         responseObserver.onNext(ServerEvent.newBuilder()
                                 .setOpened(SessionOpened.newBuilder()
                                         .setServerSessionId(batchId.toString())
-                                        .setServerLastSeq(syncStateService.getSyncState(siteId).lastAppliedSeq())
+                                        .setServerLastSeq(state.lastAppliedSeq())
                                         .setAction(RecoveryAction.RESUME_FROM)
                                         .setResumeFromSeq(buffer.lastSeq() + 1)
+                                        // Echoed on every open (issue #89), so a long-lived client
+                                        // that never re-polls GetSyncState still observes a wipe.
+                                        .setGeneration(state.generation())
                                         .build())
                                 .build());
                         return;
@@ -662,7 +691,6 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     }
                 }
 
-                SyncStateView state = syncStateService.getSyncState(siteId);
                 long serverLastSeq = state.lastAppliedSeq();
 
                 // Schema-version guard: when both sides declare a version, the session's schema must
@@ -729,6 +757,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 .setServerSessionId(batchId.toString())
                                 .setServerLastSeq(serverLastSeq)
                                 .setAction(RecoveryAction.PROCEED)
+                                .setGeneration(state.generation())
                                 .build())
                         .build());
             }
