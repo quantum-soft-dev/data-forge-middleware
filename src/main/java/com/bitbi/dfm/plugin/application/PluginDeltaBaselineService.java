@@ -69,15 +69,33 @@ public class PluginDeltaBaselineService {
      */
     @Transactional
     public void recaptureForReinit(AccountPlugin activation) {
-        List<Site> sites = accountSites(activation).toList();
-        for (Site site : sites) {
-            capture(activation, site);
-            int requeued = segmentRepository.clearPluginSqlBySiteId(site.getId());
-            log.info("Reinit re-enqueued {} segments for delta SQL: siteId={}", requeued, site.getId());
+        accountSites(activation).forEach(site -> recaptureForSite(activation, site));
+    }
+
+    /**
+     * Recapture one site's baselines and re-enqueue only that site's segments.
+     *
+     * <p>Site-scoped on purpose (issue #89): the automatic recapture after a site history wipe must
+     * not disturb the activation's other sites, whose baselines still describe history that is
+     * very much still there.</p>
+     *
+     * @param activation the account's bit-bi activation
+     * @param site       the site to recapture
+     */
+    @Transactional
+    public void recaptureForSite(AccountPlugin activation, Site site) {
+        // First, and deliberately so: a FULL_SNAPSHOT segment still in the queue would suspend the
+        // baselines this method is about to capture. Taking those rows out of the queue up front
+        // also takes their locks, which is what orders this against a sweep already in flight.
+        int claimed = segmentRepository.markFullSnapshotPluginSqlProcessed(site.getId());
+        if (claimed > 0) {
+            log.info("Recapture took {} pending FULL_SNAPSHOT segment(s) out of the SQL queue: siteId={}",
+                    claimed, site.getId());
         }
-        if (!sites.isEmpty()) {
-            wakeAfterCommit();
-        }
+        capture(activation, site);
+        int requeued = segmentRepository.clearPluginSqlBySiteId(site.getId());
+        log.info("Recapture re-enqueued {} segments for delta SQL: siteId={}", requeued, site.getId());
+        wakeAfterCommit();
     }
 
     private java.util.stream.Stream<Site> accountSites(AccountPlugin activation) {

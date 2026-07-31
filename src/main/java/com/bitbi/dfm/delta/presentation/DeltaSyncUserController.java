@@ -2,11 +2,14 @@ package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
+import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
 import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaSyncStateResponseDto;
+import com.bitbi.dfm.delta.presentation.dto.SiteHistoryWipeRequestDto;
+import com.bitbi.dfm.delta.presentation.dto.SiteHistoryWipeResponseDto;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
@@ -19,6 +22,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -28,6 +32,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -59,6 +64,7 @@ public class DeltaSyncUserController {
     private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final DeltaSegmentParquetQueryService segmentParquetQueryService;
+    private final DeltaSiteWipeService wipeService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
 
@@ -66,12 +72,14 @@ public class DeltaSyncUserController {
                                    DeltaRebaselineCancellationService cancellationService,
                                    DeltaCheckpointQueryService checkpointQueryService,
                                    DeltaSegmentParquetQueryService segmentParquetQueryService,
+                                   DeltaSiteWipeService wipeService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
         this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
         this.segmentParquetQueryService = segmentParquetQueryService;
+        this.wipeService = wipeService;
         this.siteService = siteService;
         this.authorizationHelper = authorizationHelper;
     }
@@ -243,6 +251,49 @@ public class DeltaSyncUserController {
         return ResponseEntity.ok(Map.of("status", outcome.status()));
     }
 
+
+    /**
+     * Destroy all server-side history of an owned site (issue #89).
+     * <p>
+     * POST /api/v1/account/sites/{siteId}/delta/wipe
+     * </p>
+     *
+     * @param siteId  site identifier
+     * @param request confirmation body — {@code confirm} must equal the site's name
+     * @return 200 with the wipe summary, or 409 when a session is running / one committed mid-wipe
+     */
+    @PostMapping("/wipe")
+    @Operation(
+            summary = "Wipe all history of a site",
+            description = "Irreversibly deletes the site's batches, uploaded files, changelog segments, "
+                    + "checkpoints, schema, plugin SQL and error logs, leaving the site itself (and its "
+                    + "credentials) intact. The sync state is reset and its generation bumped, which tells "
+                    + "the Delta client to drop its local journal, reset its seq counter to zero and "
+                    + "re-submit its schema; the client is answered NEED_REBASELINE as well, so an old "
+                    + "client still recovers. Bit BI delta baselines are re-captured automatically after "
+                    + "the first post-wipe checkpoint. The body must echo the site's name."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "History wiped",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SiteHistoryWipeResponseDto.class))),
+            @ApiResponse(responseCode = "400", description = "Confirmation missing or not equal to the site's name",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "status=session-in-progress (stop the client and retry) "
+                    + "or status=concurrent-session (a batch committed mid-wipe; retry)",
+                    content = @Content(mediaType = "application/json"))
+    })
+    public ResponseEntity<Object> wipeHistory(@PathVariable UUID siteId,
+                                              @RequestBody(required = false) SiteHistoryWipeRequestDto request,
+                                              HttpServletRequest httpRequest) {
+        Site site = requireOwnedSite(siteId);
+        logger.warn("Site history wipe requested by owner: siteId={}", siteId);
+        return SiteHistoryWipeEndpoints.wipe(wipeService, site, request,
+                DeltaSiteWipeService.Initiator.OWNER, httpRequest);
+    }
 
     /**
      * Issue a fresh presigned download URL for one table's delta Parquet file of a batch

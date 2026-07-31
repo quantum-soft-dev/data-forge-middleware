@@ -271,6 +271,10 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                 .setLastCheckpointSeq(view.lastCheckpointSeq())
                 .setSchemaVersion(view.schemaVersion())
                 .setAction(view.needRebaseline() ? RecoveryAction.NEED_REBASELINE : RecoveryAction.PROCEED)
+                // The epoch (issue #89): a value the client has not seen before means its whole
+                // local state — journal, seq counter, cached schema ack — belongs to a history the
+                // server no longer has.
+                .setGeneration(view.generation())
                 .build();
 
         responseObserver.onNext(response);
@@ -447,7 +451,9 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         // the whole dataset in heap (OOM guard). A very large snapshot should stream in
                         // CONTINUOUS mode, which seals bounded segments as it goes.
                         metrics.sessionOverflowedRecords();
-                        emitError(ErrorCode.INTERNAL,
+                        // Typed since #130 Q5/Q6: INTERNAL may equally be a bug, so the client could
+                        // not safely read it as "retry in CONTINUOUS".
+                        emitError(ErrorCode.OVERFLOW,
                                 "Session exceeded the " + maxSessionRecords + "-record limit; stream large "
                                         + "datasets in CONTINUOUS mode",
                                 RecoveryAction.NEED_REBASELINE);
@@ -460,7 +466,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         metrics.sessionOverflowedBytes();
                         // "Use CONTINUOUS mode" is nonsense advice to a session that already is —
                         // reachable only when budget minus seal threshold is smaller than one record.
-                        emitError(ErrorCode.INTERNAL,
+                        emitError(ErrorCode.OVERFLOW_BYTES,
                                 "Session exceeded the " + maxSessionBytes + "-byte buffer budget; "
                                         + (continuous
                                         ? "raise delta.ingestion.max-session-bytes or lower "
@@ -536,22 +542,25 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     }
                     emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
                 } catch (BatchLifecycleService.ConcurrentBatchLimitException e) {
-                    // The account-wide concurrency cap. Different rule, same move for the client:
-                    // the site is not free to open a session yet, so serialize and retry.
-                    emitError(ErrorCode.ACTIVE_SESSION_EXISTS, e.getMessage(), RecoveryAction.PROCEED);
+                    // The account-wide concurrency cap — a different rule from the per-site one
+                    // above, and now a different code (#130 Q5): the client backs off rather than
+                    // waiting on this one site to free up.
+                    emitError(ErrorCode.CONCURRENT_BATCH_LIMIT, e.getMessage(), RecoveryAction.PROCEED);
                 } catch (BatchLifecycleService.SiteNotFoundException e) {
                     // The site was deleted while this stream was open — the token was validated once,
                     // at stream open. Same answer as a deactivated site: the credentials are fine,
-                    // the site is not.
-                    emitError(ErrorCode.UNAUTHORIZED, e.getMessage(), RecoveryAction.PROCEED);
+                    // the site is not, and no retry will fix it without an operator.
+                    emitError(ErrorCode.SITE_INACTIVE, e.getMessage(), RecoveryAction.PROCEED);
                 } catch (BatchLifecycleService.SiteInactiveException e) {
-                    // The site's credentials are still valid, the site itself is not — the same
-                    // "token/site problem" UNAUTHORIZED already means on this protocol.
-                    emitError(ErrorCode.UNAUTHORIZED, e.getMessage(), RecoveryAction.PROCEED);
+                    // The site's credentials are still valid, the site itself is not. Distinct from
+                    // UNAUTHORIZED since #130 Q5: that one tells the client to fix its token, this
+                    // one tells it to stop and page an operator.
+                    emitError(ErrorCode.SITE_INACTIVE, e.getMessage(), RecoveryAction.PROCEED);
                 } catch (BatchLifecycleService.SchemaRequiredException e) {
                     // PROCEED, not NEED_REBASELINE: a FULL_SNAPSHOT would hit the same wall. The
-                    // client must SubmitSchema first, which is what SCHEMA_MISMATCH already asks for.
-                    emitError(ErrorCode.SCHEMA_MISMATCH, e.getMessage(), RecoveryAction.PROCEED);
+                    // client must SubmitSchema first — which is what this code, unlike the stale-
+                    // version SCHEMA_MISMATCH it used to share, says unambiguously (#130 Q5).
+                    emitError(ErrorCode.SCHEMA_REQUIRED, e.getMessage(), RecoveryAction.PROCEED);
                 }
                 return null;
             }
@@ -569,8 +578,35 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
             }
 
             private void onSessionStart(SessionStart start) {
-                logger.info("Delta session start: siteId={}, mode={}, firstSeq={}, schemaVersion={}",
-                        siteId, start.getMode(), start.getFirstSeq(), start.getSchemaVersion());
+                logger.info("Delta session start: siteId={}, mode={}, firstSeq={}, schemaVersion={}, "
+                                + "generation={}",
+                        siteId, start.getMode(), start.getFirstSeq(), start.getSchemaVersion(),
+                        start.getGeneration());
+
+                SyncStateView state = syncStateService.getSyncState(siteId);
+
+                // Epoch guard (issue #89): the client's sequence numbers only mean something within
+                // the generation they were produced in. A client that saw a wipe but crashed before
+                // resetting would otherwise graft pre-wipe seqs onto a site whose history is gone.
+                // Deliberately ahead of the resume branch below: a staged session is heap-local and
+                // survives a wipe of its own site, so a resume is exactly the path that can carry
+                // stale-epoch records back in.
+                //
+                // Keyed on field PRESENCE, not on a zero (dbf-data-extractor#130 Q2). A site starts
+                // at epoch 0, so the first wipe of any site moves it 0 -> 1 — and while the check
+                // read "0 means old client", a new client faithfully echoing epoch 0 was waved
+                // through exactly when the guard mattered most. An absent field still skips: such a
+                // client cannot decode GENERATION_MISMATCH anyway and recovers through the
+                // NEED_REBASELINE the wipe leaves standing.
+                if (start.hasGeneration() && start.getGeneration() != state.generation()) {
+                    emitError(ErrorCode.GENERATION_MISMATCH,
+                            "Session generation=" + start.getGeneration()
+                                    + " does not match server generation=" + state.generation()
+                                    + " (the site's history was wiped)",
+                            RecoveryAction.NEED_REBASELINE);
+                    return;
+                }
+
                 // Resume: a DELTA reconnect re-attaches to a session that dropped mid-stream and
                 // replays from the staged watermark, rather than re-sending everything (T5.1). A
                 // FULL_SNAPSHOT re-baseline instead discards any staged data.
@@ -638,9 +674,12 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                         responseObserver.onNext(ServerEvent.newBuilder()
                                 .setOpened(SessionOpened.newBuilder()
                                         .setServerSessionId(batchId.toString())
-                                        .setServerLastSeq(syncStateService.getSyncState(siteId).lastAppliedSeq())
+                                        .setServerLastSeq(state.lastAppliedSeq())
                                         .setAction(RecoveryAction.RESUME_FROM)
                                         .setResumeFromSeq(buffer.lastSeq() + 1)
+                                        // Echoed on every open (issue #89), so a long-lived client
+                                        // that never re-polls GetSyncState still observes a wipe.
+                                        .setGeneration(state.generation())
                                         .build())
                                 .build());
                         return;
@@ -662,7 +701,6 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                     }
                 }
 
-                SyncStateView state = syncStateService.getSyncState(siteId);
                 long serverLastSeq = state.lastAppliedSeq();
 
                 // Schema-version guard: when both sides declare a version, the session's schema must
@@ -729,6 +767,7 @@ public class DeltaIngestionService extends DeltaIngestionGrpc.DeltaIngestionImpl
                                 .setServerSessionId(batchId.toString())
                                 .setServerLastSeq(serverLastSeq)
                                 .setAction(RecoveryAction.PROCEED)
+                                .setGeneration(state.generation())
                                 .build())
                         .build());
             }

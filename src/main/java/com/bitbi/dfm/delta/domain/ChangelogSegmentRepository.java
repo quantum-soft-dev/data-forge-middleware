@@ -123,6 +123,40 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findNextPendingPluginSql(int limit);
 
     /**
+     * Every S3 object of a site's changelog, published and provisional alike — the collection step
+     * of a history wipe (issue #89), which unlike a re-baseline must leave nothing behind.
+     *
+     * @param siteId site identifier
+     * @return S3 keys of all the site's segments
+     */
+    List<String> findAllS3KeysBySiteId(UUID siteId);
+
+    /**
+     * Delete every segment of a site, published and provisional (issue #89). Must run before the
+     * site's batches: {@code changelog_segments.batch_id} has no cascade.
+     *
+     * @param siteId site identifier
+     * @return number of segments deleted
+     */
+    int deleteBySiteId(UUID siteId);
+
+    /**
+     * Mark a site's still-pending {@code FULL_SNAPSHOT} segments as processed for plugin SQL,
+     * without generating any (issue #89).
+     *
+     * <p>Claimed by a baseline recapture as its first act. {@code DeltaSqlQueueService} suspends the
+     * site's baselines for every snapshot segment it claims, so a snapshot still sitting in the
+     * queue would undo the recapture the moment the next sweep ran. Taking the rows first also takes
+     * their locks: a sweep that has not started skips them (SKIP LOCKED), and one already holding
+     * them makes the recapture wait until its suspension has committed — either way the recapture
+     * has the last word.</p>
+     *
+     * @param siteId site identifier
+     * @return number of snapshot segments taken out of the queue
+     */
+    int markFullSnapshotPluginSqlProcessed(UUID siteId);
+
+    /**
      * Re-enqueue all of a site's segments for plugin SQL generation (plugin reinit: the
      * checkpoint-lag gap is regenerated under freshly captured baselines).
      *

@@ -49,6 +49,14 @@ public interface ErrorLogRepository {
 
     void deleteById(UUID id);
 
+    /**
+     * Delete every error log of a site (issue #89 — history wipe).
+     *
+     * @param siteId site identifier
+     * @return number of rows deleted
+     */
+    int deleteBySiteId(UUID siteId);
+
     // ==================== Global Error Handling Methods ====================
 
     /**

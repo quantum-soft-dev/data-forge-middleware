@@ -455,24 +455,33 @@ message Ack { uint64 acked_seq = 1; } // server has durably staged records up to
 message ServerError { ErrorCode code = 1; string message = 2; RecoveryAction action = 3; uint64 resume_from_seq = 4; }
 ```
 
-| `ErrorCode` | Meaning | What to do |
-|---|---|---|
-| `SEQUENCE_GAP` | `first_seq != server_last_seq + 1` | Open a `FULL_SNAPSHOT` (action = `NEED_REBASELINE`). |
-| `RECONCILIATION_FAILED` | `SessionEnd` counts ≠ accepted records | Fix your counts; re-baseline. Nothing was committed. |
-| `ACTIVE_SESSION_EXISTS` | another session is live for this site, **or** the account is at its concurrent-batch limit | Serialize sessions; retry after the other ends/times out. |
-| `SCHEMA_MISMATCH` | `schema_version` unknown/stale, **or** a `POSTGRES_CDC` site has no schema on file yet | `SubmitSchema`, then retry. |
-| `UNAUTHORIZED` | token/site problem — including a site **deactivated or deleted** while the stream was open | Re-authenticate; if the site was deactivated, an operator must reactivate it. |
-| `INTERNAL` | server error | Retry with backoff. |
+| `ErrorCode` | № | `action` | Meaning | What to do |
+|---|---|---|---|---|
+| `SEQUENCE_GAP` | 1 | `NEED_REBASELINE` | `first_seq != server_last_seq + 1` | Open a `FULL_SNAPSHOT`. |
+| `SCHEMA_MISMATCH` | 2 | `NEED_REBASELINE` | declared `schema_version` is stale, or a keyless table sent an UPDATE | `SubmitSchema` / declare a key, then snapshot. |
+| `RECONCILIATION_FAILED` | 3 | `NEED_REBASELINE` | `SessionEnd` counts, hash or `last_seq` ≠ accepted records | Fix your counts; re-baseline. Nothing was committed. |
+| `UNAUTHORIZED` | 4 | `PROCEED` | token problem | Re-authenticate. |
+| `ACTIVE_SESSION_EXISTS` | 5 | `PROCEED` | another session is live **for this site** | Serialize your own runs; retry after the other ends/times out. |
+| `INTERNAL` | 6 | `NEED_REBASELINE` | unexpected server fault | Retry with backoff. Never read as overflow — overflow is typed. |
+| `OVERFLOW` | 7 | `NEED_REBASELINE` | per-session record cap exceeded | Retry the session in CONTINUOUS mode. |
+| `OVERFLOW_BYTES` | 8 | `NEED_REBASELINE` | per-session byte budget exceeded | Retry in CONTINUOUS mode. |
+| `SITE_INACTIVE` | 9 | `PROCEED` | site **deactivated or deleted** while the stream was open | Stop the run; an operator must reactivate it. |
+| `SCHEMA_REQUIRED` | 10 | `PROCEED` | no schema on file yet | `SubmitSchema`, then retry. A snapshot hits the same wall. |
+| `CONCURRENT_BATCH_LIMIT` | 11 | `PROCEED` | the **account** is at its concurrent-session cap | Back off and retry later; another site is holding the slot. |
+| `GENERATION_MISMATCH` | 12 | `NEED_REBASELINE` | session epoch ≠ server epoch (the site's history was wiped) | Re-read sync state, drop the local journal, send a snapshot. |
 
 gRPC transport-level `UNAUTHENTICATED` (closed call, no `ServerError`) means the `authorization` metadata was
-missing/invalid before the handler ran. That — not `UNAUTHORIZED` — is the usual symptom of a deactivated or
-deleted site, because the token is checked when the stream opens. The in-band `UNAUTHORIZED` covers the
+missing/invalid before the handler ran. That — not `SITE_INACTIVE` — is the usual symptom of a deactivated or
+deleted site, because the token is checked when the stream opens. The in-band `SITE_INACTIVE` covers the
 narrower case where the site changed *after* that check and before `SessionStart`.
 
-The last three rows widened in #83. A deactivated or deleted site, a CDC site with no schema, and the account
-concurrency limit used to escape the typed protocol entirely: they surfaced as a bare `Status.INTERNAL`
-carrying no `ErrorCode`, indistinguishable from a genuine server fault. They are now ordinary in-band
-`ServerError`s with `action = PROCEED` — none of them is fixed by a re-baseline.
+Rows 9–11 widened in #83, when a deactivated site, a schema-less site and the account concurrency limit stopped
+escaping the typed protocol as a bare `Status.INTERNAL`. They took their numbers in
+[dbf-data-extractor#130](./delta-v2-wire-contract-answers.md), which also split `OVERFLOW`/`OVERFLOW_BYTES` out
+of `INTERNAL`: a client cannot safely treat `INTERNAL` as "too big, switch to CONTINUOUS" when it may equally be
+a genuine fault. Against a server older than that reconciliation these five arrive as their pre-#130 codes
+(`UNAUTHORIZED`, `SCHEMA_MISMATCH`, `ACTIVE_SESSION_EXISTS`, `INTERNAL`) — probe with the presence of
+`SyncStateResponse.generation` if you need to know which you are talking to.
 
 ---
 
@@ -619,6 +628,123 @@ genuinely absent) falls back to the pill's own hint ("no declared schema / not e
 delta Parquet, "may not have been built yet" for checkpoints); anything else gets a generic retry
 toast. The global interceptor toast is suppressed on presign requests and on the 20-second
 sync-state poll (404 is the normal state for a never-connected site).
+
+### Site history wipe and the generation epoch (issue #89)
+
+A re-baseline replaces the changelog baseline and nothing else: the site schema, the upload history,
+the plugin state and — crucially — the client's own sequence counter all survive it. Deleting the
+site destroys the site itself, credentials included. **Wiping a site's history** is the middle
+ground: everything the server knows about the site is destroyed and the site keeps its identity.
+
+| Surface | Endpoint |
+|---|---|
+| Owner | `POST /api/v1/account/sites/{siteId}/delta/wipe` |
+| Admin | `POST /api/v1/sites/{siteId}/delta/wipe` |
+
+The body must echo the site's **name** — the same string the UI shows in the page title and the
+client authenticates with. Anything else is a `400`.
+
+```json
+{ "confirm": "shop-42" }
+```
+
+`200` reports what went:
+
+```json
+{
+  "generation": 4,
+  "deletedBatches": 123, "deletedSegments": 45, "deletedCheckpoints": 12,
+  "deletedFiles": 678, "deletedSqlGenerations": 9, "deletedErrorLogs": 33,
+  "deletedBytes": 123456789,
+  "s3DeleteErrors": 0,
+  "baselineBatchDetached": false
+}
+```
+
+`409` means the wipe did not happen and says which of two things to do about it: `session-in-progress`
+— an ingestion session is live, stop the client (or wait for the 60-minute sweeper) and retry;
+`concurrent-session` — a batch committed while the wipe ran, so the whole wipe was rolled back and can
+simply be retried. Rows are deleted inside one transaction and the S3 objects strictly after it
+commits, so a rollback never leaves rows pointing at files that are gone; objects the bucket refuses
+are counted in `s3DeleteErrors` and left as orphans (the same trade-off retention makes).
+
+**What the client sees.** `NEED_REBASELINE` alone cannot express a wipe: it means "send a full
+snapshot", not "your counters are meaningless now". So `site_sync_state.generation` (V48) is an epoch
+that a wipe bumps and **nothing else does** — an ordinary re-baseline never moves it. It is emitted
+on every surface the client reads before deciding what to send:
+
+- `optional uint64 SyncStateResponse.generation` (field 5)
+- `optional uint64 SessionOpened.generation` (field 5), on both the PROCEED and RESUME_FROM paths, so
+  a long-lived client that never re-polls `GetSyncState` still observes a wipe mid-flight
+- `optional uint64 SessionStart.generation` (field **6**) — the last epoch the client saw
+
+All three carry **explicit presence** (dbf-data-extractor#130). A site starts at epoch 0 and proto3
+implicit presence never puts a zero on the wire, so without `optional` "this server predates epochs"
+and "this server says epoch 0" are indistinguishable. The server always sets the field on both
+response messages, zero included; **absent means an older server, and nothing else**.
+
+The guard keys on presence, not on a zero: an **absent** `SessionStart.generation` is an old client
+and skips the check, while a **present** value that disagrees — `0` against a server at `1` included
+— is refused with `ErrorCode.GENERATION_MISMATCH` (**12**) + `NEED_REBASELINE`. That last case is not
+hypothetical: every site's first wipe moves it 0 → 1, so a "non-zero means new client" test would
+have waved a correct client through exactly when its sequence numbers had become meaningless. The
+guard runs *ahead* of the resume branch: a staged session is heap-local and outlives a wipe of its
+own site, so a resume is exactly the path that can carry stale-epoch records back in.
+
+> **Field numbers.** The obvious numbers were not free. The dbf-data-extractor client carries five
+> private `ErrorCode` values at 7–11 (`OVERFLOW`, `OVERFLOW_BYTES`, `SITE_INACTIVE`,
+> `SCHEMA_REQUIRED`, `CONCURRENT_BATCH_LIMIT`) and a `bool snapshot = 5` on `SessionStart` that this
+> server never declared. The two enums are now reconciled: the server **declares and emits** 7–11
+> with the client's meanings (see the error table below), and `SessionStart` field 5 stays `reserved`
+> — bootstrap and re-baseline both travel as `FULL_SNAPSHOT`, so the client's `snapshot` flag has no
+> server-side purpose. Full rationale and the delivery order: [`delta-v2-wire-contract-answers.md`](./delta-v2-wire-contract-answers.md).
+
+**Client recovery sequence.** The client persists a per-site `last_seen_generation` (initially 0):
+
+1. On every connect, call `GetSyncState`. If `response.generation` differs from the stored value
+   (absent + no local journal → adopt it silently):
+   1. drop the local journal/changelog for the site, reset the local seq counter to 0, forget the
+      cached schema-version ack;
+   2. persist the new generation **before** starting the upload — re-running the comparison is
+      idempotent, so a crash between the two is safe in that order and only in that order.
+2. `SubmitSchema` — the server holds none after a wipe.
+3. `SessionStart{mode: FULL_SNAPSHOT, first_seq: 1, schema_version: <from step 2>, generation: <stored>}`,
+   stream the whole dataset as INSERTs from seq 1, then `SessionEnd`.
+4. Every later `SessionStart` echoes the stored generation. `ServerError{GENERATION_MISMATCH}` or any
+   `NEED_REBASELINE` → back to step 1; a mismatch seen in `SessionOpened.generation` → abort the
+   session and go back to step 1.
+
+**Old clients still recover.** A wipe also raises `rebaseline_requested`, so `GetSyncState` answers
+`NEED_REBASELINE` with `last_applied_seq = 0` and `schema_version = 0`. An old client obeys and
+uploads a FULL_SNAPSHOT from its own un-reset counter, which is accepted (a snapshot is gap-exempt —
+`serverLastSeq = firstSeq - 1`), and there is no SCHEMA_MISMATCH loop because the schema guard is
+skipped while either side reports version 0. Data-wise the site recovers; only the "counters reset to
+zero" semantics needs the updated client.
+
+**Bit BI re-initializes itself.** After a wipe the plugin's delta baselines are re-captured
+automatically — no manual `POST /reinit` on this path. The trigger is the **first checkpoint built
+after the wipe**, not the FULL_SNAPSHOT commit: at commit time every checkpoint of the site has just
+been deleted in the same transaction, so a recapture there would freeze baseline 0 and the DELTA
+segments that follow would generate SQL overlapping the checkpoint CSVs the plugin client downloads
+(duplicate rows in Bit BI). Baselines must be checkpoint seqs, exactly as in a manual reinit. The
+window between snapshot and checkpoint behaves as before: snapshot segments suspend the site's
+baselines, so no SQL is produced while there is nothing consistent to base it on. One
+`DELTA_AUTO_REINIT` entry lands in `plugin_audit_logs`. **An ordinary re-baseline is unchanged** and
+still needs a manual reinit.
+
+**Egress Parquet goes too.** Nothing in the database names the objects under `egress/{siteId}/…`, so
+they are enumerated with a paginated prefix walk after the transaction commits and deleted with the
+rest. This is correctness, not housekeeping: the egress key is derived from sequence numbers alone
+(`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe is the one operation that
+sends those numbers back to zero, so a surviving pre-wipe file whose `(first, last)` pair recurs in
+the new epoch would be served as the new batch's delta by the Parquet download endpoint — and listed
+by the Parquet Export catalog — for any table egress does not overwrite (a table absent from the new
+segment, or skipped by the per-table coercion guard). A listing failure is logged and the wipe still
+reports success: the rows are already gone.
+
+**Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are
+after a re-baseline. They are addressed by key from the live `checkpoints` rows, so no stale read is
+possible through them.
 
 **Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
 request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full

@@ -145,6 +145,27 @@ public interface PluginSqlGenerationRepository {
     List<S3KeySize> findS3KeysByBatchId(UUID batchId);
 
     /**
+     * S3 keys and sizes of every generation that belongs to a site or references one of its batches
+     * on either side (issue #89 — history wipe). The comparison side matters: a generation of a
+     * <em>surviving</em> site may still point at a batch this wipe destroys.
+     *
+     * @param siteId site identifier
+     * @return key/size projections
+     */
+    List<S3KeySize> findS3KeysBySiteId(UUID siteId);
+
+    /**
+     * Delete every generation of a site and every generation referencing one of its batches
+     * (issue #89 — history wipe). Must precede the batch delete: the source-side FK cascades but
+     * the rows carry S3 objects that have to be collected first, and the comparison side would
+     * otherwise be silently nulled.
+     *
+     * @param siteId site identifier
+     * @return number of generations deleted
+     */
+    int deleteBySiteId(UUID siteId);
+
+    /**
      * Deletes SQL generations where the batch is used as comparison.
      *
      * @param batchId comparison batch ID

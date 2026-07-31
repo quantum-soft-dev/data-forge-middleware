@@ -5,6 +5,7 @@
  * Never window.confirm.
  */
 
+import { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import {
   AlertDialog,
@@ -16,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/shared/ui/ui/alert-dialog';
+import { Input } from '@/shared/ui/ui/input';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -77,6 +79,100 @@ export function RebaselineDialog({ open, onOpenChange, onConfirm }: ConfirmDialo
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+interface WipeHistoryDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Typed back by the operator to unlock the button; the backend re-checks it. */
+  siteName: string;
+  onConfirm: (confirm: string) => void;
+  wiping?: boolean;
+}
+
+/**
+ * Irreversibly destroys a site's history (#89).
+ *
+ * <p>Confirm-by-typing rather than a plain "are you sure": the damage here is total, unrecoverable
+ * and invisible until a client next connects, so a mis-click on the wrong site would not announce
+ * itself. The button stays disabled until the typed text is exactly the site's name.</p>
+ */
+export function WipeHistoryDialog({
+  open,
+  onOpenChange,
+  siteName,
+  onConfirm,
+  wiping = false,
+}: WipeHistoryDialogProps) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        {/* The typed confirmation lives one level down, inside the content Radix unmounts on close,
+            so a dialog dismissed and reopened never comes back already unlocked. */}
+        <WipeHistoryDialogBody siteName={siteName} onConfirm={onConfirm} wiping={wiping} />
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function WipeHistoryDialogBody({
+  siteName,
+  onConfirm,
+  wiping,
+}: Pick<WipeHistoryDialogProps, 'siteName' | 'onConfirm'> & { wiping: boolean }) {
+  const [typed, setTyped] = useState('');
+  const confirmed = typed === siteName;
+
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Wipe all history of {siteName}?</AlertDialogTitle>
+        <AlertDialogDescription asChild>
+          <div className="space-y-3">
+            <div
+              className="flex items-start gap-2 rounded-lg border p-3 text-sm text-danger-text"
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                borderColor: 'rgba(239,68,68,0.25)',
+              }}
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.5} />
+              <span>
+                This permanently deletes every batch, uploaded file, changelog segment, checkpoint,
+                error log and generated SQL of this site — including its table schema. It cannot be
+                undone.
+              </span>
+            </div>
+            <p className="text-sm text-ink-secondary">
+              The site itself and its credentials stay. On its next connect the client re-submits
+              its schema and re-uploads the entire dataset as one full snapshot. Bit BI baselines
+              re-capture automatically once the first checkpoint after the wipe is built.
+            </p>
+            <p className="text-sm text-ink-secondary">
+              Type <span className="font-medium text-ink">{siteName}</span> to confirm.
+            </p>
+            <Input
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+              placeholder={siteName}
+              aria-label="Confirm the site name"
+              autoComplete="off"
+            />
+          </div>
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Keep history</AlertDialogCancel>
+        <AlertDialogAction
+          onClick={() => onConfirm(typed)}
+          disabled={!confirmed || wiping}
+          className="bg-danger-solid hover:bg-danger-solid-hover"
+        >
+          {wiping ? 'Wiping…' : 'Wipe history'}
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </>
   );
 }
 

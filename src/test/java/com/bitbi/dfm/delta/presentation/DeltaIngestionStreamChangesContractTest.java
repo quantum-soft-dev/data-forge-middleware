@@ -149,7 +149,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
      * inactive site from a missing schema from a server crash.
      */
     @Test
-    void inactiveSiteIsRejectedWithTypedUnauthorizedInsteadOfStatusInternal() throws Exception {
+    void inactiveSiteIsRejectedWithTypedSiteInactive() throws Exception {
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new BatchLifecycleService.SiteInactiveException(
                         "Cannot start batch for inactive site. Please activate the site first."));
@@ -158,14 +158,14 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         assertEquals(1, received.size());
         assertTrue(received.get(0).hasError(), "an inactive site must produce a typed ServerError");
-        assertEquals(ErrorCode.UNAUTHORIZED, received.get(0).getError().getCode());
+        assertEquals(ErrorCode.SITE_INACTIVE, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction());
         assertTrue(received.get(0).getError().getMessage().contains("inactive site"),
                 "the rejection must carry the reason the client can act on");
     }
 
     @Test
-    void cdcSiteWithoutSchemaIsRejectedWithTypedSchemaMismatch() throws Exception {
+    void cdcSiteWithoutSchemaIsRejectedWithTypedSchemaRequired() throws Exception {
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new BatchLifecycleService.SchemaRequiredException(
                         "Schema required for POSTGRES_CDC sites. Submit it through Delta gRPC SubmitSchema first."));
@@ -174,7 +174,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         assertEquals(1, received.size());
         assertTrue(received.get(0).hasError(), "a missing schema must produce a typed ServerError");
-        assertEquals(ErrorCode.SCHEMA_MISMATCH, received.get(0).getError().getCode());
+        assertEquals(ErrorCode.SCHEMA_REQUIRED, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction(),
                 "SubmitSchema then retry — a re-baseline would hit the same wall");
     }
@@ -186,7 +186,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
      * deactivated site but not for a deleted one.
      */
     @Test
-    void deletedSiteIsRejectedWithTypedUnauthorizedInsteadOfStatusInternal() throws Exception {
+    void deletedSiteIsRejectedWithTypedSiteInactive() throws Exception {
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new BatchLifecycleService.SiteNotFoundException("Site not found: " + SITE));
 
@@ -194,12 +194,12 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         assertEquals(1, received.size());
         assertTrue(received.get(0).hasError(), "a deleted site must produce a typed ServerError");
-        assertEquals(ErrorCode.UNAUTHORIZED, received.get(0).getError().getCode());
+        assertEquals(ErrorCode.SITE_INACTIVE, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction());
     }
 
     @Test
-    void accountConcurrencyLimitIsRejectedWithTypedActiveSessionExists() throws Exception {
+    void accountConcurrencyLimitIsRejectedWithTypedConcurrentBatchLimit() throws Exception {
         when(batchLifecycle.startBatch(eq(ACCOUNT), eq(SITE), any()))
                 .thenThrow(new BatchLifecycleService.ConcurrentBatchLimitException(
                         "Account exceeded concurrent batch limit: 5/5"));
@@ -208,7 +208,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
         assertEquals(1, received.size());
         assertTrue(received.get(0).hasError(), "the concurrency limit must produce a typed ServerError");
-        assertEquals(ErrorCode.ACTIVE_SESSION_EXISTS, received.get(0).getError().getCode());
+        assertEquals(ErrorCode.CONCURRENT_BATCH_LIMIT, received.get(0).getError().getCode());
         assertEquals(RecoveryAction.PROCEED, received.get(0).getError().getAction());
     }
 
@@ -660,7 +660,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
         assertTrue(done.await(5, TimeUnit.SECONDS), "rejected resume did not complete");
         ServerEvent last = second.get(second.size() - 1);
         assertTrue(last.hasError(), "resume onto an inactive site is rejected, not re-attached");
-        assertEquals(ErrorCode.UNAUTHORIZED, last.getError().getCode());
+        assertEquals(ErrorCode.SITE_INACTIVE, last.getError().getCode());
     }
 
     @Test
@@ -1053,7 +1053,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
             ServerEvent last = received.get(received.size() - 1);
             assertTrue(last.hasError());
-            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertEquals(ErrorCode.OVERFLOW, last.getError().getCode());
             verify(batchLifecycle).failBatch(any());
         } finally {
             capChannel.shutdownNow();
@@ -1097,7 +1097,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
             ServerEvent last = received.get(received.size() - 1);
             assertTrue(last.hasError());
-            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertEquals(ErrorCode.OVERFLOW_BYTES, last.getError().getCode());
             assertTrue(last.getError().getMessage().contains("byte"),
                     "the error must name the byte budget, not the record cap: " + last.getError().getMessage());
             assertEquals(RecoveryAction.NEED_REBASELINE, last.getError().getAction());
@@ -1159,7 +1159,7 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
 
             ServerEvent last = received.get(received.size() - 1);
             assertTrue(last.hasError());
-            assertEquals(ErrorCode.INTERNAL, last.getError().getCode());
+            assertEquals(ErrorCode.OVERFLOW_BYTES, last.getError().getCode());
             assertTrue(last.getError().getMessage().contains("byte"), last.getError().getMessage());
             assertFalse(last.getError().getMessage().contains("CONTINUOUS"),
                     "a continuous session must not be advised to use CONTINUOUS mode: "

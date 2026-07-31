@@ -70,5 +70,12 @@ public enum PluginActionType {
      * {@code PluginAuditLogActionTypeIntegrationTest}.
      * </p>
      */
-    API_KEY_ROTATED
+    API_KEY_ROTATED,
+
+    /**
+     * Bit BI: delta baselines re-captured automatically after a site history wipe (issue #89),
+     * on the first checkpoint built post-wipe. Replaces the "reinit required" warning for that
+     * path; an ordinary re-baseline still requires a manual reinit.
+     */
+    DELTA_AUTO_REINIT
 }

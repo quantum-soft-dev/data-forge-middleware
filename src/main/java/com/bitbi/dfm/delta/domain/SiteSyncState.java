@@ -67,6 +67,24 @@ public class SiteSyncState {
     private LocalDateTime rebaselineNotifiedAt;
 
     /**
+     * Epoch counter, bumped by a site history wipe and by nothing else (issue #89). The Delta v2
+     * client persists the last generation it saw and, on any change, drops its local journal and
+     * resets its seq counter to zero — the one thing {@code NEED_REBASELINE} alone cannot express.
+     * The row is reset, never deleted, so the counter is monotonic for the life of the site.
+     */
+    @Column(name = "generation", nullable = false)
+    private long generation = 0L;
+
+    /**
+     * Set by a wipe, consumed by the first checkpoint built afterwards (issue #89). It is what makes
+     * the Bit BI baseline recapture automatic — and it is deliberately not consumed at the
+     * FULL_SNAPSHOT commit, because at that moment every checkpoint of the site has just been
+     * deleted in the same transaction, so a recapture there would freeze baseline 0.
+     */
+    @Column(name = "wipe_pending", nullable = false)
+    private boolean wipePending = false;
+
+    /**
      * Create the initial sync state for a site (no changes applied yet).
      *
      * @param siteId site identifier
@@ -116,6 +134,47 @@ public class SiteSyncState {
         this.rebaselineRequested = false;
         this.rebaselineNotifiedAt = null;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Reset the row for a site history wipe (issue #89): the server keeps nothing of the site's
+     * past, so every watermark, the checkpoint pointer and the schema version go back to what a
+     * brand-new site has.
+     *
+     * <p>Three things distinguish it from {@link #resetForRebaseline(long)}. The schema version is
+     * zeroed, because {@code site_schemas} is deleted with the rest and the client must re-submit
+     * it. {@code rebaselineRequested} is <em>raised</em> rather than cleared, which is what makes
+     * {@code GetSyncState} answer NEED_REBASELINE with no new code and gives the wipe the same
+     * retry-until-the-snapshot-commits semantics as an ordinary re-baseline. And the
+     * {@link #generation} is incremented — the signal that tells the client to reset its own
+     * counters, which a re-baseline must never send.</p>
+     */
+    public void resetForWipe() {
+        this.lastAppliedSeq = 0L;
+        this.lastCheckpointSeq = 0L;
+        this.lastCheckpointAt = null;
+        this.schemaVersion = 0;
+        this.rebaselineRequested = true;
+        // Re-armed from scratch: this request is new, whatever an earlier one had been told.
+        this.rebaselineNotifiedAt = null;
+        this.rebuildRequested = false;
+        this.generation++;
+        this.wipePending = true;
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
+    }
+
+    /**
+     * Take the pending-wipe flag, so the Bit BI baseline recapture runs once per wipe (issue #89).
+     *
+     * @return {@code true} when this call consumed a pending wipe, {@code false} when none was
+     * pending or it was already consumed
+     */
+    public boolean consumeWipePending() {
+        if (!wipePending) {
+            return false;
+        }
+        this.wipePending = false;
+        return true;
     }
 
     /**

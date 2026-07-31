@@ -28,12 +28,27 @@ public interface JpaSiteSyncStateRepository
     Optional<SiteSyncState> findBySiteId(UUID siteId);
 
     @Override
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM SiteSyncState s WHERE s.siteId = :siteId")
+    Optional<SiteSyncState> findBySiteIdForUpdate(UUID siteId);
+
+    @Override
     @Query("SELECT s FROM SiteSyncState s WHERE s.siteId IN :siteIds")
     List<SiteSyncState> findBySiteIdIn(Collection<UUID> siteIds);
 
     @Override
     @Query("SELECT s.siteId FROM SiteSyncState s WHERE s.rebuildRequested = true")
     List<UUID> findSiteIdsWithRebuildRequested();
+
+    /**
+     * Conditional single-statement take of the pending-wipe flag (issue #89): exactly one caller
+     * gets the 1, so exactly one runs the Bit BI baseline recapture.
+     */
+    @Override
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE SiteSyncState s SET s.wipePending = false "
+            + "WHERE s.siteId = :siteId AND s.wipePending = true")
+    int clearWipePending(@Param("siteId") UUID siteId);
 
     /**
      * Conditional single-statement stamp (issue #84): no entity load, no lost update against a

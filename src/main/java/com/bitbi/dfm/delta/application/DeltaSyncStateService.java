@@ -41,8 +41,9 @@ public class DeltaSyncStateService {
                         state.getLastCheckpointSeq(),
                         state.getSchemaVersion(),
                         state.isRebaselineRequested(),
-                        state.getRebaselineNotifiedAt() != null))
-                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false));
+                        state.getRebaselineNotifiedAt() != null,
+                        state.getGeneration()))
+                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false, 0L));
     }
 
     /**
@@ -135,6 +136,18 @@ public class DeltaSyncStateService {
     @Transactional
     public void markRebaselineNotified(UUID siteId) {
         repository.markRebaselineNotified(siteId, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * Take the site's pending-wipe flag (issue #89). The caller that gets {@code true} owns the
+     * post-wipe follow-up work — currently the Bit BI baseline recapture — and no other will.
+     *
+     * @param siteId site identifier
+     * @return {@code true} when this call consumed a pending wipe
+     */
+    @Transactional
+    public boolean consumeWipePending(UUID siteId) {
+        return repository.clearWipePending(siteId) > 0;
     }
 
     /**
@@ -240,8 +253,11 @@ public class DeltaSyncStateService {
      * @param needRebaseline    whether the client must re-baseline (full snapshot)
      * @param rebaselineNotified whether the pending request has already been handed to the client
      *                           (issue #84) — lets the caller skip a redundant stamping round-trip
+     * @param generation        epoch of the site's server-side history (issue #89); a change tells
+     *                          the client to drop its local journal and reset its seq counter
      */
     public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion,
-                                boolean needRebaseline, boolean rebaselineNotified) {
+                                boolean needRebaseline, boolean rebaselineNotified,
+                                long generation) {
     }
 }

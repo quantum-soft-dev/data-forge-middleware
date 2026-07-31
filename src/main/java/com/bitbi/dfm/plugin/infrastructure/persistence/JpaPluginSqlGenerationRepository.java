@@ -132,6 +132,30 @@ public interface JpaPluginSqlGenerationRepository extends JpaRepository<PluginSq
     List<S3KeySize> findS3KeysByBatchId(@Param("batchId") UUID batchId);
 
     /**
+     * Every generation that belongs to a site or references one of its batches (issue #89 — history
+     * wipe). The comparison side is included because a generation of a surviving site may still
+     * point at a batch this wipe destroys.
+     */
+    @Query("""
+        SELECT g.s3Key AS s3Key, g.fileSizeBytes AS fileSizeBytes
+        FROM PluginSqlGeneration g
+        WHERE g.siteId = :siteId
+           OR g.sourceBatchId IN (SELECT b.id FROM Batch b WHERE b.siteId = :siteId)
+           OR g.comparisonBatchId IN (SELECT b.id FROM Batch b WHERE b.siteId = :siteId)
+        """)
+    List<S3KeySize> findS3KeysBySiteId(@Param("siteId") UUID siteId);
+
+    @Override
+    @Modifying(flushAutomatically = true)
+    @Query("""
+        DELETE FROM PluginSqlGeneration g
+        WHERE g.siteId = :siteId
+           OR g.sourceBatchId IN (SELECT b.id FROM Batch b WHERE b.siteId = :siteId)
+           OR g.comparisonBatchId IN (SELECT b.id FROM Batch b WHERE b.siteId = :siteId)
+        """)
+    int deleteBySiteId(@Param("siteId") UUID siteId);
+
+    /**
      * Deletes generations where the batch is used as comparison.
      */
     @Modifying

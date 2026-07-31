@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SiteDetailShell } from './SiteDetailShell'
 import type { Site } from '@/entities/site'
+import type { ReactElement } from 'react'
 
 vi.mock('@/widgets/delta-sync/DeltaSyncWidget', () => ({
   DeltaSyncWidget: () => <div data-testid="delta-sync-widget">delta sync</div>,
@@ -26,10 +28,19 @@ const v2Site: Site = {
   clientApiVersion: 'V2',
 }
 
+/** The Danger zone (#89) owns a mutation, so the shell now needs a query client. */
+function renderShell(ui: ReactElement) {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {ui}
+    </QueryClientProvider>,
+  )
+}
+
 describe('SiteDetailShell (F3)', () => {
   it('renders breadcrumb, title, chips and subline', async () => {
     const onBack = vi.fn()
-    render(<SiteDetailShell site={v2Site} canManage={false} onBack={onBack} />)
+    renderShell(<SiteDetailShell site={v2Site} canManage={false} onBack={onBack} />)
 
     expect(screen.getByRole('heading', { name: 'store-berlin-01' })).toBeInTheDocument()
     expect(screen.getByText('POSTGRES_CDC')).toBeInTheDocument()
@@ -46,7 +57,7 @@ describe('SiteDetailShell (F3)', () => {
   })
 
   it('shows Upload history and Delta Sync tabs for a V2 site, Upload history is default', () => {
-    render(<SiteDetailShell site={v2Site} canManage={false} onBack={() => {}} />)
+    renderShell(<SiteDetailShell site={v2Site} canManage={false} onBack={() => {}} />)
 
     expect(screen.getByRole('tab', { name: 'Upload history' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Delta Sync' })).toBeInTheDocument()
@@ -57,7 +68,7 @@ describe('SiteDetailShell (F3)', () => {
   })
 
   it('styles the active tab per the prototype (blue border pill)', () => {
-    render(<SiteDetailShell site={v2Site} canManage={false} onBack={() => {}} />)
+    renderShell(<SiteDetailShell site={v2Site} canManage={false} onBack={() => {}} />)
 
     const active = screen.getByRole('tab', { name: 'Upload history' })
     expect(active).toHaveAttribute('aria-selected', 'true')

@@ -22,6 +22,16 @@ public interface SiteSyncStateRepository {
     Optional<SiteSyncState> findBySiteId(UUID siteId);
 
     /**
+     * Load the sync state for a site under a pessimistic write lock — the per-site mutex a history
+     * wipe holds for its whole transaction (issue #89), so concurrent wipes and session commits
+     * serialize on the one row every ingestion path already touches.
+     *
+     * @param siteId site identifier
+     * @return the locked sync state, or empty when the site has never synced
+     */
+    Optional<SiteSyncState> findBySiteIdForUpdate(UUID siteId);
+
+    /**
      * Bulk-fetch sync states for a set of sites in one query (Delta Sync UI, B10 —
      * site-list health badge; avoids one query per site under 30 s polling).
      *
@@ -45,6 +55,20 @@ public interface SiteSyncStateRepository {
      * @return number of rows stamped (0 when no request is pending or it was already recorded)
      */
     int markRebaselineNotified(UUID siteId, java.time.LocalDateTime now);
+
+    /**
+     * Take a site's pending-wipe flag as one conditional statement (issue #89), so the Bit BI
+     * baseline recapture runs exactly once per wipe however many checkpoint builds race for it.
+     * <p>
+     * The same reasoning as {@link #markRebaselineNotified}: {@link SiteSyncState} is
+     * {@code @DynamicUpdate} with no {@code @Version}, so a read-then-write clear could be lost
+     * against a concurrent write, and two builds could both believe they consumed the flag.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 1 when this call consumed a pending wipe, 0 when none was pending
+     */
+    int clearWipePending(UUID siteId);
 
     /**
      * Save (insert or update) the sync state.

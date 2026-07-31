@@ -57,6 +57,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 
 - **[Delta Client v2 — Change Request](./cr-delta-client-v2.md)** - gRPC ingestion design (022)
 - **[Delta Client v2 — Client & Sync UI Guide](./delta-client-v2-guide.md)** - protocol, egress, Delta Sync UI, Parquet download (022/023/025)
+- **[Site History Wipe — Client Contract](./site-history-wipe-client-guide.md)** - generation epoch, wipe recovery sequence (035, issue #89)
+- **[Delta v2 Wire Contract — Answers](./delta-v2-wire-contract-answers.md)** - presence, typed error codes, recovery matrix, delivery order (dbf-data-extractor#130)
 - **[Site Types & POSTGRES_CDC — Change Request](./cr-site-types-postgres-cdc.md)** - DBF vs POSTGRES_CDC, site_schemas (019)
 - **[POSTGRES_CDC Client Guide](./postgres-cdc-client-guide.md)** - CDC client integration
 - **[Plugin Reinitialization](./reinit.md)** - re-baseline flow (015)
@@ -135,6 +137,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 | [data-platform-concept.ru.md](./data-platform-concept.ru.md) | Data platform product concept with diagrams | Product, Architects, Developers |
 | [cr-delta-client-v2.md](./cr-delta-client-v2.md) | Delta Client v2 gRPC ingestion — change request (022) | Backend Developers |
 | [delta-client-v2-guide.md](./delta-client-v2-guide.md) | Delta v2 protocol, egress, Sync UI, Parquet download (022/023/025) | Backend, Client integrators |
+| [site-history-wipe-client-guide.md](./site-history-wipe-client-guide.md) | Generation epoch + post-wipe recovery for the Delta v2 client (035) | Client integrators, Backend |
+| [delta-v2-wire-contract-answers.md](./delta-v2-wire-contract-answers.md) | Wire-contract answers: presence, typed codes, recovery matrix, delivery order (dbf-data-extractor#130) | Client integrators, Backend |
 | [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) | Site types (DBF/POSTGRES_CDC) — change request (019) | Backend Developers |
 | [postgres-cdc-client-guide.md](./postgres-cdc-client-guide.md) | POSTGRES_CDC client integration | Client integrators |
 | [reinit.md](./reinit.md) | Plugin reinitialization / re-baseline (015) | Backend Developers |

@@ -19,7 +19,14 @@ public enum AdminActionType {
     ACTIVATE_SITE("Activate Site"),
     DELETE_SITE("Delete Site"),
     UPDATE_SITE_RETENTION("Update Site Retention Policy"),
-    BATCH_CLEANUP("Batch Cleanup");
+    BATCH_CLEANUP("Batch Cleanup"),
+
+    /**
+     * All server-side history of one site destroyed — batches, files, changelog, checkpoints,
+     * schema, plugin SQL, error logs (issue #89). Adding a value here requires a migration
+     * extending {@code chk_action_type} on {@code admin_action_logs} — see V23/V24/V48.
+     */
+    SITE_HISTORY_WIPE("Wipe Site History");
 
     private final String displayName;
 

@@ -71,6 +71,27 @@ export const cancelRebaselineResultSchema = z.object({
 });
 export type CancelRebaselineStatus = z.infer<typeof cancelRebaselineResultSchema>['status'];
 
+/** POST .../delta/wipe (035, issue #89) — what the wipe destroyed. */
+export const siteHistoryWipeResultSchema = z.object({
+  generation: z.number(),
+  deletedBatches: z.number(),
+  deletedSegments: z.number(),
+  deletedCheckpoints: z.number(),
+  deletedFiles: z.number(),
+  deletedSqlGenerations: z.number(),
+  deletedErrorLogs: z.number(),
+  deletedBytes: z.number(),
+  s3DeleteErrors: z.number(),
+  baselineBatchDetached: z.boolean(),
+});
+export type SiteHistoryWipeResult = z.infer<typeof siteHistoryWipeResultSchema>;
+
+/** 409 body of a refused wipe — the two cases need different advice. */
+export const siteHistoryWipeConflictSchema = z.object({
+  status: z.enum(['session-in-progress', 'concurrent-session']),
+});
+export type SiteHistoryWipeConflict = z.infer<typeof siteHistoryWipeConflictSchema>['status'];
+
 /** GET .../sites/delta/health (B10) — one entry per V2 site of the account. */
 export const deltaSyncHealthSchema = z.object({
   siteId: z.string(),

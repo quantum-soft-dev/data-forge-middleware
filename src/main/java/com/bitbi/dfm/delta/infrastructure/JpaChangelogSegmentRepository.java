@@ -136,12 +136,36 @@ public interface JpaChangelogSegmentRepository
             """, nativeQuery = true)
     java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit);
 
+    @Override
+    @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId")
+    java.util.List<String> findAllS3KeysBySiteId(UUID siteId);
+
+    // No clearAutomatically: the wipe keeps its locked SiteSyncState managed across the whole
+    // sequence of bulk deletes and mutates it at the end.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM ChangelogSegment s WHERE s.siteId = :siteId")
+    int deleteBySiteId(UUID siteId);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = CURRENT_TIMESTAMP "
+            + "WHERE s.siteId = :siteId AND s.provisional = false "
+            + "AND s.mode = 'FULL_SNAPSHOT' AND s.pluginSqlAt IS NULL")
+    int markFullSnapshotPluginSqlProcessed(UUID siteId);
+
     // flushAutomatically for the same reason as flipProvisionalByBatchId: clearAutomatically alone
     // detaches whatever the caller's transaction has not yet flushed.
+    //
+    // FULL_SNAPSHOT is excluded on purpose (issue #89): DeltaSqlQueueService routes every snapshot
+    // segment it claims to suspendBaselines, so re-enqueueing them suspends the very baselines this
+    // requeue exists to apply. Snapshot segments never render as SQL anyway.
     @Override
     @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true, flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ChangelogSegment s SET s.pluginSqlAt = NULL "
-            + "WHERE s.siteId = :siteId AND s.provisional = false")
+            + "WHERE s.siteId = :siteId AND s.provisional = false AND s.mode <> 'FULL_SNAPSHOT'")
     int clearPluginSqlBySiteId(UUID siteId);
 }

@@ -12,6 +12,7 @@
 
 import { ArrowLeft } from 'lucide-react';
 import { SYNC_STATE_POLL_MS } from '@/features/delta-sync/api/queries';
+import { DangerZoneCard } from '@/features/delta-sync/ui/DangerZoneCard';
 import { severityTokens } from '@/shared/ui/tokens';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/ui/tabs';
 import { BatchListWidget } from '@/widgets/upload-history/BatchListWidget';
@@ -90,6 +91,10 @@ export function SiteDetailShell({ site, canManage, admin = false, onBack }: Site
           <DeltaSyncWidget siteId={site.id} admin={admin} canManage={canManage} />
         </TabsContent>
       </Tabs>
+
+      {/* Outside the tabs on purpose: the wipe is not a sync operation, and the only irreversible
+          action on this page should not hide behind a tab the operator may not be on. */}
+      <DangerZoneCard siteId={site.id} siteName={site.siteName} scope={{ admin }} />
     </div>
   );
 }

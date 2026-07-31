@@ -120,15 +120,16 @@ class PluginActionTypeTest {
     }
 
     @Test
-    @DisplayName("Should have exactly 20 action types")
-    void shouldHaveTwentyActionTypes() {
+    @DisplayName("Should have exactly 21 action types")
+    void shouldHaveTwentyOneActionTypes() {
         // 6 existing + 3 SQL generation types + 4 history management types + 1 reinit type (Feature 015)
         // + 1 SQL_GENERATION_DELETED (manual admin tools)
         // + 4 Parquet Export types (Feature 028: FILES_LISTED, LINK_CONSUMED, LINK_REJECTED, PASSWORD_ROTATED)
         // + 1 API_KEY_ROTATED (#66)
+        // + 1 DELTA_AUTO_REINIT (#89, site history wipe)
         //
         // Changing this count means adding an enum value, which also needs a migration extending
         // chk_plugin_audit_logs_action_type — PluginAuditLogActionTypeIntegrationTest enforces that.
-        assertThat(PluginActionType.values()).hasSize(20);
+        assertThat(PluginActionType.values()).hasSize(21);
     }
 }

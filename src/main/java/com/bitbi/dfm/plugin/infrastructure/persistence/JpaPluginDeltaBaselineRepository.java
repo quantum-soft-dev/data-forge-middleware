@@ -30,6 +30,12 @@ public interface JpaPluginDeltaBaselineRepository
             @Param("siteId") UUID siteId);
 
     @Override
+    @Modifying(flushAutomatically = true)
+    @Transactional
+    @Query("DELETE FROM PluginDeltaBaseline b WHERE b.siteId = :siteId")
+    int deleteBySiteId(@Param("siteId") UUID siteId);
+
+    @Override
     @Modifying(clearAutomatically = true)
     @Transactional
     @Query("DELETE FROM PluginDeltaBaseline b WHERE b.accountPluginId = :accountPluginId AND b.siteId = :siteId")

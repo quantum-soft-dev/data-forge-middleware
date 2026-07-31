@@ -29,6 +29,18 @@ import java.util.UUID;
 public interface JpaBatchRepository extends JpaRepository<Batch, UUID>, BatchRepository {
 
     /**
+     * Delete every batch of a site (issue #89 — history wipe).
+     *
+     * @param siteId site identifier
+     * @return number of batches deleted
+     */
+    @Override
+    @Modifying(flushAutomatically = true)
+    @Transactional
+    @Query("DELETE FROM Batch b WHERE b.siteId = :siteId")
+    int deleteBySiteId(UUID siteId);
+
+    /**
      * Find active (IN_PROGRESS) batch for site.
      * <p>
      * Enforces "one active batch per site" constraint.
