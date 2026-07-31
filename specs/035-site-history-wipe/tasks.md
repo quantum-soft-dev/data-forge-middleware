@@ -36,7 +36,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   `ConcurrentSessionException`, S3 deferred to after commit, never-synced site → zero counts +
   generation 1.
 
-- [ ] **T04 — REST endpoints.**
+- [x] **T04 — REST endpoints.**
   `POST /api/v1/account/sites/{siteId}/delta/wipe` and `POST /api/v1/sites/{siteId}/delta/wipe`,
   `SiteHistoryWipeRequestDto` (confirm = site domain) + `SiteHistoryWipeResponseDto`, 409 mapping.
   Tests: contract (MockMvc) for 200 shape, 400 (missing/wrong confirm), 403 (foreign site),
