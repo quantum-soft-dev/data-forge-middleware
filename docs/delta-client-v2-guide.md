@@ -620,6 +620,107 @@ delta Parquet, "may not have been built yet" for checkpoints); anything else get
 toast. The global interceptor toast is suppressed on presign requests and on the 20-second
 sync-state poll (404 is the normal state for a never-connected site).
 
+### Site history wipe and the generation epoch (issue #89)
+
+A re-baseline replaces the changelog baseline and nothing else: the site schema, the upload history,
+the plugin state and — crucially — the client's own sequence counter all survive it. Deleting the
+site destroys the site itself, credentials included. **Wiping a site's history** is the middle
+ground: everything the server knows about the site is destroyed and the site keeps its identity.
+
+| Surface | Endpoint |
+|---|---|
+| Owner | `POST /api/v1/account/sites/{siteId}/delta/wipe` |
+| Admin | `POST /api/v1/sites/{siteId}/delta/wipe` |
+
+The body must echo the site's **name** — the same string the UI shows in the page title and the
+client authenticates with. Anything else is a `400`.
+
+```json
+{ "confirm": "shop-42" }
+```
+
+`200` reports what went:
+
+```json
+{
+  "generation": 4,
+  "deletedBatches": 123, "deletedSegments": 45, "deletedCheckpoints": 12,
+  "deletedFiles": 678, "deletedSqlGenerations": 9, "deletedErrorLogs": 33,
+  "deletedBytes": 123456789,
+  "s3DeleteErrors": 0,
+  "baselineBatchDetached": false
+}
+```
+
+`409` means the wipe did not happen and says which of two things to do about it: `session-in-progress`
+— an ingestion session is live, stop the client (or wait for the 60-minute sweeper) and retry;
+`concurrent-session` — a batch committed while the wipe ran, so the whole wipe was rolled back and can
+simply be retried. Rows are deleted inside one transaction and the S3 objects strictly after it
+commits, so a rollback never leaves rows pointing at files that are gone; objects the bucket refuses
+are counted in `s3DeleteErrors` and left as orphans (the same trade-off retention makes).
+
+**What the client sees.** `NEED_REBASELINE` alone cannot express a wipe: it means "send a full
+snapshot", not "your counters are meaningless now". So `site_sync_state.generation` (V48) is an epoch
+that a wipe bumps and **nothing else does** — an ordinary re-baseline never moves it. It is emitted
+on every surface the client reads before deciding what to send:
+
+- `SyncStateResponse.generation` (field 5)
+- `SessionOpened.generation` (field 5), on both the PROCEED and RESUME_FROM paths, so a long-lived
+  client that never re-polls `GetSyncState` still observes a wipe mid-flight
+- `SessionStart.generation` (field **6**) — the last epoch the client saw; `0` means "old client /
+  not tracked" and skips the check
+
+A non-zero `SessionStart.generation` that disagrees with the server is refused with
+`ErrorCode.GENERATION_MISMATCH` (**12**) + `NEED_REBASELINE`. Without that guard a client that saw
+the new epoch but crashed before resetting could open a DELTA session carrying pre-wipe sequence
+numbers. The guard runs *ahead* of the resume branch: a staged session is heap-local and outlives a
+wipe of its own site, so a resume is exactly the path that can carry stale-epoch records back in.
+
+> **Field numbers.** The obvious numbers were not free. The dbf-data-extractor client carries five
+> private `ErrorCode` values at 7–11 (`OVERFLOW`, `OVERFLOW_BYTES`, `SITE_INACTIVE`,
+> `SCHEMA_REQUIRED`, `CONCURRENT_BATCH_LIMIT`) and a `bool snapshot = 5` on `SessionStart` that this
+> server has never declared. Enum 7 and a varint bool both parse cleanly, so reusing those numbers
+> would have failed silently on the wire. `ErrorCode` 7–11 and `SessionStart` field 5 are `reserved`
+> in `delta-ingestion.proto`; see the comments there for what this server actually emits for those
+> five conditions.
+
+**Client recovery sequence.** The client persists a per-site `last_seen_generation` (initially 0):
+
+1. On every connect, call `GetSyncState`. If `response.generation` differs from the stored value
+   (absent + no local journal → adopt it silently):
+   1. drop the local journal/changelog for the site, reset the local seq counter to 0, forget the
+      cached schema-version ack;
+   2. persist the new generation **before** starting the upload — re-running the comparison is
+      idempotent, so a crash between the two is safe in that order and only in that order.
+2. `SubmitSchema` — the server holds none after a wipe.
+3. `SessionStart{mode: FULL_SNAPSHOT, first_seq: 1, schema_version: <from step 2>, generation: <stored>}`,
+   stream the whole dataset as INSERTs from seq 1, then `SessionEnd`.
+4. Every later `SessionStart` echoes the stored generation. `ServerError{GENERATION_MISMATCH}` or any
+   `NEED_REBASELINE` → back to step 1; a mismatch seen in `SessionOpened.generation` → abort the
+   session and go back to step 1.
+
+**Old clients still recover.** A wipe also raises `rebaseline_requested`, so `GetSyncState` answers
+`NEED_REBASELINE` with `last_applied_seq = 0` and `schema_version = 0`. An old client obeys and
+uploads a FULL_SNAPSHOT from its own un-reset counter, which is accepted (a snapshot is gap-exempt —
+`serverLastSeq = firstSeq - 1`), and there is no SCHEMA_MISMATCH loop because the schema guard is
+skipped while either side reports version 0. Data-wise the site recovers; only the "counters reset to
+zero" semantics needs the updated client.
+
+**Bit BI re-initializes itself.** After a wipe the plugin's delta baselines are re-captured
+automatically — no manual `POST /reinit` on this path. The trigger is the **first checkpoint built
+after the wipe**, not the FULL_SNAPSHOT commit: at commit time every checkpoint of the site has just
+been deleted in the same transaction, so a recapture there would freeze baseline 0 and the DELTA
+segments that follow would generate SQL overlapping the checkpoint CSVs the plugin client downloads
+(duplicate rows in Bit BI). Baselines must be checkpoint seqs, exactly as in a manual reinit. The
+window between snapshot and checkpoint behaves as before: snapshot segments suspend the site's
+baselines, so no SQL is produced while there is nothing consistent to base it on. One
+`DELTA_AUTO_REINIT` entry lands in `plugin_audit_logs`. **An ordinary re-baseline is unchanged** and
+still needs a manual reinit.
+
+**Non-goal**: the egress Parquet objects under `egress/{siteId}/…` are not deleted — nothing in the
+database tracks them and removing them would need a paginated prefix walk that does not exist. They
+are left as orphans, as checkpoint objects already are after a re-baseline.
+
 **Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
 request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full
 rebuild queue answers 503 (flag cleared); rebuild flags orphaned by a restart are re-driven on

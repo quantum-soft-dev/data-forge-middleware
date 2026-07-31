@@ -63,7 +63,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   "Danger zone" on `SiteDetailShell`, 409 toast.
   Tests: dialog gating + mutation.
 
-- [ ] **T08 — Docs.**
+- [x] **T08 — Docs.**
   `docs/delta-client-v2-guide.md` (generation contract + wipe recovery sequence),
   `docs/site-history-wipe-client-guide.md` (the dbf-data-extractor contract),
   `docs/README.md` index, `CLAUDE.md` recent-changes entry.
