@@ -730,8 +730,24 @@ opened #83. They are now served to the source addresses listed in
 
 Collection on dev is a `PodMonitoring` (`k8s/overlays/dev/podmonitoring.yaml`, 30 s interval) picked
 up by the managed-Prometheus collector that already runs in the cluster; the samples land in Cloud
-Monitoring under `prometheus.googleapis.com/delta_sessions_started/counter` and friends and are
-queryable with PromQL. Read them by hand with:
+Monitoring under `prometheus.googleapis.com/<exported name>/counter` and are queryable with PromQL.
+
+**Use the exported name, not the Micrometer one** — a query written as `delta.sessions.started` or
+even `delta_sessions_started` selects no series. Dots become underscores and every counter gains a
+`_total` suffix:
+
+| Micrometer meter | Prometheus / Cloud Monitoring |
+|---|---|
+| `delta.sessions.started` | `delta_sessions_started_total` |
+| `delta.sessions.committed` | `delta_sessions_committed_total` |
+| `delta.sessions.overflow{reason=records\|bytes}` | `delta_sessions_overflow_total{reason=...}` |
+| `delta.reconciliation.failures` | `delta_reconciliation_failures_total` |
+| `delta.egress.segments` | `delta_egress_segments_total` |
+| `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
+| `delta.checkpoint.duration` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
+
+So the Cloud Monitoring type for the session counter is
+`prometheus.googleapis.com/delta_sessions_started_total/counter`. Read the raw values by hand with:
 
 ```bash
 kubectl -n forge port-forward deploy/forge-backend 8080:8080
