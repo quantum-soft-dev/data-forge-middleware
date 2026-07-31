@@ -126,4 +126,38 @@ class PluginDeltaBaselineServiceTest {
 
         verifyNoInteractions(sweepWorker, segmentRepository);
     }
+
+    @Test
+    @DisplayName("site recapture: freezes that site's checkpoint seqs and re-enqueues its segments")
+    void shouldRecaptureOneSite() {
+        Site site = mock(Site.class);
+        when(site.getId()).thenReturn(V2_SITE_ID);
+        when(checkpointRepository.findBySiteId(V2_SITE_ID)).thenReturn(
+                List.of(Checkpoint.create(V2_SITE_ID, "customers", 100L, 5L)));
+
+        service.recaptureForSite(activation, site);
+
+        verify(baselineRepository).deleteByAccountPluginIdAndSiteId(ACTIVATION_ID, V2_SITE_ID);
+        ArgumentCaptor<PluginDeltaBaseline> captor = ArgumentCaptor.forClass(PluginDeltaBaseline.class);
+        verify(baselineRepository).save(captor.capture());
+        assertThat(captor.getValue().getBaselineSeq()).isEqualTo(100L);
+        verify(segmentRepository).clearPluginSqlBySiteId(V2_SITE_ID);
+        verify(sweepWorker).wake();
+    }
+
+    @Test
+    @DisplayName("site recapture: leaves the activation's other sites alone")
+    void shouldNotTouchSiblingSites() {
+        // A history wipe recaptures for one site. The activation usually covers several, and the
+        // others' baselines describe history that is still there.
+        UUID siblingSiteId = UUID.randomUUID();
+        Site site = mock(Site.class);
+        when(site.getId()).thenReturn(V2_SITE_ID);
+        when(checkpointRepository.findBySiteId(V2_SITE_ID)).thenReturn(List.of());
+
+        service.recaptureForSite(activation, site);
+
+        verify(baselineRepository, never()).deleteByAccountPluginIdAndSiteId(ACTIVATION_ID, siblingSiteId);
+        verify(segmentRepository, never()).clearPluginSqlBySiteId(siblingSiteId);
+    }
 }

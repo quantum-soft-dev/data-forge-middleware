@@ -5,6 +5,7 @@ import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
+import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
@@ -12,6 +13,7 @@ import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -44,6 +46,7 @@ public class CheckpointService {
     private final S3CheckpointStorage checkpointStorage;
     private final SiteSchemaService siteSchemaService;
     private final DeltaMetrics metrics;
+    private final ApplicationEventPublisher eventPublisher;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
@@ -51,7 +54,8 @@ public class CheckpointService {
                              DeltaSyncStateService syncStateService,
                              S3CheckpointStorage checkpointStorage,
                              SiteSchemaService siteSchemaService,
-                             DeltaMetrics metrics) {
+                             DeltaMetrics metrics,
+                             ApplicationEventPublisher eventPublisher) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
@@ -59,6 +63,7 @@ public class CheckpointService {
         this.checkpointStorage = checkpointStorage;
         this.siteSchemaService = siteSchemaService;
         this.metrics = metrics;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -155,6 +160,17 @@ public class CheckpointService {
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
         checkpointStorage.uploadFrame(siteId, seq, ChangelogCodec.serialize(CheckpointFrame.toRecords(state)));
         syncStateService.recordCheckpoint(siteId, seq);
+        // The single choke point every checkpoint build passes through, scheduled or forced. The
+        // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
+        // first moment post-wipe at which there are checkpoint seqs to freeze as SQL baselines.
+        // The checkpoint is already durable by now, so a listener's failure must not be allowed to
+        // fail the build behind it — that would freeze the pointer and stop retention.
+        try {
+            eventPublisher.publishEvent(new CheckpointRecordedEvent(siteId, seq));
+        } catch (RuntimeException e) {
+            log.error("A checkpoint listener failed for site {} at seq {}; the checkpoint itself "
+                    + "is committed", siteId, seq, e);
+        }
         return state;
     }
 

@@ -41,6 +41,16 @@ public interface JpaSiteSyncStateRepository
     List<UUID> findSiteIdsWithRebuildRequested();
 
     /**
+     * Conditional single-statement take of the pending-wipe flag (issue #89): exactly one caller
+     * gets the 1, so exactly one runs the Bit BI baseline recapture.
+     */
+    @Override
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE SiteSyncState s SET s.wipePending = false "
+            + "WHERE s.siteId = :siteId AND s.wipePending = true")
+    int clearWipePending(@Param("siteId") UUID siteId);
+
+    /**
      * Conditional single-statement stamp (issue #84): no entity load, no lost update against a
      * concurrent cancellation, and a no-op once recorded. Mirrors the lock-free
      * {@code JpaBatchRepository.touchActivity} pattern used on the same gRPC path.

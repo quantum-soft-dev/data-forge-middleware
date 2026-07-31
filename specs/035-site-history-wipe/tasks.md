@@ -42,7 +42,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   Tests: contract (MockMvc) for 200 shape, 400 (missing/wrong confirm), 403 (foreign site),
   404 (unknown site), 409 (both statuses), on both surfaces.
 
-- [ ] **T05 — Bit BI auto-reinit.**
+- [x] **T05 — Bit BI auto-reinit.**
   `PluginDeltaBaselineService.recaptureForSite` (with `recaptureForReinit` looping over it),
   `CheckpointRecordedEvent` published by `CheckpointService`, `PluginDeltaWipeReinitListener`
   consuming `wipe_pending` and recapturing, `PluginAuditService.logDeltaAutoReinit`, and the

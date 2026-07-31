@@ -57,6 +57,20 @@ public interface SiteSyncStateRepository {
     int markRebaselineNotified(UUID siteId, java.time.LocalDateTime now);
 
     /**
+     * Take a site's pending-wipe flag as one conditional statement (issue #89), so the Bit BI
+     * baseline recapture runs exactly once per wipe however many checkpoint builds race for it.
+     * <p>
+     * The same reasoning as {@link #markRebaselineNotified}: {@link SiteSyncState} is
+     * {@code @DynamicUpdate} with no {@code @Version}, so a read-then-write clear could be lost
+     * against a concurrent write, and two builds could both believe they consumed the flag.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return 1 when this call consumed a pending wipe, 0 when none was pending
+     */
+    int clearWipePending(UUID siteId);
+
+    /**
      * Save (insert or update) the sync state.
      *
      * @param state sync state entity

@@ -688,6 +688,37 @@ public class PluginAuditService {
     }
 
     /**
+     * Logs the automatic baseline recapture that follows a site history wipe (issue #89).
+     * <p>
+     * Deferred to after commit like every other state-change entry: the recapture and the entry
+     * describing it are one transaction, so a rollback takes both. It replaces the "reinit
+     * required" warning for this path — an ordinary re-baseline still raises that warning and
+     * still needs a manual reinit.
+     * </p>
+     *
+     * @param accountId     the account owning the site
+     * @param siteId        the wiped site whose baselines were re-captured
+     * @param checkpointSeq the checkpoint seq the new baselines were taken at
+     */
+    public void logDeltaAutoReinit(UUID accountId, UUID siteId, long checkpointSeq) {
+        try {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("siteId", siteId.toString());
+            metadata.put("checkpointSeq", checkpointSeq);
+            metadata.put("trigger", "SITE_HISTORY_WIPE");
+
+            publishAfterCommit(PluginAuditLog
+                    .success("bit-bi", accountId, PluginActionType.DELTA_AUTO_REINIT)
+                    .withMetadata(metadata));
+            log.debug("Audit logged: DELTA_AUTO_REINIT account={} site={} seq={}",
+                    accountId, siteId, checkpointSeq);
+        } catch (Exception e) {
+            log.error("Failed to log delta auto-reinit audit: account={} site={} error={}",
+                    accountId, siteId, e.getMessage());
+        }
+    }
+
+    /**
      * Logs a failed plugin reinitialization attempt.
      *
      * @param pluginId the plugin identifier

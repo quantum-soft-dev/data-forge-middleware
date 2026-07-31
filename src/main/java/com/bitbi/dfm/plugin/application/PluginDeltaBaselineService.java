@@ -69,15 +69,25 @@ public class PluginDeltaBaselineService {
      */
     @Transactional
     public void recaptureForReinit(AccountPlugin activation) {
-        List<Site> sites = accountSites(activation).toList();
-        for (Site site : sites) {
-            capture(activation, site);
-            int requeued = segmentRepository.clearPluginSqlBySiteId(site.getId());
-            log.info("Reinit re-enqueued {} segments for delta SQL: siteId={}", requeued, site.getId());
-        }
-        if (!sites.isEmpty()) {
-            wakeAfterCommit();
-        }
+        accountSites(activation).forEach(site -> recaptureForSite(activation, site));
+    }
+
+    /**
+     * Recapture one site's baselines and re-enqueue only that site's segments.
+     *
+     * <p>Site-scoped on purpose (issue #89): the automatic recapture after a site history wipe must
+     * not disturb the activation's other sites, whose baselines still describe history that is
+     * very much still there.</p>
+     *
+     * @param activation the account's bit-bi activation
+     * @param site       the site to recapture
+     */
+    @Transactional
+    public void recaptureForSite(AccountPlugin activation, Site site) {
+        capture(activation, site);
+        int requeued = segmentRepository.clearPluginSqlBySiteId(site.getId());
+        log.info("Recapture re-enqueued {} segments for delta SQL: siteId={}", requeued, site.getId());
+        wakeAfterCommit();
     }
 
     private java.util.stream.Stream<Site> accountSites(AccountPlugin activation) {

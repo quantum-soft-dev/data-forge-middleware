@@ -139,6 +139,18 @@ public class DeltaSyncStateService {
     }
 
     /**
+     * Take the site's pending-wipe flag (issue #89). The caller that gets {@code true} owns the
+     * post-wipe follow-up work — currently the Bit BI baseline recapture — and no other will.
+     *
+     * @param siteId site identifier
+     * @return {@code true} when this call consumed a pending wipe
+     */
+    @Transactional
+    public boolean consumeWipePending(UUID siteId) {
+        return repository.clearWipePending(siteId) > 0;
+    }
+
+    /**
      * Flag a site for a forced out-of-schedule checkpoint rebuild (creating the sync state row
      * if absent); cleared via {@link #clearRebuildRequested} once the rebuild completes.
      * Idempotent: an already-flagged site is left untouched.

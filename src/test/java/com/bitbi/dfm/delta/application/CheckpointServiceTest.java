@@ -42,10 +42,12 @@ class CheckpointServiceTest {
     private final S3CheckpointStorage checkpointStorage = mock(S3CheckpointStorage.class);
     private final SiteSchemaService siteSchemaService = mock(SiteSchemaService.class);
     private final DeltaMetrics metrics = mock(DeltaMetrics.class);
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher =
+            mock(org.springframework.context.ApplicationEventPublisher.class);
 
     private final CheckpointService service = new CheckpointService(
             segmentRepository, changelogSegmentService, checkpointRepository,
-            syncStateService, checkpointStorage, siteSchemaService, metrics);
+            syncStateService, checkpointStorage, siteSchemaService, metrics, eventPublisher);
 
     @BeforeEach
     @SuppressWarnings("unchecked")
