@@ -26,7 +26,7 @@ Per-task gate: `./gradlew test -PexcludeIntegration` (+ frontend `tsc --noEmit`,
   Tests: handler tests for each of the four emissions, the rejection, and `generation = 0` skipping
   the guard.
 
-- [ ] **T03 — `DeltaSiteWipeService`.**
+- [x] **T03 — `DeltaSiteWipeService`.**
   Repository additions (site-scoped key lookups + bulk deletes, `findBySiteIdForUpdate`,
   `detachBaselineBatchesOfSite`), the service itself (lock → live-session guard → collect keys →
   ordered deletes → detach → schema delete → `resetForWipe` → audit → batch re-count guard;

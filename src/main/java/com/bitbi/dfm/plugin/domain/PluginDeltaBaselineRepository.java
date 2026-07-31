@@ -22,6 +22,15 @@ public interface PluginDeltaBaselineRepository {
     int deleteByAccountPluginIdAndSiteId(Long accountPluginId, UUID siteId);
 
     /**
+     * Delete every baseline of a site across all activations (issue #89 — history wipe). The site
+     * row survives a wipe, so no cascade fires and the delete must be explicit.
+     *
+     * @param siteId site identifier
+     * @return number of baselines deleted
+     */
+    int deleteBySiteId(UUID siteId);
+
+    /**
      * The site's per-table baseline seqs, keyed by table name (input to the SQL generation
      * filter: emit iff {@code seq > baselineSeq(table)}, missing table → 0).
      */

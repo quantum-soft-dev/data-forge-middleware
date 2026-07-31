@@ -28,6 +28,11 @@ public interface JpaSiteSyncStateRepository
     Optional<SiteSyncState> findBySiteId(UUID siteId);
 
     @Override
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM SiteSyncState s WHERE s.siteId = :siteId")
+    Optional<SiteSyncState> findBySiteIdForUpdate(UUID siteId);
+
+    @Override
     @Query("SELECT s FROM SiteSyncState s WHERE s.siteId IN :siteIds")
     List<SiteSyncState> findBySiteIdIn(Collection<UUID> siteIds);
 

@@ -123,6 +123,24 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findNextPendingPluginSql(int limit);
 
     /**
+     * Every S3 object of a site's changelog, published and provisional alike — the collection step
+     * of a history wipe (issue #89), which unlike a re-baseline must leave nothing behind.
+     *
+     * @param siteId site identifier
+     * @return S3 keys of all the site's segments
+     */
+    List<String> findAllS3KeysBySiteId(UUID siteId);
+
+    /**
+     * Delete every segment of a site, published and provisional (issue #89). Must run before the
+     * site's batches: {@code changelog_segments.batch_id} has no cascade.
+     *
+     * @param siteId site identifier
+     * @return number of segments deleted
+     */
+    int deleteBySiteId(UUID siteId);
+
+    /**
      * Re-enqueue all of a site's segments for plugin SQL generation (plugin reinit: the
      * checkpoint-lag gap is regenerated under freshly captured baselines).
      *

@@ -70,6 +70,15 @@ public interface UploadedFileRepository {
     List<FileKeySize> findS3KeysByBatchId(UUID batchId);
 
     /**
+     * S3 keys and sizes of every file a site ever uploaded (issue #89 — history wipe). One query
+     * across all the site's batches: a wiped site can have thousands of them.
+     *
+     * @param siteId site identifier
+     * @return key/size projections
+     */
+    List<FileKeySize> findS3KeysBySiteId(UUID siteId);
+
+    /**
      * Projection interface for latest file info query.
      */
     interface LatestFileInfo {

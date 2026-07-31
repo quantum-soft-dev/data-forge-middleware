@@ -87,4 +87,15 @@ public interface JpaAccountPluginRepository extends JpaRepository<AccountPlugin,
     @Modifying
     @Query("UPDATE AccountPlugin ap SET ap.lastUsedAt = CURRENT_TIMESTAMP, ap.updatedAt = CURRENT_TIMESTAMP WHERE ap.id = :id")
     void updateLastUsedAtById(@Param("id") Long id);
+
+    /**
+     * Detaches plugin baselines that point at a batch of the site (issue #89 — history wipe).
+     * {@code updatedAt} is deliberately untouched: the activation itself did not change, the batch
+     * it happened to reference simply stopped existing.
+     */
+    @Override
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE AccountPlugin ap SET ap.baselineBatchId = NULL "
+            + "WHERE ap.baselineBatchId IN (SELECT b.id FROM Batch b WHERE b.siteId = :siteId)")
+    int detachBaselineBatchesOfSite(@Param("siteId") UUID siteId);
 }

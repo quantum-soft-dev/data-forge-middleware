@@ -26,4 +26,10 @@ public interface JpaCheckpointRepository extends JpaRepository<Checkpoint, UUID>
     @Override
     @Query("SELECT c FROM Checkpoint c WHERE c.siteId = :siteId")
     List<Checkpoint> findBySiteId(UUID siteId);
+
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM Checkpoint c WHERE c.siteId = :siteId")
+    int deleteBySiteId(UUID siteId);
 }

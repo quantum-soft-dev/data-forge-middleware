@@ -28,6 +28,19 @@ import java.util.UUID;
 public interface JpaErrorLogRepository extends JpaRepository<ErrorLog, UUID>, ErrorLogRepository {
 
     /**
+     * Delete every error log of a site (issue #89 — history wipe). Bulk, not per-row: a wiped site
+     * can carry hundreds of thousands of rows across the monthly partitions.
+     *
+     * @param siteId site identifier
+     * @return number of rows deleted
+     */
+    @Override
+    @Modifying(flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM ErrorLog e WHERE e.siteId = :siteId")
+    int deleteBySiteId(UUID siteId);
+
+    /**
      * Find errors by site with pagination.
      *
      * @param siteId site identifier

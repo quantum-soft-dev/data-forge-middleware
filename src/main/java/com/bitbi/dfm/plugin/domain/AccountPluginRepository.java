@@ -132,4 +132,17 @@ public interface AccountPluginRepository {
      * @param id the account plugin ID
      */
     void updateLastUsedAtById(Long id);
+
+    /**
+     * Null every {@code baseline_batch_id} pointing at a batch of the site (issue #89 — history
+     * wipe). The FK is {@code ON DELETE RESTRICT}, so a wipe cannot delete the batches otherwise.
+     * <p>
+     * Nulled, not re-pointed: the next completed batch of the account becomes the baseline by
+     * itself, which is exactly the semantics of a reinit performed with no batches in hand.
+     * </p>
+     *
+     * @param siteId site identifier
+     * @return number of activations detached
+     */
+    int detachBaselineBatchesOfSite(UUID siteId);
 }

@@ -22,6 +22,16 @@ public interface SiteSyncStateRepository {
     Optional<SiteSyncState> findBySiteId(UUID siteId);
 
     /**
+     * Load the sync state for a site under a pessimistic write lock — the per-site mutex a history
+     * wipe holds for its whole transaction (issue #89), so concurrent wipes and session commits
+     * serialize on the one row every ingestion path already touches.
+     *
+     * @param siteId site identifier
+     * @return the locked sync state, or empty when the site has never synced
+     */
+    Optional<SiteSyncState> findBySiteIdForUpdate(UUID siteId);
+
+    /**
      * Bulk-fetch sync states for a set of sites in one query (Delta Sync UI, B10 —
      * site-list health badge; avoids one query per site under 30 s polling).
      *

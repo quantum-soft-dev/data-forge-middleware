@@ -78,6 +78,16 @@ public interface BatchRepository {
 
     void deleteById(UUID id);
 
+    /**
+     * Delete every batch of a site (issue #89 — history wipe). Uploaded files and file comparisons
+     * follow through their {@code ON DELETE CASCADE} FKs; changelog segments do <b>not</b> and must
+     * be deleted first.
+     *
+     * @param siteId site identifier
+     * @return number of batches deleted
+     */
+    int deleteBySiteId(UUID siteId);
+
     Page<Batch> findBySiteId(UUID siteId, Pageable pageable);
 
     Page<Batch> findByStatus(BatchStatus status, Pageable pageable);

@@ -136,6 +136,18 @@ public interface JpaChangelogSegmentRepository
             """, nativeQuery = true)
     java.util.List<ChangelogSegment> findNextPendingPluginSql(int limit);
 
+    @Override
+    @Query("SELECT s.s3Key FROM ChangelogSegment s WHERE s.siteId = :siteId")
+    java.util.List<String> findAllS3KeysBySiteId(UUID siteId);
+
+    // No clearAutomatically: the wipe keeps its locked SiteSyncState managed across the whole
+    // sequence of bulk deletes and mutates it at the end.
+    @Override
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM ChangelogSegment s WHERE s.siteId = :siteId")
+    int deleteBySiteId(UUID siteId);
+
     // flushAutomatically for the same reason as flipProvisionalByBatchId: clearAutomatically alone
     // detaches whatever the caller's transaction has not yet flushed.
     @Override
