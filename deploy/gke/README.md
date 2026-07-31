@@ -156,8 +156,11 @@ change that only touches the ConfigMap, run `kubectl -n forge rollout restart de
 If the variable is right and it still 403s, check the address family the connection actually used.
 
 The `delta_*` counters are registered eagerly at startup, so a healthy pod always prints them, at
-`0.0` if it has served no session. An empty grep with a 200 therefore means the *exporter* is
-broken (registry or `micrometer-registry-prometheus` missing), not that ingestion has been idle.
+`0.0` if it has served no session. An empty grep with a **200** therefore does not mean ingestion
+has been idle — it means the response came from something other than a current backend pod (the
+port-forward landed on another workload, or the image predates the meters), or a meter filter is
+dropping them. It does *not* indicate a missing `micrometer-registry-prometheus`: without that
+dependency the endpoint is not mapped at all and the curl returns **404**, not an empty 200.
 
 ## Placeholders to fill before a real deploy
 

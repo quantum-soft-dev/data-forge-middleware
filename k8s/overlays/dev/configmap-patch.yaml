@@ -22,6 +22,9 @@ data:
   # Delta gRPC (9090) serves TLS in-pod: the external ALB only speaks HTTP/2 to
   # backends over TLS, and the site Bearer token travels in gRPC metadata.
   # Cert/key come from the forge-backend-grpc-tls Secret (see deployment patch).
+  DELTA_GRPC_TLS_ENABLED: "true"
+  DELTA_GRPC_TLS_CERT_PATH: "/etc/forge/grpc-tls/tls.crt"
+  DELTA_GRPC_TLS_KEY_PATH: "/etc/forge/grpc-tls/tls.key"
   # Who may read /actuator/prometheus and /actuator/metrics/** (issue #83, item 5). The
   # managed-Prometheus collector scrapes the pod from the cluster pod range — `gcloud container
   # clusters describe dev-bitbi-cluster` reports clusterIpv4Cidr 10.4.0.0/14, and the collectors
@@ -31,6 +34,3 @@ data:
   # External traffic reaches none of these — nginx only proxies /api, and the load balancer would
   # arrive from a Google front-end range.
   METRICS_SCRAPE_ALLOWED_CIDRS: "10.4.0.0/14,127.0.0.1/32,::1/128"
-  DELTA_GRPC_TLS_ENABLED: "true"
-  DELTA_GRPC_TLS_CERT_PATH: "/etc/forge/grpc-tls/tls.crt"
-  DELTA_GRPC_TLS_KEY_PATH: "/etc/forge/grpc-tls/tls.key"
