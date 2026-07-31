@@ -95,8 +95,26 @@ reading them as something else.
 
 Note the `NEED_REBASELINE` on both overflow rows. It is not a demand for a full snapshot on the next
 attempt — it says "this session committed nothing, start over"; the *how* is the CONTINUOUS retry in
-the last column. If that overload is awkward on the client side, say so and the server will carry a
-distinct action rather than have the client special-case the code.
+the last column.
+
+**Settled with the client team: no new `RecoveryAction`.** `NEED_REBASELINE` stays on both overflow
+rows, and the mode the session was in decides what it means:
+
+| Session mode at overflow | Client behaviour |
+|---|---|
+| `DELTA` | retry in CONTINUOUS mode |
+| `CONTINUOUS` | **terminal** — a configuration error, not a retry |
+| `FULL_SNAPSHOT` | **terminal** — a configuration error, not a retry |
+
+A snapshot must not degrade into a CONTINUOUS session to get around a cap: CONTINUOUS publishes as
+it goes, so it cannot offer the atomic replace-on-`SessionEnd` that makes a snapshot a snapshot.
+Overflow in either of the last two rows means the caps are set wrong for this deployment, and the
+fix is server configuration.
+
+The server enforces the one invariant that can produce an unrecoverable snapshot overflow —
+`delta.ingestion.snapshot-seal-records` **must** be below `delta.ingestion.max-session-records`,
+checked at startup, so a bad pair fails the pod rather than the site. The shipped defaults (25 000
+against 2 000 000) were already safe; nothing but this check kept them that way.
 
 ## 6. Reachability of typed overflow — yes, both, at a single point
 
@@ -121,7 +139,10 @@ What can still reject one:
 | `batch.timeout.minutes` | 60 | measured from last session activity, not from session start |
 
 Segment size itself is not a rejection: it is the seal threshold, and a snapshot crossing it seals
-and continues.
+and continues. That only holds while the seal fires *before* the cap, so the server now refuses to
+start unless `delta.ingestion.snapshot-seal-records` (25 000) is below
+`delta.ingestion.max-session-records` (2 000 000) — see Q5. Both caps are per session and count the
+live buffer, so a sealed segment's records no longer count towards them.
 
 ## 8. `CONTINUOUS + snapshot=true` — no server-side need
 
@@ -169,25 +190,34 @@ The server's `delta-ingestion.proto` is the single canonical wire contract. Any 
 a generated artefact of it.
 
 The cross-repository descriptor check is welcome — names, field and enum numbers, wire types,
-`optional` presence and reserved ranges all included. The server side can publish the descriptor set
-as a build artefact so the check has something stable to compare against; say which format suits the
-client build (`protoc --descriptor_set_out`, or the `.proto` itself pinned by commit).
+`optional` presence and reserved ranges all included.
+
+**Settled**: the client repository vendors this server's `.proto` verbatim, pinned to the merge SHA
+of PR #90, and its CI compares normalized descriptors. Nothing is required of the server build; the
+`.proto` at that SHA is the reference. When the contract changes again the server will say so in the
+PR description, with the new SHA to re-pin.
 
 Delivery order is as proposed: merge PR #90 → deploy the server → release the client. **Do not
 release a client that relies on typed errors or presence-aware generation before the server is
 deployed** — against an older server both degrade quietly rather than break, but the epoch guard is
 simply absent, which is the state PR #90 exists to end.
 
-**Minimum server version.** There is no version RPC today. Until one exists, the reliable probe is
-`GetSyncState`: **if `generation` is present, the server is this release or newer** — typed errors
-and the presence-aware guard ship in the same PR and cannot be separated. If the client would rather
-have an explicit capability, ask and the server will add one rather than have the client infer it.
+**Minimum server version.** **Settled: no capability or version RPC.** The probe is `GetSyncState` —
+**if `generation` is present, the server is this release or newer**. That single bit is sufficient
+because the presence-aware fields, the typed codes 7–12 and the new guard all ship in this one PR and
+cannot arrive separately. If a later change ever splits them, the server will add an explicit
+capability then rather than let the inference rot.
 
 ---
 
-## Open questions back to the client team
+## Settled — nothing outstanding
 
-1. Is `NEED_REBASELINE` on the two overflow rows acceptable, or should the server carry a distinct
-   action for "retry in CONTINUOUS" (Q5)?
-2. Which descriptor format do you want for the cross-repo check (Q12)?
-3. Do you want an explicit capability/version RPC, or is presence-of-`generation` enough (Q12)?
+The three questions this document originally left open were answered by the client team on
+2026-07-31 and are folded into Q5 and Q12 above:
+
+1. **No new `RecoveryAction`** — `NEED_REBASELINE` stays on both overflow rows; only `DELTA` +
+   `OVERFLOW` switches to CONTINUOUS, and overflow in `CONTINUOUS` or `FULL_SNAPSHOT` is terminal.
+   The server now fails startup on the configuration that could cause the unrecoverable case.
+2. **Contract check** against this server's `.proto`, vendored client-side and pinned to the PR #90
+   merge SHA; normalized descriptors compared in the client's CI.
+3. **No capability RPC** — presence of `SyncStateResponse.generation` is the version probe.

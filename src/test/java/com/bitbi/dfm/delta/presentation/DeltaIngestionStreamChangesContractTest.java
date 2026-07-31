@@ -1037,7 +1037,9 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 mock(com.bitbi.dfm.delta.application.DeltaEgressWorker.class), rebaselineService);
         DeltaIngestionService capped = new DeltaIngestionService(
                 syncStateService, batchLifecycle, siteSchemaService, commitService, rebaselineService,
-                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L, 500, 100); // cap = 2 records
+                // cap = 2 records; the snapshot seal must stay below it (#130) — irrelevant to this
+                // DELTA session, but the constructor now refuses the inverted pair outright.
+                new DeltaMetrics(new SimpleMeterRegistry()), 2, Long.MAX_VALUE, 3900000L, 300000L, 16777216L, 500, 1);
         String name = InProcessServerBuilder.generateName();
         Server capServer = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(ServerInterceptors.intercept(capped, authContext(SITE, ACCOUNT))).build().start();
