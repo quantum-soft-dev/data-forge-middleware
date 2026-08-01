@@ -1,6 +1,5 @@
 package com.bitbi.dfm.delta.presentation;
 
-import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.integration.BaseIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.hamcrest.Matchers.containsString;
@@ -44,14 +44,19 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
-    @Autowired
-    private S3CheckpointStorage checkpointStorage;
-
     @BeforeEach
     void cleanSegments() {
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE);
         jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE);
         // Defensive: assertions must not be satisfied by other tests' leftovers either.
         purgeEgressPrefix(SITE);
+    }
+
+    @AfterEach
+    void cleanSeededArtifacts() {
+        // The manifest rows are committed and the database is shared: leaving a PENDING/FAILED row
+        // behind would make another class's claim-query assertions see work that is not theirs.
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE);
     }
 
     @AfterEach
@@ -62,25 +67,29 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
         purgeEgressPrefix(SITE);
     }
 
-    private void seedSegment(long firstSeq, long lastSeq) {
+    private void seedArtifact(String tableName, String artifactStatus) {
+        boolean ready = "READY".equals(artifactStatus);
         jdbc.update("""
-                INSERT INTO changelog_segments
-                    (id, site_id, batch_id, first_seq, last_seq, record_count, content_hash, s3_key, mode, created_at)
-                VALUES (?, ?, ?, ?, ?, 42, 'hash', 'changelog/x', 'DELTA', '2026-07-05 10:00:00'::timestamp)
-                """, UUID.randomUUID(), SITE, BATCH, firstSeq, lastSeq);
+                INSERT INTO batch_parquet_artifacts
+                    (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
+                     checksum, attempt_count, created_at, updated_at, ready_at, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, 0)
+                """, UUID.randomUUID(), SITE, BATCH, tableName, artifactStatus,
+                ready ? "egress/%s/batches/%s/%s.parquet".formatted(SITE, BATCH, tableName) : null,
+                ready ? 42L : null, ready ? 1234L : null, ready ? "abc123" : null,
+                ready ? LocalDateTime.now() : null);
     }
 
     @Test
     @DisplayName("owner: returns a presigned URL when the delta Parquet file exists")
     void shouldPresignOwnedBatchParquet() throws Exception {
-        seedSegment(401, 950);
-        checkpointStorage.uploadDelta(SITE, "orders", 401, 950, new byte[]{1, 2, 3});
+        seedArtifact("orders", "READY");
 
         mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "orders"))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.downloadUrl").isNotEmpty())
-                .andExpect(jsonPath("$.fileName").value("orders_seq401-950.parquet"))
+                .andExpect(jsonPath("$.fileName").value("orders_batch-" + BATCH + ".parquet"))
                 .andExpect(jsonPath("$.downloadUrl", containsString("egress")))
                 .andExpect(jsonPath("$.expiresAt").isNotEmpty());
     }
@@ -88,9 +97,38 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
     @Test
     @DisplayName("returns 404 when the table's file was never egressed (no declared schema)")
     void shouldReturn404WhenFileMissing() throws Exception {
-        seedSegment(401, 950);
-
         mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "no_schema_table"))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("returns 409 while the unified artifact is still finalizing")
+    void shouldReturn409WhenArtifactNotReady() throws Exception {
+        seedArtifact("orders", "PENDING");
+
+        mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "orders"))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message", containsString("finalization")));
+    }
+
+    @Test
+    @DisplayName("returns 409 while a failed table still has attempts left")
+    void shouldReturn409WhenArtifactFailedButRetryable() throws Exception {
+        seedArtifact("orders", "FAILED");
+
+        mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "orders"))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("returns 404 once finalization gave up on that table")
+    void shouldReturn404WhenArtifactAbandoned() throws Exception {
+        seedArtifact("orders", "ABANDONED");
+
+        mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "orders"))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))
                 .andExpect(status().isNotFound());
     }

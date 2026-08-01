@@ -104,6 +104,51 @@ class BatchHistoryServiceTest {
     }
 
     @Test
+    void getBatchDetailsAggregatesDuplicateTableStatsAcrossSegmentsAndIgnoresLegacyNullStats() {
+        UUID accountId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        Batch batch = Batch.start(accountId, siteId);
+
+        ChangelogSegment first = mock(ChangelogSegment.class);
+        when(first.getStats()).thenReturn(Map.of(
+                "orders", new TableChangeStats(10, 2, 1),
+                "customers", new TableChangeStats(3, 0, 0)));
+        when(first.getMode()).thenReturn("FULL_SNAPSHOT");
+        when(first.getFirstSeq()).thenReturn(1L);
+        when(first.getLastSeq()).thenReturn(16L);
+
+        ChangelogSegment legacy = mock(ChangelogSegment.class);
+        when(legacy.getStats()).thenReturn(null);
+        when(legacy.getMode()).thenReturn("FULL_SNAPSHOT");
+        when(legacy.getFirstSeq()).thenReturn(17L);
+        when(legacy.getLastSeq()).thenReturn(20L);
+
+        ChangelogSegment last = mock(ChangelogSegment.class);
+        when(last.getStats()).thenReturn(Map.of(
+                "orders", new TableChangeStats(5, 4, 2),
+                "customers", new TableChangeStats(0, 1, 1)));
+        when(last.getMode()).thenReturn("FULL_SNAPSHOT");
+        when(last.getFirstSeq()).thenReturn(21L);
+        when(last.getLastSeq()).thenReturn(34L);
+
+        when(batchRepository.findByIdWithFiles(batch.getId())).thenReturn(Optional.of(batch));
+        when(changelogSegmentRepository.findByBatchId(batch.getId()))
+                .thenReturn(List.of(last, legacy, first));
+
+        BatchDetailDto dto = service.getBatchDetails(batch.getId(), accountId);
+
+        assertEquals(2, dto.deltaStats().size());
+        assertEquals("customers", dto.deltaStats().get(0).table());
+        assertEquals(3, dto.deltaStats().get(0).inserts());
+        assertEquals(1, dto.deltaStats().get(0).updates());
+        assertEquals(1, dto.deltaStats().get(0).deletes());
+        assertEquals("orders", dto.deltaStats().get(1).table());
+        assertEquals(15, dto.deltaStats().get(1).inserts());
+        assertEquals(6, dto.deltaStats().get(1).updates());
+        assertEquals(3, dto.deltaStats().get(1).deletes());
+    }
+
+    @Test
     void listBatchHistoryIncludesDeltaTotalsAggregatedAcrossSegments() {
         // 029: a session batch owns N segments; the list row shows the batch-level aggregate
         // (SUM of record counts, DISTINCT table count) computed SQL-side per page.

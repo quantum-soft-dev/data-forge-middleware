@@ -19,6 +19,12 @@ import java.util.function.Supplier;
  *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
+ *   <li>{@code delta.batch-parquet.artifacts} — completed-batch artifacts settled, tagged
+ *       {@code outcome=ready|failed|abandoned}; {@code abandoned} is a permanently 404-ing
+ *       user-facing download and is the one worth alerting on (036)</li>
+ *   <li>{@code delta.batch-parquet.duration} — time to replay a batch into one table's artifact</li>
+ *   <li>{@code delta.batch-parquet.reclaims} — claims taken over after their build lease expired;
+ *       a rising count means builds are outrunning {@code lease-seconds}</li>
  * </ul>
  *
  * @author Data Forge Team
@@ -38,6 +44,11 @@ public class DeltaMetrics {
     private final Timer checkpointDuration;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
+    private final Counter batchParquetReady;
+    private final Counter batchParquetFailed;
+    private final Counter batchParquetAbandoned;
+    private final Counter batchParquetReclaims;
+    private final Timer batchParquetDuration;
 
     public DeltaMetrics(MeterRegistry registry) {
         this.sessionsStarted = Counter.builder("delta.sessions.started")
@@ -64,6 +75,46 @@ public class DeltaMetrics {
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.batchParquetReady = batchParquetOutcome(registry, "ready");
+        this.batchParquetFailed = batchParquetOutcome(registry, "failed");
+        this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
+        this.batchParquetReclaims = Counter.builder("delta.batch-parquet.reclaims")
+                .description("Completed-batch Parquet claims taken over after their lease expired")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.batchParquetDuration = Timer.builder("delta.batch-parquet.duration")
+                .description("Time to replay a completed batch into one table's Parquet artifact")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+    }
+
+    private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
+        return Counter.builder("delta.batch-parquet.artifacts")
+                .description("Completed-batch Parquet artifacts settled, by outcome")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("outcome", outcome).register(registry);
+    }
+
+    /** One table's completed-batch artifact is published and downloadable. */
+    public void batchParquetReady() {
+        batchParquetReady.increment();
+    }
+
+    /** An attempt failed but the artifact stays retryable. */
+    public void batchParquetFailed() {
+        batchParquetFailed.increment();
+    }
+
+    /** An artifact used up its attempts: its download answers 404 until someone intervenes. */
+    public void batchParquetAbandoned() {
+        batchParquetAbandoned.increment();
+    }
+
+    /** A claim was taken over because its build lease had expired. */
+    public void batchParquetReclaimed() {
+        batchParquetReclaims.increment();
+    }
+
+    /** Time one artifact build (replay + upload), whatever its outcome. */
+    public <T> T timeBatchParquetBuild(Supplier<T> build) {
+        return batchParquetDuration.record(build);
     }
 
     /** A new ingestion session opened a batch. */

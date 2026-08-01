@@ -3,14 +3,18 @@ package com.bitbi.dfm.integration;
 import com.bitbi.dfm.batch.application.BatchRetentionService;
 import com.bitbi.dfm.batch.application.BatchRetentionService.BatchCleanupRequest;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -18,6 +22,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("Batch Retention Integration Tests (Testcontainers)")
 class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
+
+    @TempDir
+    Path tempDir;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -34,10 +41,13 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private UploadedFileRepository uploadedFileRepository;
 
+    @Autowired
+    private S3CheckpointStorage checkpointStorage;
+
     @Test
     @Transactional
     @DisplayName("Should cleanup eligible batches and cascade error logs")
-    void shouldCleanupEligibleBatches() {
+    void shouldCleanupEligibleBatches() throws Exception {
         UUID accountId = UUID.randomUUID();
         UUID siteId = UUID.randomUUID();
         UUID eligibleBatchId = UUID.randomUUID();
@@ -138,6 +148,19 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                 "{}"
         );
 
+        Path artifactFile = tempDir.resolve("orders.parquet");
+        Files.write(artifactFile, new byte[]{1, 2, 3, 4});
+        String artifactKey = checkpointStorage.uploadBatchParquet(
+                siteId, eligibleBatchId, "orders", artifactFile);
+        jdbcTemplate.update("""
+                INSERT INTO batch_parquet_artifacts
+                    (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
+                     checksum, attempt_count, created_at, updated_at, ready_at, version)
+                VALUES (?, ?, ?, 'orders', 'READY', ?, 1, 4, 'checksum', 1,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                """, UUID.randomUUID(), siteId, eligibleBatchId, artifactKey);
+        assertThat(checkpointStorage.exists(artifactKey)).isTrue();
+
         BatchRetentionService.BatchCleanupSummary summary = batchRetentionService.runCleanup(
                 new BatchCleanupRequest(siteId, null, null, null, 100, false)
         );
@@ -151,6 +174,10 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
 
         assertThat(uploadedFileRepository.countByBatchId(eligibleBatchId)).isZero();
         assertThat(errorLogRepository.countByBatchId(eligibleBatchId)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM batch_parquet_artifacts WHERE batch_id = ?",
+                Long.class, eligibleBatchId)).isZero();
+        assertThat(checkpointStorage.exists(artifactKey)).isFalse();
     }
 
     @Test

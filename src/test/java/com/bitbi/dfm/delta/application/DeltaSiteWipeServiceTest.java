@@ -5,6 +5,7 @@ import com.bitbi.dfm.account.domain.AdminActionType;
 import com.bitbi.dfm.account.infrastructure.AdminActionLogRepository;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
@@ -68,6 +69,7 @@ class DeltaSiteWipeServiceTest {
     private final AccountPluginRepository accountPluginRepository = mock(AccountPluginRepository.class);
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final CheckpointRepository checkpointRepository = mock(CheckpointRepository.class);
+    private final BatchParquetArtifactRepository artifactRepository = mock(BatchParquetArtifactRepository.class);
     private final ErrorLogRepository errorLogRepository = mock(ErrorLogRepository.class);
     private final SiteSchemaService siteSchemaService = mock(SiteSchemaService.class);
     private final S3FileStorageService s3FileStorageService = mock(S3FileStorageService.class);
@@ -80,7 +82,7 @@ class DeltaSiteWipeServiceTest {
     void setUp() {
         service = new DeltaSiteWipeService(directTransactionTemplate(), syncStateRepository, batchRepository,
                 uploadedFileRepository, sqlGenerationRepository, baselineRepository, accountPluginRepository,
-                segmentRepository, checkpointRepository, errorLogRepository, siteSchemaService,
+                segmentRepository, checkpointRepository, artifactRepository, errorLogRepository, siteSchemaService,
                 s3FileStorageService, checkpointStorage, adminActionLogRepository, BATCH_TIMEOUT_MINUTES);
 
         when(syncStateRepository.findBySiteIdForUpdate(SITE_ID))
@@ -90,6 +92,7 @@ class DeltaSiteWipeServiceTest {
         when(sqlGenerationRepository.findS3KeysBySiteId(SITE_ID)).thenReturn(List.of());
         when(segmentRepository.findAllS3KeysBySiteId(SITE_ID)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of());
+        when(artifactRepository.findS3KeysBySiteId(SITE_ID)).thenReturn(List.of());
         when(s3FileStorageService.deleteObjects(anyList())).thenReturn(new DeleteObjectsResult(0, List.of()));
         when(checkpointStorage.listAllKeys(any())).thenReturn(List.of());
         when(batchRepository.countBySiteId(SITE_ID)).thenReturn(0L);
@@ -148,13 +151,14 @@ class DeltaSiteWipeServiceTest {
         service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
 
         InOrder order = inOrder(sqlGenerationRepository, baselineRepository, segmentRepository,
-                checkpointRepository, errorLogRepository, accountPluginRepository, batchRepository,
-                siteSchemaService);
+                checkpointRepository, artifactRepository, errorLogRepository, accountPluginRepository,
+                batchRepository, siteSchemaService);
         order.verify(sqlGenerationRepository).deleteBySiteId(SITE_ID);
         order.verify(baselineRepository).deleteBySiteId(SITE_ID);
         // Segments before batches: changelog_segments.batch_id has no cascade.
         order.verify(segmentRepository).deleteBySiteId(SITE_ID);
         order.verify(checkpointRepository).deleteBySiteId(SITE_ID);
+        order.verify(artifactRepository).deleteBySiteId(SITE_ID);
         order.verify(errorLogRepository).deleteBySiteId(SITE_ID);
         // Detach before batches: the baseline_batch_id FK is ON DELETE RESTRICT.
         order.verify(accountPluginRepository).detachBaselineBatchesOfSite(SITE_ID);
@@ -175,16 +179,22 @@ class DeltaSiteWipeServiceTest {
         when(segmentRepository.findAllS3KeysBySiteId(SITE_ID))
                 .thenReturn(List.of("segments/1.pb.gz", "segments/2.pb.gz"));
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
+        when(artifactRepository.findS3KeysBySiteId(SITE_ID))
+                .thenReturn(List.of("egress/site/batches/batch/orders.parquet"));
 
         service.wipe(site(), DeltaSiteWipeService.Initiator.OWNER);
 
         InOrder order = inOrder(uploadedFileRepository, sqlGenerationRepository, segmentRepository,
-                checkpointRepository);
+                checkpointRepository, artifactRepository);
         order.verify(uploadedFileRepository).findS3KeysBySiteId(SITE_ID);
         order.verify(sqlGenerationRepository).findS3KeysBySiteId(SITE_ID);
         order.verify(sqlGenerationRepository).deleteBySiteId(SITE_ID);
         order.verify(segmentRepository).findAllS3KeysBySiteId(SITE_ID);
         order.verify(segmentRepository).deleteBySiteId(SITE_ID);
+        order.verify(checkpointRepository).findBySiteId(SITE_ID);
+        order.verify(checkpointRepository).deleteBySiteId(SITE_ID);
+        order.verify(artifactRepository).findS3KeysBySiteId(SITE_ID);
+        order.verify(artifactRepository).deleteBySiteId(SITE_ID);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
@@ -192,7 +202,8 @@ class DeltaSiteWipeServiceTest {
         assertThat(keys.getValue()).containsExactlyInAnyOrder(
                 "uploads/a.csv", "plugins/bit-bi/x.sql",
                 "segments/1.pb.gz", "segments/2.pb.gz",
-                "cp/t.csv.gz", "cp/t.parquet");
+                "cp/t.csv.gz", "cp/t.parquet",
+                "egress/site/batches/batch/orders.parquet");
     }
 
     @Test
@@ -249,7 +260,7 @@ class DeltaSiteWipeServiceTest {
     void shouldDeleteEgressObjects() {
         // The wipe resets the sequence counter, so these keys — derived from seq alone — are reused
         // by the new epoch. A survivor would be served as a post-wipe batch's delta by
-        // DeltaSegmentParquetQueryService whenever egress does not overwrite it.
+        // BatchParquetDownloadService whenever egress does not overwrite it.
         when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/")).thenReturn(List.of(
                 "egress/" + SITE_ID + "/orders/delta/seq=1-1000.parquet",
                 "egress/" + SITE_ID + "/items/delta/seq=1-1000.parquet"));

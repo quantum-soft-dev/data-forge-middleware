@@ -27,7 +27,18 @@ interface DeltaBatchDetailProps {
 }
 
 export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
-  const stats = [...(batch.deltaStats ?? [])].sort((a, b) => a.table.localeCompare(b.table));
+  const stats = Array.from(
+    (batch.deltaStats ?? []).reduce((byTable, stat) => {
+      const current = byTable.get(stat.table);
+      byTable.set(stat.table, {
+        table: stat.table,
+        inserts: (current?.inserts ?? 0) + stat.inserts,
+        updates: (current?.updates ?? 0) + stat.updates,
+        deletes: (current?.deletes ?? 0) + stat.deletes,
+      });
+      return byTable;
+    }, new Map<string, NonNullable<BatchDetail['deltaStats']>[number]>()),
+  ).map(([, stat]) => stat).sort((a, b) => a.table.localeCompare(b.table));
   const totals = stats.reduce(
     (acc, stat) => ({
       inserts: acc.inserts + stat.inserts,
@@ -50,7 +61,8 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
       await openPresignedDownload(
         () => presignBatchTableParquet(batch.siteId, batch.id, tableName),
         {
-          notFoundMessage: `No delta Parquet for "${tableName}" — the table has no declared schema or the file is not egressed yet.`,
+          notFoundMessage: `No delta Parquet for "${tableName}" — the file could not be built, most likely because the table has no declared schema.`,
+          notReadyMessage: `Preparing the delta Parquet for "${tableName}" — try again in a moment.`,
         },
       );
     } finally {

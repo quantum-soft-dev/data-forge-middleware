@@ -8,6 +8,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
@@ -81,6 +82,7 @@ public class DeltaSiteWipeService {
     private final AccountPluginRepository accountPluginRepository;
     private final ChangelogSegmentRepository segmentRepository;
     private final CheckpointRepository checkpointRepository;
+    private final BatchParquetArtifactRepository artifactRepository;
     private final ErrorLogRepository errorLogRepository;
     private final SiteSchemaService siteSchemaService;
     private final S3FileStorageService s3FileStorageService;
@@ -97,6 +99,7 @@ public class DeltaSiteWipeService {
                                 AccountPluginRepository accountPluginRepository,
                                 ChangelogSegmentRepository segmentRepository,
                                 CheckpointRepository checkpointRepository,
+                                BatchParquetArtifactRepository artifactRepository,
                                 ErrorLogRepository errorLogRepository,
                                 SiteSchemaService siteSchemaService,
                                 S3FileStorageService s3FileStorageService,
@@ -112,6 +115,7 @@ public class DeltaSiteWipeService {
         this.accountPluginRepository = accountPluginRepository;
         this.segmentRepository = segmentRepository;
         this.checkpointRepository = checkpointRepository;
+        this.artifactRepository = artifactRepository;
         this.errorLogRepository = errorLogRepository;
         this.siteSchemaService = siteSchemaService;
         this.s3FileStorageService = s3FileStorageService;
@@ -186,10 +190,11 @@ public class DeltaSiteWipeService {
      * <p>Egress writes to {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}, a key
      * derived from sequence numbers alone — and a wipe is the one operation that sends those
      * numbers back to zero. Left in place, a pre-wipe file whose {@code (firstSeq, lastSeq)} pair
-     * happens to recur in the new epoch is served as the new batch's delta by
-     * {@code DeltaSegmentParquetQueryService} (and listed by {@code ParquetExportCatalogDao}) unless
-     * egress overwrites it, which it does not for a table missing from the new segment or skipped by
-     * the per-table coercion guard. So this is a correctness step, not housekeeping.</p>
+     * happens to recur in the new epoch is listed by {@code ParquetExportCatalogDao} as the new
+     * epoch's delta unless egress overwrites it, which it does not for a table missing from the new
+     * segment or skipped by the per-table coercion guard. So this is a correctness step, not
+     * housekeeping. (The batch download endpoint is no longer exposed to this: since 036 it resolves
+     * an exact {@code batch_parquet_artifacts} row instead of deriving a seq-based key.)</p>
      *
      * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
      * and the objects are only reachable through keys the rows never held. A listing failure is
@@ -274,6 +279,11 @@ public class DeltaSiteWipeService {
             }
         }
         int deletedCheckpoints = checkpointRepository.deleteBySiteId(siteId);
+
+        // Unified artifact objects are also covered by the post-commit egress-prefix walk, but the
+        // manifest gives us exact keys even if that listing later fails.
+        s3Keys.addAll(artifactRepository.findS3KeysBySiteId(siteId));
+        artifactRepository.deleteBySiteId(siteId);
 
         // 8. Error logs.
         int deletedErrorLogs = errorLogRepository.deleteBySiteId(siteId);

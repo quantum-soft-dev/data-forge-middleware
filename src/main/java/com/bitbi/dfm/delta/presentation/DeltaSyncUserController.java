@@ -3,7 +3,7 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
-import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
+import com.bitbi.dfm.delta.application.BatchParquetDownloadService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
@@ -63,7 +63,7 @@ public class DeltaSyncUserController {
     private final DeltaSyncStateService syncStateService;
     private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
-    private final DeltaSegmentParquetQueryService segmentParquetQueryService;
+    private final BatchParquetDownloadService batchParquetDownloadService;
     private final DeltaSiteWipeService wipeService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
@@ -71,14 +71,14 @@ public class DeltaSyncUserController {
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
                                    DeltaRebaselineCancellationService cancellationService,
                                    DeltaCheckpointQueryService checkpointQueryService,
-                                   DeltaSegmentParquetQueryService segmentParquetQueryService,
+                                   BatchParquetDownloadService batchParquetDownloadService,
                                    DeltaSiteWipeService wipeService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
         this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
-        this.segmentParquetQueryService = segmentParquetQueryService;
+        this.batchParquetDownloadService = batchParquetDownloadService;
         this.wipeService = wipeService;
         this.siteService = siteService;
         this.authorizationHelper = authorizationHelper;
@@ -311,22 +311,26 @@ public class DeltaSyncUserController {
     @Operation(
             summary = "Presign a batch delta Parquet download",
             description = "Issues a fresh presigned S3 URL (15-minute expiry) for the typed delta Parquet file that "
-                    + "the egress worker materialized for one table of the batch's changelog segment. 404 when the "
-                    + "batch has no segment or the table's file was never egressed (no declared schema)."
+                    + "the finalizer materialized from all of the completed batch's changelog segments. 409 while "
+                    + "finalization is pending — including the first request for a batch that closed before this "
+                    + "feature shipped, which is enqueued on demand. 404 when the batch has nothing to build for "
+                    + "that table or finalization gave up on it."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Presigned URL issued",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = DeltaCheckpointDownloadResponseDto.class))),
             @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
-            @ApiResponse(responseCode = "404", description = "Site, segment or delta Parquet file not found",
+            @ApiResponse(responseCode = "404", description = "Site not found, or the batch has no artifact for that table",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "Unified artifact is still finalizing",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
     public ResponseEntity<DeltaCheckpointDownloadResponseDto> downloadBatchParquet(@PathVariable UUID siteId,
                                                                                    @PathVariable UUID batchId,
                                                                                    @PathVariable String tableName) {
         requireOwnedSite(siteId);
-        return segmentParquetQueryService.presignBatchTableParquet(siteId, batchId, tableName)
+        return batchParquetDownloadService.presignBatchTableParquet(siteId, batchId, tableName)
                 .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }

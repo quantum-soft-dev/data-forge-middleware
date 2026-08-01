@@ -80,6 +80,9 @@ public interface ChangelogSegmentRepository {
 
     List<ChangelogSegment> findByBatchId(UUID batchId);
 
+    /** A completed batch's published raw segments in replay order (036, issue #93). */
+    List<ChangelogSegment> findByBatchIdOrderByFirstSeq(UUID batchId);
+
     boolean existsByBatchId(UUID batchId);
 
     /**

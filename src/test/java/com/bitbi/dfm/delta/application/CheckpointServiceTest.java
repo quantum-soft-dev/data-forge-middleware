@@ -164,7 +164,7 @@ class CheckpointServiceTest {
 
     @Test
     void buildCheckpointDoesNotHoldATransactionAcrossS3RoundTrips() throws NoSuchMethodException {
-        // Same contract as DeltaSegmentParquetQueryService (025-T3): the build downloads the frame,
+        // Same contract as BatchParquetDownloadService (025-T3): the build downloads the frame,
         // every segment, and uploads CSV/Parquet/frame to S3 — holding a HikariCP connection across
         // those network calls pins it for the whole multi-minute build. Repository calls run in
         // their own short transactions; recordCheckpoint is transactional on its own.

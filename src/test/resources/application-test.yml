@@ -8,6 +8,8 @@ delta:
   egress:
     # Slow sweep so tests exercise the explicit commit-time wake, not the fallback
     sweep-ms: 3600000
+  batch-parquet:
+    sweep-ms: 3600000
 
 spring:
   main:

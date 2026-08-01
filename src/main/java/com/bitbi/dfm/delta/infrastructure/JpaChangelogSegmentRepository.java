@@ -78,6 +78,11 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findByBatchId(UUID batchId);
 
     @Override
+    @Query("SELECT s FROM ChangelogSegment s WHERE s.batchId = :batchId AND s.provisional = false "
+            + "ORDER BY s.firstSeq")
+    java.util.List<ChangelogSegment> findByBatchIdOrderByFirstSeq(UUID batchId);
+
+    @Override
     boolean existsByBatchId(UUID batchId);
 
     @Override

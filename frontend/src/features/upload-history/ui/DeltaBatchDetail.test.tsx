@@ -57,6 +57,26 @@ describe('DeltaBatchDetail — delta Parquet downloads (025)', () => {
     expect(screen.getAllByRole('button', { name: 'Parquet' })).toHaveLength(2);
   });
 
+  it('defensively aggregates duplicate table entries into one row and one download', () => {
+    render(
+      <DeltaBatchDetail
+        batch={makeBatch({
+          deltaStats: [
+            { table: 'orders', inserts: 10, updates: 2, deletes: 1 },
+            { table: 'orders', inserts: 5, updates: 4, deletes: 2 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getAllByTestId('delta-stats-row-orders')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Parquet' })).toHaveLength(1);
+    expect(screen.getByTestId('delta-stats-row-orders')).toHaveTextContent('+15');
+    expect(screen.getByTestId('delta-stats-row-orders')).toHaveTextContent('6');
+    expect(screen.getByTestId('delta-stats-row-orders')).toHaveTextContent('−3');
+    expect(screen.getByTestId('delta-stats-total-row')).toHaveTextContent('24');
+  });
+
   it('colors the status circle from shared tokens per severity (stalled vs critical)', () => {
     // CSSOM normalizes color strings — run tokens through the same normalization
     const css = (color: string) => {

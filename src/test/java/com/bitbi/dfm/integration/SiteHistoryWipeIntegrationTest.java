@@ -17,9 +17,12 @@ import com.bitbi.dfm.site.domain.Site;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +41,9 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
     private static final UUID ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     /** store-01 — seeded site under ACCOUNT_ID. */
     private static final UUID SITE_ID = UUID.fromString("0199baac-f852-753f-6fc3-7c994fc38654");
+
+    @TempDir
+    Path tempDir;
 
     @Autowired
     private DeltaSiteWipeService wipeService;
@@ -74,6 +80,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 WHERE site_id = ? AND status = 'IN_PROGRESS'
                 """, SITE_ID);
         jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", SITE_ID);
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE_ID);
         jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE_ID);
         jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", SITE_ID);
         jdbc.update("DELETE FROM plugin_delta_baselines WHERE site_id = ?", SITE_ID);
@@ -91,7 +98,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
 
     @Test
     @DisplayName("empties every site-scoped table and bumps the epoch")
-    void wipeEmptiesTheSite() {
+    void wipeEmptiesTheSite() throws Exception {
         UUID batchId = seedBatch();
         changelogSegmentService.persist(SITE_ID, batchId, "DELTA", 1L, List.of(
                 insert(1L, "Ann"), insert(2L, "Bob")));
@@ -101,6 +108,11 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         seedUploadedFile(batchId);
         seedErrorLog(batchId);
         pointPluginBaselineAt(batchId);
+        Path artifactFile = tempDir.resolve("customers.parquet");
+        Files.write(artifactFile, new byte[]{1, 2, 3, 4});
+        String artifactKey = checkpointStorage.uploadBatchParquet(
+                SITE_ID, batchId, "customers", artifactFile);
+        seedReadyArtifact(batchId, artifactKey);
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
@@ -117,9 +129,11 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         assertThat(count("SELECT COUNT(*) FROM batches WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM changelog_segments WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM checkpoints WHERE site_id = ?")).isZero();
+        assertThat(count("SELECT COUNT(*) FROM batch_parquet_artifacts WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM error_logs WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM site_schemas WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM plugin_delta_baselines WHERE site_id = ?")).isZero();
+        assertThat(checkpointStorage.exists(artifactKey)).isFalse();
 
         // The site itself survives — that is the whole point of a wipe rather than a delete.
         assertThat(count("SELECT COUNT(*) FROM sites WHERE id = ?")).isEqualTo(1);
@@ -322,6 +336,16 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 INSERT INTO error_logs (id, batch_id, site_id, type, title, message, occurred_at)
                 VALUES (?, ?, ?, 'TEST', 'boom', 'boom', now())
                 """, UUID.randomUUID(), batchId, SITE_ID);
+    }
+
+    private void seedReadyArtifact(UUID batchId, String s3Key) {
+        jdbc.update("""
+                INSERT INTO batch_parquet_artifacts
+                    (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
+                     checksum, attempt_count, created_at, updated_at, ready_at, version)
+                VALUES (?, ?, ?, 'customers', 'READY', ?, 2, 4, 'checksum', 1,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                """, UUID.randomUUID(), SITE_ID, batchId, s3Key);
     }
 
     private void pointPluginBaselineAt(UUID batchId) {
