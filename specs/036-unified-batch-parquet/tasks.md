@@ -63,3 +63,10 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   sibling egress path has (`delta.batch-parquet.{artifacts,duration,reclaims}`); bring `CLAUDE.md`
   to V49/next V50 and add the 036 journal entry; rename `DeltaSegmentParquetQueryService` to
   `BatchParquetDownloadService`, which is what it now is.
+
+- [x] **T13 — Review round 6.** Pin the behaviours rounds 3–5 added but left revertible-green: the
+  orphan-object delete in `publish()`, the lease renewal actually being scheduled (and under the
+  claim's own token), retention's derived-key cleanup for a row with no recorded key, and the
+  worker's drain/shutdown guard (new `BatchParquetFinalizationWorkerTest`). Correct `CLAUDE.md` on
+  what the site wipe does and on the renamed download service, bring `plan.md` forward to the
+  shipped design, retire the stale limitation note in the 033 CR, and fix the `404` wording.

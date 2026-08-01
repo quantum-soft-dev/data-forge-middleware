@@ -187,10 +187,11 @@ duration of a large one); the checkpoint-seq read moved out of the per-seal path
 `SessionTotals`/`ChangelogContentHash` gained per-record overloads to drop the per-record wrapper
 allocations.
 
-**Known, not fixed here:** the per-batch Parquet download (`.../batches/{batchId}/tables/{table}/parquet`)
-returns the first matching segment's file. That is pre-existing — a `CONTINUOUS` batch has had many
-segments since 029 — and correcting it means changing the endpoint's shape and the UI that consumes
-it, so it belongs in its own change.
+**Known, not fixed here — resolved since by 036:** the per-batch Parquet download
+(`.../batches/{batchId}/tables/{table}/parquet`) returned the first matching segment's file. That was
+pre-existing — a `CONTINUOUS` batch has had many segments since 029 — and correcting it meant its own
+change: see `docs/cr-unified-batch-parquet.md`, which replaced the segment scan with one unified
+artifact per `(batch, table)`.
 
 ## Downstream contract change
 

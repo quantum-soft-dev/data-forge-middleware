@@ -22,18 +22,23 @@ segments twice, uploads a temp file with `RequestBody.fromFile`, and publishes m
 
 ## Finalization algorithm
 
-1. Claim one retryable manifest row under a database row lock.
+1. Claim one retryable manifest row under a database row lock, minting a `claim_token` and
+   committing the claim *before* the build so a lost process still spends its attempt (T09/T10).
+   The owner renews the lease while it builds; a claim is reclaimable only once the lease lapses.
 2. Resolve all non-provisional batch segments ordered by `first_seq` and the current site schemas.
 3. Create a uniquely named temp file under the configured temp directory.
-4. First streaming pass: visit only records for the target table and compute required decimal
-   precision after declared-scale rounding.
+4. First streaming pass, **only when the table declares a decimal column** (T08 — each pass is a
+   full replay of the changelog): visit only records for the target table and compute required
+   decimal precision after declared-scale rounding.
 5. Open one file-backed `AvroParquetWriter` with the widened schema.
 6. Second streaming pass: visit the same segments/table, assert strictly ascending `_seq`, and write
    typed rows with `_op`, `_seq`, `_changed`, key, and data values.
 7. Close the writer, compute file size and SHA-256 without loading the file, upload from the path,
-   then set `READY` metadata.
-8. On any failure mark only that artifact `FAILED`; always delete the temp file. A retry overwrites
-   the same stable S3 key and cannot append or duplicate rows.
+   then set `READY` metadata — but only if the row is still held by this claim's token; otherwise
+   discard the outcome, and delete the object when the row is gone entirely (T11).
+8. On any failure mark only that artifact `FAILED`, or `ABANDONED` once it has used up
+   `max-attempts` (T09); always delete the temp file. A retry overwrites the same stable S3 key and
+   cannot append or duplicate rows.
 
 ## Test strategy
 

@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -13,6 +14,7 @@ import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsRes
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -129,8 +131,13 @@ class BatchRetentionServiceTest {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
         artifact.markBuilding();
         artifact.markReady("egress/batch/orders.parquet", 10, 400, "hash");
-        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact));
+        // Mid-build: no recorded key, yet an attempt may already have uploaded the object. Reading
+        // s3_key here would silently orphan it — the key has to be derived from the row's identity.
+        BatchParquetArtifact building = BatchParquetArtifact.pending(batchId, siteId, "items");
+        building.markBuilding();
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact, building));
 
+        ArgumentCaptor<List<String>> deleted = ArgumentCaptor.forClass(List.class);
         when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(1, List.of()));
 
         BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
@@ -138,7 +145,10 @@ class BatchRetentionServiceTest {
         );
 
         assertThat(summary.deletedBatches()).isEqualTo(1);
-        verify(s3FileStorageService).deleteObjects(any());
+        verify(s3FileStorageService).deleteObjects(deleted.capture());
+        assertThat(deleted.getValue()).contains(
+                S3CheckpointStorage.batchParquetKey(siteId, batchId, "orders"),
+                S3CheckpointStorage.batchParquetKey(siteId, batchId, "items"));
         verify(sqlGenerationRepository).deleteByComparisonBatchId(batchId);
         verify(sqlGenerationRepository).deleteBySourceBatchId(batchId);
         // Delta v2 changelog segments must be removed before the batch so the batch_id FK does not block it.
@@ -146,7 +156,7 @@ class BatchRetentionServiceTest {
         verify(artifactRepository).deleteByBatchId(batchId);
         verify(batchRepository).deleteById(batchId);
         assertThat(summary.deletedBytes()).isEqualTo(500L);
-        assertThat(summary.deletedFiles()).isEqualTo(2);
+        assertThat(summary.deletedFiles()).isEqualTo(3);
     }
 
     @Test

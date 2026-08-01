@@ -321,7 +321,7 @@ public class DeltaSyncUserController {
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = DeltaCheckpointDownloadResponseDto.class))),
             @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
-            @ApiResponse(responseCode = "404", description = "Site, segment or delta Parquet file not found",
+            @ApiResponse(responseCode = "404", description = "Site not found, or the batch has no artifact for that table",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
             @ApiResponse(responseCode = "409", description = "Unified artifact is still finalizing",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))

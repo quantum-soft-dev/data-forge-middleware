@@ -30,6 +30,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -37,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -67,11 +71,15 @@ class BatchParquetFinalizationServiceTest {
     }
 
     private BatchParquetFinalizationService newService(int maxAttempts) {
+        return newService(maxAttempts, 1800);
+    }
+
+    private BatchParquetFinalizationService newService(int maxAttempts, int leaseSeconds) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
                 segmentService, schemaService, batchRepository, storage, new DeltaMetrics(
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 mock(PlatformTransactionManager.class), tempDir.toString(), 10_000_000L, 60,
-                maxAttempts, 1800);
+                maxAttempts, leaseSeconds);
     }
 
     @Test
@@ -263,6 +271,8 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
         verify(artifactRepository, times(1)).save(any(BatchParquetArtifact.class));
+        // Nothing else can name that key now that the row is gone, so the uploader cleans up.
+        verify(storage).deleteBatchParquet("egress/orders.parquet");
     }
 
     @Test
@@ -307,6 +317,43 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.FAILED, artifact.getStatus());
         assertTrue(artifact.getLastError().contains("does not match segment stats"));
         verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
+    }
+
+    @Test
+    void renewsItsLeaseWhileTheBuildIsStillRunning() throws Exception {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        CountDownLatch renewed = new CountDownLatch(1);
+        // The token only exists once the claim is taken, so it cannot be matched on up front.
+        when(artifactRepository.touchClaim(eq(artifact.getId()), any(), any()))
+                .thenAnswer(invocation -> {
+                    renewed.countDown();
+                    return 1;
+                });
+        // The upload holds the build open until a renewal lands: without one, lease-seconds would
+        // be a hard ceiling on build time and a long build would be reclaimed mid-flight.
+        AtomicReference<UUID> tokenDuringBuild = new AtomicReference<>();
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+            tokenDuringBuild.set(artifact.getClaimToken());
+            assertTrue(renewed.await(10, TimeUnit.SECONDS), "the build lease was never renewed");
+            return "egress/orders.parquet";
+        });
+
+        // lease-seconds 3 → the owner touches the row every second.
+        assertTrue(newService(7, 3).finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        ArgumentCaptor<UUID> renewedToken = ArgumentCaptor.forClass(UUID.class);
+        verify(artifactRepository, atLeastOnce())
+                .touchClaim(eq(artifact.getId()), renewedToken.capture(), any());
+        assertEquals(tokenDuringBuild.get(), renewedToken.getValue(),
+                "the renewal must carry the claim's own token, or it would extend a stranger's lease");
     }
 
     /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */
