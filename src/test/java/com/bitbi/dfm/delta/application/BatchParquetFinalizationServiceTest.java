@@ -29,6 +29,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -57,7 +58,7 @@ class BatchParquetFinalizationServiceTest {
     @BeforeEach
     void setUp() {
         service = new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, storage, tempDir.toString(), 10_000_000L, 60);
+                segmentService, schemaService, storage, tempDir.toString(), 10_000_000L, 60, 5);
     }
 
     @Test
@@ -97,7 +98,7 @@ class BatchParquetFinalizationServiceTest {
                 Map.of("orders", new TableChangeStats(2, 0, 0)));
         ChangelogSegment second = segment(siteId, batchId, "second", 3, 4,
                 Map.of("orders", new TableChangeStats(1, 1, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), eq(1)))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), eq(1)))
                 .thenReturn(List.of(artifact));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(first, second));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
@@ -111,11 +112,13 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
         assertEquals(4, artifact.getRowCount());
         assertEquals("egress/orders.parquet", artifact.getS3Key());
+        // One replay in segment order: the table declares no decimal column, so the precision
+        // scan pass is skipped rather than re-downloading every segment.
         InOrder reads = inOrder(segmentService);
         reads.verify(segmentService).forEachRecord(eq("first"), any());
         reads.verify(segmentService).forEachRecord(eq("second"), any());
-        reads.verify(segmentService).forEachRecord(eq("first"), any());
-        reads.verify(segmentService).forEachRecord(eq("second"), any());
+        verify(segmentService, times(1)).forEachRecord(eq("first"), any());
+        verify(segmentService, times(1)).forEachRecord(eq("second"), any());
         try (var files = Files.list(tempDir)) {
             assertTrue(files.findAny().isEmpty(), "temp file deleted after success");
         }
@@ -128,7 +131,7 @@ class BatchParquetFinalizationServiceTest {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt()))
                 .thenReturn(List.of(artifact));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
@@ -152,7 +155,7 @@ class BatchParquetFinalizationServiceTest {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt()))
                 .thenReturn(List.of(artifact));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of());
@@ -161,6 +164,16 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(BatchParquetArtifactStatus.FAILED, artifact.getStatus());
         verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
+    }
+
+    @Test
+    void claimsWorkWithTheConfiguredAttemptCeilingSoDeadArtifactsAreNeverRetried() {
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt()))
+                .thenReturn(List.of());
+
+        assertFalse(service.finalizeNext());
+
+        verify(artifactRepository).findNextRetryable(any(LocalDateTime.class), eq(5), eq(1));
     }
 
     private ChangelogSegment segment(UUID siteId, UUID batchId, String key, long first, long last,

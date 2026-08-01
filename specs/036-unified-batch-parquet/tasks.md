@@ -30,3 +30,9 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
 - [x] **T07 — Integration and delivery docs.** PostgreSQL + LocalStack coverage for multi-segment
   mixed-table output, ordered completeness, retry, retention, and wipe; update the Delta guide and
   docs index; run the before-PR integration gate.
+
+- [x] **T08 — Review round 1.** Cap retries (`delta.batch-parquet.max-attempts`) so a deterministic
+  failure becomes terminal instead of rebuilding the changelog every minute forever; backfill
+  pre-feature batches on demand from the download path instead of answering a permanent `404`; skip
+  the decimal scan pass for tables that declare no decimal column. Tests cover the attempt ceiling
+  at repository and service level, the backfill/`409` path, and the single-pass replay.

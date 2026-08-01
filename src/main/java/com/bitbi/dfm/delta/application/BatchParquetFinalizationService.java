@@ -41,6 +41,7 @@ public class BatchParquetFinalizationService {
     private final Path tempDirectory;
     private final long maxTempBytes;
     private final int retryDelaySeconds;
+    private final int maxAttempts;
 
     public BatchParquetFinalizationService(
             BatchParquetArtifactRepository artifactRepository,
@@ -50,7 +51,8 @@ public class BatchParquetFinalizationService {
             S3CheckpointStorage storage,
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String tempDirectory,
             @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
-            @Value("${delta.batch-parquet.retry-delay-seconds:60}") int retryDelaySeconds) {
+            @Value("${delta.batch-parquet.retry-delay-seconds:60}") int retryDelaySeconds,
+            @Value("${delta.batch-parquet.max-attempts:5}") int maxAttempts) {
         this.artifactRepository = artifactRepository;
         this.segmentRepository = segmentRepository;
         this.segmentService = segmentService;
@@ -59,6 +61,7 @@ public class BatchParquetFinalizationService {
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.retryDelaySeconds = retryDelaySeconds;
+        this.maxAttempts = maxAttempts;
     }
 
     /**
@@ -71,7 +74,30 @@ public class BatchParquetFinalizationService {
         if (segments.isEmpty()) {
             return 0;
         }
-        UUID siteId = segments.get(0).getSiteId();
+        return enqueue(batchId, segments.get(0).getSiteId(), segments);
+    }
+
+    /**
+     * Enqueue a batch on demand, scoped to the site that is asking. Manifest rows exist only for
+     * batches completed since 036 shipped, so a download of an older batch would answer 404 for an
+     * artifact that is still perfectly buildable — its raw segments are untouched. Backfilling here
+     * rebuilds lazily, only for the batches someone actually opens, instead of queueing every
+     * historical batch at migration time and pushing fresh sessions behind them.
+     *
+     * @param siteId  the site the caller was authorized for
+     * @param batchId batch (= Delta session) identifier
+     * @return rows created; 0 when the batch has no published segments or belongs to another site
+     */
+    @Transactional
+    public int enqueueBatchForSite(UUID siteId, UUID batchId) {
+        List<ChangelogSegment> segments = segmentRepository.findByBatchIdOrderByFirstSeq(batchId);
+        if (segments.isEmpty() || !segments.get(0).getSiteId().equals(siteId)) {
+            return 0;
+        }
+        return enqueue(batchId, siteId, segments);
+    }
+
+    private int enqueue(UUID batchId, UUID siteId, List<ChangelogSegment> segments) {
         Map<String, TableChangeStats> totals = aggregateStats(segments);
         int created = 0;
         for (String tableName : totals.keySet()) {
@@ -89,11 +115,16 @@ public class BatchParquetFinalizationService {
      * Claim and finalize one row. The PostgreSQL row lock is held for the transaction, so replicas
      * cannot build the same logical artifact concurrently; a crash releases the lock and rolls the
      * state back to retryable. Upload completion always precedes the READY transition.
+     *
+     * <p>Retries are capped: a row that fails {@code delta.batch-parquet.max-attempts} times stays
+     * FAILED and is never claimed again, so a deterministic failure (no declared schema, data the
+     * schema cannot render, a batch whose segments a re-baseline removed) settles into the 404 the
+     * download path already answers instead of rebuilding the whole changelog every minute.</p>
      */
     @Transactional
     public boolean finalizeNext() {
         LocalDateTime retryBefore = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(retryDelaySeconds);
-        List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(retryBefore, 1);
+        List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(retryBefore, maxAttempts, 1);
         if (next.isEmpty()) {
             return false;
         }
@@ -109,8 +140,15 @@ public class BatchParquetFinalizationService {
         } catch (RuntimeException e) {
             String message = Objects.toString(e.getMessage(), e.getClass().getSimpleName());
             artifact.markFailed(message);
-            log.warn("Unified batch Parquet failed: batchId={}, table={}, error={}",
-                    artifact.getBatchId(), artifact.getTableName(), message);
+            if (artifact.getAttemptCount() >= maxAttempts) {
+                log.error("Unified batch Parquet abandoned after {} attempt(s): batchId={}, table={}, "
+                                + "error={} — the table's download stays 404 until the row is reset",
+                        artifact.getAttemptCount(), artifact.getBatchId(), artifact.getTableName(), message);
+            } else {
+                log.warn("Unified batch Parquet failed (attempt {}/{}): batchId={}, table={}, error={}",
+                        artifact.getAttemptCount(), maxAttempts, artifact.getBatchId(),
+                        artifact.getTableName(), message);
+            }
         }
         artifactRepository.save(artifact);
         return true;

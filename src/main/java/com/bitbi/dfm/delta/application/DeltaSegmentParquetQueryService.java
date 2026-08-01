@@ -17,6 +17,10 @@ import java.util.UUID;
  * <p>The exact {@code (site, batch, table)} manifest row is authoritative. Segment-level realtime
  * egress remains a separate compatibility contract and is never scanned by this download path.</p>
  *
+ * <p>A batch that closed before 036 shipped has no manifest row, so the first download request
+ * enqueues one from its raw segments and answers {@code 409}; the artifact is built in the
+ * background and the next click downloads it.</p>
+ *
  * @author Data Forge Team
  * @version 1.0.0
  */
@@ -24,11 +28,17 @@ import java.util.UUID;
 public class DeltaSegmentParquetQueryService {
 
     private final BatchParquetArtifactRepository artifactRepository;
+    private final BatchParquetFinalizationService finalizationService;
+    private final BatchParquetFinalizationWorker finalizationWorker;
     private final S3PresignedUrlService presignedUrlService;
 
     public DeltaSegmentParquetQueryService(BatchParquetArtifactRepository artifactRepository,
+                                           BatchParquetFinalizationService finalizationService,
+                                           BatchParquetFinalizationWorker finalizationWorker,
                                            S3PresignedUrlService presignedUrlService) {
         this.artifactRepository = artifactRepository;
+        this.finalizationService = finalizationService;
+        this.finalizationWorker = finalizationWorker;
         this.presignedUrlService = presignedUrlService;
     }
 
@@ -38,14 +48,18 @@ public class DeltaSegmentParquetQueryService {
      * @param siteId    site identifier (segments of other sites are ignored)
      * @param batchId   batch (= Delta session) identifier
      * @param tableName table whose delta file to download
-     * @return presigned download, or empty when no manifest exists / finalization failed
+     * @return presigned download, or empty when the batch has nothing to build for that table
+     *         (unknown table, no published segments) or finalization gave up on it
      */
-    // No @Transactional: the only DB read (findByBatchId) runs in the repository's own
-    // transaction and is materialized before the S3 HEAD/presign round-trips — holding a
-    // HikariCP connection across network calls would starve the pool under S3 latency.
+    // No @Transactional: the DB reads run in their own transactions and are materialized before
+    // the S3 HEAD/presign round-trips — holding a HikariCP connection across network calls would
+    // starve the pool under S3 latency.
     public Optional<PresignedDownload> presignBatchTableParquet(UUID siteId, UUID batchId, String tableName) {
         Optional<BatchParquetArtifact> found = artifactRepository
                 .findBySiteIdAndBatchIdAndTableName(siteId, batchId, tableName);
+        if (found.isEmpty()) {
+            found = backfill(siteId, batchId, tableName);
+        }
         if (found.isEmpty()) {
             return Optional.empty();
         }
@@ -61,6 +75,20 @@ public class DeltaSegmentParquetQueryService {
         String fileName = "%s_batch-%s.parquet".formatted(safeTable, batchId);
         PresignedUrlResult result = presignedUrlService.generatePresignedUrl(artifact.getS3Key(), fileName);
         return Optional.of(new PresignedDownload(result.url(), fileName, result.expiresAt()));
+    }
+
+    /**
+     * Enqueue a batch whose manifest was never written — the batches that completed before 036
+     * shipped. Their raw segments are intact, so the artifact is buildable; the first click queues
+     * it (answering 409) and a later one downloads it. Returns empty when there is nothing to
+     * build, which keeps the existing 404 for an unknown table or a batch without segments.
+     */
+    private Optional<BatchParquetArtifact> backfill(UUID siteId, UUID batchId, String tableName) {
+        if (finalizationService.enqueueBatchForSite(siteId, batchId) == 0) {
+            return Optional.empty();
+        }
+        finalizationWorker.wake();
+        return artifactRepository.findBySiteIdAndBatchIdAndTableName(siteId, batchId, tableName);
     }
 
     /** A manifest exists, but S3 publication has not completed yet. */

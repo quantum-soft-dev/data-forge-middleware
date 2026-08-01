@@ -135,7 +135,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                         eq(SITE_ID), eq(BATCH_ID), eq("customers"), any(Path.class));
         BatchParquetFinalizationService flakyService = new BatchParquetFinalizationService(
                 artifactRepository, segmentRepository, segmentService, schemaService, flakyStorage,
-                tempDir.toString(), 10_000_000L, 0);
+                tempDir.toString(), 10_000_000L, 0, 5);
         TransactionTemplate transactions = new TransactionTemplate(transactionManager);
 
         Boolean firstAttempt = transactions.execute(status -> flakyService.finalizeNext());
@@ -155,6 +155,41 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         assertThat(ready.getStatus()).isEqualTo(BatchParquetArtifactStatus.READY);
         assertThat(ready.getAttemptCount()).isEqualTo(2);
         assertThat(storage.listKeys(batchPrefix())).containsExactly(ready.getS3Key());
+    }
+
+    @Test
+    @DisplayName("a deterministic failure stops being claimed once it exhausts its attempts")
+    void abandonsAnArtifactThatCanNeverSucceed() {
+        segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
+                record("ghost", Op.INSERT, 1L, 1L, data("id", intValue(1L)))));
+        assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(1);
+        BatchParquetFinalizationService cappedService = new BatchParquetFinalizationService(
+                artifactRepository, segmentRepository, segmentService, schemaService, storage,
+                tempDir.toString(), 10_000_000L, 0, 2);
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+
+        Boolean firstAttempt = transactions.execute(status -> cappedService.finalizeNext());
+        assertThat(firstAttempt).isTrue();
+        coolDownFailures();
+        Boolean secondAttempt = transactions.execute(status -> cappedService.finalizeNext());
+        assertThat(secondAttempt).isTrue();
+        coolDownFailures();
+        Boolean thirdAttempt = transactions.execute(status -> cappedService.finalizeNext());
+        assertThat(thirdAttempt)
+                .describedAs("the second failure used up the cap, so the row is terminal")
+                .isFalse();
+
+        BatchParquetArtifact abandoned = artifact("ghost");
+        assertThat(abandoned.getStatus()).isEqualTo(BatchParquetArtifactStatus.FAILED);
+        assertThat(abandoned.getAttemptCount()).isEqualTo(2);
+        assertThat(abandoned.getLastError()).contains("No declared schema");
+        assertThat(storage.listKeys(batchPrefix())).isEmpty();
+    }
+
+    /** Take the retry-delay out of play so a test can drive consecutive attempts. */
+    private void coolDownFailures() {
+        jdbc.update("UPDATE batch_parquet_artifacts SET updated_at = TIMESTAMP '2000-01-01 00:00:00' "
+                + "WHERE batch_id = ? AND status = 'FAILED'", BATCH_ID);
     }
 
     private void seedMixedSegments() {

@@ -29,12 +29,12 @@ public interface JpaBatchParquetArtifactRepository
     @Query(value = """
             SELECT * FROM batch_parquet_artifacts
             WHERE status = 'PENDING'
-               OR (status = 'FAILED' AND updated_at < :retryBefore)
+               OR (status = 'FAILED' AND updated_at < :retryBefore AND attempt_count < :maxAttempts)
             ORDER BY updated_at, created_at, table_name
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
-    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int limit);
+    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int maxAttempts, int limit);
 
     @Override
     @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.batchId = :batchId AND a.s3Key IS NOT NULL")

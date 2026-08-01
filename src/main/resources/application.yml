@@ -239,6 +239,9 @@ delta:
     max-concurrent: ${DELTA_BATCH_PARQUET_MAX_CONCURRENT:2}
     sweep-ms: ${DELTA_BATCH_PARQUET_SWEEP_MS:60000}
     retry-delay-seconds: ${DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS:60}
+    # Attempt ceiling per artifact. A deterministic failure (no declared schema, unrenderable data)
+    # would otherwise be rebuilt every retry-delay forever; past the cap the row is left FAILED (404).
+    max-attempts: ${DELTA_BATCH_PARQUET_MAX_ATTEMPTS:5}
     # A completed artifact is file-backed; refuse upload if the local file exceeds this policy.
     max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}
     temp-dir: ${DELTA_BATCH_PARQUET_TEMP_DIR:${java.io.tmpdir}}

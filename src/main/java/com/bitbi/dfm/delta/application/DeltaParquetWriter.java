@@ -97,7 +97,8 @@ public final class DeltaParquetWriter {
 
     /**
      * Build one table's unified batch artifact with bounded heap use. The replay source is invoked
-     * twice: once to determine lossless decimal precision and once to write rows to the file.
+     * once to write rows to the file, preceded by a scan pass <em>only</em> when the table declares
+     * decimal columns whose precision has to be measured losslessly.
      * Records for other tables are ignored, allowing callers to replay mixed-table segments.
      */
     public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
@@ -151,6 +152,11 @@ public final class DeltaParquetWriter {
                 decimals.put(field.name(), decimal);
                 precisions.put(field.name(), decimal.getPrecision());
             }
+        }
+        if (decimals.isEmpty()) {
+            // Nothing to measure: skipping the pass halves the segment downloads for a table
+            // without decimal columns, and finalization replays the changelog once per table.
+            return precisions;
         }
         replay.forEach(change -> {
             if (!tableName.equals(change.getTable())) {

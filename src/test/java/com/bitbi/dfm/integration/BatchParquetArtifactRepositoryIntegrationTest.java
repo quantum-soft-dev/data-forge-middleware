@@ -37,7 +37,8 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         ready.markReady("egress/customers.parquet", 3, 100, "abc");
         repository.save(ready);
 
-        List<BatchParquetArtifact> claimed = repository.findNextRetryable(LocalDateTime.now().plusSeconds(1), 10);
+        List<BatchParquetArtifact> claimed = repository.findNextRetryable(
+                LocalDateTime.now().plusSeconds(1), 5, 10);
 
         assertEquals(List.of("items", "orders"), claimed.stream()
                 .map(BatchParquetArtifact::getTableName).sorted().toList());
@@ -49,6 +50,22 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         assertEquals(BatchParquetArtifactStatus.READY,
                 repository.findBySiteIdAndBatchIdAndTableName(
                         SITE_ID, BATCH_ID, "customers").orElseThrow().getStatus());
+    }
+
+    @Test
+    void stopsClaimingAFailureThatExhaustedItsAttempts() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
+        for (int attempt = 0; attempt < 3; attempt++) {
+            artifact.markBuilding();
+            artifact.markFailed("no declared schema");
+        }
+        repository.save(artifact);
+        LocalDateTime cooledDown = LocalDateTime.now().plusSeconds(1);
+
+        assertEquals(List.of("orders"), repository.findNextRetryable(cooledDown, 4, 10).stream()
+                .map(BatchParquetArtifact::getTableName).toList());
+        assertTrue(repository.findNextRetryable(cooledDown, 3, 10).isEmpty(),
+                "an artifact that used up its attempts is terminal, not retryable");
     }
 
     @Test

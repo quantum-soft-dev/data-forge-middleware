@@ -15,7 +15,17 @@ public interface BatchParquetArtifactRepository {
 
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
 
-    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int limit);
+    /**
+     * Work worth another attempt: never-claimed rows, plus cooled-down failures that still have
+     * attempts left. A failure that used up {@code maxAttempts} is terminal — several failure
+     * classes are deterministic (a table with no declared schema, data the schema cannot render,
+     * a batch whose segments a re-baseline removed) and would otherwise be rebuilt forever.
+     *
+     * @param retryBefore only retry failures last touched before this instant
+     * @param maxAttempts attempt ceiling; rows at or above it are never returned again
+     * @param limit       maximum rows to claim
+     */
+    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int maxAttempts, int limit);
 
     List<String> findS3KeysByBatchId(UUID batchId);
 

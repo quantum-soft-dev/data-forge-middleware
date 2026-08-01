@@ -552,8 +552,9 @@ You don't write these — they're how downstream tools read your data:
   `egress/{siteId}/batches/{batchId}/{table}.parquet`. This is the artifact returned by the Batch
   Detail Parquet button. It contains every applicable batch record once in ascending `_seq` order;
   physical seal boundaries do not appear in the UI or download contract. Finalization uses a
-  two-pass streaming replay (decimal envelope, then write), a local file-backed writer, and an S3
-  file upload, so heap use does not grow with batch size.
+  streaming replay (write pass, preceded by a decimal-envelope pass only for tables that declare
+  decimal columns), a local file-backed writer, and an S3 file upload, so heap use does not grow
+  with batch size.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
@@ -563,10 +564,17 @@ You don't write these — they're how downstream tools read your data:
 Realtime segment files appear **within seconds of `SessionCommitted`**. The commit also enqueues the
 unified batch/table artifacts in a durable manifest and wakes a separate bounded worker pool. A
 manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
-independently. The Bit BI checkpoint CSV is still built by the async scheduler. Operators can tune
-the completed-batch pool and disk policy with `DELTA_BATCH_PARQUET_MAX_CONCURRENT`,
-`DELTA_BATCH_PARQUET_SWEEP_MS`, `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`,
+independently, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 5) — past that the table is left
+failed (and logged at ERROR) rather than rebuilt forever, since the common causes (no declared
+schema, data the schema cannot render) never recover on their own. The Bit BI checkpoint CSV is
+still built by the async scheduler. Operators can tune the completed-batch pool and disk policy with
+`DELTA_BATCH_PARQUET_MAX_CONCURRENT`, `DELTA_BATCH_PARQUET_SWEEP_MS`,
+`DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,
 `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`, and `DELTA_BATCH_PARQUET_TEMP_DIR`.
+
+Batches that completed **before** this feature shipped have no manifest row. They are backfilled on
+demand: the first Parquet click on such a batch enqueues its tables from the raw segments and
+answers `409` (finalizing), and the next click downloads the artifact.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
@@ -644,7 +652,8 @@ update, and delete counts across all batch segments before rendering. The "Table
 exactly one row and one **Parquet** pill per table. One click presigns the manifest's unified object
 (`egress/{siteId}/batches/{batchId}/{table}.parquet`), never the first realtime segment slice. While
 finalization is running the endpoint returns `409`; a missing/failed artifact returns `404`. Tables
-without a declared/renderable schema fail independently and do not block other tables.
+without a declared/renderable schema fail independently and do not block other tables. A batch that
+predates the feature is enqueued by the first click (`409`) and downloads on the next one.
 
 **Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
 server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily

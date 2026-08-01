@@ -214,6 +214,32 @@ class DeltaParquetWriterTest {
     }
 
     @Test
+    void skipsTheDecimalScanPassWhenTheTableDeclaresNoDecimalColumn() throws Exception {
+        TableSchema noDecimals = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("name", "varchar(255)", true)),
+                List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                changeForTable("customers", Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "name", strVal("Ann"))),
+                changeForTable("customers", Op.INSERT, 2L, Map.of("id", intVal(2)),
+                        Map.of("id", intVal(2), "name", strVal("Bob"))));
+        AtomicInteger passes = new AtomicInteger();
+        Path output = tempDir.resolve("customers-no-decimals.parquet");
+
+        DeltaParquetWriter.FileWriteResult result = DeltaParquetWriter.writeDeltaParquet(
+                output, "customers", noDecimals, consumer -> {
+                    passes.incrementAndGet();
+                    records.forEach(consumer);
+                });
+
+        assertEquals(1, passes.get(), "nothing to measure — the changelog is replayed once");
+        assertEquals(2, result.rowCount());
+        assertEquals(List.of(1L, 2L),
+                readBack(output).stream().map(row -> (Long) row.get("_seq")).toList());
+    }
+
+    @Test
     void fileWriterRejectsOutOfOrderTargetSequences() {
         List<ChangeRecord> records = List.of(
                 change(Op.INSERT, 2L, Map.of("id", intVal(2)), Map.of("id", intVal(2))),

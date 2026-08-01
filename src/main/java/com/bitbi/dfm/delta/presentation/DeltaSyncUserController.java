@@ -312,7 +312,9 @@ public class DeltaSyncUserController {
             summary = "Presign a batch delta Parquet download",
             description = "Issues a fresh presigned S3 URL (15-minute expiry) for the typed delta Parquet file that "
                     + "the finalizer materialized from all of the completed batch's changelog segments. 409 while "
-                    + "finalization is pending; 404 when no artifact exists or that table failed independently."
+                    + "finalization is pending — including the first request for a batch that closed before this "
+                    + "feature shipped, which is enqueued on demand. 404 when the batch has nothing to build for "
+                    + "that table or finalization gave up on it."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Presigned URL issued",
