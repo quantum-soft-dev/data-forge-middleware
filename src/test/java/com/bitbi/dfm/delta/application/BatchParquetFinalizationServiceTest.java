@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -401,6 +402,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, orders.getStatus(),
                 "one stale sibling must not roll back or skip another sibling's publication");
         verify(artifactRepository, times(2)).findById(any());
+        verify(storage, never()).deleteBatchParquet("egress/customers.parquet");
     }
 
     @Test
@@ -554,6 +556,49 @@ class BatchParquetFinalizationServiceTest {
         verify(artifactRepository, atLeastOnce()).touchClaim(eq(customers.getId()), any(), any());
         verify(artifactRepository, atLeastOnce()).touchClaim(eq(orders.getId()), any(), any());
         verify(artifactRepository, atLeast(2)).tryLockBatch(batchId);
+    }
+
+    @Test
+    void keepsRenewingTheBatchUntilEverySiblingIsPublished() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact customers = BatchParquetArtifact.pending(batchId, siteId, "customers");
+        BatchParquetArtifact orders = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        claimableBatch(customers, orders);
+        ChangelogSegment segment = segment(siteId, batchId, "mixed", 1, 2, Map.of(
+                "customers", new TableChangeStats(1, 0, 0),
+                "orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
+                "customers", schema(), "orders", schema()));
+        stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation ->
+                "egress/" + invocation.getArgument(2) + ".parquet");
+        AtomicBoolean publishing = new AtomicBoolean();
+        AtomicBoolean renewedDuringPublish = new AtomicBoolean();
+        CountDownLatch renewal = new CountDownLatch(1);
+        when(artifactRepository.touchClaim(any(), any(), any())).thenAnswer(invocation -> {
+            if (publishing.get()) {
+                renewedDuringPublish.set(true);
+                renewal.countDown();
+            }
+            return 1;
+        });
+        doAnswer(invocation -> {
+            BatchParquetArtifact saved = invocation.getArgument(0);
+            if (saved.getTableName().equals("customers")
+                    && saved.getStatus() == BatchParquetArtifactStatus.READY) {
+                publishing.set(true);
+                renewal.await(3, TimeUnit.SECONDS);
+            }
+            return saved;
+        }).when(artifactRepository).save(any(BatchParquetArtifact.class));
+
+        assertTrue(newService(7, 3).finalizeNext());
+
+        assertTrue(renewedDuringPublish.get(),
+                "lease renewal must continue through the independent publication transactions");
+        assertEquals(BatchParquetArtifactStatus.READY, orders.getStatus());
     }
 
     @Test

@@ -15,5 +15,6 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T05 — Review follow-up.** Add regression tests and resolve the first review round: isolate
   schema construction and result publication per table, renew sibling claims atomically under the
   batch advisory lock, and keep the worker drain alive during lock contention.
-- [ ] **T06 — Final synchronization.** Re-review every changed line, merge current
-  `origin/develop`, rerun all gates, and stop at `status: ready to merge`.
+- [x] **T06 — Final synchronization.** Resolve the second review's publication lifecycle races,
+  re-review every changed line, merge current `origin/develop`, rerun all gates, and stop at
+  `status: ready to merge`.

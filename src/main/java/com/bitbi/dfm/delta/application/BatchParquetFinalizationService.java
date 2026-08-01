@@ -205,43 +205,42 @@ public class BatchParquetFinalizationService {
         // out of here must reach publish(). A rejected schedule (the renewal executor is shutting
         // down) would otherwise abandon the row in BUILDING for a whole lease having done no work.
         ScheduledFuture<?> lease = null;
-        Map<UUID, BuildOutcome> built;
         try {
-            lease = renewLeaseWhileBuilding(claims);
-            built = metrics.timeBatchParquetBuild(() -> buildAndUpload(claims));
-        } catch (RuntimeException e) {
-            String error = Objects.toString(e.getMessage(), e.getClass().getSimpleName());
-            built = new LinkedHashMap<>();
-            for (Claim claim : claims) {
-                built.put(claim.artifactId(), BuildOutcome.failed(error));
+            Map<UUID, BuildOutcome> built;
+            try {
+                lease = renewLeaseWhileBuilding(claims);
+                built = metrics.timeBatchParquetBuild(() -> buildAndUpload(claims));
+            } catch (RuntimeException e) {
+                String error = Objects.toString(e.getMessage(), e.getClass().getSimpleName());
+                built = new LinkedHashMap<>();
+                for (Claim claim : claims) {
+                    built.put(claim.artifactId(), BuildOutcome.failed(error));
+                }
             }
+            for (Claim claim : claims) {
+                BuildOutcome outcome = built.getOrDefault(claim.artifactId(),
+                        BuildOutcome.failed("Build produced no outcome for claimed artifact"));
+                try {
+                    transactions.execute(status -> {
+                        publish(claim, outcome);
+                        return null;
+                    });
+                } catch (RuntimeException e) {
+                    // The object key is stable across attempts. A successor may already have
+                    // published the same key, and a commit error can be ambiguous, so deleting it
+                    // here could break a valid READY manifest. Retention owns final cleanup.
+                    log.error("Could not publish unified batch Parquet outcome: batchId={}, table={}",
+                            claim.batchId(), claim.tableName(), e);
+                }
+            }
+            return true;
         } finally {
+            // Publication is part of the live attempt: later siblings must not become reclaimable
+            // while earlier sibling transactions are still settling.
             if (lease != null) {
                 lease.cancel(false);
             }
         }
-        for (Claim claim : claims) {
-            BuildOutcome outcome = built.getOrDefault(claim.artifactId(),
-                    BuildOutcome.failed("Build produced no outcome for claimed artifact"));
-            try {
-                transactions.execute(status -> {
-                    publish(claim, outcome);
-                    return null;
-                });
-            } catch (RuntimeException e) {
-                log.error("Could not publish unified batch Parquet outcome: batchId={}, table={}",
-                        claim.batchId(), claim.tableName(), e);
-                if (outcome.file() != null) {
-                    try {
-                        storage.deleteBatchParquet(outcome.file().s3Key());
-                    } catch (RuntimeException cleanupFailure) {
-                        log.warn("Could not delete unpublished unified batch Parquet: batchId={}, table={}",
-                                claim.batchId(), claim.tableName(), cleanupFailure);
-                    }
-                }
-            }
-        }
-        return true;
     }
 
     /**
