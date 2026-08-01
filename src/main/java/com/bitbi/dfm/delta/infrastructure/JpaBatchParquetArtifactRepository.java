@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.infrastructure;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
+import com.bitbi.dfm.delta.domain.BatchParquetQueueDepth;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -42,7 +43,12 @@ public interface JpaBatchParquetArtifactRepository
                                                  @Param("batchId") UUID batchId);
 
     @Override
-    long countByStatus(BatchParquetArtifactStatus status);
+    @Query("""
+            SELECT new com.bitbi.dfm.delta.domain.BatchParquetQueueDepth(a.status, COUNT(a))
+            FROM BatchParquetArtifact a
+            GROUP BY a.status
+            """)
+    List<BatchParquetQueueDepth> countByStatusGrouped();
 
     /**
      * The row lock only serializes the claim itself — the claim transaction commits {@code BUILDING}

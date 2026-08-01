@@ -12,5 +12,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   and requeue routes, extend the audit constraint with V50, and document the OpenAPI contract.
 - [x] **T05 — Documentation and delivery gates.** Update the unified Parquet CR, Delta guide,
   docs index and project journal; run all required backend/integration gates and open the PR.
-- [ ] **T06 — Review and synchronization.** Resolve every review finding with a recorded outcome,
-  merge current `origin/develop`, rerun all gates and CI, and stop at `status: ready to merge`.
+- [x] **T06 — Review fixes.** Resolve the grouped-metrics query and recovery-concurrency coverage
+  findings test-first, run the per-task gate, and record each outcome on the PR.
+- [ ] **T07 — Final review and synchronization.** Complete a clean repeat review, merge current
+  `origin/develop`, rerun all gates and CI, and stop at `status: ready to merge`.

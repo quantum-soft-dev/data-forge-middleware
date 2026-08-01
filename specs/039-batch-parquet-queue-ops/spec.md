@@ -8,8 +8,8 @@ an artifact that reached `ABANDONED` without direct SQL against versioned claim 
 
 ## Requirements
 
-- Export one `delta.batch-parquet.queue` gauge for every artifact status. Each gauge reads the
-  current database count at scrape time and carries a `status` tag.
+- Export one `delta.batch-parquet.queue` gauge for every artifact status. The gauges share one
+  grouped database snapshot, reused for at most five seconds, and carry a `status` tag.
 - Add an admin-only endpoint that lists a site's batch artifacts with their id, table, status,
   attempt count, last error, and timestamps. S3 keys, checksums, and claim tokens remain internal.
 - Add an admin-only endpoint that requeues one artifact belonging to the site and batch in the
@@ -38,4 +38,3 @@ an artifact that reached `ABANDONED` without direct SQL against versioned claim 
 - V50 only widens the existing `admin_action_logs.action_type` check constraint; it does not
   rewrite artifact rows.
 - No gRPC, protobuf, owner REST, frontend, S3-key, query-key, or worker scheduling change.
-

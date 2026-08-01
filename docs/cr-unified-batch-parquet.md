@@ -96,7 +96,8 @@ including shared replay and per-table uploads, rather than one table replay.
 
 Current queue depth is exported as `delta.batch-parquet.queue{status=...}` for all five durable
 states (`pending`, `building`, `ready`, `failed`, `abandoned`). Each Prometheus scrape runs a
-database count by status; the gauges are not reconstructed from process-local event counters.
+single grouped database count, shared by all status gauges for at most five seconds; the gauges are
+not reconstructed from process-local event counters.
 Useful alerts include sustained `pending` growth, `building` rows that survive longer than the
 configured lease, and any increase in `abandoned`.
 

@@ -32,8 +32,8 @@ public interface BatchParquetArtifactRepository {
     /** Lock one route-constrained artifact so recovery cannot race a worker settlement. */
     Optional<BatchParquetArtifact> findForUpdate(UUID artifactId, UUID siteId, UUID batchId);
 
-    /** Current durable queue depth for one status, sampled by the queue gauge. */
-    long countByStatus(BatchParquetArtifactStatus status);
+    /** All durable queue depths in one grouped query; absent statuses have zero rows. */
+    List<BatchParquetQueueDepth> countByStatusGrouped();
 
     /**
      * Work worth another attempt: never-claimed rows, failures whose backoff has elapsed, and

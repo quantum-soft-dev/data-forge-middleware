@@ -6,9 +6,9 @@ since feature 036.
 ## Design
 
 1. A dedicated Micrometer `MeterBinder` registers one gauge per
-   `BatchParquetArtifactStatus`. The gauge supplier calls a repository `countByStatus` query at
-   scrape time, so the value represents current queue depth and the application does not retain a
-   stale in-memory copy.
+   `BatchParquetArtifactStatus`. The gauge suppliers share one repository `COUNT(*) GROUP BY
+   status` snapshot for at most five seconds, so a collection reads all statuses with one database
+   round trip while remaining bounded-fresh.
 2. `BatchParquetQueueService` owns the list and recovery use cases. Listing filters by both site
    and batch. Recovery selects the same tuple plus artifact id under a pessimistic row lock, then
    accepts only `ABANDONED` or `BUILDING` older than the configured lease.
@@ -22,12 +22,15 @@ since feature 036.
 
 ## Test strategy
 
-- Unit: gauges are registered for every status and read live repository counts.
+- Unit: gauges are registered for every status, share one grouped query, default absent statuses
+  to zero, and refresh after the bounded snapshot TTL.
 - Unit: aggregate recovery clears all mutable attempt/publication state and rejects unrelated
   states; service recovery enforces the expired-lease rule, route tuple, locking, and audit data.
 - Contract/integration: admin can list and requeue an abandoned or expired-building artifact;
   live/unrecoverable states return `409`, route mismatch returns `404`, user/anonymous access is
   rejected, persistence and audit rows match the response, and Prometheus exposes every status.
+  A real PostgreSQL concurrency test holds the recovery row lock against a stale worker lease
+  touch, while a rollback test proves the reset and audit row commit atomically.
 - Gates: `./gradlew test -PexcludeIntegration` before each code commit and
   `./gradlew integrationTest` before opening the PR.
 
@@ -37,4 +40,3 @@ since feature 036.
   `CLAUDE.md` endpoint table/recent changes/migration number, OpenAPI annotations, and this spec.
 - Not needed: protobuf/wire-contract docs, client plugin guides, frontend/UI docs, CI/deployment
   docs, and root `CHANGELOG.md`; none of those contracts change.
-

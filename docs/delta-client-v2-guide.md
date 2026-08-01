@@ -964,6 +964,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.sessions.overflow{reason=records\|bytes}` | `delta_sessions_overflow_total{reason=...}` |
 | `delta.reconciliation.failures` | `delta_reconciliation_failures_total` |
 | `delta.egress.segments` | `delta_egress_segments_total` |
+| `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 
