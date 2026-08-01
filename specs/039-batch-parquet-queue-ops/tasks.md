@@ -4,7 +4,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 
 - [x] **T01 — Design.** Record the queue metrics, admin REST contract, recovery concurrency rule,
   audit strategy, compatibility boundary, documentation surfaces, and test strategy.
-- [ ] **T02 — Queue depth gauges.** Add red tests, then register a database-backed gauge for every
+- [x] **T02 — Queue depth gauges.** Add red tests, then register a database-backed gauge for every
   artifact status and verify the values remain live.
 - [ ] **T03 — Recovery domain and application service.** Add red aggregate/service/repository tests,
   then implement locked list/requeue operations, expired-lease validation, and transactional audit.

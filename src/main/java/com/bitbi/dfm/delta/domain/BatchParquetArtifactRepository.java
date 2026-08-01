@@ -26,6 +26,9 @@ public interface BatchParquetArtifactRepository {
 
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
 
+    /** Current durable queue depth for one status, sampled by the queue gauge. */
+    long countByStatus(BatchParquetArtifactStatus status);
+
     /**
      * Work worth another attempt: never-claimed rows, failures whose backoff has elapsed, and
      * claims whose owner disappeared (their build lease expired). {@code ABANDONED} rows are
