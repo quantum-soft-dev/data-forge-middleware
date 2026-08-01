@@ -49,6 +49,15 @@ public interface JpaBatchParquetArtifactRepository
                                                  int leaseSeconds, int limit);
 
     @Override
+    @Modifying(flushAutomatically = true)
+    @Transactional
+    @Query(value = """
+            UPDATE batch_parquet_artifacts SET updated_at = :now
+            WHERE id = :id AND claim_token = :claimToken AND status = 'BUILDING'
+            """, nativeQuery = true)
+    int touchClaim(UUID id, UUID claimToken, LocalDateTime now);
+
+    @Override
     @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.batchId = :batchId AND a.s3Key IS NOT NULL")
     List<String> findS3KeysByBatchId(UUID batchId);
 

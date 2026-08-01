@@ -243,9 +243,11 @@ delta:
     retry-delay-seconds: ${DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS:60}
     # Attempt ceiling per artifact. A deterministic failure (no declared schema, unrenderable data)
     # would otherwise be rebuilt forever; past the cap the row becomes ABANDONED and answers 404.
-    max-attempts: ${DELTA_BATCH_PARQUET_MAX_ATTEMPTS:5}
-    # How long a committed BUILDING claim is honoured before another worker reclaims it. Must exceed
-    # the longest plausible build: a live build reclaimed early is wasted work, not corruption.
+    # With the doubling backoff above, 7 attempts span 60+120+240+480+960+1920s ~= 63 min, so an
+    # outage has to outlast an hour before in-flight artifacts are given up on.
+    max-attempts: ${DELTA_BATCH_PARQUET_MAX_ATTEMPTS:7}
+    # How long a BUILDING claim is honoured with no sign of life. The owner renews it every third
+    # of this while it builds, so it bounds worker death, not how long a build may legitimately run.
     lease-seconds: ${DELTA_BATCH_PARQUET_LEASE_SECONDS:1800}
     # A completed artifact is file-backed; refuse upload if the local file exceeds this policy.
     max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}

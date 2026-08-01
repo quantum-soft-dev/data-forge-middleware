@@ -95,6 +95,21 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         assertTrue(isClaimed(stuck, now, 60, 0), "an expired lease makes the row claimable again");
     }
 
+    @Test
+    void renewsALeaseOnlyForTheClaimThatStillHoldsTheRow() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
+        artifact.markBuilding();
+        repository.save(artifact);
+        UUID firstClaim = artifact.getClaimToken();
+        LocalDateTime renewedAt = LocalDateTime.now(ZoneOffset.UTC).plusHours(1);
+
+        assertEquals(1, repository.touchClaim(artifact.getId(), firstClaim, renewedAt));
+        assertFalse(isClaimed(artifact, renewedAt.plusSeconds(1), 60, 3600),
+                "a renewed lease keeps the row with its owner");
+        assertEquals(0, repository.touchClaim(artifact.getId(), UUID.randomUUID(), renewedAt),
+                "a stale owner cannot renew a lease it no longer holds");
+    }
+
     /**
      * Whether the claim query would hand this specific row out. The suite shares one database and
      * other classes leave manifest rows behind, so an assertion on the whole result set is not

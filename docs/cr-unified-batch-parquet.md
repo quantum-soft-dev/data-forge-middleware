@@ -37,20 +37,26 @@ The claim is committed **before** the build runs, in its own transaction, and `B
 held row lock — is what keeps other replicas off the row. That is what makes the attempt ceiling
 real: a process that dies mid-build (an OOM on a large batch, a pod eviction) has already made its
 incremented `attempt_count` durable, so the most expensive failure class cannot loop forever. It
-also keeps the long S3 work off a database connection. A claim whose owner never came back is
-reclaimed once `delta.batch-parquet.lease-seconds` (default 30 min) elapse, which must stay above
-the longest plausible build — reclaiming a live build wastes work, it does not corrupt anything,
-because the object key is stable and the content deterministic.
+also keeps the long S3 work off a database connection.
 
-Retries are capped at `delta.batch-parquet.max-attempts` (default 5), with the failure backoff
-doubling per attempt (capped at 64×the base delay) so a transient S3 outage gets a wide window
-instead of burning every attempt in five flat minutes. Several failure classes are deterministic
-and never recover — a table with no declared schema, data the declared schema cannot render, or a
-batch whose segments a re-baseline removed — and rebuilding them forever would re-download and
-re-write the whole batch changelog on a loop. Past the cap the row becomes `ABANDONED`, logged at
-ERROR, and is never claimed again, which matches how the per-segment egress worker already treats
-an unrenderable table (skip, don't wedge the queue). Resetting the row requeues it once the
-underlying cause is fixed.
+Each claim mints a `claim_token`, and its owner renews the lease (`updated_at`) every third of
+`delta.batch-parquet.lease-seconds` (default 30 min) while it builds. The lease therefore bounds
+*worker death*, not how long a build may legitimately take — without the renewal it would be a hard
+ceiling on build time, and any batch slower than it would be reclaimed mid-flight and rebuilt from
+scratch by the next worker, spending an attempt and a pool slot on every lapse. The token settles
+the race the lease cannot: a reclaim mints a new one, so a previous owner that surfaces late finds
+its token stale and discards its outcome instead of overwriting a live claim — or burying a build
+that is still running under its own failure.
+
+Retries are capped at `delta.batch-parquet.max-attempts` (default 7), with the failure backoff
+doubling per attempt. Seven attempts span `60+120+240+480+960+1920s ≈ 63 min`, so a transient S3
+outage has to outlast an hour before in-flight artifacts are given up on. Several failure classes
+are deterministic and never recover — a table with no declared schema, data the declared schema
+cannot render, or a batch whose segments a re-baseline removed — and rebuilding them forever would
+re-download and re-write the whole batch changelog on a loop. Past the cap the row becomes
+`ABANDONED`, logged at ERROR, and is never claimed again, which matches how the per-segment egress
+worker already treats an unrenderable table (skip, don't wedge the queue). Resetting the row
+requeues it once the underlying cause is fixed.
 
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.

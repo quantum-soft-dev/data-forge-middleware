@@ -58,6 +58,9 @@ public class BatchParquetArtifact {
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
 
+    @Column(name = "claim_token")
+    private UUID claimToken;
+
     @Column(name = "last_error")
     private String lastError;
 
@@ -94,6 +97,10 @@ public class BatchParquetArtifact {
      * attempts that <em>started</em> rather than attempts that returned an answer — a process that
      * dies mid-build has still used one up. {@code BUILDING} is therefore a legal source state: it
      * means the previous claimant went away and its build lease expired.</p>
+     *
+     * <p>Each claim mints a fresh {@link #getClaimToken() token}. The previous owner may still be
+     * running — a lease lapses on elapsed time, not on proof of death — and the token is what stops
+     * its late result from landing in this attempt.</p>
      */
     public void markBuilding() {
         if (status == BatchParquetArtifactStatus.READY || status == BatchParquetArtifactStatus.ABANDONED) {
@@ -101,9 +108,16 @@ public class BatchParquetArtifact {
         }
         status = BatchParquetArtifactStatus.BUILDING;
         attemptCount++;
+        claimToken = UUID.randomUUID();
         clearPublishedMetadata();
         lastError = null;
         touch();
+    }
+
+    /** @return true when {@code token} identifies the claim this row currently holds. */
+    public boolean isHeldBy(UUID token) {
+        return status == BatchParquetArtifactStatus.BUILDING && claimToken != null
+                && claimToken.equals(token);
     }
 
     /** Publish immutable metadata only after the stable S3 object has completed uploading. */
@@ -115,6 +129,7 @@ public class BatchParquetArtifact {
         checksum = Objects.requireNonNull(sha256, "sha256");
         status = BatchParquetArtifactStatus.READY;
         lastError = null;
+        claimToken = null;
         readyAt = LocalDateTime.now(ZoneOffset.UTC);
         updatedAt = readyAt;
     }
@@ -125,6 +140,7 @@ public class BatchParquetArtifact {
         status = BatchParquetArtifactStatus.FAILED;
         clearPublishedMetadata();
         lastError = Objects.requireNonNull(error, "error");
+        claimToken = null;
         touch();
     }
 
@@ -137,6 +153,7 @@ public class BatchParquetArtifact {
         status = BatchParquetArtifactStatus.ABANDONED;
         clearPublishedMetadata();
         lastError = Objects.requireNonNull(error, "error");
+        claimToken = null;
         touch();
     }
 

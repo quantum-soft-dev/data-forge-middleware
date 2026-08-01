@@ -50,8 +50,9 @@ public class BatchParquetFinalizationWorker {
                 // drain all currently retryable rows
             }
         } catch (RuntimeException e) {
-            log.warn("Batch Parquet finalization drain failed; durable rows remain retryable: {}",
-                    e.getMessage());
+            // A build failure is recorded on the row itself; what reaches here is a claim or
+            // publish transaction failing, and that is only ever diagnosable from the stack trace.
+            log.warn("Batch Parquet finalization drain failed; durable rows remain retryable", e);
         }
     }
 

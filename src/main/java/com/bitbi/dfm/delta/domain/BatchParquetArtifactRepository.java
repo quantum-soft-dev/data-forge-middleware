@@ -13,6 +13,14 @@ public interface BatchParquetArtifactRepository {
     /** Re-read a claimed row once its build finished, to settle the outcome against current state. */
     Optional<BatchParquetArtifact> findById(UUID id);
 
+    /**
+     * Renew a live claim's lease. Without this the lease would be a ceiling on build time rather
+     * than a liveness signal, and any build slower than it would be duplicated by the next worker.
+     *
+     * @return 1 when the row is still {@code BUILDING} under this token, 0 once it was taken over
+     */
+    int touchClaim(UUID id, UUID claimToken, LocalDateTime now);
+
     Optional<BatchParquetArtifact> findBySiteIdAndBatchIdAndTableName(
             UUID siteId, UUID batchId, String tableName);
 

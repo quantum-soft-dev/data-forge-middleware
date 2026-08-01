@@ -34,6 +34,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -263,6 +264,30 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
         verify(artifactRepository, times(1)).save(any(BatchParquetArtifact.class));
+    }
+
+    @Test
+    void discardsItsOutcomeWhenTheClaimWasTakenOverMidBuild() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+            // Our lease lapsed and another worker reclaimed the row while we were still uploading.
+            artifact.markBuilding();
+            return "egress/orders.parquet";
+        });
+
+        assertTrue(service.finalizeNext());
+
+        // The successor's attempt owns the row: publishing here would overwrite a live claim.
+        assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
+        assertEquals(2, artifact.getAttemptCount());
+        assertNull(artifact.getS3Key());
     }
 
     /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */

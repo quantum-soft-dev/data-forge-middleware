@@ -43,3 +43,8 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   batch whose session is still running; add a doubling failure backoff; close the segment stream in
   the service that opened it. Tests cover claim durability and lease takeover, the backoff and
   abandon boundaries, the IN_PROGRESS refusal, and the `409`/`404` split.
+
+- [x] **T10 — Review round 3.** Give each claim a `claim_token` and renew its lease while the build
+  runs, so the lease bounds worker death rather than build time and a superseded owner cannot write
+  into its successor's attempt; raise `max-attempts` to 7 so the backoff spans ~1 h; log the drain
+  failure with its stack trace. Tests cover the mid-build takeover and lease renewal by token.

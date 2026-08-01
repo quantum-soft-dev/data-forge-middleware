@@ -12,6 +12,9 @@ CREATE TABLE batch_parquet_artifacts (
     file_size BIGINT,
     checksum VARCHAR(64),
     attempt_count INTEGER NOT NULL DEFAULT 0,
+    -- Identifies one worker's claim. A reclaim after a lapsed lease mints a new token, so the
+    -- previous owner cannot write its late result into somebody else's attempt.
+    claim_token UUID,
     last_error TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

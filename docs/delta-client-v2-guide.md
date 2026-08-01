@@ -564,11 +564,12 @@ You don't write these — they're how downstream tools read your data:
 Realtime segment files appear **within seconds of `SessionCommitted`**. The commit also enqueues the
 unified batch/table artifacts in a durable manifest and wakes a separate bounded worker pool. A
 manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
-independently with a doubling backoff, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 5) — past
-that the table is abandoned (and logged at ERROR) rather than rebuilt forever, since the common
-causes (no declared schema, data the schema cannot render) never recover on their own. A worker
-claim is durable, so a build killed by a restart still spends its attempt; the row is picked up
-again after `DELTA_BATCH_PARQUET_LEASE_SECONDS` (default 30 min). The Bit BI checkpoint CSV is
+independently with a doubling backoff, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 7, which
+spans about an hour) — past that the table is abandoned (and logged at ERROR) rather than rebuilt
+forever, since the common causes (no declared schema, data the schema cannot render) never recover
+on their own. A worker claim is durable, so a build killed by a restart still spends its attempt;
+the row is picked up again once `DELTA_BATCH_PARQUET_LEASE_SECONDS` (default 30 min) pass with no
+sign of life, which a live build refreshes as it goes. The Bit BI checkpoint CSV is
 still built by the async scheduler. Operators can tune the completed-batch pool and disk policy with
 `DELTA_BATCH_PARQUET_MAX_CONCURRENT`, `DELTA_BATCH_PARQUET_SWEEP_MS`,
 `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,

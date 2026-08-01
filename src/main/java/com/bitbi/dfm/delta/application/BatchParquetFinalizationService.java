@@ -20,6 +20,8 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import jakarta.annotation.PreDestroy;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -32,6 +34,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /** Durable, idempotent finalization of one completed-batch Parquet per table (036, issue #93). */
 @Service
@@ -46,6 +52,7 @@ public class BatchParquetFinalizationService {
     private final BatchRepository batchRepository;
     private final S3CheckpointStorage storage;
     private final TransactionTemplate transactions;
+    private final ScheduledExecutorService leaseRenewals;
     private final Path tempDirectory;
     private final long maxTempBytes;
     private final int retryDelaySeconds;
@@ -63,7 +70,7 @@ public class BatchParquetFinalizationService {
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String tempDirectory,
             @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
             @Value("${delta.batch-parquet.retry-delay-seconds:60}") int retryDelaySeconds,
-            @Value("${delta.batch-parquet.max-attempts:5}") int maxAttempts,
+            @Value("${delta.batch-parquet.max-attempts:7}") int maxAttempts,
             @Value("${delta.batch-parquet.lease-seconds:1800}") int leaseSeconds) {
         this.artifactRepository = artifactRepository;
         this.segmentRepository = segmentRepository;
@@ -77,6 +84,11 @@ public class BatchParquetFinalizationService {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transactions = template;
+        this.leaseRenewals = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "batch-parquet-lease");
+            thread.setDaemon(true);
+            return thread;
+        });
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.retryDelaySeconds = retryDelaySeconds;
@@ -167,11 +179,14 @@ public class BatchParquetFinalizationService {
         if (claim == null) {
             return false;
         }
+        ScheduledFuture<?> lease = renewLeaseWhileBuilding(claim);
         BuildOutcome built;
         try {
             built = BuildOutcome.succeeded(buildAndUpload(claim));
         } catch (RuntimeException e) {
             built = BuildOutcome.failed(Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
+        } finally {
+            lease.cancel(false);
         }
         BuildOutcome outcome = built;
         transactions.execute(status -> {
@@ -195,8 +210,31 @@ public class BatchParquetFinalizationService {
         }
         artifact.markBuilding();
         artifactRepository.save(artifact);
-        return new Claim(artifact.getId(), artifact.getBatchId(), artifact.getSiteId(),
-                artifact.getTableName());
+        return new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
+                artifact.getSiteId(), artifact.getTableName());
+    }
+
+    /**
+     * Keep touching the row while the build runs, so the lease measures liveness instead of
+     * capping how long a build may take. A large batch replayed per table can legitimately outrun
+     * {@code lease-seconds}; without this it would be reclaimed mid-flight and rebuilt from scratch
+     * by the next worker, spending an attempt and a pool slot on every lapse.
+     */
+    private ScheduledFuture<?> renewLeaseWhileBuilding(Claim claim) {
+        long period = Math.max(1L, leaseSeconds / 3L);
+        return leaseRenewals.scheduleAtFixedRate(() -> {
+            try {
+                Integer renewed = transactions.execute(status -> artifactRepository.touchClaim(
+                        claim.artifactId(), claim.token(), LocalDateTime.now(ZoneOffset.UTC)));
+                if (renewed != null && renewed == 0) {
+                    log.warn("Build lease was taken over while still building: batchId={}, table={}",
+                            claim.batchId(), claim.tableName());
+                }
+            } catch (RuntimeException e) {
+                log.warn("Could not renew the build lease for batchId={}, table={}",
+                        claim.batchId(), claim.tableName(), e);
+            }
+        }, period, period, TimeUnit.SECONDS);
     }
 
     /**
@@ -212,9 +250,13 @@ public class BatchParquetFinalizationService {
             return;
         }
         BatchParquetArtifact artifact = found.get();
-        if (artifact.getStatus() != BatchParquetArtifactStatus.BUILDING) {
-            log.warn("Unified batch Parquet finished for a row already in status {}; leaving it alone: "
-                    + "batchId={}, table={}", artifact.getStatus(), claim.batchId(), claim.tableName());
+        if (!artifact.isHeldBy(claim.token())) {
+            // Another worker reclaimed the row after our lease lapsed. Its attempt owns the outcome
+            // now: writing ours here would either overwrite a live claim or bury a build that is
+            // still running under a stale failure.
+            log.warn("Unified batch Parquet finished under a claim that was taken over (status {}); "
+                            + "discarding this attempt's outcome: batchId={}, table={}",
+                    artifact.getStatus(), claim.batchId(), claim.tableName());
             return;
         }
         if (outcome.file() != null) {
@@ -293,8 +335,13 @@ public class BatchParquetFinalizationService {
         return totals;
     }
 
-    /** The facts a build needs, read once under the claim transaction. */
-    private record Claim(UUID artifactId, UUID batchId, UUID siteId, String tableName) {
+    @PreDestroy
+    void shutdown() {
+        leaseRenewals.shutdownNow();
+    }
+
+    /** The facts a build needs, plus the token identifying this attempt's claim. */
+    private record Claim(UUID artifactId, UUID token, UUID batchId, UUID siteId, String tableName) {
     }
 
     private record FinalizedFile(String s3Key, long rowCount, long fileSize, String checksum) {
