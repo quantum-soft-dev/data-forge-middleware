@@ -22,7 +22,7 @@ referencing #100.
 - [x] **T05 — Documentation and pre-PR gates.** Update the unified Parquet CR, Delta guide, docs
   index, project journal, and completed task ledger; verify documentation consistency; run
   `./gradlew test -PexcludeIntegration` and `./gradlew integrationTest` before opening the PR.
-- [ ] **T06 — Review and synchronization.** Resolve every review finding test-first with one atomic
+- [x] **T06 — Review and synchronization.** Resolve every review finding test-first with one atomic
   commit per review task, record outcomes on the PR, merge current `origin/develop`, check Flyway
   numbering, rerun all applicable gates and CI, and stop at `status: ready to merge`.
 
