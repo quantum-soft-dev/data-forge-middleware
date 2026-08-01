@@ -5,9 +5,11 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -52,5 +54,17 @@ public final class ChangelogCodec {
             throw new UncheckedIOException("Failed to parse change records", e);
         }
         return records;
+    }
+
+    /** Stream gzipped, length-delimited records without accumulating them in a list. */
+    public static void forEach(InputStream content, Consumer<ChangeRecord> consumer) {
+        try (GZIPInputStream gz = new GZIPInputStream(content)) {
+            ChangeRecord record;
+            while ((record = ChangeRecord.parseDelimitedFrom(gz)) != null) {
+                consumer.accept(record);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to stream change records", e);
+        }
     }
 }

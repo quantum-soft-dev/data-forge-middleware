@@ -20,12 +20,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * T8.2 — the delta Parquet writer renders one segment's change records for a table as a typed
@@ -175,10 +177,61 @@ class DeltaParquetWriterTest {
         assertEquals(2, decimal.getScale());
     }
 
+    @Test
+    void streamsTwoPassesToAFileAndRoutesOnlyTheTargetTable() throws Exception {
+        TableSchema narrow = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("price", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                changeForTable("customers", Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "price", decVal("1234567.89"))),
+                changeForTable("orders", Op.INSERT, 2L, Map.of(), Map.of()),
+                changeForTable("customers", Op.UPDATE, 3L, Map.of("id", intVal(1)),
+                        Map.of("price", decVal("9.50"))),
+                changeForTable("customers", Op.DELETE, 4L, Map.of("id", intVal(1)), Map.of()));
+        AtomicInteger passes = new AtomicInteger();
+        Path output = tempDir.resolve("customers-batch.parquet");
+
+        DeltaParquetWriter.FileWriteResult result = DeltaParquetWriter.writeDeltaParquet(
+                output, "customers", narrow, consumer -> {
+                    passes.incrementAndGet();
+                    records.forEach(consumer);
+                });
+
+        assertEquals(2, passes.get(), "decimal scan + file write; neither pass retains the dataset");
+        assertEquals(3, result.rowCount());
+        assertEquals(Files.size(output), result.fileSize());
+        assertEquals(64, result.checksum().length(), "SHA-256 hex");
+
+        List<GenericRecord> rows = readBack(output);
+        assertEquals(List.of(1L, 3L, 4L), rows.stream().map(row -> (Long) row.get("_seq")).toList());
+        assertEquals("price", rows.get(1).get("_changed").toString());
+        assertEquals(new BigDecimal("1234567.89"), rows.get(0).get("price"));
+        LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(rows.get(0).getSchema(), "price")
+                .getLogicalType();
+        assertEquals(9, decimal.getPrecision());
+    }
+
+    @Test
+    void fileWriterRejectsOutOfOrderTargetSequences() {
+        List<ChangeRecord> records = List.of(
+                change(Op.INSERT, 2L, Map.of("id", intVal(2)), Map.of("id", intVal(2))),
+                change(Op.INSERT, 1L, Map.of("id", intVal(1)), Map.of("id", intVal(1))));
+
+        assertThrows(IllegalArgumentException.class, () -> DeltaParquetWriter.writeDeltaParquet(
+                tempDir.resolve("out-of-order.parquet"), "customers", SCHEMA,
+                consumer -> records.forEach(consumer)));
+    }
+
     private List<GenericRecord> readBack(byte[] parquet) throws Exception {
         assertFalse(parquet.length == 0, "parquet bytes written");
         Path file = tempDir.resolve("delta.parquet");
         Files.write(file, parquet);
+        return readBack(file);
+    }
+
+    private List<GenericRecord> readBack(Path file) throws Exception {
         List<GenericRecord> rows = new java.util.ArrayList<>();
         try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
@@ -202,7 +255,12 @@ class DeltaParquetWriterTest {
     }
 
     private static ChangeRecord change(Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
-        return ChangeRecord.newBuilder().setTable("customers").setOp(op).setSeq(seq)
+        return changeForTable("customers", op, seq, key, data);
+    }
+
+    private static ChangeRecord changeForTable(String table, Op op, long seq,
+                                               Map<String, Value> key, Map<String, Value> data) {
+        return ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq)
                 .putAllKey(key).putAllData(data).build();
     }
 

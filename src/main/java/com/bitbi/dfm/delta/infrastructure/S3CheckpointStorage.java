@@ -18,6 +18,9 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -111,6 +114,31 @@ public class S3CheckpointStorage {
         } catch (S3Exception e) {
             throw new CheckpointStorageException("Failed to store delta Parquet: " + s3Key, e);
         }
+    }
+
+    /** Upload one completed batch/table artifact directly from a local file. */
+    public String uploadBatchParquet(UUID siteId, UUID batchId, String tableName, Path file) {
+        String s3Key = batchParquetKey(siteId, batchId, tableName);
+        try {
+            long size = java.nio.file.Files.size(file);
+            PutObjectRequest request = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .contentType("application/vnd.apache.parquet")
+                    .contentLength(size)
+                    .build();
+            s3Client.putObject(request, RequestBody.fromFile(file));
+            log.info("Stored unified batch Parquet: key={}, size={}", s3Key, size);
+            return s3Key;
+        } catch (S3Exception | IOException e) {
+            throw new CheckpointStorageException("Failed to store unified batch Parquet: " + s3Key, e);
+        }
+    }
+
+    /** Stable, unique object key for one logical batch/table artifact. */
+    public static String batchParquetKey(UUID siteId, UUID batchId, String tableName) {
+        String encodedTable = URLEncoder.encode(tableName, StandardCharsets.UTF_8).replace("+", "%20");
+        return String.format("egress/%s/batches/%s/%s.parquet", siteId, batchId, encodedTable);
     }
 
     /** @return the delta Parquet key for one table's slice of a segment (feature 025). */

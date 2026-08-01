@@ -14,6 +14,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Persists a session's accepted change records as an immutable changelog segment
@@ -117,6 +118,11 @@ public class ChangelogSegmentService {
      */
     public List<ChangeRecord> readRecords(String s3Key) {
         return ChangelogCodec.parse(storage.download(s3Key));
+    }
+
+    /** Stream a raw segment in wire order without retaining its records. */
+    public void forEachRecord(String s3Key, Consumer<ChangeRecord> consumer) {
+        ChangelogCodec.forEach(storage.open(s3Key), consumer);
     }
 
     /**

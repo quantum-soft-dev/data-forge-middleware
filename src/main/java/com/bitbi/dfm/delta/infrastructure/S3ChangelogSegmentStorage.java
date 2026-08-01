@@ -83,6 +83,17 @@ public class S3ChangelogSegmentStorage {
         }
     }
 
+    /** Open a raw segment for bounded streaming; the caller must close the returned stream. */
+    public ResponseInputStream<GetObjectResponse> open(String s3Key) {
+        try {
+            return s3Client.getObject(GetObjectRequest.builder().bucket(bucketName).key(s3Key).build());
+        } catch (NoSuchKeyException e) {
+            throw new SegmentStorageException("Changelog segment not found: " + s3Key, e);
+        } catch (S3Exception e) {
+            throw new SegmentStorageException("Failed to open changelog segment: " + s3Key, e);
+        }
+    }
+
     /**
      * Delete a segment object (retention). A missing object is treated as already deleted.
      *

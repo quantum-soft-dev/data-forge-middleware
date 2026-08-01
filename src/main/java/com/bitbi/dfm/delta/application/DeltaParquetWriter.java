@@ -7,11 +7,32 @@ import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.conf.PlainParquetConfiguration;
+import org.apache.parquet.hadoop.ParquetWriter;
+import org.apache.parquet.hadoop.metadata.CompressionCodecName;
+import org.apache.parquet.io.OutputFile;
+import org.apache.parquet.io.PositionOutputStream;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.file.Files;
+import java.nio.file.OpenOption;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Renders one segment's change records for a table as a typed <b>delta</b> Parquet file
@@ -29,6 +50,8 @@ import java.util.Map;
  * @version 1.0.0
  */
 public final class DeltaParquetWriter {
+
+    private static final CompressionCodecName CODEC = CompressionCodecName.SNAPPY;
 
     private DeltaParquetWriter() {
     }
@@ -70,5 +93,219 @@ public final class DeltaParquetWriter {
             rows.add(row);
         }
         return ParquetCheckpointWriter.write(avro, rows, tableName);
+    }
+
+    /**
+     * Build one table's unified batch artifact with bounded heap use. The replay source is invoked
+     * twice: once to determine lossless decimal precision and once to write rows to the file.
+     * Records for other tables are ignored, allowing callers to replay mixed-table segments.
+     */
+    public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
+                                                    RecordReplay replay) {
+        Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
+        Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
+        AtomicLong rowCount = new AtomicLong();
+        AtomicLong previousSeq = new AtomicLong(Long.MIN_VALUE);
+
+        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
+                        new FileOutputFile(output))
+                .withSchema(avro)
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .withCompressionCodec(CODEC)
+                .build()) {
+            replay.forEach(change -> {
+                if (!tableName.equals(change.getTable())) {
+                    return;
+                }
+                long prior = previousSeq.getAndSet(change.getSeq());
+                if (change.getSeq() <= prior) {
+                    throw new IllegalArgumentException("Out-of-order sequence for table " + tableName
+                            + ": " + change.getSeq() + " after " + prior);
+                }
+                try {
+                    writer.write(toRecord(avro, tableSchema, change));
+                    rowCount.incrementAndGet();
+                } catch (IOException e) {
+                    throw new UncheckedIOException("Failed to write Parquet row for table " + tableName, e);
+                }
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
+        }
+
+        try {
+            return new FileWriteResult(rowCount.get(), Files.size(output), sha256(output));
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to inspect Parquet file for table " + tableName, e);
+        }
+    }
+
+    private static Map<String, Integer> scanDecimalPrecisions(Schema schema, String tableName,
+                                                               RecordReplay replay) {
+        Map<String, Integer> precisions = new LinkedHashMap<>();
+        Map<String, org.apache.avro.LogicalTypes.Decimal> decimals = new LinkedHashMap<>();
+        for (Schema.Field field : schema.getFields()) {
+            Schema fieldType = branch(field.schema());
+            if (fieldType.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal) {
+                decimals.put(field.name(), decimal);
+                precisions.put(field.name(), decimal.getPrecision());
+            }
+        }
+        replay.forEach(change -> {
+            if (!tableName.equals(change.getTable())) {
+                return;
+            }
+            decimals.forEach((column, decimal) -> {
+                Value value = change.getDataMap().containsKey(column)
+                        ? change.getDataMap().get(column)
+                        : change.getKeyMap().get(column);
+                Object java = value == null ? null : ValueMapper.toJava(value);
+                if (java != null) {
+                    int required = new BigDecimal(java.toString())
+                            .setScale(decimal.getScale(), RoundingMode.HALF_UP).precision();
+                    precisions.merge(column, required, Math::max);
+                }
+            });
+        });
+        return precisions;
+    }
+
+    private static Schema widenDecimals(Schema recordSchema, Map<String, Integer> precisions) {
+        List<Schema.Field> fields = new ArrayList<>(recordSchema.getFields().size());
+        for (Schema.Field field : recordSchema.getFields()) {
+            Schema fieldSchema = field.schema();
+            Schema valueSchema = branch(fieldSchema);
+            if (valueSchema.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal) {
+                int precision = Math.max(decimal.getPrecision(), precisions.getOrDefault(
+                        field.name(), decimal.getPrecision()));
+                if (precision > decimal.getPrecision()) {
+                    Schema wider = org.apache.avro.LogicalTypes.decimal(precision, decimal.getScale())
+                            .addToSchema(Schema.create(Schema.Type.BYTES));
+                    fieldSchema = fieldSchema.getType() == Schema.Type.UNION
+                            ? Schema.createUnion(Schema.create(Schema.Type.NULL), wider)
+                            : wider;
+                }
+            }
+            fields.add(new Schema.Field(field.name(), fieldSchema, field.doc(), field.defaultVal()));
+        }
+        return Schema.createRecord(recordSchema.getName(), recordSchema.getDoc(),
+                recordSchema.getNamespace(), recordSchema.isError(), fields);
+    }
+
+    private static GenericRecord toRecord(Schema avro, TableSchema tableSchema, ChangeRecord change) {
+        GenericRecord row = new GenericData.Record(avro);
+        row.put("_op", change.getOp().name());
+        row.put("_seq", change.getSeq());
+        row.put("_changed", change.getOp() == com.bitbi.dfm.delta.grpc.v2.Op.UPDATE
+                ? String.join(",", change.getDataMap().keySet())
+                : null);
+        for (ColumnDefinition column : tableSchema.columns()) {
+            Value value = change.getDataMap().containsKey(column.name())
+                    ? change.getDataMap().get(column.name())
+                    : change.getKeyMap().get(column.name());
+            row.put(column.name(), ParquetCheckpointWriter.coerceValue(
+                    value, avro.getField(column.name()).schema()));
+        }
+        return row;
+    }
+
+    private static Schema branch(Schema schema) {
+        if (schema.getType() == Schema.Type.UNION) {
+            return schema.getTypes().stream()
+                    .filter(type -> type.getType() != Schema.Type.NULL)
+                    .findFirst().orElseThrow();
+        }
+        return schema;
+    }
+
+    private static String sha256(Path file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream input = Files.newInputStream(file)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    if (read > 0) {
+                        digest.update(buffer, 0, read);
+                    }
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    @FunctionalInterface
+    public interface RecordReplay {
+        void forEach(Consumer<ChangeRecord> consumer);
+    }
+
+    public record FileWriteResult(long rowCount, long fileSize, String checksum) {
+    }
+
+    /** Minimal Hadoop-free Parquet output backed by a local file. */
+    private static final class FileOutputFile implements OutputFile {
+        private final Path path;
+
+        private FileOutputFile(Path path) {
+            this.path = path;
+        }
+
+        @Override
+        public PositionOutputStream create(long blockSizeHint) throws IOException {
+            return stream(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        }
+
+        @Override
+        public PositionOutputStream createOrOverwrite(long blockSizeHint) throws IOException {
+            return stream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE);
+        }
+
+        @Override
+        public boolean supportsBlockSize() {
+            return false;
+        }
+
+        @Override
+        public long defaultBlockSize() {
+            return 0L;
+        }
+
+        private PositionOutputStream stream(OpenOption... options) throws IOException {
+            OutputStream output = Files.newOutputStream(path, options);
+            return new PositionOutputStream() {
+                private long position;
+
+                @Override
+                public long getPos() {
+                    return position;
+                }
+
+                @Override
+                public void write(int value) throws IOException {
+                    output.write(value);
+                    position++;
+                }
+
+                @Override
+                public void write(byte[] bytes, int offset, int length) throws IOException {
+                    output.write(bytes, offset, length);
+                    position += length;
+                }
+
+                @Override
+                public void flush() throws IOException {
+                    output.flush();
+                }
+
+                @Override
+                public void close() throws IOException {
+                    output.close();
+                }
+            };
+        }
     }
 }

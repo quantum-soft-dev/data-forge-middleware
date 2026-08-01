@@ -15,7 +15,7 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   unique `(batch_id, table_name)`, durable states, metadata, ordered claim query, and batch/site
   cleanup queries. Tests cover lifecycle transitions and concurrent claim behavior.
 
-- [ ] **T04 — File-backed streaming writer.** Add streaming raw-segment iteration and a two-pass
+- [x] **T04 — File-backed streaming writer.** Add streaming raw-segment iteration and a two-pass
   file writer preserving types, `_op`, `_seq`, `_changed`, decimal widening, and ascending order.
   Upload through a file request body. Tests prove replay, bounded output shape, and cleanup helpers.
 
