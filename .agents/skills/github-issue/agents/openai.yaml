@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deliver GitHub Issue"
+  short_description: "Take one issue through the full delivery cycle"
+  default_prompt: "Use $github-issue to deliver GitHub issue #123 through review and merge readiness."

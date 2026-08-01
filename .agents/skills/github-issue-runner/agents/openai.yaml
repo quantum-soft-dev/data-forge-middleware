@@ -1,0 +1,7 @@
+interface:
+  display_name: "Run GitHub Issue Queue"
+  short_description: "Coordinate up to three GitHub issues safely"
+  default_prompt: "Use $github-issue-runner to coordinate the next three ready GitHub issues."
+
+policy:
+  allow_implicit_invocation: false
