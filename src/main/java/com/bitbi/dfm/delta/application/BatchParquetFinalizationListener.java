@@ -5,7 +5,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-/** Makes batch artifact work durable before commit and starts processing only after commit. */
+/** Enqueues completed-batch artifacts and starts processing after the ingestion commit. */
 @Component
 public class BatchParquetFinalizationListener {
 
@@ -18,13 +18,9 @@ public class BatchParquetFinalizationListener {
         this.worker = worker;
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT, fallbackExecution = true)
-    public void enqueue(BatchCompletedEvent event) {
-        service.enqueueBatch(event.batchId());
-    }
-
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
-    public void wake(BatchCompletedEvent event) {
+    public void enqueueAndWake(BatchCompletedEvent event) {
+        service.enqueueBatch(event.batchId());
         worker.wake();
     }
 }

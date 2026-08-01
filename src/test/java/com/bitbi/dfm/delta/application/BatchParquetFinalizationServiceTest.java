@@ -109,6 +109,24 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void enqueueDiscoversTablesByReplayingLegacySegmentsWithoutStats() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        ChangelogSegment legacy = segment(siteId, batchId, "legacy", 1, 2, null);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(legacy));
+        stream("legacy", record("orders", 1, Op.INSERT), record("customers", 2, Op.UPDATE));
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(batchId), eq(siteId), any(), any()))
+                .thenReturn(1);
+
+        assertEquals(2, service.enqueueBatch(batchId));
+
+        ArgumentCaptor<String> tables = ArgumentCaptor.forClass(String.class);
+        verify(artifactRepository, times(2))
+                .insertPendingIfAbsent(any(), eq(batchId), eq(siteId), tables.capture(), any());
+        assertEquals(List.of("customers", "orders"), tables.getAllValues().stream().sorted().toList());
+    }
+
+    @Test
     void onDemandBackfillRefusesABatchWhoseSessionIsStillRunning() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
@@ -320,6 +338,23 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void publishesACompleteReplayWhenLegacySegmentsHaveNoExpectedRowCount() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment legacy = segment(siteId, batchId, "legacy", 1, 1, null);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(legacy));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("legacy", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        assertEquals(1, artifact.getRowCount());
+    }
+
+    @Test
     void renewsItsLeaseWhileTheBuildIsStillRunning() throws Exception {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
@@ -437,8 +472,12 @@ class BatchParquetFinalizationServiceTest {
     }
 
     private static ChangeRecord record(long seq, Op op) {
+        return record("orders", seq, op);
+    }
+
+    private static ChangeRecord record(String table, long seq, Op op) {
         Value id = Value.newBuilder().setIntValue(seq).build();
-        return ChangeRecord.newBuilder().setTable("orders").setSeq(seq).setOp(op)
+        return ChangeRecord.newBuilder().setTable(table).setSeq(seq).setOp(op)
                 .putKey("id", id).putData("id", id).build();
     }
 }

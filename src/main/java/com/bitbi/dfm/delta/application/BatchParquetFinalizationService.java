@@ -32,7 +32,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -103,8 +105,8 @@ public class BatchParquetFinalizationService {
     }
 
     /**
-     * Create the durable per-table work rows inside the batch-completion transaction. Existing rows
-     * make replayed completion events harmless.
+     * Create the durable per-table work rows after the batch-completion transaction. Existing rows
+     * make replayed completion events harmless, and lazy download backfill covers a failed callback.
      */
     @Transactional
     public int enqueueBatch(UUID batchId) {
@@ -152,7 +154,7 @@ public class BatchParquetFinalizationService {
     private int enqueue(UUID batchId, UUID siteId, List<ChangelogSegment> segments) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         int created = 0;
-        for (String tableName : aggregateStats(segments).keySet()) {
+        for (String tableName : tableNames(segments)) {
             // Insert-if-absent rather than read-then-insert: two enqueues of the same batch can run
             // at once (two download clicks, two replicas), and losing that race on the unique index
             // would turn a 409 into a 500 — or roll back the completion this runs inside.
@@ -160,6 +162,14 @@ public class BatchParquetFinalizationService {
                     UUID.randomUUID(), batchId, siteId, tableName, now);
         }
         return created;
+    }
+
+    private Set<String> tableNames(List<ChangelogSegment> segments) {
+        Set<String> tables = new TreeSet<>(aggregateStats(segments).keySet());
+        segments.stream().filter(segment -> segment.getStats() == null)
+                .forEach(segment -> segmentService.forEachRecord(
+                        segment.getS3Key(), change -> tables.add(change.getTable())));
+        return tables;
     }
 
     /**
@@ -349,9 +359,10 @@ public class BatchParquetFinalizationService {
                     output, claim.tableName(), schema,
                     consumer -> segments.forEach(segment ->
                             segmentService.forEachRecord(segment.getS3Key(), consumer)));
+            boolean expectedCountKnown = segments.stream().allMatch(segment -> segment.getStats() != null);
             long expectedRows = aggregateStats(segments).getOrDefault(
                     claim.tableName(), new TableChangeStats(0, 0, 0)).total();
-            if (result.rowCount() != expectedRows) {
+            if (expectedCountKnown && result.rowCount() != expectedRows) {
                 throw new IllegalStateException("Artifact row count " + result.rowCount()
                         + " does not match segment stats " + expectedRows);
             }
