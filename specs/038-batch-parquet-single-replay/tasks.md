@@ -7,7 +7,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T02 — Multi-table streaming writer.** Add red tests, then fan one replay out to all
   non-decimal tables and share one decimal-envelope scan across all decimal tables. Preserve
   per-table `_seq`, row counts, typed rows, output limits, and independent writer failures.
-- [ ] **T03 — Batch claim and finalization.** Add red service/repository/integration tests, then
+- [x] **T03 — Batch claim and finalization.** Add red service/repository/integration tests, then
   claim retryable rows by batch under a transaction-scoped advisory lock, renew every token, build
   them together, and publish each outcome independently.
 - [ ] **T04 — Documentation and delivery gates.** Update the 036 plan/change request, Delta guide,

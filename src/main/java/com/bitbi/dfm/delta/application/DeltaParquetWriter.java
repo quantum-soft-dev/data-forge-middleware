@@ -160,6 +160,9 @@ public final class DeltaParquetWriter {
      */
     static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
                                                     RecordReplay replay, long maxBytes) {
+        if (requests.isEmpty()) {
+            return new BatchWriteResult(Map.of(), Map.of());
+        }
         Map<String, Schema> baseSchemas = new LinkedHashMap<>();
         Map<String, Map<String, Integer>> decimalPrecisions = new LinkedHashMap<>();
         boolean needsDecimalScan = false;

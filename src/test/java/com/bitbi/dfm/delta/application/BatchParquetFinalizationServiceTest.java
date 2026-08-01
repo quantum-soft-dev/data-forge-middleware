@@ -199,6 +199,62 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void finalizesEveryRetryableTableInTheBatchFromOneReplay() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact customers = BatchParquetArtifact.pending(batchId, siteId, "customers");
+        BatchParquetArtifact orders = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        claimableBatch(customers, orders);
+        ChangelogSegment segment = segment(siteId, batchId, "mixed", 1, 4, Map.of(
+                "customers", new TableChangeStats(2, 0, 0),
+                "orders", new TableChangeStats(1, 0, 1)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
+                "customers", schema(), "orders", schema()));
+        stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT),
+                record("customers", 3, Op.INSERT), record("orders", 4, Op.DELETE));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("customers"), any(Path.class)))
+                .thenReturn("egress/customers.parquet");
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(Path.class)))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, customers.getStatus());
+        assertEquals(BatchParquetArtifactStatus.READY, orders.getStatus());
+        assertEquals(2, customers.getRowCount());
+        assertEquals(2, orders.getRowCount());
+        verify(segmentService, times(1)).forEachRecord(eq("mixed"), any());
+        verify(artifactRepository).tryLockBatch(batchId);
+        verify(artifactRepository).findRetryableByBatchId(
+                eq(batchId), any(LocalDateTime.class), eq(60), eq(1800), eq(5));
+    }
+
+    @Test
+    void oneTableFailureDoesNotBlockItsBatchSibling() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact customers = BatchParquetArtifact.pending(batchId, siteId, "customers");
+        BatchParquetArtifact missingSchema = BatchParquetArtifact.pending(batchId, siteId, "ghost");
+        claimableBatch(customers, missingSchema);
+        ChangelogSegment segment = segment(siteId, batchId, "mixed", 1, 2, Map.of(
+                "customers", new TableChangeStats(1, 0, 0),
+                "ghost", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("customers", schema()));
+        stream("mixed", record("customers", 1, Op.INSERT), record("ghost", 2, Op.INSERT));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("customers"), any(Path.class)))
+                .thenReturn("egress/customers.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, customers.getStatus());
+        assertEquals(BatchParquetArtifactStatus.FAILED, missingSchema.getStatus());
+        assertTrue(missingSchema.getLastError().contains("No declared schema"));
+        verify(segmentService, times(1)).forEachRecord(eq("mixed"), any());
+    }
+
+    @Test
     void commitsTheClaimBeforeTheBuildSoACrashStillSpendsAnAttempt() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
@@ -294,6 +350,23 @@ class BatchParquetFinalizationServiceTest {
 
         verify(artifactRepository).findNextRetryable(
                 any(LocalDateTime.class), eq(60), eq(1800), eq(5), eq(1));
+    }
+
+    @Test
+    void leavesTheBatchForTheWorkerThatAlreadyHoldsItsAdvisoryLock() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        when(artifactRepository.findNextRetryable(
+                any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(artifact));
+        when(artifactRepository.tryLockBatch(batchId)).thenReturn(false);
+
+        assertFalse(service.finalizeNext());
+
+        verify(artifactRepository, never()).findRetryableByBatchId(
+                any(), any(LocalDateTime.class), anyInt(), anyInt(), anyInt());
+        verify(artifactRepository, never()).save(any(BatchParquetArtifact.class));
     }
 
     @Test
@@ -448,6 +521,10 @@ class BatchParquetFinalizationServiceTest {
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
         when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of(stranded));
+        when(artifactRepository.tryLockBatch(batchId)).thenReturn(true);
+        when(artifactRepository.findRetryableByBatchId(
+                eq(batchId), any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(stranded));
         when(artifactRepository.findById(stranded.getId())).thenReturn(Optional.of(stranded));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
@@ -465,8 +542,26 @@ class BatchParquetFinalizationServiceTest {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, tableName);
         when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of(artifact));
+        when(artifactRepository.tryLockBatch(batchId)).thenReturn(true);
+        when(artifactRepository.findRetryableByBatchId(
+                eq(batchId), any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(artifact));
         when(artifactRepository.findById(artifact.getId())).thenReturn(Optional.of(artifact));
         return artifact;
+    }
+
+    private void claimableBatch(BatchParquetArtifact... artifacts) {
+        UUID batchId = artifacts[0].getBatchId();
+        when(artifactRepository.findNextRetryable(
+                any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(artifacts[0]));
+        when(artifactRepository.tryLockBatch(batchId)).thenReturn(true);
+        when(artifactRepository.findRetryableByBatchId(
+                eq(batchId), any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(artifacts));
+        for (BatchParquetArtifact artifact : artifacts) {
+            when(artifactRepository.findById(artifact.getId())).thenReturn(Optional.of(artifact));
+        }
     }
 
     private static Batch batch(BatchStatus status) {

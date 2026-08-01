@@ -43,6 +43,19 @@ public interface BatchParquetArtifactRepository {
                                                  int leaseSeconds, int maxAttempts, int limit);
 
     /**
+     * Serialize the short claim transaction for one batch. The lock is transaction-scoped, so the
+     * caller must claim every retryable sibling before committing.
+     *
+     * @return false when another transaction is already claiming the same batch
+     */
+    boolean tryLockBatch(UUID batchId);
+
+    /** Retryable siblings of a selected batch, locked for the duration of the claim transaction. */
+    List<BatchParquetArtifact> findRetryableByBatchId(UUID batchId, LocalDateTime now,
+                                                      int retryDelaySeconds, int leaseSeconds,
+                                                      int maxAttempts);
+
+    /**
      * Settle expired claims whose owners never returned and whose attempt budget is spent.
      *
      * @return number of rows moved to {@code ABANDONED}

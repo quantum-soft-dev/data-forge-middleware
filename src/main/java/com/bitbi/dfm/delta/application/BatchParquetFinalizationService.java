@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -172,7 +173,7 @@ public class BatchParquetFinalizationService {
     }
 
     /**
-     * Claim and finalize one row.
+     * Claim and finalize all currently retryable rows of one batch.
      *
      * <p>The claim commits <em>before</em> the build starts, in its own transaction. That is what
      * makes the attempt ceiling real: if the process dies mid-build (an OOM on a large batch, a pod
@@ -186,45 +187,51 @@ public class BatchParquetFinalizationService {
      * cannot render, a batch whose segments a re-baseline removed) settles instead of rebuilding
      * the whole changelog forever.</p>
      *
-     * @return true when a row was claimed and its attempt recorded
+     * @return true when a batch was claimed and its attempts recorded
      */
     public boolean finalizeNext() {
-        Claim claim = transactions.execute(status -> claimNext());
-        if (claim == null) {
+        List<Claim> claims = transactions.execute(status -> claimNext());
+        if (claims == null || claims.isEmpty()) {
             return false;
         }
         // Scheduled inside the try: once the claim is committed the attempt is spent, so every path
         // out of here must reach publish(). A rejected schedule (the renewal executor is shutting
         // down) would otherwise abandon the row in BUILDING for a whole lease having done no work.
         ScheduledFuture<?> lease = null;
-        BuildOutcome built;
+        Map<UUID, BuildOutcome> built;
         try {
-            lease = renewLeaseWhileBuilding(claim);
-            built = BuildOutcome.succeeded(metrics.timeBatchParquetBuild(() -> buildAndUpload(claim)));
-        } catch (DeltaParquetWriter.ArtifactSizeLimitExceededException e) {
-            built = BuildOutcome.permanentlyFailed(e.getMessage());
+            lease = renewLeaseWhileBuilding(claims);
+            built = metrics.timeBatchParquetBuild(() -> buildAndUpload(claims));
         } catch (RuntimeException e) {
-            built = BuildOutcome.failed(Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
+            String error = Objects.toString(e.getMessage(), e.getClass().getSimpleName());
+            built = new LinkedHashMap<>();
+            for (Claim claim : claims) {
+                built.put(claim.artifactId(), BuildOutcome.failed(error));
+            }
         } finally {
             if (lease != null) {
                 lease.cancel(false);
             }
         }
-        BuildOutcome outcome = built;
+        Map<UUID, BuildOutcome> outcomes = built;
         transactions.execute(status -> {
-            publish(claim, outcome);
+            for (Claim claim : claims) {
+                publish(claim, outcomes.getOrDefault(claim.artifactId(),
+                        BuildOutcome.failed("Build produced no outcome for claimed artifact")));
+            }
             return null;
         });
         return true;
     }
 
     /**
-     * Take one row and commit its {@code BUILDING} claim, so the attempt outlives this process.
+     * Take one batch and commit every retryable sibling's {@code BUILDING} claim, so the attempts
+     * outlive this process.
      *
      * <p>Spent claims whose owners never returned are bulk-settled first. The claim query then
      * excludes them, so any number of stranded rows cannot hide real work until another sweep.</p>
      */
-    private Claim claimNext() {
+    private List<Claim> claimNext() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         String expiredError = "Build lease expired without an outcome after the configured attempt limit";
         int abandoned = artifactRepository.abandonExpiredClaims(
@@ -242,16 +249,25 @@ public class BatchParquetFinalizationService {
         if (next.isEmpty()) {
             return null;
         }
-        BatchParquetArtifact artifact = next.get(0);
-        if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
-            metrics.batchParquetReclaimed();
-            log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
-                    artifact.getBatchId(), artifact.getTableName());
+        UUID batchId = next.get(0).getBatchId();
+        if (!artifactRepository.tryLockBatch(batchId)) {
+            return null;
         }
-        artifact.markBuilding();
-        artifactRepository.save(artifact);
-        return new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
-                artifact.getSiteId(), artifact.getTableName());
+        List<BatchParquetArtifact> artifacts = artifactRepository.findRetryableByBatchId(
+                batchId, now, retryDelaySeconds, leaseSeconds, maxAttempts);
+        List<Claim> claims = new java.util.ArrayList<>(artifacts.size());
+        for (BatchParquetArtifact artifact : artifacts) {
+            if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
+                metrics.batchParquetReclaimed();
+                log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
+                        artifact.getBatchId(), artifact.getTableName());
+            }
+            artifact.markBuilding();
+            artifactRepository.save(artifact);
+            claims.add(new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
+                    artifact.getSiteId(), artifact.getTableName()));
+        }
+        return claims;
     }
 
     /**
@@ -260,19 +276,21 @@ public class BatchParquetFinalizationService {
      * {@code lease-seconds}; without this it would be reclaimed mid-flight and rebuilt from scratch
      * by the next worker, spending an attempt and a pool slot on every lapse.
      */
-    private ScheduledFuture<?> renewLeaseWhileBuilding(Claim claim) {
+    private ScheduledFuture<?> renewLeaseWhileBuilding(List<Claim> claims) {
         long period = Math.max(1L, leaseSeconds / 3L);
         return leaseRenewals.scheduleAtFixedRate(() -> {
-            try {
-                Integer renewed = transactions.execute(status -> artifactRepository.touchClaim(
-                        claim.artifactId(), claim.token(), LocalDateTime.now(ZoneOffset.UTC)));
-                if (renewed != null && renewed == 0) {
-                    log.warn("Build lease was taken over while still building: batchId={}, table={}",
-                            claim.batchId(), claim.tableName());
+            for (Claim claim : claims) {
+                try {
+                    Integer renewed = transactions.execute(status -> artifactRepository.touchClaim(
+                            claim.artifactId(), claim.token(), LocalDateTime.now(ZoneOffset.UTC)));
+                    if (renewed != null && renewed == 0) {
+                        log.warn("Build lease was taken over while still building: batchId={}, table={}",
+                                claim.batchId(), claim.tableName());
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("Could not renew the build lease for batchId={}, table={}",
+                            claim.batchId(), claim.tableName(), e);
                 }
-            } catch (RuntimeException e) {
-                log.warn("Could not renew the build lease for batchId={}, table={}",
-                        claim.batchId(), claim.tableName(), e);
             }
         }, period, period, TimeUnit.SECONDS);
     }
@@ -328,39 +346,68 @@ public class BatchParquetFinalizationService {
         artifactRepository.save(artifact);
     }
 
-    private FinalizedFile buildAndUpload(Claim claim) {
+    private Map<UUID, BuildOutcome> buildAndUpload(List<Claim> claims) {
+        Claim firstClaim = claims.get(0);
         List<ChangelogSegment> segments = segmentRepository
-                .findByBatchIdOrderByFirstSeq(claim.batchId());
+                .findByBatchIdOrderByFirstSeq(firstClaim.batchId());
         if (segments.isEmpty()) {
             throw new IllegalStateException("Batch has no published changelog segments");
         }
-        TableSchema schema = schemaService.getTableSchemas(claim.siteId()).get(claim.tableName());
-        if (schema == null) {
-            throw new IllegalStateException("No declared schema for table " + claim.tableName());
-        }
-
-        Path tempFile = null;
+        Map<String, TableSchema> schemas = schemaService.getTableSchemas(firstClaim.siteId());
+        Map<UUID, BuildOutcome> outcomes = new LinkedHashMap<>();
+        Map<String, Claim> claimsByTable = new LinkedHashMap<>();
+        Map<String, Path> tempFiles = new LinkedHashMap<>();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         try {
             Files.createDirectories(tempDirectory);
-            tempFile = Files.createTempFile(tempDirectory,
-                    "batch-parquet-" + claim.artifactId() + "-", ".parquet");
-            Path output = tempFile;
-            OptionalLong expectedRows = expectedRowCount(segments, claim.tableName());
-            DeltaParquetWriter.FileWriteResult result = DeltaParquetWriter.writeDeltaParquet(
-                    output, claim.tableName(), schema,
-                    consumer -> segments.forEach(segment ->
-                            segmentService.forEachRecord(segment.getS3Key(), consumer)), maxTempBytes);
-            if (expectedRows.isPresent() && result.rowCount() != expectedRows.getAsLong()) {
-                throw new IllegalStateException("Artifact row count " + result.rowCount()
-                        + " does not match segment stats " + expectedRows.getAsLong());
+            for (Claim claim : claims) {
+                TableSchema schema = schemas.get(claim.tableName());
+                if (schema == null) {
+                    outcomes.put(claim.artifactId(),
+                            BuildOutcome.failed("No declared schema for table " + claim.tableName()));
+                    continue;
+                }
+                Path output = Files.createTempFile(tempDirectory,
+                        "batch-parquet-" + claim.artifactId() + "-", ".parquet");
+                claimsByTable.put(claim.tableName(), claim);
+                tempFiles.put(claim.tableName(), output);
+                requests.put(claim.tableName(), new DeltaParquetWriter.TableWriteRequest(output, schema));
             }
-            String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
-                    claim.tableName(), output);
-            return new FinalizedFile(s3Key, result.rowCount(), result.fileSize(), result.checksum());
+            DeltaParquetWriter.BatchWriteResult written = DeltaParquetWriter.writeBatchDeltaParquet(
+                    requests, consumer -> segments.forEach(segment ->
+                            segmentService.forEachRecord(segment.getS3Key(), consumer)), maxTempBytes);
+            for (Map.Entry<String, DeltaParquetWriter.FileWriteFailure> entry
+                    : written.failures().entrySet()) {
+                Claim claim = claimsByTable.get(entry.getKey());
+                DeltaParquetWriter.FileWriteFailure failure = entry.getValue();
+                outcomes.put(claim.artifactId(), failure.permanent()
+                        ? BuildOutcome.permanentlyFailed(failure.error())
+                        : BuildOutcome.failed(failure.error()));
+            }
+            for (Map.Entry<String, DeltaParquetWriter.FileWriteResult> entry : written.files().entrySet()) {
+                String tableName = entry.getKey();
+                Claim claim = claimsByTable.get(tableName);
+                DeltaParquetWriter.FileWriteResult result = entry.getValue();
+                try {
+                    OptionalLong expectedRows = expectedRowCount(segments, tableName);
+                    if (expectedRows.isPresent() && result.rowCount() != expectedRows.getAsLong()) {
+                        throw new IllegalStateException("Artifact row count " + result.rowCount()
+                                + " does not match segment stats " + expectedRows.getAsLong());
+                    }
+                    String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
+                            tableName, tempFiles.get(tableName));
+                    outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
+                            s3Key, result.rowCount(), result.fileSize(), result.checksum())));
+                } catch (RuntimeException e) {
+                    outcomes.put(claim.artifactId(), BuildOutcome.failed(
+                            Objects.toString(e.getMessage(), e.getClass().getSimpleName())));
+                }
+            }
+            return outcomes;
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to create unified Parquet temp file", e);
         } finally {
-            if (tempFile != null) {
+            for (Path tempFile : tempFiles.values()) {
                 try {
                     Files.deleteIfExists(tempFile);
                 } catch (IOException e) {

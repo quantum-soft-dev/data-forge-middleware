@@ -5,12 +5,20 @@ import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.UUID;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,6 +33,9 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
 
     @Autowired
     private BatchParquetArtifactRepository repository;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Test
     void claimsOnlyRetryableRowsAndResolvesExactManifest() {
@@ -92,6 +103,61 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
 
         assertFalse(isClaimed(stuck, now, 60, 3600), "a live claim is left to its owner");
         assertTrue(isClaimed(stuck, now, 60, 0), "an expired lease makes the row claimable again");
+    }
+
+    @Test
+    void activeClaimHidesPendingSiblingsOfTheSameBatch() {
+        UUID batchId = BATCH_ID;
+        BatchParquetArtifact building = BatchParquetArtifact.pending(batchId, SITE_ID, "active-orders");
+        building.markBuilding();
+        repository.save(building);
+        BatchParquetArtifact pending = repository.save(
+                BatchParquetArtifact.pending(batchId, SITE_ID, "active-customers"));
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        List<UUID> liveLeaseCandidates = repository.findNextRetryable(now, 0, 3600, 7, 500)
+                .stream().map(BatchParquetArtifact::getId).toList();
+        List<UUID> expiredLeaseCandidates = repository.findNextRetryable(now, 0, 0, 7, 500)
+                .stream().map(BatchParquetArtifact::getId).toList();
+
+        assertFalse(liveLeaseCandidates.contains(pending.getId()),
+                "a second worker must not split a batch while its sibling is building");
+        assertTrue(expiredLeaseCandidates.contains(pending.getId()),
+                "the batch becomes available again after the active lease expires");
+    }
+
+    @Test
+    void advisoryLockAllowsOnlyOneBatchClaimTransaction() throws Exception {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> owner = executor.submit(() -> transaction.execute(status -> {
+                boolean acquired = repository.tryLockBatch(BATCH_ID);
+                locked.countDown();
+                try {
+                    assertTrue(release.await(10, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                return acquired;
+            }));
+            assertTrue(locked.await(10, TimeUnit.SECONDS));
+
+            Boolean competitor = transaction.execute(status -> repository.tryLockBatch(BATCH_ID));
+
+            assertFalse(Boolean.TRUE.equals(competitor));
+            release.countDown();
+            assertTrue(owner.get(10, TimeUnit.SECONDS));
+            assertTrue(Boolean.TRUE.equals(
+                    transaction.execute(status -> repository.tryLockBatch(BATCH_ID))));
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test
