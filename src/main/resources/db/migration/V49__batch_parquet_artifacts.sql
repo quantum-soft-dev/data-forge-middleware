@@ -19,7 +19,7 @@ CREATE TABLE batch_parquet_artifacts (
     version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_batch_parquet_artifact UNIQUE (batch_id, table_name),
     CONSTRAINT chk_batch_parquet_artifact_status
-        CHECK (status IN ('PENDING', 'BUILDING', 'READY', 'FAILED')),
+        CHECK (status IN ('PENDING', 'BUILDING', 'READY', 'FAILED', 'ABANDONED')),
     CONSTRAINT chk_batch_parquet_artifact_ready CHECK (
         (status = 'READY' AND s3_key IS NOT NULL AND row_count IS NOT NULL
             AND file_size IS NOT NULL AND checksum IS NOT NULL AND ready_at IS NOT NULL)
@@ -27,9 +27,11 @@ CREATE TABLE batch_parquet_artifacts (
     )
 );
 
+-- Claim index. BUILDING is included because a claim is committed before its build runs: a worker
+-- that dies leaves the row BUILDING, and it is reclaimed once its build lease expires.
 CREATE INDEX idx_batch_parquet_artifacts_claim
     ON batch_parquet_artifacts (status, updated_at, created_at)
-    WHERE status IN ('PENDING', 'FAILED');
+    WHERE status IN ('PENDING', 'FAILED', 'BUILDING');
 
 CREATE INDEX idx_batch_parquet_artifacts_site
     ON batch_parquet_artifacts (site_id);

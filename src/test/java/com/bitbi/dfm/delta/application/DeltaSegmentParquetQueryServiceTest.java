@@ -81,14 +81,26 @@ class DeltaSegmentParquetQueryServiceTest {
 
     @Test
     void reportsAnAbandonedArtifactAsAbsentWithoutReenqueueing() {
-        BatchParquetArtifact failed = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
-        failed.markBuilding();
-        failed.markFailed("No declared schema for table orders");
+        BatchParquetArtifact abandoned = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
+        abandoned.markBuilding();
+        abandoned.markAbandoned("No declared schema for table orders");
         when(artifactRepository.findBySiteIdAndBatchIdAndTableName(SITE_ID, BATCH_ID, "orders"))
-                .thenReturn(Optional.of(failed));
+                .thenReturn(Optional.of(abandoned));
 
         assertTrue(service.presignBatchTableParquet(SITE_ID, BATCH_ID, "orders").isEmpty());
 
         verify(finalizationService, never()).enqueueBatchForSite(any(), any());
+    }
+
+    @Test
+    void reportsAFailureThatStillHasAttemptsAsFinalizingRatherThanMissing() {
+        BatchParquetArtifact failed = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
+        failed.markBuilding();
+        failed.markFailed("Failed to store unified batch Parquet");
+        when(artifactRepository.findBySiteIdAndBatchIdAndTableName(SITE_ID, BATCH_ID, "orders"))
+                .thenReturn(Optional.of(failed));
+
+        assertThrows(BatchParquetNotReadyException.class,
+                () -> service.presignBatchTableParquet(SITE_ID, BATCH_ID, "orders"));
     }
 }

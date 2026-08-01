@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BatchParquetArtifactTest {
 
@@ -47,6 +49,36 @@ class BatchParquetArtifactTest {
         assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
         assertEquals(2, artifact.getAttemptCount());
         assertNull(artifact.getLastError());
+    }
+
+    @Test
+    void abandonedArtifactIsTerminalAndNoLongerRetryable() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+        artifact.markFailed("upload unavailable");
+
+        assertTrue(artifact.isRetryable(), "a plain failure is still worth another attempt");
+
+        artifact.markBuilding();
+        artifact.markAbandoned("no declared schema");
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
+        assertFalse(artifact.isRetryable());
+        assertThrows(IllegalStateException.class, artifact::markBuilding);
+    }
+
+    @Test
+    void anExpiredClaimCanBeTakenOverWithoutLosingTheAttemptItSpent() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        // The owner died mid-build; the lease lapsed and another worker reclaims the row.
+        artifact.markBuilding();
+
+        assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
+        assertEquals(2, artifact.getAttemptCount(), "the lost attempt still counts against the cap");
     }
 
     @Test

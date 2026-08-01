@@ -238,10 +238,15 @@ delta:
     # Completed-session artifacts are separate from the realtime per-segment egress above.
     max-concurrent: ${DELTA_BATCH_PARQUET_MAX_CONCURRENT:2}
     sweep-ms: ${DELTA_BATCH_PARQUET_SWEEP_MS:60000}
+    # Base failure backoff; doubles per attempt (capped at 64x), so the attempt ceiling below spans
+    # a window wide enough to ride out a transient S3 outage rather than ~5 flat minutes.
     retry-delay-seconds: ${DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS:60}
     # Attempt ceiling per artifact. A deterministic failure (no declared schema, unrenderable data)
-    # would otherwise be rebuilt every retry-delay forever; past the cap the row is left FAILED (404).
+    # would otherwise be rebuilt forever; past the cap the row becomes ABANDONED and answers 404.
     max-attempts: ${DELTA_BATCH_PARQUET_MAX_ATTEMPTS:5}
+    # How long a committed BUILDING claim is honoured before another worker reclaims it. Must exceed
+    # the longest plausible build: a live build reclaimed early is wasted work, not corruption.
+    lease-seconds: ${DELTA_BATCH_PARQUET_LEASE_SECONDS:1800}
     # A completed artifact is file-backed; refuse upload if the local file exceeds this policy.
     max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}
     temp-dir: ${DELTA_BATCH_PARQUET_TEMP_DIR:${java.io.tmpdir}}

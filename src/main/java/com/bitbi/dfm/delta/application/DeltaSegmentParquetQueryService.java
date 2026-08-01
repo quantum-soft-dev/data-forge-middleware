@@ -49,7 +49,9 @@ public class DeltaSegmentParquetQueryService {
      * @param batchId   batch (= Delta session) identifier
      * @param tableName table whose delta file to download
      * @return presigned download, or empty when the batch has nothing to build for that table
-     *         (unknown table, no published segments) or finalization gave up on it
+     *         (unknown table, unfinished batch, no published segments) or finalization gave up
+     * @throws BatchParquetNotReadyException while the artifact is queued, building, or awaiting
+     *         another attempt
      */
     // No @Transactional: the DB reads run in their own transactions and are materialized before
     // the S3 HEAD/presign round-trips — holding a HikariCP connection across network calls would
@@ -64,8 +66,10 @@ public class DeltaSegmentParquetQueryService {
             return Optional.empty();
         }
         BatchParquetArtifact artifact = found.get();
-        if (artifact.getStatus() == BatchParquetArtifactStatus.PENDING
-                || artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
+        // A FAILED artifact still has attempts left, so the answer is "not yet", not "not there":
+        // reporting a transient upload or segment-read failure as 404 would tell the user the table
+        // has no file at all, minutes before the same click starts working.
+        if (artifact.isRetryable()) {
             throw new BatchParquetNotReadyException(batchId, tableName);
         }
         if (artifact.getStatus() != BatchParquetArtifactStatus.READY || artifact.getS3Key() == null) {

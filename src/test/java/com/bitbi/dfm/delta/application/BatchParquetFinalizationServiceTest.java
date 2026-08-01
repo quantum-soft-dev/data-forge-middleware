@@ -1,5 +1,8 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
+import com.bitbi.dfm.batch.domain.BatchRepository;
+import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
@@ -18,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,13 +56,20 @@ class BatchParquetFinalizationServiceTest {
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final ChangelogSegmentService segmentService = mock(ChangelogSegmentService.class);
     private final SiteSchemaService schemaService = mock(SiteSchemaService.class);
+    private final BatchRepository batchRepository = mock(BatchRepository.class);
     private final S3CheckpointStorage storage = mock(S3CheckpointStorage.class);
     private BatchParquetFinalizationService service;
 
     @BeforeEach
     void setUp() {
-        service = new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, storage, tempDir.toString(), 10_000_000L, 60, 5);
+        service = newService(5);
+    }
+
+    private BatchParquetFinalizationService newService(int maxAttempts) {
+        return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
+                segmentService, schemaService, batchRepository, storage,
+                mock(PlatformTransactionManager.class), tempDir.toString(), 10_000_000L, 60,
+                maxAttempts, 1800);
     }
 
     @Test
@@ -90,16 +101,49 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void onDemandBackfillRefusesABatchWhoseSessionIsStillRunning() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        // A continuous session seals non-provisional segments while its batch stays IN_PROGRESS;
+        // enqueueing then would publish a truncated artifact that is never rebuilt.
+        ChangelogSegment sealed = segment(siteId, batchId, "sealed", 1, 10,
+                Map.of("orders", new TableChangeStats(10, 0, 0)));
+        Batch running = batch(BatchStatus.IN_PROGRESS);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(sealed));
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(running));
+
+        assertEquals(0, service.enqueueBatchForSite(siteId, batchId));
+
+        verify(artifactRepository, never()).save(any());
+    }
+
+    @Test
+    void onDemandBackfillEnqueuesAFinishedBatchOfTheAskingSite() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        ChangelogSegment sealed = segment(siteId, batchId, "sealed", 1, 10,
+                Map.of("orders", new TableChangeStats(10, 0, 0)));
+        Batch finished = batch(BatchStatus.COMPLETED);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(sealed));
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(finished));
+        when(artifactRepository.findBySiteIdAndBatchIdAndTableName(eq(siteId), eq(batchId), any()))
+                .thenReturn(Optional.empty());
+
+        assertEquals(1, service.enqueueBatchForSite(siteId, batchId));
+
+        assertEquals(0, service.enqueueBatchForSite(UUID.randomUUID(), batchId),
+                "a batch of another site is not enqueued");
+    }
+
+    @Test
     void finalizesOrderedSegmentsToOneReadyArtifactAndCleansTempFile() throws Exception {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
-        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
         ChangelogSegment first = segment(siteId, batchId, "first", 1, 2,
                 Map.of("orders", new TableChangeStats(2, 0, 0)));
         ChangelogSegment second = segment(siteId, batchId, "second", 3, 4,
                 Map.of("orders", new TableChangeStats(1, 1, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), eq(1)))
-                .thenReturn(List.of(artifact));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(first, second));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("first", record(1, Op.INSERT), record(2, Op.INSERT));
@@ -125,14 +169,36 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
-    void uploadFailureMarksOnlyThatTableFailedAndCleansTempFile() throws Exception {
+    void commitsTheClaimBeforeTheBuildSoACrashStillSpendsAnAttempt() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
-        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt()))
-                .thenReturn(List.of(artifact));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any()))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        // The BUILDING claim is persisted before any segment is read or uploaded: a process that
+        // dies mid-build leaves attemptCount already incremented instead of an endless retry.
+        InOrder order = inOrder(artifactRepository, segmentService, storage);
+        order.verify(artifactRepository).save(any(BatchParquetArtifact.class));
+        order.verify(segmentService).forEachRecord(any(), any());
+        order.verify(storage).uploadBatchParquet(any(), any(), any(), any());
+        assertEquals(1, artifact.getAttemptCount());
+    }
+
+    @Test
+    void uploadFailureStaysRetryableWhileAttemptsRemainAndCleansTempFile() throws Exception {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
@@ -142,6 +208,7 @@ class BatchParquetFinalizationServiceTest {
         assertTrue(service.finalizeNext());
 
         assertEquals(BatchParquetArtifactStatus.FAILED, artifact.getStatus());
+        assertTrue(artifact.isRetryable());
         assertTrue(artifact.getLastError().contains("upload failed"));
         try (var files = Files.list(tempDir)) {
             assertTrue(files.findAny().isEmpty(), "temp file deleted after failure");
@@ -149,31 +216,68 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
-    void missingSchemaFailsOneArtifactWithoutAttemptingUpload() {
+    void theLastAllowedAttemptAbandonsTheArtifactInsteadOfFailingItAgain() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
-        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt()))
-                .thenReturn(List.of(artifact));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of());
 
-        assertTrue(service.finalizeNext());
+        assertTrue(newService(1).finalizeNext());
 
-        assertEquals(BatchParquetArtifactStatus.FAILED, artifact.getStatus());
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
+        assertFalse(artifact.isRetryable());
+        assertTrue(artifact.getLastError().contains("No declared schema"));
         verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
     }
 
     @Test
-    void claimsWorkWithTheConfiguredAttemptCeilingSoDeadArtifactsAreNeverRetried() {
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt()))
+    void claimsWithTheConfiguredBackoffAndLeaseWindows() {
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of());
 
         assertFalse(service.finalizeNext());
 
-        verify(artifactRepository).findNextRetryable(any(LocalDateTime.class), eq(5), eq(1));
+        verify(artifactRepository).findNextRetryable(any(LocalDateTime.class), eq(60), eq(1800), eq(1));
+    }
+
+    @Test
+    void leavesTheRowAloneWhenSomethingElseMovedItWhileTheBuildRan() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+            // A site wipe removed the manifest row while this build was streaming from S3.
+            when(artifactRepository.findById(artifact.getId())).thenReturn(Optional.empty());
+            return "egress/orders.parquet";
+        });
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
+        verify(artifactRepository, times(1)).save(any(BatchParquetArtifact.class));
+    }
+
+    /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */
+    private BatchParquetArtifact claimable(UUID batchId, UUID siteId, String tableName) {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, tableName);
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(artifact));
+        when(artifactRepository.findById(artifact.getId())).thenReturn(Optional.of(artifact));
+        return artifact;
+    }
+
+    private static Batch batch(BatchStatus status) {
+        Batch batch = mock(Batch.class);
+        when(batch.getStatus()).thenReturn(status);
+        return batch;
     }
 
     private ChangelogSegment segment(UUID siteId, UUID batchId, String key, long first, long last,

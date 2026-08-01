@@ -33,13 +33,27 @@ claims one row with PostgreSQL row locking, writes to a unique local file, uploa
 and sets `READY` only after `PutObject` succeeds. A crash or failure cannot expose the row as ready;
 retries rebuild and overwrite the same logical object. Table failures are isolated.
 
-Retries are capped at `delta.batch-parquet.max-attempts` (default 5). Several failure classes are
-deterministic and never recover — a table with no declared schema, data the declared schema cannot
-render, or a batch whose segments a re-baseline removed — and rebuilding them every retry delay
-forever would re-download and re-write the whole batch changelog on a loop. Past the cap the row is
-left `FAILED`, logged at ERROR, and never claimed again; the download answers `404`, which matches
-how the per-segment egress worker already treats an unrenderable table (skip, don't wedge the
-queue). Resetting `attempt_count` requeues it after the underlying cause is fixed.
+The claim is committed **before** the build runs, in its own transaction, and `BUILDING` — not a
+held row lock — is what keeps other replicas off the row. That is what makes the attempt ceiling
+real: a process that dies mid-build (an OOM on a large batch, a pod eviction) has already made its
+incremented `attempt_count` durable, so the most expensive failure class cannot loop forever. It
+also keeps the long S3 work off a database connection. A claim whose owner never came back is
+reclaimed once `delta.batch-parquet.lease-seconds` (default 30 min) elapse, which must stay above
+the longest plausible build — reclaiming a live build wastes work, it does not corrupt anything,
+because the object key is stable and the content deterministic.
+
+Retries are capped at `delta.batch-parquet.max-attempts` (default 5), with the failure backoff
+doubling per attempt (capped at 64×the base delay) so a transient S3 outage gets a wide window
+instead of burning every attempt in five flat minutes. Several failure classes are deterministic
+and never recover — a table with no declared schema, data the declared schema cannot render, or a
+batch whose segments a re-baseline removed — and rebuilding them forever would re-download and
+re-write the whole batch changelog on a loop. Past the cap the row becomes `ABANDONED`, logged at
+ERROR, and is never claimed again, which matches how the per-segment egress worker already treats
+an unrenderable table (skip, don't wedge the queue). Resetting the row requeues it once the
+underlying cause is fixed.
+
+`ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
+attempts is work in progress, and the download must say so rather than claim the file is missing.
 
 ## Compatibility
 
@@ -57,8 +71,10 @@ egress and any orphan left by an interrupted cleanup are removed.
 ## Download readiness contract
 
 The existing owner route is unchanged. It resolves the exact `(site, batch, table)` manifest and
-returns the existing short-lived presigned-download DTO only for `READY`. `PENDING` or `BUILDING`
-returns `409 Conflict`; an absent or `FAILED` row returns `404 Not Found`.
+returns the existing short-lived presigned-download DTO only for `READY`. `PENDING`, `BUILDING` and
+`FAILED` all return `409 Conflict` — each means "an attempt is queued or running", and answering
+`404` for a retryable failure would tell the user the table has no file minutes before the same
+click starts working. Only an absent row or `ABANDONED` returns `404 Not Found`.
 
 Manifest rows are written when a batch completes, so batches that closed before this change shipped
 have none — and V49 deliberately does not backfill them at migration time, which would queue every
@@ -66,6 +82,11 @@ historical batch at once and push freshly completed sessions behind the whole ba
 download path backfills lazily: a request for a batch with no manifest row enqueues that batch's
 tables from its (untouched) raw segments and answers `409`, and the next click downloads the built
 artifact. A batch with no published segments still answers `404`, so nothing that was 404 before
-becomes a queued build. Batch Detail aggregates
+becomes a queued build.
+
+The backfill only accepts a batch in a **terminal** status. A continuous session publishes
+non-provisional segments while its batch is still `IN_PROGRESS`, so enqueueing then would build an
+artifact from the seals so far and publish it `READY`; batch completion skips tables that already
+have a row, and the finished session would serve a silently truncated download. Batch Detail aggregates
 segment statistics by table, so rolling deployments and legacy duplicate DTO entries still render
 one row and one request per table.

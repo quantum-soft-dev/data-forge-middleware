@@ -35,9 +35,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 
@@ -68,6 +68,9 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private S3CheckpointStorage storage;
+
+    @Autowired
+    private com.bitbi.dfm.batch.domain.BatchRepository batchRepository;
 
     @Autowired
     private PlatformTransactionManager transactionManager;
@@ -133,13 +136,9 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                 .doCallRealMethod()
                 .when(flakyStorage).uploadBatchParquet(
                         eq(SITE_ID), eq(BATCH_ID), eq("customers"), any(Path.class));
-        BatchParquetFinalizationService flakyService = new BatchParquetFinalizationService(
-                artifactRepository, segmentRepository, segmentService, schemaService, flakyStorage,
-                tempDir.toString(), 10_000_000L, 0, 5);
-        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        BatchParquetFinalizationService flakyService = service(flakyStorage, 5);
 
-        Boolean firstAttempt = transactions.execute(status -> flakyService.finalizeNext());
-        assertThat(firstAttempt).isTrue();
+        assertThat(flakyService.finalizeNext()).isTrue();
         BatchParquetArtifact failed = artifact("customers");
         assertThat(failed.getStatus()).isEqualTo(BatchParquetArtifactStatus.FAILED);
         assertThat(failed.getS3Key()).isNull();
@@ -148,8 +147,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
         jdbc.update("UPDATE batch_parquet_artifacts SET updated_at = TIMESTAMP '2000-01-01 00:00:00' "
                 + "WHERE id = ?", failed.getId());
-        Boolean retryAttempt = transactions.execute(status -> flakyService.finalizeNext());
-        assertThat(retryAttempt).isTrue();
+        assertThat(flakyService.finalizeNext()).isTrue();
 
         BatchParquetArtifact ready = artifact("customers");
         assertThat(ready.getStatus()).isEqualTo(BatchParquetArtifactStatus.READY);
@@ -163,27 +161,61 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
                 record("ghost", Op.INSERT, 1L, 1L, data("id", intValue(1L)))));
         assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(1);
-        BatchParquetFinalizationService cappedService = new BatchParquetFinalizationService(
-                artifactRepository, segmentRepository, segmentService, schemaService, storage,
-                tempDir.toString(), 10_000_000L, 0, 2);
-        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        BatchParquetFinalizationService cappedService = service(storage, 2);
 
-        Boolean firstAttempt = transactions.execute(status -> cappedService.finalizeNext());
-        assertThat(firstAttempt).isTrue();
+        assertThat(cappedService.finalizeNext()).isTrue();
         coolDownFailures();
-        Boolean secondAttempt = transactions.execute(status -> cappedService.finalizeNext());
-        assertThat(secondAttempt).isTrue();
+        assertThat(cappedService.finalizeNext()).isTrue();
         coolDownFailures();
-        Boolean thirdAttempt = transactions.execute(status -> cappedService.finalizeNext());
-        assertThat(thirdAttempt)
+        assertThat(cappedService.finalizeNext())
                 .describedAs("the second failure used up the cap, so the row is terminal")
                 .isFalse();
 
         BatchParquetArtifact abandoned = artifact("ghost");
-        assertThat(abandoned.getStatus()).isEqualTo(BatchParquetArtifactStatus.FAILED);
+        assertThat(abandoned.getStatus()).isEqualTo(BatchParquetArtifactStatus.ABANDONED);
         assertThat(abandoned.getAttemptCount()).isEqualTo(2);
         assertThat(abandoned.getLastError()).contains("No declared schema");
         assertThat(storage.listKeys(batchPrefix())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a claim survives the process that made it and is only reclaimed after its lease")
+    void claimIsDurableAndReclaimedOnlyWhenTheLeaseExpires() {
+        segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Ann")))));
+        assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(1);
+        S3CheckpointStorage dyingStorage = spy(storage);
+        doThrow(new OutOfMemoryError("row group buffer"))
+                .when(dyingStorage).uploadBatchParquet(any(), any(), any(), any(Path.class));
+
+        // An Error is not caught by the finalizer: this is the "process died mid-build" shape.
+        assertThatThrownBy(() -> service(dyingStorage, 5).finalizeNext())
+                .isInstanceOf(OutOfMemoryError.class);
+
+        BatchParquetArtifact stuck = artifact("customers");
+        assertThat(stuck.getStatus()).isEqualTo(BatchParquetArtifactStatus.BUILDING);
+        assertThat(stuck.getAttemptCount())
+                .describedAs("the claim committed before the build, so the attempt is spent")
+                .isEqualTo(1);
+
+        // Nobody touches a live claim; once the lease lapses the row is picked up again.
+        assertThat(service(storage, 5).finalizeNext()).isFalse();
+        assertThat(leasedService(storage).finalizeNext()).isTrue();
+        assertThat(artifact("customers").getStatus()).isEqualTo(BatchParquetArtifactStatus.READY);
+        assertThat(artifact("customers").getAttemptCount()).isEqualTo(2);
+    }
+
+    private BatchParquetFinalizationService service(S3CheckpointStorage storageToUse, int maxAttempts) {
+        return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
+                segmentService, schemaService, batchRepository, storageToUse, transactionManager,
+                tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600);
+    }
+
+    /** Same finalizer, but with an already-elapsed build lease so stale claims are reclaimed. */
+    private BatchParquetFinalizationService leasedService(S3CheckpointStorage storageToUse) {
+        return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
+                segmentService, schemaService, batchRepository, storageToUse, transactionManager,
+                tempDir.toString(), 10_000_000L, 0, 5, 0);
     }
 
     /** Take the retry-delay out of play so a test can drive consecutive attempts. */

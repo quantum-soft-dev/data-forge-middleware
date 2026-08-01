@@ -36,3 +36,10 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   pre-feature batches on demand from the download path instead of answering a permanent `404`; skip
   the decimal scan pass for tables that declare no decimal column. Tests cover the attempt ceiling
   at repository and service level, the backfill/`409` path, and the single-pass replay.
+
+- [x] **T09 — Review round 2.** Make the claim durable (committed before the build, `BUILDING` as
+  the cross-replica guard, lease-based reclaim) so a process death still spends an attempt; add
+  `ABANDONED` so a retryable `FAILED` answers `409` instead of "no such file"; refuse to backfill a
+  batch whose session is still running; add a doubling failure backoff; close the segment stream in
+  the service that opened it. Tests cover claim durability and lease takeover, the backoff and
+  abandon boundaries, the IN_PROGRESS refusal, and the `409`/`404` split.

@@ -53,6 +53,13 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
     }
 
     @AfterEach
+    void cleanSeededArtifacts() {
+        // The manifest rows are committed and the database is shared: leaving a PENDING/FAILED row
+        // behind would make another class's claim-query assertions see work that is not theirs.
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE);
+    }
+
+    @AfterEach
     void cleanUploadedDeltaFiles() {
         // The LocalStack bucket is shared across the suite — leaving the uploaded delta
         // file behind breaks DeltaEgressIntegrationTest's "schema-less table skipped"
@@ -107,9 +114,19 @@ class DeltaBatchParquetRestContractTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("returns 404 when that table failed finalization")
-    void shouldReturn404WhenArtifactFailed() throws Exception {
+    @DisplayName("returns 409 while a failed table still has attempts left")
+    void shouldReturn409WhenArtifactFailedButRetryable() throws Exception {
         seedArtifact("orders", "FAILED");
+
+        mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "orders"))
+                        .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("returns 404 once finalization gave up on that table")
+    void shouldReturn404WhenArtifactAbandoned() throws Exception {
+        seedArtifact("orders", "ABANDONED");
 
         mockMvc.perform(get(USER_URL.formatted(SITE, BATCH, "orders"))
                         .header("Authorization", "Bearer " + MOCK_USER_JWT))

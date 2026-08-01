@@ -564,17 +564,21 @@ You don't write these — they're how downstream tools read your data:
 Realtime segment files appear **within seconds of `SessionCommitted`**. The commit also enqueues the
 unified batch/table artifacts in a durable manifest and wakes a separate bounded worker pool. A
 manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
-independently, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 5) — past that the table is left
-failed (and logged at ERROR) rather than rebuilt forever, since the common causes (no declared
-schema, data the schema cannot render) never recover on their own. The Bit BI checkpoint CSV is
+independently with a doubling backoff, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 5) — past
+that the table is abandoned (and logged at ERROR) rather than rebuilt forever, since the common
+causes (no declared schema, data the schema cannot render) never recover on their own. A worker
+claim is durable, so a build killed by a restart still spends its attempt; the row is picked up
+again after `DELTA_BATCH_PARQUET_LEASE_SECONDS` (default 30 min). The Bit BI checkpoint CSV is
 still built by the async scheduler. Operators can tune the completed-batch pool and disk policy with
 `DELTA_BATCH_PARQUET_MAX_CONCURRENT`, `DELTA_BATCH_PARQUET_SWEEP_MS`,
 `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,
-`DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`, and `DELTA_BATCH_PARQUET_TEMP_DIR`.
+`DELTA_BATCH_PARQUET_LEASE_SECONDS`, `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`, and
+`DELTA_BATCH_PARQUET_TEMP_DIR`.
 
-Batches that completed **before** this feature shipped have no manifest row. They are backfilled on
-demand: the first Parquet click on such a batch enqueues its tables from the raw segments and
-answers `409` (finalizing), and the next click downloads the artifact.
+Batches that completed **before** this feature shipped have no manifest row. A finished batch is
+backfilled on demand: the first Parquet click enqueues its tables from the raw segments and answers
+`409` (finalizing), and the next click downloads the artifact. A session still running is never
+backfilled — its artifact would be missing everything it seals afterwards.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
@@ -598,7 +602,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags; 404 until the client first connects |
 | `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with `hasCsv`/`hasParquet` presence flags |
 | `.../delta/checkpoints/{table}/download?format=csv\|parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click |
-| `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while its manifest is `PENDING`/`BUILDING`; `404` when absent or failed (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
+| `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while an attempt is queued, running or pending retry (`PENDING`/`BUILDING`/`FAILED`); `404` when absent or abandoned after `max-attempts` (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
@@ -651,9 +655,10 @@ implemented.
 update, and delete counts across all batch segments before rendering. The "Table changes" card has
 exactly one row and one **Parquet** pill per table. One click presigns the manifest's unified object
 (`egress/{siteId}/batches/{batchId}/{table}.parquet`), never the first realtime segment slice. While
-finalization is running the endpoint returns `409`; a missing/failed artifact returns `404`. Tables
-without a declared/renderable schema fail independently and do not block other tables. A batch that
-predates the feature is enqueued by the first click (`409`) and downloads on the next one.
+an attempt is queued, running or awaiting retry the endpoint returns `409`; a missing or abandoned
+artifact returns `404`. Tables without a declared/renderable schema fail independently and do not
+block other tables. A finished batch that predates the feature is enqueued by the first click
+(`409`) and downloads on the next one.
 
 **Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
 server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily

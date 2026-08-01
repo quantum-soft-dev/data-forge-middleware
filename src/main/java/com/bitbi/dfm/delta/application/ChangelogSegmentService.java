@@ -8,6 +8,9 @@ import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -120,9 +123,17 @@ public class ChangelogSegmentService {
         return ChangelogCodec.parse(storage.download(s3Key));
     }
 
-    /** Stream a raw segment in wire order without retaining its records. */
+    /**
+     * Stream a raw segment in wire order without retaining its records. The stream is closed here
+     * rather than inside the codec: a truncated or corrupt object makes {@code GZIPInputStream}
+     * throw while reading the header, and the wrapper that would have closed it is never created.
+     */
     public void forEachRecord(String s3Key, Consumer<ChangeRecord> consumer) {
-        ChangelogCodec.forEach(storage.open(s3Key), consumer);
+        try (InputStream content = storage.open(s3Key)) {
+            ChangelogCodec.forEach(content, consumer);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to close changelog segment " + s3Key, e);
+        }
     }
 
     /**

@@ -87,9 +87,16 @@ public class BatchParquetArtifact {
         return artifact;
     }
 
-    /** Claim a pending or failed artifact for another deterministic build attempt. */
+    /**
+     * Claim this artifact for another deterministic build attempt.
+     *
+     * <p>The claim is committed on its own, before the build runs, so {@code attemptCount} counts
+     * attempts that <em>started</em> rather than attempts that returned an answer — a process that
+     * dies mid-build has still used one up. {@code BUILDING} is therefore a legal source state: it
+     * means the previous claimant went away and its build lease expired.</p>
+     */
     public void markBuilding() {
-        if (status != BatchParquetArtifactStatus.PENDING && status != BatchParquetArtifactStatus.FAILED) {
+        if (status == BatchParquetArtifactStatus.READY || status == BatchParquetArtifactStatus.ABANDONED) {
             throw new IllegalStateException("Cannot build artifact in status " + status);
         }
         status = BatchParquetArtifactStatus.BUILDING;
@@ -119,6 +126,25 @@ public class BatchParquetArtifact {
         clearPublishedMetadata();
         lastError = Objects.requireNonNull(error, "error");
         touch();
+    }
+
+    /**
+     * Give up on this table after its attempts ran out. Terminal — the claim query skips it and the
+     * download answers 404, which separates "we stopped trying" from a failure still being retried.
+     */
+    public void markAbandoned(String error) {
+        requireBuilding();
+        status = BatchParquetArtifactStatus.ABANDONED;
+        clearPublishedMetadata();
+        lastError = Objects.requireNonNull(error, "error");
+        touch();
+    }
+
+    /** @return true while a worker is expected to make another attempt. */
+    public boolean isRetryable() {
+        return status == BatchParquetArtifactStatus.PENDING
+                || status == BatchParquetArtifactStatus.BUILDING
+                || status == BatchParquetArtifactStatus.FAILED;
     }
 
     private void requireBuilding() {

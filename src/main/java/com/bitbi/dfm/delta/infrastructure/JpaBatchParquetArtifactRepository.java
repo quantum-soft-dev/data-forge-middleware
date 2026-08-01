@@ -24,17 +24,29 @@ public interface JpaBatchParquetArtifactRepository
     @Override
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
 
-    /** Caller holds the returned row lock for the whole finalization transaction. */
+    /**
+     * The row lock only serializes the claim itself — the claim transaction commits {@code BUILDING}
+     * immediately, and that status is what keeps other workers off the row until its lease expires.
+     * The failure backoff doubles per attempt (capped) so a transient outage gets a wide window
+     * while a deterministic failure still uses its attempts up quickly.
+     */
     @Override
     @Query(value = """
             SELECT * FROM batch_parquet_artifacts
             WHERE status = 'PENDING'
-               OR (status = 'FAILED' AND updated_at < :retryBefore AND attempt_count < :maxAttempts)
+               OR (status = 'FAILED' AND updated_at
+                       < CAST(:now AS timestamp) - make_interval(secs =>
+                           CAST(:retryDelaySeconds AS double precision)
+                               * power(2, LEAST(GREATEST(attempt_count - 1, 0), 6))))
+               OR (status = 'BUILDING' AND updated_at
+                       < CAST(:now AS timestamp) - make_interval(secs =>
+                           CAST(:leaseSeconds AS double precision)))
             ORDER BY updated_at, created_at, table_name
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
-    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int maxAttempts, int limit);
+    List<BatchParquetArtifact> findNextRetryable(LocalDateTime now, int retryDelaySeconds,
+                                                 int leaseSeconds, int limit);
 
     @Override
     @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.batchId = :batchId AND a.s3Key IS NOT NULL")
