@@ -62,6 +62,7 @@ export function DeltaBatchDetail({ batch, siteName }: DeltaBatchDetailProps) {
         () => presignBatchTableParquet(batch.siteId, batch.id, tableName),
         {
           notFoundMessage: `No delta Parquet for "${tableName}" — the file could not be built, most likely because the table has no declared schema.`,
+          notReadyMessage: `Preparing the delta Parquet for "${tableName}" — try again in a moment.`,
         },
       );
     } finally {

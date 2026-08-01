@@ -8,6 +8,7 @@ import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
@@ -132,6 +133,23 @@ public class S3CheckpointStorage {
             return s3Key;
         } catch (S3Exception | IOException e) {
             throw new CheckpointStorageException("Failed to store unified batch Parquet: " + s3Key, e);
+        }
+    }
+
+    /**
+     * Best-effort removal of one artifact object. Used when a finished build discovers that the row
+     * which would have owned the object is gone: nothing else can name that key afterwards, so the
+     * uploader is the only one left who can clean up after itself.
+     *
+     * @return true when the delete was issued without error
+     */
+    public boolean deleteBatchParquet(String s3Key) {
+        try {
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(s3Key).build());
+            return true;
+        } catch (S3Exception e) {
+            log.warn("Could not delete orphaned unified batch Parquet {}", s3Key, e);
+            return false;
         }
     }
 

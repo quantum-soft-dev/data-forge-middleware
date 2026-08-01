@@ -18,8 +18,11 @@ public class BatchParquetFinalizationWorker {
 
     private static final Logger log = LoggerFactory.getLogger(BatchParquetFinalizationWorker.class);
 
+    private static final long SHUTDOWN_GRACE_SECONDS = 30L;
+
     private final BatchParquetFinalizationService service;
     private final ThreadPoolExecutor pool;
+    private volatile boolean shuttingDown;
 
     public BatchParquetFinalizationWorker(
             BatchParquetFinalizationService service,
@@ -46,7 +49,9 @@ public class BatchParquetFinalizationWorker {
 
     private void drain() {
         try {
-            while (service.finalizeNext()) {
+            // Stop claiming once shutdown began: a claim spends an attempt, and a row claimed on
+            // the way out would be built by nobody and sit BUILDING until its lease lapses.
+            while (!shuttingDown && service.finalizeNext()) {
                 // drain all currently retryable rows
             }
         } catch (RuntimeException e) {
@@ -56,8 +61,24 @@ public class BatchParquetFinalizationWorker {
         }
     }
 
+    /**
+     * Let an in-flight build finish before the context tears down the pieces it needs. Spring
+     * destroys this bean before the service it depends on, so waiting here is what keeps a running
+     * finalization from losing its lease-renewal executor mid-build.
+     */
     @PreDestroy
     void shutdown() {
+        shuttingDown = true;
         pool.shutdown();
+        try {
+            if (!pool.awaitTermination(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)) {
+                log.warn("Batch Parquet finalization did not finish within {}s; the claimed rows stay "
+                        + "BUILDING until their lease expires", SHUTDOWN_GRACE_SECONDS);
+                pool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            pool.shutdownNow();
+        }
     }
 }

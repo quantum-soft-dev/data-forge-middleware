@@ -50,7 +50,6 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
                 SITE_ID, BATCH_ID, "orders").orElseThrow().getId());
         assertTrue(repository.findBySiteIdAndBatchIdAndTableName(
                 SITE_ID, BATCH_ID, "absent").isEmpty());
-        assertEquals(List.of("egress/customers.parquet"), repository.findS3KeysByBatchId(BATCH_ID));
         assertEquals(BatchParquetArtifactStatus.READY,
                 repository.findBySiteIdAndBatchIdAndTableName(
                         SITE_ID, BATCH_ID, "customers").orElseThrow().getStatus());
@@ -119,6 +118,21 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
                               int retryDelaySeconds, int leaseSeconds) {
         return repository.findNextRetryable(now, retryDelaySeconds, leaseSeconds, 500).stream()
                 .anyMatch(claimed -> claimed.getId().equals(artifact.getId()));
+    }
+
+    @Test
+    void insertPendingIfAbsentIsIdempotentUnderTheUniqueIndex() {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        assertEquals(1, repository.insertPendingIfAbsent(
+                UUID.randomUUID(), BATCH_ID, SITE_ID, "orders", now));
+        // The second enqueue of the same batch/table must be absorbed, not blow up on
+        // uk_batch_parquet_artifact — two download clicks or two replicas can race here.
+        assertEquals(0, repository.insertPendingIfAbsent(
+                UUID.randomUUID(), BATCH_ID, SITE_ID, "orders", now));
+        assertEquals(BatchParquetArtifactStatus.PENDING, repository
+                .findBySiteIdAndBatchIdAndTableName(SITE_ID, BATCH_ID, "orders").orElseThrow()
+                .getStatus());
     }
 
     @Test

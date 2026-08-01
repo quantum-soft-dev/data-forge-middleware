@@ -8,6 +8,7 @@ import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -172,7 +173,8 @@ public class BatchAdminController {
      */
     @Operation(
             summary = "Delete batch",
-            description = "Deletes batch metadata and its unified Delta Parquet artifacts."
+            description = "Deletes batch metadata, its changelog segments and its unified Delta Parquet "
+                    + "artifacts. Note: uploaded files are still not deleted from S3."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Batch deleted successfully"),
@@ -186,7 +188,13 @@ public class BatchAdminController {
             return ResponseEntity.notFound().build();
         }
 
-        List<String> artifactKeys = artifactRepository.findS3KeysByBatchId(batchId);
+        // Derive the keys rather than reading s3_key: a row that is mid-build, failed or abandoned
+        // records none, yet an attempt may already have uploaded the object — and once these rows
+        // are gone nothing names it. Deleting a key that was never written is a no-op.
+        List<String> artifactKeys = artifactRepository.findByBatchId(batchId).stream()
+                .map(artifact -> S3CheckpointStorage.batchParquetKey(
+                        artifact.getSiteId(), artifact.getBatchId(), artifact.getTableName()))
+                .toList();
         artifactRepository.deleteByBatchId(batchId);
         // Remove Delta v2 changelog segments first so the batch_id FK does not block the delete.
         changelogSegmentService.deleteByBatchId(batchId);

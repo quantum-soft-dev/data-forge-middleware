@@ -17,6 +17,7 @@ import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.conf.PlainParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetReader;
 import org.apache.parquet.io.LocalInputFile;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,11 +81,23 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE_ID);
+        // The claim query is global, not site-scoped, and other classes complete Delta batches
+        // (some for sites with no declared schema, leaving retryable rows behind). Since the queue
+        // is ordered by updated_at, a foreign row would be handed out ahead of this test's own and
+        // finalizeNext() would build somebody else's work. Own the whole queue for the duration.
+        jdbc.update("DELETE FROM batch_parquet_artifacts");
         jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE_ID);
         jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE_ID);
         purgeEgressPrefix(SITE_ID);
         declareSchemas();
+    }
+
+    @AfterEach
+    void cleanUp() {
+        // These rows are committed and BATCH_ID/SITE_ID are shared verbatim with
+        // BatchParquetArtifactRepositoryIntegrationTest, whose inserts would then collide with
+        // uk_batch_parquet_artifact (batch_id, table_name).
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE_ID);
     }
 
     @Test
@@ -122,6 +135,29 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         assertThat(orderRows).extracting(row -> row.get("_op").toString())
                 .containsExactly("INSERT", "DELETE");
         assertThat(orders.getRowCount()).isEqualTo(orderRows.size());
+    }
+
+    @Test
+    @DisplayName("a re-baseline's provisional segments are invisible to finalization")
+    void ignoresProvisionalSegmentsOfAnUnfinishedSnapshot() throws Exception {
+        segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L, data("id", intValue(1L), "name", stringValue("Ann")))));
+        // 033: a segmented re-baseline seals these mid-snapshot and only publishes them at
+        // SessionEnd. Folded in early they would be baked into a READY artifact that the published
+        // baseline then contradicts.
+        segmentService.persistProvisional(SITE_ID, BATCH_ID, "FULL_SNAPSHOT", 2L, List.of(
+                record("customers", Op.INSERT, 2L, 2L, data("id", intValue(2L), "name", stringValue("Bob")))));
+
+        assertThat(segmentRepository.findByBatchIdOrderByFirstSeq(BATCH_ID)).hasSize(1);
+        assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(1);
+        assertThat(finalizationService.finalizeNext()).isTrue();
+
+        BatchParquetArtifact customers = artifact("customers");
+        assertThat(customers.getStatus()).isEqualTo(BatchParquetArtifactStatus.READY);
+        assertThat(customers.getRowCount()).isEqualTo(1);
+        assertThat(readBack(storage.download(customers.getS3Key())))
+                .extracting(row -> (Long) row.get("_seq"))
+                .containsExactly(1L);
     }
 
     @Test

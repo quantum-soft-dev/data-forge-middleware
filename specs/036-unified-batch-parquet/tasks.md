@@ -48,3 +48,12 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   runs, so the lease bounds worker death rather than build time and a superseded owner cannot write
   into its successor's attempt; raise `max-attempts` to 7 so the backoff spans ~1 h; log the drain
   failure with its stack trace. Tests cover the mid-build takeover and lease renewal by token.
+
+- [x] **T11 — Review round 4 (five parallel reviewers).** Surface the `409` as progress on the
+  frontend instead of a raw error toast; make the enqueue an insert-if-absent so concurrent
+  backfills cannot collide on the unique index; derive artifact S3 keys from `(site, batch, table)`
+  in retention and admin delete so a mid-build/failed row's object is still collected, and delete
+  the object a finished build can no longer attach to a row; keep the claim's lease scheduling
+  inside the published path and drain gracefully on shutdown. Tests: listener phases, the
+  row-count guard, admin-delete ordering, provisional invisibility, insert idempotency, `409` UX,
+  plus queue isolation between integration classes.

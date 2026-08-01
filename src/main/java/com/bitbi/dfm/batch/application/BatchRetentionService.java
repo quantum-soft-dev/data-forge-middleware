@@ -5,6 +5,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -140,9 +141,13 @@ public class BatchRetentionService {
                 }
 
                 for (BatchParquetArtifact artifact : artifacts) {
-                    if (artifact.getS3Key() != null) {
-                        batchS3Keys.add(artifact.getS3Key());
-                    }
+                    // Derive the key instead of reading s3_key: a row that is mid-build, failed or
+                    // abandoned has no recorded key, yet an earlier attempt may already have
+                    // uploaded the object — and after these rows are gone nothing else names it.
+                    // The key is a pure function of (site, batch, table), and deleting a key that
+                    // was never written is a no-op.
+                    batchS3Keys.add(S3CheckpointStorage.batchParquetKey(
+                            artifact.getSiteId(), artifact.getBatchId(), artifact.getTableName()));
                     if (artifact.getFileSize() != null) {
                         batchBytes += artifact.getFileSize();
                     }

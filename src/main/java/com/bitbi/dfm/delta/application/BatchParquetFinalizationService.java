@@ -144,15 +144,14 @@ public class BatchParquetFinalizationService {
     }
 
     private int enqueue(UUID batchId, UUID siteId, List<ChangelogSegment> segments) {
-        Map<String, TableChangeStats> totals = aggregateStats(segments);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         int created = 0;
-        for (String tableName : totals.keySet()) {
-            Optional<BatchParquetArtifact> existing = artifactRepository
-                    .findBySiteIdAndBatchIdAndTableName(siteId, batchId, tableName);
-            if (existing.isEmpty()) {
-                artifactRepository.save(BatchParquetArtifact.pending(batchId, siteId, tableName));
-                created++;
-            }
+        for (String tableName : aggregateStats(segments).keySet()) {
+            // Insert-if-absent rather than read-then-insert: two enqueues of the same batch can run
+            // at once (two download clicks, two replicas), and losing that race on the unique index
+            // would turn a 409 into a 500 — or roll back the completion this runs inside.
+            created += artifactRepository.insertPendingIfAbsent(
+                    UUID.randomUUID(), batchId, siteId, tableName, now);
         }
         return created;
     }
@@ -179,14 +178,20 @@ public class BatchParquetFinalizationService {
         if (claim == null) {
             return false;
         }
-        ScheduledFuture<?> lease = renewLeaseWhileBuilding(claim);
+        // Scheduled inside the try: once the claim is committed the attempt is spent, so every path
+        // out of here must reach publish(). A rejected schedule (the renewal executor is shutting
+        // down) would otherwise abandon the row in BUILDING for a whole lease having done no work.
+        ScheduledFuture<?> lease = null;
         BuildOutcome built;
         try {
+            lease = renewLeaseWhileBuilding(claim);
             built = BuildOutcome.succeeded(buildAndUpload(claim));
         } catch (RuntimeException e) {
             built = BuildOutcome.failed(Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
         } finally {
-            lease.cancel(false);
+            if (lease != null) {
+                lease.cancel(false);
+            }
         }
         BuildOutcome outcome = built;
         transactions.execute(status -> {
@@ -247,6 +252,12 @@ public class BatchParquetFinalizationService {
         if (found.isEmpty()) {
             log.warn("Unified batch Parquet finished for an artifact that no longer exists: batchId={}, table={}",
                     claim.batchId(), claim.tableName());
+            if (outcome.file() != null) {
+                // Retention or an admin delete removed the row while we were building — and it
+                // collected keys from that row, which was BUILDING and named none. We are the last
+                // reference to the object we just wrote, so it goes with us.
+                storage.deleteBatchParquet(outcome.file().s3Key());
+            }
             return;
         }
         BatchParquetArtifact artifact = found.get();

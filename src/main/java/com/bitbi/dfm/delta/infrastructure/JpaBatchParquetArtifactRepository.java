@@ -57,9 +57,24 @@ public interface JpaBatchParquetArtifactRepository
             """, nativeQuery = true)
     int touchClaim(UUID id, UUID claimToken, LocalDateTime now);
 
+    /**
+     * Insert the work row only if it is not there yet. A guarded read-then-insert would race two
+     * concurrent enqueues of the same batch onto uk_batch_parquet_artifact, and the resulting
+     * constraint violation would surface as a 500 on the download path — or, worse, roll back the
+     * batch completion that the BEFORE_COMMIT enqueue runs inside.
+     *
+     * @return 1 when a row was created, 0 when one already existed
+     */
     @Override
-    @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.batchId = :batchId AND a.s3Key IS NOT NULL")
-    List<String> findS3KeysByBatchId(UUID batchId);
+    @Modifying(flushAutomatically = true)
+    @Transactional
+    @Query(value = """
+            INSERT INTO batch_parquet_artifacts
+                (id, batch_id, site_id, table_name, status, attempt_count, created_at, updated_at, version)
+            VALUES (:id, :batchId, :siteId, :tableName, 'PENDING', 0, :now, :now, 0)
+            ON CONFLICT (batch_id, table_name) DO NOTHING
+            """, nativeQuery = true)
+    int insertPendingIfAbsent(UUID id, UUID batchId, UUID siteId, String tableName, LocalDateTime now);
 
     @Override
     @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.siteId = :siteId AND a.s3Key IS NOT NULL")

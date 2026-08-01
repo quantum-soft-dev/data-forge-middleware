@@ -41,8 +41,15 @@ public interface BatchParquetArtifactRepository {
     List<BatchParquetArtifact> findNextRetryable(LocalDateTime now, int retryDelaySeconds,
                                                  int leaseSeconds, int limit);
 
-    List<String> findS3KeysByBatchId(UUID batchId);
+    /**
+     * Create one PENDING work row unless it already exists. Idempotent by
+     * {@code (batch_id, table_name)} so concurrent enqueues of the same batch cannot collide.
+     *
+     * @return 1 when a row was created, 0 when one already existed
+     */
+    int insertPendingIfAbsent(UUID id, UUID batchId, UUID siteId, String tableName, LocalDateTime now);
 
+    /** Recorded keys of a site's published artifacts — the wipe's exact-key fallback. */
     List<String> findS3KeysBySiteId(UUID siteId);
 
     int deleteByBatchId(UUID batchId);

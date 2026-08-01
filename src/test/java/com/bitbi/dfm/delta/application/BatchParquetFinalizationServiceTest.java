@@ -83,22 +83,20 @@ class BatchParquetFinalizationServiceTest {
         ChangelogSegment second = segment(siteId, batchId, "second", 11, 20, Map.of(
                 "orders", new TableChangeStats(5, 1, 0)));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(first, second));
-        when(artifactRepository.findBySiteIdAndBatchIdAndTableName(eq(siteId), eq(batchId), any()))
-                .thenReturn(Optional.empty());
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(batchId), eq(siteId), any(), any()))
+                .thenReturn(1);
 
         assertEquals(2, service.enqueueBatch(batchId));
 
-        ArgumentCaptor<BatchParquetArtifact> saved = ArgumentCaptor.forClass(BatchParquetArtifact.class);
-        verify(artifactRepository, times(2)).save(saved.capture());
-        assertEquals(List.of("items", "orders"), saved.getAllValues().stream()
-                .map(BatchParquetArtifact::getTableName).sorted().toList());
-        assertTrue(saved.getAllValues().stream()
-                .allMatch(artifact -> artifact.getStatus() == BatchParquetArtifactStatus.PENDING));
+        ArgumentCaptor<String> tables = ArgumentCaptor.forClass(String.class);
+        verify(artifactRepository, times(2))
+                .insertPendingIfAbsent(any(), eq(batchId), eq(siteId), tables.capture(), any());
+        assertEquals(List.of("items", "orders"), tables.getAllValues().stream().sorted().toList());
 
-        when(artifactRepository.findBySiteIdAndBatchIdAndTableName(eq(siteId), eq(batchId), any()))
-                .thenReturn(Optional.of(saved.getValue()));
+        // A replayed completion event re-runs the insert; the unique index absorbs it (0 rows).
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(batchId), eq(siteId), any(), any()))
+                .thenReturn(0);
         assertEquals(0, service.enqueueBatch(batchId));
-        verify(artifactRepository, times(2)).save(any());
     }
 
     @Test
@@ -115,7 +113,7 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(0, service.enqueueBatchForSite(siteId, batchId));
 
-        verify(artifactRepository, never()).save(any());
+        verify(artifactRepository, never()).insertPendingIfAbsent(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -127,8 +125,8 @@ class BatchParquetFinalizationServiceTest {
         Batch finished = batch(BatchStatus.COMPLETED);
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(sealed));
         when(batchRepository.findById(batchId)).thenReturn(Optional.of(finished));
-        when(artifactRepository.findBySiteIdAndBatchIdAndTableName(eq(siteId), eq(batchId), any()))
-                .thenReturn(Optional.empty());
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(batchId), eq(siteId), any(), any()))
+                .thenReturn(1);
 
         assertEquals(1, service.enqueueBatchForSite(siteId, batchId));
 
@@ -288,6 +286,26 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
         assertEquals(2, artifact.getAttemptCount());
         assertNull(artifact.getS3Key());
+    }
+
+    @Test
+    void refusesToPublishAnArtifactWhoseRowCountDisagreesWithTheSegmentStats() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        // The stats promise five rows; the replay yields one — a segment stream that ended early.
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 5,
+                Map.of("orders", new TableChangeStats(5, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+
+        assertTrue(service.finalizeNext());
+
+        // Publishing it would advertise a silently truncated download as complete.
+        assertEquals(BatchParquetArtifactStatus.FAILED, artifact.getStatus());
+        assertTrue(artifact.getLastError().contains("does not match segment stats"));
+        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
     }
 
     /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */

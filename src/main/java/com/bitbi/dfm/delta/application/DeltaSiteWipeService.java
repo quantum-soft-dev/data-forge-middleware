@@ -190,10 +190,11 @@ public class DeltaSiteWipeService {
      * <p>Egress writes to {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}, a key
      * derived from sequence numbers alone — and a wipe is the one operation that sends those
      * numbers back to zero. Left in place, a pre-wipe file whose {@code (firstSeq, lastSeq)} pair
-     * happens to recur in the new epoch is served as the new batch's delta by
-     * {@code DeltaSegmentParquetQueryService} (and listed by {@code ParquetExportCatalogDao}) unless
-     * egress overwrites it, which it does not for a table missing from the new segment or skipped by
-     * the per-table coercion guard. So this is a correctness step, not housekeeping.</p>
+     * happens to recur in the new epoch is listed by {@code ParquetExportCatalogDao} as the new
+     * epoch's delta unless egress overwrites it, which it does not for a table missing from the new
+     * segment or skipped by the per-table coercion guard. So this is a correctness step, not
+     * housekeeping. (The batch download endpoint is no longer exposed to this: since 036 it resolves
+     * an exact {@code batch_parquet_artifacts} row instead of deriving a seq-based key.)</p>
      *
      * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
      * and the objects are only reachable through keys the rows never held. A listing failure is
