@@ -21,7 +21,7 @@ REST contract or manifest schema.
    retry cannot make the same deterministic artifact smaller.
 5. A superseded uploader still writes the stable logical object key. Changing that layout safely
    requires attempt-scoped objects plus orphan reclamation and is intentionally split into a
-   follow-up rather than folded into this bounded hardening pass.
+   follow-up #100 rather than folded into this bounded hardening pass.
 
 ## Compatibility
 

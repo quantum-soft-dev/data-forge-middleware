@@ -44,9 +44,12 @@ Each claim mints a `claim_token`, and its owner renews the lease (`updated_at`) 
 *worker death*, not how long a build may legitimately take — without the renewal it would be a hard
 ceiling on build time, and any batch slower than it would be reclaimed mid-flight and rebuilt from
 scratch by the next worker, spending an attempt and a pool slot on every lapse. The token settles
-the race the lease cannot: a reclaim mints a new one, so a previous owner that surfaces late finds
-its token stale and discards its outcome instead of overwriting a live claim — or burying a build
-that is still running under its own failure.
+the manifest race the lease cannot: a reclaim mints a new one, so a previous owner that surfaces
+late finds its token stale and cannot publish metadata over the successor. Both attempts still
+upload to the same stable object key, so a superseded `PutObject` that completes last can replace
+the successor's bytes before its stale metadata is discarded. The replay is deterministic and the
+bytes are expected to match, but attempt-scoped objects plus deterministic orphan cleanup are
+required to remove the race completely; that storage-layout change is tracked in #100.
 
 Retries are capped at `delta.batch-parquet.max-attempts` (default 7), with the failure backoff
 doubling per attempt. Seven attempts span `60+120+240+480+960+1920s ≈ 63 min`, so a transient S3
@@ -59,11 +62,16 @@ worker already treats an unrenderable table (skip, don't wedge the queue). Reset
 requeues it once the underlying cause is fixed.
 
 The ceiling is applied on **both** paths that can end an attempt. `publish()` cannot run for a build
-that never returns, so a claim whose owner died is settled when the next worker reclaims it: past
-the ceiling the reclaim abandons the row instead of taking it. Without that, an artifact whose build
-reliably kills its process would be re-claimed every lease forever — `attempt_count` growing without
-bound, the ERROR never logged, and the download answering `409 "still finalizing"` for the life of
-the site.
+that never returns, so before each claim the worker bulk-abandons expired `BUILDING` rows whose
+attempt budget is spent; the retry query excludes them. Any number of dead claims therefore settles
+without hiding live work behind a fixed scan window. Without that, an artifact whose build reliably
+kills its process would be re-claimed every lease forever — `attempt_count` growing without bound,
+the ERROR never logged, and the download answering `409 "still finalizing"` for the life of the site.
+
+`delta.batch-parquet.max-temp-bytes` is enforced by the file output stream while Parquet is written,
+not after a complete oversized file has consumed the disk budget. Crossing it is deterministic for
+the same input and is therefore `ABANDONED` on the first attempt instead of rewritten up to seven
+times.
 
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.
@@ -80,7 +88,9 @@ Batch retention and explicit batch deletion **derive** each object key from the 
 `(site, batch, table)` rather than reading its recorded `s3_key` — a row that is mid-build, failed
 or abandoned records no key even though an attempt may already have uploaded the object, and once
 the rows are gone nothing else names it. They remove the rows before their parent batches, then
-delete the objects best-effort. A site-history wipe instead takes the recorded keys and relies on
+delete the objects best-effort. Explicit admin deletion routes artifact rows, changelog segments,
+and the parent batch through one transactional application service, so a failed parent delete rolls
+the dependent-row changes back. A site-history wipe instead takes the recorded keys and relies on
 its walk of the complete `egress/{siteId}/` prefix for everything else, which also removes realtime
 segment egress and any orphan left by an interrupted cleanup.
 
@@ -92,13 +102,19 @@ returns the existing short-lived presigned-download DTO only for `READY`. `PENDI
 `404` for a retryable failure would tell the user the table has no file minutes before the same
 click starts working. Only an absent row or `ABANDONED` returns `404 Not Found`.
 
-Manifest rows are written when a batch completes, so batches that closed before this change shipped
-have none — and V49 deliberately does not backfill them at migration time, which would queue every
+Manifest rows are written after a batch commits, so a manifest insert can no longer roll back a
+successful ingestion transaction. Lazy backfill is the recovery path if that post-commit callback
+fails. Batches that closed before this change shipped have none — and V49 deliberately does not
+backfill them at migration time, which would queue every
 historical batch at once and push freshly completed sessions behind the whole backlog. Instead the
 download path backfills lazily: a request for a batch with no manifest row enqueues that batch's
 tables from its (untouched) raw segments and answers `409`, and the next click downloads the built
 artifact. A batch with no published segments still answers `404`, so nothing that was 404 before
 becomes a queued build.
+
+Segments created before V32 may have `stats IS NULL`. Backfill discovers their table names by
+streaming those raw records, and finalization skips only the expected-row-count assertion when any
+segment's count is unknowable; it still writes and publishes the complete replay.
 
 The backfill only accepts a batch in a **terminal** status. A continuous session publishes
 non-provisional segments while its batch is still `IN_PROGRESS`, so enqueueing then would build an

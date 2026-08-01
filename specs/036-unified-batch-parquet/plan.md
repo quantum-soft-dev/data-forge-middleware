@@ -2,10 +2,11 @@
 
 ## Shape
 
-Keep sequential segment egress as-is and add an independent completed-batch artifact queue. The
-session commit transaction creates one `PENDING` manifest row per table from aggregated segment
-statistics. After commit, a bounded worker claims rows with `FOR UPDATE SKIP LOCKED`, streams raw
-segments twice, uploads a temp file with `RequestBody.fromFile`, and publishes metadata as `READY`.
+Keep sequential segment egress as-is and add an independent completed-batch artifact queue. A
+post-commit completion callback creates one `PENDING` manifest row per table from aggregated
+segment statistics (or raw-record discovery for legacy null stats). A bounded worker claims rows
+with `FOR UPDATE SKIP LOCKED`, streams raw segments twice, uploads a temp file with
+`RequestBody.fromFile`, and publishes metadata as `READY`.
 
 ## Layers
 
@@ -33,12 +34,13 @@ segments twice, uploads a temp file with `RequestBody.fromFile`, and publishes m
 5. Open one file-backed `AvroParquetWriter` with the widened schema.
 6. Second streaming pass: visit the same segments/table, assert strictly ascending `_seq`, and write
    typed rows with `_op`, `_seq`, `_changed`, key, and data values.
-7. Close the writer, compute file size and SHA-256 without loading the file, upload from the path,
+7. Enforce the configured byte ceiling as the writer emits the local file, then close it, compute
+   file size and SHA-256 without loading it, upload from the path,
    then set `READY` metadata — but only if the row is still held by this claim's token; otherwise
    discard the outcome, and delete the object when the row is gone entirely (T11).
-8. On any failure mark only that artifact `FAILED`, or `ABANDONED` once it has used up
-   `max-attempts` (T09); always delete the temp file. A retry overwrites the same stable S3 key and
-   cannot append or duplicate rows.
+8. On a transient failure mark only that artifact `FAILED`, or `ABANDONED` once it has used up
+   `max-attempts` (T09); a deterministic byte-limit failure abandons immediately. Always delete the
+   temp file. A retry overwrites the same stable S3 key and cannot append or duplicate rows.
 
 ## Test strategy
 
