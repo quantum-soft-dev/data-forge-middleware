@@ -14,5 +14,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   docs index and project journal; run all required backend/integration gates and open the PR.
 - [x] **T06 — Review fixes.** Resolve the grouped-metrics query and recovery-concurrency coverage
   findings test-first, run the per-task gate, and record each outcome on the PR.
-- [ ] **T07 — Final review and synchronization.** Complete a clean repeat review, merge current
+- [x] **T07 — Review edge cases.** Start the metric TTL only after a successful grouped query,
+  cover negative monotonic-clock values, and make the PostgreSQL lock assertion observable.
+- [ ] **T08 — Final review and synchronization.** Complete a clean repeat review, merge current
   `origin/develop`, rerun all gates and CI, and stop at `status: ready to merge`.

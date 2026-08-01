@@ -9,11 +9,13 @@ import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
 import com.bitbi.dfm.site.domain.Site;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -22,7 +24,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -46,6 +50,9 @@ class BatchParquetQueueServiceIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @Test
     void staleWorkerCannotRenewTheClaimAfterAConcurrentOperatorRequeue() throws Exception {
         Site site = siteRepository.findById(SITE_ID).orElseThrow();
@@ -60,6 +67,8 @@ class BatchParquetQueueServiceIntegrationTest extends BaseIntegrationTest {
         requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         CountDownLatch requeuedUnderLock = new CountDownLatch(1);
         CountDownLatch allowCommit = new CountDownLatch(1);
+        CountDownLatch staleTransactionStarted = new CountDownLatch(1);
+        AtomicInteger staleBackendPid = new AtomicInteger();
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<?> operator = executor.submit(() -> requiresNew.executeWithoutResult(status -> {
@@ -72,10 +81,18 @@ class BatchParquetQueueServiceIntegrationTest extends BaseIntegrationTest {
                 throw new AssertionError("operator did not reach the held-lock checkpoint");
             }
 
-            Future<Integer> staleWorker = executor.submit(() -> requiresNew.execute(status ->
-                    artifactRepository.touchClaim(artifact.getId(), staleClaimToken,
-                            LocalDateTime.now(ZoneOffset.UTC))));
-            Thread.sleep(200);
+            Future<Integer> staleWorker = executor.submit(() -> requiresNew.execute(status -> {
+                staleBackendPid.set(jdbcTemplate.queryForObject(
+                        "SELECT pg_backend_pid()", Integer.class));
+                staleTransactionStarted.countDown();
+                return artifactRepository.touchClaim(artifact.getId(), staleClaimToken,
+                        LocalDateTime.now(ZoneOffset.UTC));
+            }));
+            assertTrue(staleTransactionStarted.await(10, TimeUnit.SECONDS));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals("Lock",
+                    jdbcTemplate.queryForObject(
+                            "SELECT wait_event_type FROM pg_stat_activity WHERE pid = ?",
+                            String.class, staleBackendPid.get())));
             assertFalse(staleWorker.isDone(), "the worker update waits for the operator row lock");
 
             allowCommit.countDown();

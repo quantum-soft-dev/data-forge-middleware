@@ -28,7 +28,7 @@ public class BatchParquetQueueMetrics implements MeterBinder {
     private final BatchParquetArtifactRepository repository;
     private final LongSupplier nanoTime;
     private final long snapshotTtlNanos;
-    private volatile Snapshot snapshot = new Snapshot(Map.of(), -1);
+    private volatile Snapshot snapshot = Snapshot.uninitialized();
 
     @Autowired
     public BatchParquetQueueMetrics(BatchParquetArtifactRepository repository) {
@@ -58,7 +58,7 @@ public class BatchParquetQueueMetrics implements MeterBinder {
     private long queueDepth(BatchParquetArtifactStatus status) {
         long now = nanoTime.getAsLong();
         Snapshot current = snapshot;
-        if (now >= current.expiresAtNanos()) {
+        if (!isFresh(current, now)) {
             current = refreshSnapshot(now);
         }
         return current.depths().getOrDefault(status, 0L);
@@ -66,7 +66,7 @@ public class BatchParquetQueueMetrics implements MeterBinder {
 
     private synchronized Snapshot refreshSnapshot(long now) {
         Snapshot current = snapshot;
-        if (now < current.expiresAtNanos()) {
+        if (isFresh(current, now)) {
             return current;
         }
         Map<BatchParquetArtifactStatus, Long> depths =
@@ -74,11 +74,20 @@ public class BatchParquetQueueMetrics implements MeterBinder {
         for (BatchParquetQueueDepth depth : repository.countByStatusGrouped()) {
             depths.put(depth.status(), depth.count());
         }
-        Snapshot refreshed = new Snapshot(Map.copyOf(depths), now + snapshotTtlNanos);
+        Snapshot refreshed = new Snapshot(Map.copyOf(depths), nanoTime.getAsLong(), true);
         snapshot = refreshed;
         return refreshed;
     }
 
-    private record Snapshot(Map<BatchParquetArtifactStatus, Long> depths, long expiresAtNanos) {
+    private boolean isFresh(Snapshot candidate, long now) {
+        return candidate.initialized()
+                && now - candidate.refreshedAtNanos() < snapshotTtlNanos;
+    }
+
+    private record Snapshot(Map<BatchParquetArtifactStatus, Long> depths, long refreshedAtNanos,
+                            boolean initialized) {
+        private static Snapshot uninitialized() {
+            return new Snapshot(Map.of(), 0, false);
+        }
     }
 }

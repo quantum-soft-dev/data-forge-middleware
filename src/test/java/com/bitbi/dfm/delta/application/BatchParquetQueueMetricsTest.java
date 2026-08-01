@@ -21,11 +21,14 @@ class BatchParquetQueueMetricsTest {
     @Test
     void sharesOneGroupedSnapshotAcrossAllStatusGaugesAndRefreshesAfterItsTtl() {
         BatchParquetArtifactRepository repository = mock(BatchParquetArtifactRepository.class);
-        AtomicLong clock = new AtomicLong();
+        AtomicLong clock = new AtomicLong(-Duration.ofSeconds(100).toNanos());
         when(repository.countByStatusGrouped())
-                .thenReturn(List.of(
-                        new BatchParquetQueueDepth(BatchParquetArtifactStatus.PENDING, 2),
-                        new BatchParquetQueueDepth(BatchParquetArtifactStatus.BUILDING, 1)))
+                .thenAnswer(ignored -> {
+                    clock.addAndGet(Duration.ofSeconds(6).toNanos());
+                    return List.of(
+                            new BatchParquetQueueDepth(BatchParquetArtifactStatus.PENDING, 2),
+                            new BatchParquetQueueDepth(BatchParquetArtifactStatus.BUILDING, 1));
+                })
                 .thenReturn(List.of(
                         new BatchParquetQueueDepth(BatchParquetArtifactStatus.PENDING, 42)));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -44,7 +47,7 @@ class BatchParquetQueueMetricsTest {
         }
         verify(repository, times(1)).countByStatusGrouped();
 
-        clock.set(Duration.ofSeconds(6).toNanos());
+        clock.addAndGet(Duration.ofSeconds(6).toNanos());
         assertEquals(42.0, registry.get("delta.batch-parquet.queue")
                 .tag("status", "pending").gauge().value(),
                 "the grouped snapshot must refresh after its bounded reuse window");
