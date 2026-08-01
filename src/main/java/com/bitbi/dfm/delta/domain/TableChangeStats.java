@@ -7,4 +7,7 @@ package com.bitbi.dfm.delta.domain;
  * @version 1.0.0
  */
 public record TableChangeStats(long inserts, long updates, long deletes) {
+    public long total() {
+        return inserts + updates + deletes;
+    }
 }

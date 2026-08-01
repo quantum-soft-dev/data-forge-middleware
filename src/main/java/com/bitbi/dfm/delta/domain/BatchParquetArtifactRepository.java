@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.domain;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.LocalDateTime;
 
 /** Persistence contract for the completed-batch Parquet manifest and work queue. */
 public interface BatchParquetArtifactRepository {
@@ -14,7 +15,7 @@ public interface BatchParquetArtifactRepository {
 
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
 
-    List<BatchParquetArtifact> findNextRetryable(int limit);
+    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int limit);
 
     List<String> findS3KeysByBatchId(UUID batchId);
 

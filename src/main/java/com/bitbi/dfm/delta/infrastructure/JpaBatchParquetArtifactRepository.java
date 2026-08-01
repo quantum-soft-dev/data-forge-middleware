@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.LocalDateTime;
 
 @Repository
 public interface JpaBatchParquetArtifactRepository
@@ -27,12 +28,13 @@ public interface JpaBatchParquetArtifactRepository
     @Override
     @Query(value = """
             SELECT * FROM batch_parquet_artifacts
-            WHERE status IN ('PENDING', 'FAILED')
+            WHERE status = 'PENDING'
+               OR (status = 'FAILED' AND updated_at < :retryBefore)
             ORDER BY updated_at, created_at, table_name
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
-    List<BatchParquetArtifact> findNextRetryable(int limit);
+    List<BatchParquetArtifact> findNextRetryable(LocalDateTime retryBefore, int limit);
 
     @Override
     @Query("SELECT a.s3Key FROM BatchParquetArtifact a WHERE a.batchId = :batchId AND a.s3Key IS NOT NULL")

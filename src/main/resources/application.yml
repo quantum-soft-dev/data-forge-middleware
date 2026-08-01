@@ -234,6 +234,14 @@ delta:
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
     # Fallback sweep interval (ms) picking up segments missed by the commit-time wake
     sweep-ms: ${DELTA_EGRESS_SWEEP_MS:60000}
+  batch-parquet:
+    # Completed-session artifacts are separate from the realtime per-segment egress above.
+    max-concurrent: ${DELTA_BATCH_PARQUET_MAX_CONCURRENT:2}
+    sweep-ms: ${DELTA_BATCH_PARQUET_SWEEP_MS:60000}
+    retry-delay-seconds: ${DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS:60}
+    # A completed artifact is file-backed; refuse upload if the local file exceeds this policy.
+    max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}
+    temp-dir: ${DELTA_BATCH_PARQUET_TEMP_DIR:${java.io.tmpdir}}
 
 # OpenAPI Configuration
 springdoc:

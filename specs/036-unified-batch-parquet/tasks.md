@@ -19,7 +19,7 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   file writer preserving types, `_op`, `_seq`, `_changed`, decimal widening, and ascending order.
   Upload through a file request body. Tests prove replay, bounded output shape, and cleanup helpers.
 
-- [ ] **T05 — Batch finalization queue.** Enqueue per-table rows inside Delta session completion,
+- [x] **T05 — Batch finalization queue.** Enqueue per-table rows inside Delta session completion,
   wake a bounded worker after commit, and finalize tables independently/idempotently from ordered
   non-provisional segments. Tests cover ordering, schema/render/upload failure, retry, and cleanup.
 

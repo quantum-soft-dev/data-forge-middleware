@@ -255,7 +255,8 @@ public final class DeltaParquetWriter {
 
         @Override
         public PositionOutputStream create(long blockSizeHint) throws IOException {
-            return stream(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            return stream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE);
         }
 
         @Override

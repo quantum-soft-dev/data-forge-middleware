@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.UUID;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,7 +37,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         ready.markReady("egress/customers.parquet", 3, 100, "abc");
         repository.save(ready);
 
-        List<BatchParquetArtifact> claimed = repository.findNextRetryable(10);
+        List<BatchParquetArtifact> claimed = repository.findNextRetryable(LocalDateTime.now().plusSeconds(1), 10);
 
         assertEquals(List.of("items", "orders"), claimed.stream()
                 .map(BatchParquetArtifact::getTableName).sorted().toList());
