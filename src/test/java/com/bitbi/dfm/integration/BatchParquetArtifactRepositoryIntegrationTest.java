@@ -40,7 +40,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         repository.save(ready);
 
         List<UUID> claimed = repository.findNextRetryable(
-                        LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600, 500).stream()
+                        LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1), 0, 3600, 7, 500).stream()
                 .map(BatchParquetArtifact::getId).toList();
 
         assertTrue(claimed.contains(pending.getId()), "a pending row is claimable");
@@ -95,6 +95,23 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     }
 
     @Test
+    void settlesSpentExpiredClaimsAndLeavesRetryableClaimsVisible() {
+        BatchParquetArtifact spent = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "spent");
+        spent.markBuilding();
+        repository.save(spent);
+        BatchParquetArtifact retryable = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "retryable");
+        repository.save(retryable);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        assertEquals(1, repository.abandonExpiredClaims(now, 0, 1, "lease expired"));
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED,
+                repository.findById(spent.getId()).orElseThrow().getStatus());
+        assertTrue(repository.findNextRetryable(now, 0, 0, 2, 500).stream()
+                .anyMatch(candidate -> candidate.getId().equals(retryable.getId())));
+    }
+
+    @Test
     void renewsALeaseOnlyForTheClaimThatStillHoldsTheRow() {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
         artifact.markBuilding();
@@ -116,7 +133,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
      */
     private boolean isClaimed(BatchParquetArtifact artifact, LocalDateTime now,
                               int retryDelaySeconds, int leaseSeconds) {
-        return repository.findNextRetryable(now, retryDelaySeconds, leaseSeconds, 500).stream()
+        return repository.findNextRetryable(now, retryDelaySeconds, leaseSeconds, 7, 500).stream()
                 .anyMatch(claimed -> claimed.getId().equals(artifact.getId()));
     }
 

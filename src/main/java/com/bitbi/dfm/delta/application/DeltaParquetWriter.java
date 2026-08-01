@@ -103,13 +103,23 @@ public final class DeltaParquetWriter {
      */
     public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
                                                     RecordReplay replay) {
+        return writeDeltaParquet(output, tableName, tableSchema, replay, Long.MAX_VALUE);
+    }
+
+    /**
+     * Write a unified artifact while refusing to put more than {@code maxBytes} on local disk.
+     *
+     * @throws ArtifactSizeLimitExceededException as soon as the next write would cross the limit
+     */
+    public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
+                                                    RecordReplay replay, long maxBytes) {
         Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
         Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
         AtomicLong rowCount = new AtomicLong();
         AtomicLong previousSeq = new AtomicLong(Long.MIN_VALUE);
 
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
-                        new FileOutputFile(output))
+                        new FileOutputFile(output, maxBytes))
                 .withSchema(avro)
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())
@@ -251,12 +261,21 @@ public final class DeltaParquetWriter {
     public record FileWriteResult(long rowCount, long fileSize, String checksum) {
     }
 
+    /** Raised when a unified artifact would exceed its configured local-file policy. */
+    public static final class ArtifactSizeLimitExceededException extends RuntimeException {
+        private ArtifactSizeLimitExceededException(long maxBytes) {
+            super("Artifact exceeds temp-file limit of " + maxBytes + " bytes");
+        }
+    }
+
     /** Minimal Hadoop-free Parquet output backed by a local file. */
     private static final class FileOutputFile implements OutputFile {
         private final Path path;
+        private final long maxBytes;
 
-        private FileOutputFile(Path path) {
+        private FileOutputFile(Path path, long maxBytes) {
             this.path = path;
+            this.maxBytes = maxBytes;
         }
 
         @Override
@@ -293,12 +312,14 @@ public final class DeltaParquetWriter {
 
                 @Override
                 public void write(int value) throws IOException {
+                    checkCapacity(1);
                     output.write(value);
                     position++;
                 }
 
                 @Override
                 public void write(byte[] bytes, int offset, int length) throws IOException {
+                    checkCapacity(length);
                     output.write(bytes, offset, length);
                     position += length;
                 }
@@ -311,6 +332,12 @@ public final class DeltaParquetWriter {
                 @Override
                 public void close() throws IOException {
                     output.close();
+                }
+
+                private void checkCapacity(int length) {
+                    if (length > maxBytes - position) {
+                        throw new ArtifactSizeLimitExceededException(maxBytes);
+                    }
                 }
             };
         }

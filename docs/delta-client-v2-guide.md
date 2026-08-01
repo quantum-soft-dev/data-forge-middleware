@@ -554,15 +554,19 @@ You don't write these — they're how downstream tools read your data:
   physical seal boundaries do not appear in the UI or download contract. Finalization uses a
   streaming replay (write pass, preceded by a decimal-envelope pass only for tables that declare
   decimal columns), a local file-backed writer, and an S3 file upload, so heap use does not grow
-  with batch size.
+  with batch size. `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` is enforced during the write; an artifact
+  that crosses it is abandoned on its first deterministic attempt rather than fully rewritten on
+  every retry.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
   UI (presigned URL, 15 min). Parquet is the target format; the checkpoint CSV is the legacy Bit BI
   path and will go away once Bit BI migrates.
 
-Realtime segment files appear **within seconds of `SessionCommitted`**. The commit also enqueues the
-unified batch/table artifacts in a durable manifest and wakes a separate bounded worker pool. A
+Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
+the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
+durable manifest, and wakes a separate bounded worker pool; callback failures are contained and
+cannot turn the already committed session into an apparent client failure. A
 manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
 independently with a doubling backoff, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 7, which
 spans about an hour) — past that the table is abandoned (and logged at ERROR) rather than rebuilt
@@ -580,6 +584,11 @@ Batches that completed **before** this feature shipped have no manifest row. A f
 backfilled on demand: the first Parquet click enqueues its tables from the raw segments and answers
 `409` (finalizing), and the next click downloads the artifact. A session still running is never
 backfilled — its artifact would be missing everything it seals afterwards.
+
+Pre-V32 segments whose per-table `stats` are null are also backfillable: the server discovers their
+tables from the raw records and omits only the unavailable expected-row-count check. Expired claims
+that have already spent their attempts are bulk-abandoned before the retry query, so they cannot
+delay live work until another sweep.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
@@ -780,7 +789,8 @@ interrupted cleanup. This is correctness, not housekeeping: realtime keys are de
 numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe sends those numbers
 back to zero. A listing failure is logged and the wipe still reports success because the database
 rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
-the unified manifest rows and exact S3 objects for the affected batch; realtime segment cleanup
+the unified manifest rows and exact S3 objects for the affected batch; explicit admin deletion
+defers those object removes until its database transaction commits. Realtime segment cleanup
 remains on its existing lifecycle path.
 
 **Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are

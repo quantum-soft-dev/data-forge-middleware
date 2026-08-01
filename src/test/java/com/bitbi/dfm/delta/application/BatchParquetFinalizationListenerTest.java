@@ -2,6 +2,8 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -9,42 +11,59 @@ import java.lang.reflect.Method;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class BatchParquetFinalizationListenerTest {
 
     @Test
-    void delegatesTheCompletionToTheQueueAndTheWorker() {
+    void enqueuesBeforeWakingTheWorkerAfterCompletionCommits() {
         BatchParquetFinalizationService service = mock(BatchParquetFinalizationService.class);
         BatchParquetFinalizationWorker worker = mock(BatchParquetFinalizationWorker.class);
         BatchParquetFinalizationListener listener = new BatchParquetFinalizationListener(service, worker);
         UUID batchId = UUID.randomUUID();
         BatchCompletedEvent event = new BatchCompletedEvent(batchId, UUID.randomUUID(), 0, 0);
 
-        listener.enqueue(event);
-        listener.wake(event);
+        listener.enqueueAndWake(event);
 
-        verify(service).enqueueBatch(batchId);
-        verify(worker).wake();
+        org.mockito.InOrder order = inOrder(service, worker);
+        order.verify(service).enqueueBatch(batchId);
+        order.verify(worker).wake();
     }
 
     /**
-     * The phases are the durability contract, not a detail. {@code BEFORE_COMMIT} is what puts the
-     * manifest rows in the same transaction as the completion: move the enqueue to
-     * {@code AFTER_COMMIT} or a plain {@code @EventListener} and a batch could commit as completed
-     * with no work rows behind it — or gain rows for a completion that then rolled back — while
-     * every behavioural test stays green.
+     * The phase is the isolation contract, not a detail. Enqueue must not make an otherwise valid
+     * ingestion commit depend on the manifest insert; lazy download backfill covers a callback
+     * failure after the batch is durable.
      */
     @Test
-    void enqueueRunsInsideTheCompletingTransaction() {
-        assertPhase("enqueue", TransactionPhase.BEFORE_COMMIT);
+    void enqueueAndWakeRunOnlyOnceTheBatchIsCommitted() {
+        assertPhase("enqueueAndWake", TransactionPhase.AFTER_COMMIT);
     }
 
-    /** The wake must not fire before the rows are visible to the worker's own transaction. */
     @Test
-    void wakeRunsOnlyOnceTheRowsAreCommitted() {
-        assertPhase("wake", TransactionPhase.AFTER_COMMIT);
+    void enqueueStartsANewTransactionAfterThePublisherHasCommitted() throws Exception {
+        Method method = BatchParquetFinalizationService.class.getMethod("enqueueBatch", UUID.class);
+        Transactional annotation = method.getAnnotation(Transactional.class);
+
+        assertThat(annotation).isNotNull();
+        assertThat(annotation.propagation()).isEqualTo(Propagation.REQUIRES_NEW);
+    }
+
+    @Test
+    void enqueueFailureCannotEscapeAfterTheBatchCommit() {
+        BatchParquetFinalizationService service = mock(BatchParquetFinalizationService.class);
+        BatchParquetFinalizationWorker worker = mock(BatchParquetFinalizationWorker.class);
+        BatchParquetFinalizationListener listener = new BatchParquetFinalizationListener(service, worker);
+        UUID batchId = UUID.randomUUID();
+        BatchCompletedEvent event = new BatchCompletedEvent(batchId, UUID.randomUUID(), 0, 0);
+        when(service.enqueueBatch(batchId)).thenThrow(new IllegalStateException("S3 unavailable"));
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> listener.enqueueAndWake(event));
+
+        verifyNoInteractions(worker);
     }
 
     private static void assertPhase(String methodName, TransactionPhase expected) {

@@ -36,10 +36,18 @@ public interface BatchParquetArtifactRepository {
      * @param now                current instant, the reference for both delays
      * @param retryDelaySeconds  base failure backoff; doubles per attempt, capped
      * @param leaseSeconds       how long a {@code BUILDING} claim is honoured before it is reclaimed
+     * @param maxAttempts        spent expired claims are settled separately, never reclaimed
      * @param limit              maximum rows to claim
      */
     List<BatchParquetArtifact> findNextRetryable(LocalDateTime now, int retryDelaySeconds,
-                                                 int leaseSeconds, int limit);
+                                                 int leaseSeconds, int maxAttempts, int limit);
+
+    /**
+     * Settle expired claims whose owners never returned and whose attempt budget is spent.
+     *
+     * @return number of rows moved to {@code ABANDONED}
+     */
+    int abandonExpiredClaims(LocalDateTime now, int leaseSeconds, int maxAttempts, String error);
 
     /**
      * Create one PENDING work row unless it already exists. Idempotent by

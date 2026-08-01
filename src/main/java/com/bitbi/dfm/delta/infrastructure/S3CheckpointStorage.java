@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.infrastructure;
 
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,8 +20,6 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
@@ -155,8 +154,7 @@ public class S3CheckpointStorage {
 
     /** Stable, unique object key for one logical batch/table artifact. */
     public static String batchParquetKey(UUID siteId, UUID batchId, String tableName) {
-        String encodedTable = URLEncoder.encode(tableName, StandardCharsets.UTF_8).replace("+", "%20");
-        return String.format("egress/%s/batches/%s/%s.parquet", siteId, batchId, encodedTable);
+        return BatchParquetArtifactKey.of(siteId, batchId, tableName);
     }
 
     /** @return the delta Parquet key for one table's slice of a segment (feature 025). */

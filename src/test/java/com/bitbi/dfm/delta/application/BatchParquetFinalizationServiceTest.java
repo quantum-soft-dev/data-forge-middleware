@@ -75,10 +75,14 @@ class BatchParquetFinalizationServiceTest {
     }
 
     private BatchParquetFinalizationService newService(int maxAttempts, int leaseSeconds) {
+        return newService(maxAttempts, leaseSeconds, 10_000_000L);
+    }
+
+    private BatchParquetFinalizationService newService(int maxAttempts, int leaseSeconds, long maxTempBytes) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
                 segmentService, schemaService, batchRepository, storage, new DeltaMetrics(
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
-                mock(PlatformTransactionManager.class), tempDir.toString(), 10_000_000L, 60,
+                mock(PlatformTransactionManager.class), tempDir.toString(), maxTempBytes, 60,
                 maxAttempts, leaseSeconds);
     }
 
@@ -106,6 +110,24 @@ class BatchParquetFinalizationServiceTest {
         when(artifactRepository.insertPendingIfAbsent(any(), eq(batchId), eq(siteId), any(), any()))
                 .thenReturn(0);
         assertEquals(0, service.enqueueBatch(batchId));
+    }
+
+    @Test
+    void enqueueDiscoversTablesByReplayingLegacySegmentsWithoutStats() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        ChangelogSegment legacy = segment(siteId, batchId, "legacy", 1, 2, null);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(legacy));
+        stream("legacy", record("orders", 1, Op.INSERT), record("customers", 2, Op.UPDATE));
+        when(artifactRepository.insertPendingIfAbsent(any(), eq(batchId), eq(siteId), any(), any()))
+                .thenReturn(1);
+
+        assertEquals(2, service.enqueueBatch(batchId));
+
+        ArgumentCaptor<String> tables = ArgumentCaptor.forClass(String.class);
+        verify(artifactRepository, times(2))
+                .insertPendingIfAbsent(any(), eq(batchId), eq(siteId), tables.capture(), any());
+        assertEquals(List.of("customers", "orders"), tables.getAllValues().stream().sorted().toList());
     }
 
     @Test
@@ -242,13 +264,36 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void anOversizedArtifactIsAbandonedOnItsFirstDeterministicAttempt() throws Exception {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+
+        assertTrue(newService(7, 1800, 8).finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
+        assertEquals(1, artifact.getAttemptCount());
+        assertTrue(artifact.getLastError().contains("exceeds temp-file limit"));
+        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
+        try (java.util.stream.Stream<Path> files = Files.list(tempDir)) {
+            assertTrue(files.findAny().isEmpty(), "partial oversized file is deleted");
+        }
+    }
+
+    @Test
     void claimsWithTheConfiguredBackoffAndLeaseWindows() {
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of());
 
         assertFalse(service.finalizeNext());
 
-        verify(artifactRepository).findNextRetryable(any(LocalDateTime.class), eq(60), eq(1800), eq(1));
+        verify(artifactRepository).findNextRetryable(
+                any(LocalDateTime.class), eq(60), eq(1800), eq(5), eq(1));
     }
 
     @Test
@@ -320,6 +365,23 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void publishesACompleteReplayWhenLegacySegmentsHaveNoExpectedRowCount() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment legacy = segment(siteId, batchId, "legacy", 1, 1, null);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(legacy));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("legacy", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        assertEquals(1, artifact.getRowCount());
+    }
+
+    @Test
     void renewsItsLeaseWhileTheBuildIsStillRunning() throws Exception {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
@@ -357,24 +419,23 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
-    void abandonsAClaimWhoseOwnerNeverReturnedOnceItsAttemptsAreSpent() {
+    void bulkSettlesSpentClaimsWithoutHidingRetryableWorkBehindThem() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
-        BatchParquetArtifact stranded = BatchParquetArtifact.pending(batchId, siteId, "orders");
-        stranded.markBuilding();
-        // Its owner died mid-build and the lease lapsed. publish() — the only path that abandons —
-        // never runs for a build that does not return, so without settling the row here it would be
-        // reclaimed every lease forever, and the download would answer 409 for the life of the site.
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
-                .thenReturn(List.of(stranded))
-                .thenReturn(List.of());
+        BatchParquetArtifact retryable = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(artifactRepository.abandonExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7), any()))
+                .thenReturn(17);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
 
-        assertFalse(newService(1).finalizeNext());
+        assertTrue(newService(7).finalizeNext());
 
-        assertEquals(BatchParquetArtifactStatus.ABANDONED, stranded.getStatus());
-        assertFalse(stranded.isRetryable(), "the download must settle on 404, not a permanent 409");
-        assertEquals(1, stranded.getAttemptCount(), "a settled claim does not spend another attempt");
-        verify(segmentService, never()).forEachRecord(any(), any());
+        assertEquals(BatchParquetArtifactStatus.READY, retryable.getStatus());
+        verify(artifactRepository).abandonExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7), any());
     }
 
     @Test
@@ -385,7 +446,7 @@ class BatchParquetFinalizationServiceTest {
         stranded.markBuilding();
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of(stranded));
         when(artifactRepository.findById(stranded.getId())).thenReturn(Optional.of(stranded));
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
@@ -402,7 +463,7 @@ class BatchParquetFinalizationServiceTest {
     /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */
     private BatchParquetArtifact claimable(UUID batchId, UUID siteId, String tableName) {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, tableName);
-        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(List.of(artifact));
         when(artifactRepository.findById(artifact.getId())).thenReturn(Optional.of(artifact));
         return artifact;
@@ -437,8 +498,12 @@ class BatchParquetFinalizationServiceTest {
     }
 
     private static ChangeRecord record(long seq, Op op) {
+        return record("orders", seq, op);
+    }
+
+    private static ChangeRecord record(String table, long seq, Op op) {
         Value id = Value.newBuilder().setIntValue(seq).build();
-        return ChangeRecord.newBuilder().setTable("orders").setSeq(seq).setOp(op)
+        return ChangeRecord.newBuilder().setTable(table).setSeq(seq).setOp(op)
                 .putKey("id", id).putData("id", id).build();
     }
 }

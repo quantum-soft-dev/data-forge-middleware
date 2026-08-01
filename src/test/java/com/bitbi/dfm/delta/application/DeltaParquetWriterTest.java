@@ -240,6 +240,21 @@ class DeltaParquetWriterTest {
     }
 
     @Test
+    void stopsWritingAsSoonAsTheConfiguredFileLimitIsCrossed() throws Exception {
+        TableSchema noDecimals = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());
+        Path output = tempDir.resolve("bounded.parquet");
+
+        assertThrows(DeltaParquetWriter.ArtifactSizeLimitExceededException.class,
+                () -> DeltaParquetWriter.writeDeltaParquet(output, "customers", noDecimals,
+                        consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
+                                Map.of("id", intVal(1)), Map.of("id", intVal(1)))), 8));
+
+        assertTrue(Files.size(output) <= 8,
+                "the limit is a write guard, not a policy checked after the full file exists");
+    }
+
+    @Test
     void fileWriterRejectsOutOfOrderTargetSequences() {
         List<ChangeRecord> records = List.of(
                 change(Op.INSERT, 2L, Map.of("id", intVal(2)), Map.of("id", intVal(2))),

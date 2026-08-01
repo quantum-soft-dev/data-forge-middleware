@@ -1,14 +1,12 @@
 package com.bitbi.dfm.batch.presentation;
 
 import com.bitbi.dfm.batch.application.BatchLifecycleService;
+import com.bitbi.dfm.batch.application.BatchDeletionService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
-import com.bitbi.dfm.delta.application.ChangelogSegmentService;
-import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
-import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -16,7 +14,6 @@ import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -64,24 +61,18 @@ public class BatchAdminController {
     private final SiteRepository siteRepository;
     private final UploadedFileRepository uploadedFileRepository;
     private final BatchLifecycleService batchLifecycleService;
-    private final ChangelogSegmentService changelogSegmentService;
-    private final BatchParquetArtifactRepository artifactRepository;
-    private final S3FileStorageService s3FileStorageService;
+    private final BatchDeletionService batchDeletionService;
 
     public BatchAdminController(BatchRepository batchRepository,
                                 SiteRepository siteRepository,
                                 UploadedFileRepository uploadedFileRepository,
                                 BatchLifecycleService batchLifecycleService,
-                                ChangelogSegmentService changelogSegmentService,
-                                BatchParquetArtifactRepository artifactRepository,
-                                S3FileStorageService s3FileStorageService) {
+                                BatchDeletionService batchDeletionService) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.batchLifecycleService = batchLifecycleService;
-        this.changelogSegmentService = changelogSegmentService;
-        this.artifactRepository = artifactRepository;
-        this.s3FileStorageService = s3FileStorageService;
+        this.batchDeletionService = batchDeletionService;
     }
 
     /**
@@ -184,27 +175,8 @@ public class BatchAdminController {
     public ResponseEntity<Void> deleteBatch(@PathVariable("id") UUID batchId) {
         logger.info("Deleting batch: batchId={}", batchId);
 
-        if (!batchRepository.existsById(batchId)) {
+        if (!batchDeletionService.deleteBatch(batchId)) {
             return ResponseEntity.notFound().build();
-        }
-
-        // Derive the keys rather than reading s3_key: a row that is mid-build, failed or abandoned
-        // records none, yet an attempt may already have uploaded the object — and once these rows
-        // are gone nothing names it. Deleting a key that was never written is a no-op.
-        List<String> artifactKeys = artifactRepository.findByBatchId(batchId).stream()
-                .map(artifact -> S3CheckpointStorage.batchParquetKey(
-                        artifact.getSiteId(), artifact.getBatchId(), artifact.getTableName()))
-                .toList();
-        artifactRepository.deleteByBatchId(batchId);
-        // Remove Delta v2 changelog segments first so the batch_id FK does not block the delete.
-        changelogSegmentService.deleteByBatchId(batchId);
-        batchRepository.deleteById(batchId);
-        if (!artifactKeys.isEmpty()) {
-            S3FileStorageService.DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(artifactKeys);
-            if (!deleted.errors().isEmpty()) {
-                logger.warn("Batch {} deleted but {} unified artifact object(s) remain orphaned: {}",
-                        batchId, deleted.errors().size(), deleted.errors());
-            }
         }
         return ResponseEntity.noContent().build();
     }

@@ -60,6 +60,21 @@ class ChangelogSegmentServiceTest {
     }
 
     @Test
+    void deleteMetadataByBatchIdReturnsKeysWithoutDeletingObjects() {
+        UUID batchId = UUID.randomUUID();
+        ChangelogSegment segment = mock(ChangelogSegment.class);
+        when(segment.getId()).thenReturn(UUID.randomUUID());
+        when(segment.getS3Key()).thenReturn("delta/site/segments/1.pb.gz");
+        when(repository.findByBatchId(batchId)).thenReturn(List.of(segment));
+
+        assertEquals(List.of("delta/site/segments/1.pb.gz"),
+                service.deleteMetadataByBatchId(batchId));
+
+        verify(repository).deleteById(segment.getId());
+        verifyNoInteractions(storage);
+    }
+
+    @Test
     void persistComputesPerTableStatsFromRecords() {
         UUID site = UUID.randomUUID();
         UUID batch = UUID.randomUUID();
