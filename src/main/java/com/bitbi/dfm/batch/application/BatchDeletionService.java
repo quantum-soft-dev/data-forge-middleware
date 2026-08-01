@@ -8,7 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -35,7 +38,7 @@ public class BatchDeletionService {
 
     /**
      * Delete artifact rows, changelog segments, and the batch in one transaction, then issue the
-     * existing best-effort S3 cleanup while the manifest identities are still available.
+     * existing best-effort S3 cleanup only after that transaction commits.
      *
      * @return false when the batch does not exist
      */
@@ -45,20 +48,47 @@ public class BatchDeletionService {
             return false;
         }
 
-        List<String> artifactKeys = artifactRepository.findByBatchId(batchId).stream()
+        List<String> objectKeys = new ArrayList<>(artifactRepository.findByBatchId(batchId).stream()
                 .map(artifact -> artifact.expectedS3Key())
-                .toList();
+                .toList());
         artifactRepository.deleteByBatchId(batchId);
-        segmentService.deleteByBatchId(batchId);
+        objectKeys.addAll(segmentService.deleteMetadataByBatchId(batchId));
         batchRepository.deleteById(batchId);
 
-        if (!artifactKeys.isEmpty()) {
-            S3FileStorageService.DeleteObjectsResult deleted = storage.deleteObjects(artifactKeys);
+        deleteObjectsAfterCommit(List.copyOf(objectKeys), batchId);
+        return true;
+    }
+
+    private void deleteObjectsAfterCommit(List<String> objectKeys, UUID batchId) {
+        if (objectKeys.isEmpty()) {
+            return;
+        }
+        Runnable cleanup = () -> deleteObjects(objectKeys, batchId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cleanup.run();
+                }
+            });
+        } else {
+            // Keeps explicit non-proxied callers and unit tests useful; production enters through
+            // the transactional Spring proxy and therefore registers the callback above.
+            cleanup.run();
+        }
+    }
+
+    private void deleteObjects(List<String> objectKeys, UUID batchId) {
+        try {
+            S3FileStorageService.DeleteObjectsResult deleted = storage.deleteObjects(objectKeys);
             if (!deleted.errors().isEmpty()) {
-                log.warn("Batch {} deleted but {} unified artifact object(s) remain orphaned: {}",
+                log.warn("Batch {} deleted but {} object(s) remain orphaned: {}",
                         batchId, deleted.errors().size(), deleted.errors());
             }
+        } catch (RuntimeException e) {
+            // DB deletion is already committed. Object cleanup is deliberately best-effort; an
+            // orphan is safer than reporting that the successfully deleted batch still exists.
+            log.warn("Batch {} deleted but object cleanup failed", batchId, e);
         }
-        return true;
     }
 }

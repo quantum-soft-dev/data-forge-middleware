@@ -564,8 +564,9 @@ You don't write these — they're how downstream tools read your data:
   path and will go away once Bit BI migrates.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
-the completion callback enqueues unified batch/table artifacts in a durable manifest and wakes a
-separate bounded worker pool; an enqueue failure cannot roll back the completed session. A
+the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
+durable manifest, and wakes a separate bounded worker pool; callback failures are contained and
+cannot turn the already committed session into an apparent client failure. A
 manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
 independently with a doubling backoff, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 7, which
 spans about an hour) — past that the table is abandoned (and logged at ERROR) rather than rebuilt
@@ -788,7 +789,8 @@ interrupted cleanup. This is correctness, not housekeeping: realtime keys are de
 numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe sends those numbers
 back to zero. A listing failure is logged and the wipe still reports success because the database
 rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
-the unified manifest rows and exact S3 objects for the affected batch; realtime segment cleanup
+the unified manifest rows and exact S3 objects for the affected batch; explicit admin deletion
+defers those object removes until its database transaction commits. Realtime segment cleanup
 remains on its existing lifecycle path.
 
 **Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are

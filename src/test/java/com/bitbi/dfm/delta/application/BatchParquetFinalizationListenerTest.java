@@ -2,6 +2,8 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -11,6 +13,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class BatchParquetFinalizationListenerTest {
 
@@ -37,6 +41,29 @@ class BatchParquetFinalizationListenerTest {
     @Test
     void enqueueAndWakeRunOnlyOnceTheBatchIsCommitted() {
         assertPhase("enqueueAndWake", TransactionPhase.AFTER_COMMIT);
+    }
+
+    @Test
+    void enqueueStartsANewTransactionAfterThePublisherHasCommitted() throws Exception {
+        Method method = BatchParquetFinalizationService.class.getMethod("enqueueBatch", UUID.class);
+        Transactional annotation = method.getAnnotation(Transactional.class);
+
+        assertThat(annotation).isNotNull();
+        assertThat(annotation.propagation()).isEqualTo(Propagation.REQUIRES_NEW);
+    }
+
+    @Test
+    void enqueueFailureCannotEscapeAfterTheBatchCommit() {
+        BatchParquetFinalizationService service = mock(BatchParquetFinalizationService.class);
+        BatchParquetFinalizationWorker worker = mock(BatchParquetFinalizationWorker.class);
+        BatchParquetFinalizationListener listener = new BatchParquetFinalizationListener(service, worker);
+        UUID batchId = UUID.randomUUID();
+        BatchCompletedEvent event = new BatchCompletedEvent(batchId, UUID.randomUUID(), 0, 0);
+        when(service.enqueueBatch(batchId)).thenThrow(new IllegalStateException("S3 unavailable"));
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> listener.enqueueAndWake(event));
+
+        verifyNoInteractions(worker);
     }
 
     private static void assertPhase(String methodName, TransactionPhase expected) {

@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -106,7 +107,7 @@ public class BatchParquetFinalizationService {
      * Create the durable per-table work rows after the batch-completion transaction. Existing rows
      * make replayed completion events harmless, and lazy download backfill covers a failed callback.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int enqueueBatch(UUID batchId) {
         List<ChangelogSegment> segments = segmentRepository.findByBatchIdOrderByFirstSeq(batchId);
         if (segments.isEmpty()) {
@@ -155,7 +156,7 @@ public class BatchParquetFinalizationService {
         for (String tableName : tableNames(segments)) {
             // Insert-if-absent rather than read-then-insert: two enqueues of the same batch can run
             // at once (two download clicks, two replicas), and losing that race on the unique index
-            // would turn a 409 into a 500 — or roll back the completion this runs inside.
+            // would turn a 409 into a 500 on either the completion callback or lazy backfill path.
             created += artifactRepository.insertPendingIfAbsent(
                     UUID.randomUUID(), batchId, siteId, tableName, now);
         }

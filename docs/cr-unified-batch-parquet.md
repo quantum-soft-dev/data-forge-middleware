@@ -87,10 +87,11 @@ closes. Authorization and short-lived presigned downloads retain the existing ro
 Batch retention and explicit batch deletion **derive** each object key from the manifest row's
 `(site, batch, table)` rather than reading its recorded `s3_key` — a row that is mid-build, failed
 or abandoned records no key even though an attempt may already have uploaded the object, and once
-the rows are gone nothing else names it. They remove the rows before their parent batches, then
-delete the objects best-effort. Explicit admin deletion routes artifact rows, changelog segments,
-and the parent batch through one transactional application service, so a failed parent delete rolls
-the dependent-row changes back. A site-history wipe instead takes the recorded keys and relies on
+the rows are gone nothing else names it. Explicit admin deletion routes artifact rows, changelog
+segments, and the parent batch through one transactional application service, so a failed parent
+delete rolls the dependent-row changes back. Its irreversible object cleanup is registered only
+after that database transaction commits; a rollback therefore leaves both rows and objects intact.
+A site-history wipe instead takes the recorded keys and relies on
 its walk of the complete `egress/{siteId}/` prefix for everything else, which also removes realtime
 segment egress and any orphan left by an interrupted cleanup.
 
@@ -102,9 +103,10 @@ returns the existing short-lived presigned-download DTO only for `READY`. `PENDI
 `404` for a retryable failure would tell the user the table has no file minutes before the same
 click starts working. Only an absent row or `ABANDONED` returns `404 Not Found`.
 
-Manifest rows are written after a batch commits, so a manifest insert can no longer roll back a
-successful ingestion transaction. Lazy backfill is the recovery path if that post-commit callback
-fails. Batches that closed before this change shipped have none — and V49 deliberately does not
+Manifest rows are written in a new transaction after a batch commits, so a manifest insert can no
+longer roll back a successful ingestion transaction or disappear into the publisher's completed
+transaction. Callback failures are contained; lazy backfill is the recovery path. Batches that
+closed before this change shipped have none — and V49 deliberately does not
 backfill them at migration time, which would queue every
 historical batch at once and push freshly completed sessions behind the whole backlog. Instead the
 download path backfills lazily: a request for a batch with no manifest row enqueues that batch's

@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -157,10 +158,21 @@ public class ChangelogSegmentService {
      */
     @Transactional
     public void deleteByBatchId(UUID batchId) {
+        deleteMetadataByBatchId(batchId).forEach(storage::delete);
+    }
+
+    /**
+     * Remove only segment metadata and return the object keys. A wider batch transaction uses this
+     * variant so it can defer irreversible object deletion until the database commit succeeds.
+     */
+    @Transactional
+    public List<String> deleteMetadataByBatchId(UUID batchId) {
+        List<String> keys = new ArrayList<>();
         for (ChangelogSegment segment : repository.findByBatchId(batchId)) {
-            storage.delete(segment.getS3Key());
+            keys.add(segment.getS3Key());
             repository.deleteById(segment.getId());
         }
+        return keys;
     }
 
     private static String sha256Hex(byte[] content) {
