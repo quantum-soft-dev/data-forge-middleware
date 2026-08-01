@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -46,9 +47,6 @@ import java.util.concurrent.TimeUnit;
 public class BatchParquetFinalizationService {
 
     private static final Logger log = LoggerFactory.getLogger(BatchParquetFinalizationService.class);
-
-    /** How many stranded claims one claim attempt will settle before giving the pool slot back. */
-    private static final int CLAIM_SCAN_LIMIT = 16;
 
     private final BatchParquetArtifactRepository artifactRepository;
     private final ChangelogSegmentRepository segmentRepository;
@@ -202,6 +200,8 @@ public class BatchParquetFinalizationService {
         try {
             lease = renewLeaseWhileBuilding(claim);
             built = BuildOutcome.succeeded(metrics.timeBatchParquetBuild(() -> buildAndUpload(claim)));
+        } catch (DeltaParquetWriter.ArtifactSizeLimitExceededException e) {
+            built = BuildOutcome.permanentlyFailed(e.getMessage());
         } catch (RuntimeException e) {
             built = BuildOutcome.failed(Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
         } finally {
@@ -220,48 +220,37 @@ public class BatchParquetFinalizationService {
     /**
      * Take one row and commit its {@code BUILDING} claim, so the attempt outlives this process.
      *
-     * <p>Reclaiming a stranded claim is also where the attempt ceiling has to be applied to it.
-     * {@link #publish} is the only path that abandons, and it cannot run for a build that never
-     * returns — an artifact whose build reliably kills its process would otherwise be re-claimed
-     * every lease forever, growing {@code attemptCount} without bound while the download answered
-     * {@code 409} for the life of the site. Settling it here turns that into the 404 the contract
-     * promises. Rows settled this way are skipped rather than returned, so one of them does not end
-     * the drain.</p>
+     * <p>Spent claims whose owners never returned are bulk-settled first. The claim query then
+     * excludes them, so any number of stranded rows cannot hide real work until another sweep.</p>
      */
     private Claim claimNext() {
-        for (int scanned = 0; scanned < CLAIM_SCAN_LIMIT; scanned++) {
-            List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
-                    LocalDateTime.now(ZoneOffset.UTC), retryDelaySeconds, leaseSeconds, 1);
-            if (next.isEmpty()) {
-                return null;
-            }
-            BatchParquetArtifact artifact = next.get(0);
-            if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
-                if (artifact.getAttemptCount() >= maxAttempts) {
-                    settleStrandedClaim(artifact);
-                    continue;
-                }
-                metrics.batchParquetReclaimed();
-                log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
-                        artifact.getBatchId(), artifact.getTableName());
-            }
-            artifact.markBuilding();
-            artifactRepository.save(artifact);
-            return new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
-                    artifact.getSiteId(), artifact.getTableName());
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        String expiredError = "Build lease expired without an outcome after the configured attempt limit";
+        int abandoned = artifactRepository.abandonExpiredClaims(
+                now, leaseSeconds, maxAttempts, expiredError);
+        for (int index = 0; index < abandoned; index++) {
+            metrics.batchParquetAbandoned();
         }
-        return null;
-    }
+        if (abandoned > 0) {
+            log.error("Abandoned {} unified batch Parquet claim(s) whose owners never returned",
+                    abandoned);
+        }
 
-    /** Give up on a claim whose owner never came back and whose attempts are spent. */
-    private void settleStrandedClaim(BatchParquetArtifact artifact) {
-        artifact.markAbandoned("Build lease expired without an outcome after "
-                + artifact.getAttemptCount() + " attempt(s)");
+        List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
+                now, retryDelaySeconds, leaseSeconds, maxAttempts, 1);
+        if (next.isEmpty()) {
+            return null;
+        }
+        BatchParquetArtifact artifact = next.get(0);
+        if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
+            metrics.batchParquetReclaimed();
+            log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
+                    artifact.getBatchId(), artifact.getTableName());
+        }
+        artifact.markBuilding();
         artifactRepository.save(artifact);
-        metrics.batchParquetAbandoned();
-        log.error("Unified batch Parquet abandoned after {} attempt(s) that never returned: "
-                        + "batchId={}, table={} — the table's download answers 404 until the row is reset",
-                artifact.getAttemptCount(), artifact.getBatchId(), artifact.getTableName());
+        return new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
+                artifact.getSiteId(), artifact.getTableName());
     }
 
     /**
@@ -322,7 +311,7 @@ public class BatchParquetFinalizationService {
             metrics.batchParquetReady();
             log.info("Unified batch Parquet ready: batchId={}, table={}, rows={}, bytes={}",
                     claim.batchId(), claim.tableName(), finalized.rowCount(), finalized.fileSize());
-        } else if (artifact.getAttemptCount() >= maxAttempts) {
+        } else if (outcome.permanentFailure() || artifact.getAttemptCount() >= maxAttempts) {
             artifact.markAbandoned(outcome.error());
             metrics.batchParquetAbandoned();
             log.error("Unified batch Parquet abandoned after {} attempt(s): batchId={}, table={}, "
@@ -355,19 +344,14 @@ public class BatchParquetFinalizationService {
             tempFile = Files.createTempFile(tempDirectory,
                     "batch-parquet-" + claim.artifactId() + "-", ".parquet");
             Path output = tempFile;
+            OptionalLong expectedRows = expectedRowCount(segments, claim.tableName());
             DeltaParquetWriter.FileWriteResult result = DeltaParquetWriter.writeDeltaParquet(
                     output, claim.tableName(), schema,
                     consumer -> segments.forEach(segment ->
-                            segmentService.forEachRecord(segment.getS3Key(), consumer)));
-            boolean expectedCountKnown = segments.stream().allMatch(segment -> segment.getStats() != null);
-            long expectedRows = aggregateStats(segments).getOrDefault(
-                    claim.tableName(), new TableChangeStats(0, 0, 0)).total();
-            if (expectedCountKnown && result.rowCount() != expectedRows) {
+                            segmentService.forEachRecord(segment.getS3Key(), consumer)), maxTempBytes);
+            if (expectedRows.isPresent() && result.rowCount() != expectedRows.getAsLong()) {
                 throw new IllegalStateException("Artifact row count " + result.rowCount()
-                        + " does not match segment stats " + expectedRows);
-            }
-            if (result.fileSize() > maxTempBytes) {
-                throw new IllegalStateException("Artifact exceeds temp-file limit of " + maxTempBytes + " bytes");
+                        + " does not match segment stats " + expectedRows.getAsLong());
             }
             String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
                     claim.tableName(), output);
@@ -395,6 +379,19 @@ public class BatchParquetFinalizationService {
         return totals;
     }
 
+    private static OptionalLong expectedRowCount(List<ChangelogSegment> segments, String tableName) {
+        if (segments.stream().anyMatch(segment -> segment.getStats() == null)) {
+            return OptionalLong.empty();
+        }
+        long total = segments.stream()
+                .map(ChangelogSegment::getStats)
+                .map(stats -> stats.get(tableName))
+                .filter(Objects::nonNull)
+                .mapToLong(TableChangeStats::total)
+                .sum();
+        return OptionalLong.of(total);
+    }
+
     @PreDestroy
     void shutdown() {
         leaseRenewals.shutdownNow();
@@ -408,13 +405,17 @@ public class BatchParquetFinalizationService {
     }
 
     /** Either the finished file or the error that stopped this attempt. */
-    private record BuildOutcome(FinalizedFile file, String error) {
+    private record BuildOutcome(FinalizedFile file, String error, boolean permanentFailure) {
         static BuildOutcome succeeded(FinalizedFile file) {
-            return new BuildOutcome(file, null);
+            return new BuildOutcome(file, null, false);
         }
 
         static BuildOutcome failed(String error) {
-            return new BuildOutcome(null, error);
+            return new BuildOutcome(null, error, false);
+        }
+
+        static BuildOutcome permanentlyFailed(String error) {
+            return new BuildOutcome(null, error, true);
         }
     }
 }

@@ -10,7 +10,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T03 — Deletion layering and atomicity.** Put artifact key derivation in the delta domain
   and route admin deletion through a transactional application service; remove delta
   infrastructure imports from batch presentation/application code. Tests first.
-- [ ] **T04 — Queue and publish policy.** Bulk-settle spent expired claims, remove the scan loop,
+- [x] **T04 — Queue and publish policy.** Bulk-settle spent expired claims, remove the scan loop,
   compute aggregate stats once, enforce the byte ceiling during file output, and abandon an
   oversized deterministic artifact immediately. Tests first.
 - [ ] **T05 — Documentation and delivery.** Update 036/037 docs, `AGENTS.md`, and the project

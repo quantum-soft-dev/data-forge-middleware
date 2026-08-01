@@ -38,7 +38,7 @@ public interface JpaBatchParquetArtifactRepository
                        < CAST(:now AS timestamp) - make_interval(secs =>
                            CAST(:retryDelaySeconds AS double precision)
                                * power(2, LEAST(GREATEST(attempt_count - 1, 0), 6))))
-               OR (status = 'BUILDING' AND updated_at
+               OR (status = 'BUILDING' AND attempt_count < :maxAttempts AND updated_at
                        < CAST(:now AS timestamp) - make_interval(secs =>
                            CAST(:leaseSeconds AS double precision)))
             ORDER BY updated_at, created_at, table_name
@@ -46,7 +46,20 @@ public interface JpaBatchParquetArtifactRepository
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
     List<BatchParquetArtifact> findNextRetryable(LocalDateTime now, int retryDelaySeconds,
-                                                 int leaseSeconds, int limit);
+                                                 int leaseSeconds, int maxAttempts, int limit);
+
+    @Override
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query(value = """
+            UPDATE batch_parquet_artifacts
+            SET status = 'ABANDONED', claim_token = NULL, last_error = :error, updated_at = :now,
+                version = version + 1
+            WHERE status = 'BUILDING' AND attempt_count >= :maxAttempts AND updated_at
+                < CAST(:now AS timestamp) - make_interval(secs =>
+                    CAST(:leaseSeconds AS double precision))
+            """, nativeQuery = true)
+    int abandonExpiredClaims(LocalDateTime now, int leaseSeconds, int maxAttempts, String error);
 
     @Override
     @Modifying(flushAutomatically = true)
