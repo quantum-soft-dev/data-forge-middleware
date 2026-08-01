@@ -445,10 +445,11 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
+        String staleAttemptKey = "egress/site/batches/batch/attempts/old/orders.parquet";
         when(storage.uploadBatchParquet(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             // Our lease lapsed and another worker reclaimed the row while we were still uploading.
             artifact.markBuilding();
-            return "egress/orders.parquet";
+            return staleAttemptKey;
         });
 
         assertTrue(service.finalizeNext());
@@ -457,6 +458,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
         assertEquals(2, artifact.getAttemptCount());
         assertNull(artifact.getS3Key());
+        verify(storage).deleteBatchParquet(staleAttemptKey);
     }
 
     @Test

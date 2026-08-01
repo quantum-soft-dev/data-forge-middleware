@@ -226,9 +226,8 @@ public class BatchParquetFinalizationService {
                         return null;
                     });
                 } catch (RuntimeException e) {
-                    // The object key is stable across attempts. A successor may already have
-                    // published the same key, and a commit error can be ambiguous, so deleting it
-                    // here could break a valid READY manifest. Retention owns final cleanup.
+                    // A commit error is ambiguous: the row may already be READY with this attempt
+                    // key, so eager deletion could break a valid manifest. Retention owns cleanup.
                     log.error("Could not publish unified batch Parquet outcome: batchId={}, table={}",
                             claim.batchId(), claim.tableName(), e);
                 }
@@ -347,12 +346,15 @@ public class BatchParquetFinalizationService {
         }
         BatchParquetArtifact artifact = found.get();
         if (!artifact.isHeldBy(claim.token())) {
-            // Another worker reclaimed the row after our lease lapsed. Its attempt owns the outcome
-            // now: writing ours here would either overwrite a live claim or bury a build that is
-            // still running under a stale failure.
+            // Another worker reclaimed the row after our lease lapsed. Attempt keys are immutable,
+            // so our upload cannot overwrite its object and is safe to remove without touching the
+            // winner. If deletion fails, batch/site prefix cleanup can still discover it.
             log.warn("Unified batch Parquet finished under a claim that was taken over (status {}); "
                             + "discarding this attempt's outcome: batchId={}, table={}",
                     artifact.getStatus(), claim.batchId(), claim.tableName());
+            if (outcome.file() != null) {
+                storage.deleteBatchParquet(outcome.file().s3Key());
+            }
             return;
         }
         if (outcome.file() != null) {

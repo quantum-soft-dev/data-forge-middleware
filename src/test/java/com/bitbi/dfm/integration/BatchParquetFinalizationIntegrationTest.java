@@ -29,16 +29,24 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 
@@ -117,9 +125,8 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
                 .allMatch(artifact -> artifact.getStatus() == BatchParquetArtifactStatus.READY);
         assertThat(artifacts).extracting(BatchParquetArtifact::getTableName)
                 .containsExactlyInAnyOrder("customers", "orders");
-        assertThat(storage.listKeys(batchPrefix())).containsExactlyInAnyOrder(
-                S3CheckpointStorage.batchParquetKey(SITE_ID, BATCH_ID, "customers"),
-                S3CheckpointStorage.batchParquetKey(SITE_ID, BATCH_ID, "orders"));
+        assertThat(storage.listKeys(batchPrefix())).containsExactlyInAnyOrderElementsOf(
+                artifacts.stream().map(BatchParquetArtifact::getS3Key).toList());
 
         BatchParquetArtifact customers = artifact("customers");
         List<GenericRecord> customerRows = readBack(storage.download(customers.getS3Key()));
@@ -243,6 +250,55 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         assertThat(artifact("customers").getAttemptCount()).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("a superseded upload completing last cannot replace the winning claim's bytes")
+    void lateSupersededUploadCannotOverwriteTheWinningClaim() throws Exception {
+        segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
+                record("customers", Op.INSERT, 1L, 1L,
+                        data("id", intValue(1L), "name", stringValue("Ann")))));
+        assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(1);
+
+        CountDownLatch oldUploadStarted = new CountDownLatch(1);
+        CountDownLatch releaseOldUpload = new CountDownLatch(1);
+        AtomicReference<String> oldAttemptKey = new AtomicReference<>();
+        S3CheckpointStorage delayedStorage = spy(storage);
+        doAnswer(invocation -> {
+            Path oldFile = invocation.getArgument(4);
+            oldUploadStarted.countDown();
+            if (!releaseOldUpload.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("successor did not publish before the old upload timeout");
+            }
+            // Make the old physical upload observably different after the writer computed its
+            // metadata. With the previous shared key this late PutObject corrupts the READY row.
+            Files.write(oldFile, new byte[]{0x55}, StandardOpenOption.APPEND);
+            String uploaded = (String) invocation.callRealMethod();
+            oldAttemptKey.set(uploaded);
+            return uploaded;
+        }).when(delayedStorage).uploadBatchParquet(
+                eq(SITE_ID), eq(BATCH_ID), eq("customers"), any(UUID.class), any(Path.class));
+
+        CompletableFuture<Boolean> oldFinalization = CompletableFuture.supplyAsync(
+                () -> service(delayedStorage, 5).finalizeNext());
+        assertThat(oldUploadStarted.await(10, TimeUnit.SECONDS)).isTrue();
+
+        jdbc.update("UPDATE batch_parquet_artifacts "
+                + "SET updated_at = TIMESTAMP '2000-01-01 00:00:00' WHERE batch_id = ?", BATCH_ID);
+        assertThat(leasedService(storage).finalizeNext()).isTrue();
+        BatchParquetArtifact winner = artifact("customers");
+        assertThat(winner.getStatus()).isEqualTo(BatchParquetArtifactStatus.READY);
+        assertThat(winner.getAttemptCount()).isEqualTo(2);
+        byte[] winningBytes = storage.download(winner.getS3Key());
+
+        releaseOldUpload.countDown();
+        assertThat(oldFinalization.get(10, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(oldAttemptKey.get()).isNotNull().isNotEqualTo(winner.getS3Key());
+        assertThat(storage.exists(oldAttemptKey.get())).isFalse();
+        assertThat(storage.listKeys(batchPrefix())).containsExactly(winner.getS3Key());
+        assertThat(winner.getFileSize()).isEqualTo((long) winningBytes.length);
+        assertThat(winner.getChecksum()).isEqualTo(sha256(winningBytes));
+    }
+
     private BatchParquetFinalizationService service(S3CheckpointStorage storageToUse, int maxAttempts) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
                 segmentService, schemaService, batchRepository, storageToUse, metrics, transactionManager,
@@ -300,6 +356,10 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
             }
         }
         return rows;
+    }
+
+    private static String sha256(byte[] content) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
     }
 
     private void declareSchemas() {

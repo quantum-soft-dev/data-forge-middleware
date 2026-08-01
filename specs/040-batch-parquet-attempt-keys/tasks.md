@@ -11,7 +11,7 @@ referencing #100.
   deterministic batch prefixes and claim-token object keys in `BatchParquetArtifactKey` and require
   a claim token in `S3CheckpointStorage.uploadBatchParquet`. Keep legacy stable-key derivation for
   compatibility cleanup.
-- [ ] **T03 — Winning-claim publication.** Add failing finalizer unit and LocalStack concurrency
+- [x] **T03 — Winning-claim publication.** Add failing finalizer unit and LocalStack concurrency
   coverage that pauses the old upload, reclaims the lease, publishes the successor, and completes
   different old bytes last. Then pass claim tokens into uploads, delete stale attempt keys safely,
   and prove manifest bytes/size/SHA-256 belong to the winner.
