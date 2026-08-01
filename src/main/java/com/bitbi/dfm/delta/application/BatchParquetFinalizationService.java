@@ -187,12 +187,19 @@ public class BatchParquetFinalizationService {
      * cannot render, a batch whose segments a re-baseline removed) settles instead of rebuilding
      * the whole changelog forever.</p>
      *
-     * @return true when a batch was claimed and its attempts recorded
+     * @return true when a batch was claimed, or when lock contention proves work remains and the
+     *         caller should keep draining
      */
     public boolean finalizeNext() {
         List<Claim> claims = transactions.execute(status -> claimNext());
-        if (claims == null || claims.isEmpty()) {
+        if (claims == null) {
             return false;
+        }
+        if (claims.isEmpty()) {
+            // Another worker has selected this batch but has not committed its short claim
+            // transaction yet. Reporting an empty queue here would stop this worker before it can
+            // select an unrelated batch after that commit releases the candidate row lock.
+            return true;
         }
         // Scheduled inside the try: once the claim is committed the attempt is spent, so every path
         // out of here must reach publish(). A rejected schedule (the renewal executor is shutting
@@ -213,14 +220,27 @@ public class BatchParquetFinalizationService {
                 lease.cancel(false);
             }
         }
-        Map<UUID, BuildOutcome> outcomes = built;
-        transactions.execute(status -> {
-            for (Claim claim : claims) {
-                publish(claim, outcomes.getOrDefault(claim.artifactId(),
-                        BuildOutcome.failed("Build produced no outcome for claimed artifact")));
+        for (Claim claim : claims) {
+            BuildOutcome outcome = built.getOrDefault(claim.artifactId(),
+                    BuildOutcome.failed("Build produced no outcome for claimed artifact"));
+            try {
+                transactions.execute(status -> {
+                    publish(claim, outcome);
+                    return null;
+                });
+            } catch (RuntimeException e) {
+                log.error("Could not publish unified batch Parquet outcome: batchId={}, table={}",
+                        claim.batchId(), claim.tableName(), e);
+                if (outcome.file() != null) {
+                    try {
+                        storage.deleteBatchParquet(outcome.file().s3Key());
+                    } catch (RuntimeException cleanupFailure) {
+                        log.warn("Could not delete unpublished unified batch Parquet: batchId={}, table={}",
+                                claim.batchId(), claim.tableName(), cleanupFailure);
+                    }
+                }
             }
-            return null;
-        });
+        }
         return true;
     }
 
@@ -251,7 +271,7 @@ public class BatchParquetFinalizationService {
         }
         UUID batchId = next.get(0).getBatchId();
         if (!artifactRepository.tryLockBatch(batchId)) {
-            return null;
+            return List.of();
         }
         List<BatchParquetArtifact> artifacts = artifactRepository.findRetryableByBatchId(
                 batchId, now, retryDelaySeconds, leaseSeconds, maxAttempts);
@@ -271,26 +291,39 @@ public class BatchParquetFinalizationService {
     }
 
     /**
-     * Keep touching the row while the build runs, so the lease measures liveness instead of
+     * Keep touching every sibling while the build runs, so the lease measures liveness instead of
      * capping how long a build may take. A large batch replayed per table can legitimately outrun
      * {@code lease-seconds}; without this it would be reclaimed mid-flight and rebuilt from scratch
      * by the next worker, spending an attempt and a pool slot on every lapse.
+     *
+     * <p>The batch advisory lock and every token touch share one transaction. This makes renewal
+     * all-or-nothing relative to a competing batch claim: a claimant sees either every sibling's
+     * old lease or every sibling's renewed lease, never a partially renewed batch.</p>
      */
     private ScheduledFuture<?> renewLeaseWhileBuilding(List<Claim> claims) {
         long period = Math.max(1L, leaseSeconds / 3L);
         return leaseRenewals.scheduleAtFixedRate(() -> {
-            for (Claim claim : claims) {
-                try {
-                    Integer renewed = transactions.execute(status -> artifactRepository.touchClaim(
-                            claim.artifactId(), claim.token(), LocalDateTime.now(ZoneOffset.UTC)));
-                    if (renewed != null && renewed == 0) {
-                        log.warn("Build lease was taken over while still building: batchId={}, table={}",
-                                claim.batchId(), claim.tableName());
+            UUID batchId = claims.get(0).batchId();
+            try {
+                transactions.execute(status -> {
+                    if (!artifactRepository.tryLockBatch(batchId)) {
+                        log.warn("Could not acquire batch lock to renew Parquet build lease: batchId={}",
+                                batchId);
+                        return null;
                     }
-                } catch (RuntimeException e) {
-                    log.warn("Could not renew the build lease for batchId={}, table={}",
-                            claim.batchId(), claim.tableName(), e);
-                }
+                    LocalDateTime renewedAt = LocalDateTime.now(ZoneOffset.UTC);
+                    for (Claim claim : claims) {
+                        int renewed = artifactRepository.touchClaim(
+                                claim.artifactId(), claim.token(), renewedAt);
+                        if (renewed == 0) {
+                            log.warn("Build lease was taken over while still building: batchId={}, table={}",
+                                    claim.batchId(), claim.tableName());
+                        }
+                    }
+                    return null;
+                });
+            } catch (RuntimeException e) {
+                log.warn("Could not atomically renew the batch build lease: batchId={}", batchId, e);
             }
         }, period, period, TimeUnit.SECONDS);
     }

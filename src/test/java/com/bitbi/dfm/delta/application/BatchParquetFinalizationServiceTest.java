@@ -43,6 +43,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -353,7 +354,7 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
-    void leavesTheBatchForTheWorkerThatAlreadyHoldsItsAdvisoryLock() {
+    void keepsTheDrainAliveWhenAnotherWorkerHoldsTheBatchAdvisoryLock() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
@@ -362,11 +363,44 @@ class BatchParquetFinalizationServiceTest {
                 .thenReturn(List.of(artifact));
         when(artifactRepository.tryLockBatch(batchId)).thenReturn(false);
 
-        assertFalse(service.finalizeNext());
+        assertTrue(service.finalizeNext(),
+                "contention means the queue is non-empty, so the drain must select again");
 
         verify(artifactRepository, never()).findRetryableByBatchId(
                 any(), any(LocalDateTime.class), anyInt(), anyInt(), anyInt());
         verify(artifactRepository, never()).save(any(BatchParquetArtifact.class));
+    }
+
+    @Test
+    void publishesEachBatchSiblingInAnIndependentTransaction() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact customers = BatchParquetArtifact.pending(batchId, siteId, "customers");
+        BatchParquetArtifact orders = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        claimableBatch(customers, orders);
+        ChangelogSegment segment = segment(siteId, batchId, "mixed", 1, 2, Map.of(
+                "customers", new TableChangeStats(1, 0, 0),
+                "orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
+                "customers", schema(), "orders", schema()));
+        stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), any(), any(Path.class)))
+                .thenAnswer(invocation -> "egress/" + invocation.getArgument(2) + ".parquet");
+        doAnswer(invocation -> {
+            BatchParquetArtifact saved = invocation.getArgument(0);
+            if (saved.getTableName().equals("customers")
+                    && saved.getStatus() == BatchParquetArtifactStatus.READY) {
+                throw new IllegalStateException("simulated optimistic-lock conflict");
+            }
+            return saved;
+        }).when(artifactRepository).save(any(BatchParquetArtifact.class));
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, orders.getStatus(),
+                "one stale sibling must not roll back or skip another sibling's publication");
+        verify(artifactRepository, times(2)).findById(any());
     }
 
     @Test
@@ -489,6 +523,37 @@ class BatchParquetFinalizationServiceTest {
                 .touchClaim(eq(artifact.getId()), renewedToken.capture(), any());
         assertEquals(tokenDuringBuild.get(), renewedToken.getValue(),
                 "the renewal must carry the claim's own token, or it would extend a stranger's lease");
+    }
+
+    @Test
+    void renewsEverySiblingTogetherUnderTheBatchAdvisoryLock() throws Exception {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact customers = BatchParquetArtifact.pending(batchId, siteId, "customers");
+        BatchParquetArtifact orders = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        claimableBatch(customers, orders);
+        ChangelogSegment segment = segment(siteId, batchId, "mixed", 1, 2, Map.of(
+                "customers", new TableChangeStats(1, 0, 0),
+                "orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
+                "customers", schema(), "orders", schema()));
+        stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT));
+        CountDownLatch renewed = new CountDownLatch(2);
+        when(artifactRepository.touchClaim(any(), any(), any())).thenAnswer(invocation -> {
+            renewed.countDown();
+            return 1;
+        });
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+            assertTrue(renewed.await(10, TimeUnit.SECONDS), "both sibling leases were not renewed");
+            return "egress/" + invocation.getArgument(2) + ".parquet";
+        });
+
+        assertTrue(newService(7, 3).finalizeNext());
+
+        verify(artifactRepository, atLeastOnce()).touchClaim(eq(customers.getId()), any(), any());
+        verify(artifactRepository, atLeastOnce()).touchClaim(eq(orders.getId()), any(), any());
+        verify(artifactRepository, atLeast(2)).tryLockBatch(batchId);
     }
 
     @Test

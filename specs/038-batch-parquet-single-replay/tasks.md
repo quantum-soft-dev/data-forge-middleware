@@ -12,5 +12,8 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   them together, and publish each outcome independently.
 - [x] **T04 — Documentation and delivery gates.** Update the 036 plan/change request, Delta guide,
   and project journal with the new cost/heap model; run backend and integration gates before PR.
-- [ ] **T05 — Review follow-up and final synchronization.** Resolve every review surface, merge
-  current `origin/develop`, rerun all gates, and stop at `status: ready to merge`.
+- [x] **T05 — Review follow-up.** Add regression tests and resolve the first review round: isolate
+  schema construction and result publication per table, renew sibling claims atomically under the
+  batch advisory lock, and keep the worker drain alive during lock contention.
+- [ ] **T06 — Final synchronization.** Re-review every changed line, merge current
+  `origin/develop`, rerun all gates, and stop at `status: ready to merge`.

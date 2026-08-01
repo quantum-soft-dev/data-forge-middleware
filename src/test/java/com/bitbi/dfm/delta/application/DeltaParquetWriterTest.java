@@ -350,6 +350,27 @@ class DeltaParquetWriterTest {
     }
 
     @Test
+    void isolatesAnInvalidDeclaredSchemaWhileOtherWritersFinish() throws Exception {
+        TableSchema valid = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());
+        TableSchema reservedColumn = new TableSchema(List.of(
+                new ColumnDefinition("_op", "varchar(20)", false)), List.of("_op"), List.of());
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers-valid-schema.parquet"), valid));
+        requests.put("broken", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("broken-schema.parquet"), reservedColumn));
+
+        DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
+                requests, consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
+                        Map.of("id", intVal(1)), Map.of("id", intVal(1)))), Long.MAX_VALUE);
+
+        assertEquals(1, result.files().get("customers").rowCount());
+        assertFalse(result.files().containsKey("broken"));
+        assertNotNull(result.failures().get("broken"));
+    }
+
+    @Test
     void stopsWritingAsSoonAsTheConfiguredFileLimitIsCrossed() throws Exception {
         TableSchema noDecimals = new TableSchema(List.of(
                 new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());

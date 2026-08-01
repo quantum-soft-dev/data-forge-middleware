@@ -165,16 +165,21 @@ public final class DeltaParquetWriter {
         }
         Map<String, Schema> baseSchemas = new LinkedHashMap<>();
         Map<String, Map<String, Integer>> decimalPrecisions = new LinkedHashMap<>();
+        Map<String, FileWriteFailure> failures = new LinkedHashMap<>();
         boolean needsDecimalScan = false;
         for (Map.Entry<String, TableWriteRequest> entry : requests.entrySet()) {
-            Schema base = ParquetSchemaMapper.toDeltaAvroSchema(entry.getKey(), entry.getValue().schema());
-            Map<String, Integer> precisions = declaredDecimalPrecisions(base);
-            baseSchemas.put(entry.getKey(), base);
-            decimalPrecisions.put(entry.getKey(), precisions);
-            needsDecimalScan |= !precisions.isEmpty();
+            try {
+                Schema base = ParquetSchemaMapper.toDeltaAvroSchema(
+                        entry.getKey(), entry.getValue().schema());
+                Map<String, Integer> precisions = declaredDecimalPrecisions(base);
+                baseSchemas.put(entry.getKey(), base);
+                decimalPrecisions.put(entry.getKey(), precisions);
+                needsDecimalScan |= !precisions.isEmpty();
+            } catch (RuntimeException e) {
+                failures.put(entry.getKey(), failure(e));
+            }
         }
 
-        Map<String, FileWriteFailure> failures = new LinkedHashMap<>();
         if (needsDecimalScan) {
             replay.forEach(change -> {
                 Schema schema = baseSchemas.get(change.getTable());
