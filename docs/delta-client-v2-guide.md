@@ -551,12 +551,14 @@ You don't write these — they're how downstream tools read your data:
   non-provisional raw segments in sequence order and writes exactly one unified artifact per table:
   `egress/{siteId}/batches/{batchId}/{table}.parquet`. This is the artifact returned by the Batch
   Detail Parquet button. It contains every applicable batch record once in ascending `_seq` order;
-  physical seal boundaries do not appear in the UI or download contract. Finalization uses a
-  streaming replay (write pass, preceded by a decimal-envelope pass only for tables that declare
-  decimal columns), a local file-backed writer, and an S3 file upload, so heap use does not grow
-  with batch size. `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` is enforced during the write; an artifact
-  that crosses it is abandoned on its first deterministic attempt rather than fully rewritten on
-  every retry.
+  physical seal boundaries do not appear in the UI or download contract. One batch claim opens a
+  file-backed writer per retryable table and fans a shared streaming replay out by table name. With
+  no decimal columns the changelog is read once; if any claimed table declares decimals, one shared
+  envelope scan precedes one shared write replay. Replay cost is therefore one or two full reads,
+  independent of table count. Heap is bounded by open writers × one Parquet row-group buffer rather
+  than batch rows. `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` is enforced per artifact during the write;
+  an artifact that crosses it is abandoned on its first deterministic attempt rather than fully
+  rewritten on every retry.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
@@ -567,7 +569,9 @@ Realtime segment files appear **within seconds of `SessionCommitted`**. After th
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
 durable manifest, and wakes a separate bounded worker pool; callback failures are contained and
 cannot turn the already committed session into an apparent client failure. A
-manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
+manifest becomes `READY` only after its stable S3 object is complete. PostgreSQL advisory locking
+serializes the short batch claim across replicas; each table keeps its own claim token, lease,
+attempt count, and outcome. Failed table artifacts retry
 independently with a doubling backoff, up to `DELTA_BATCH_PARQUET_MAX_ATTEMPTS` (default 7, which
 spans about an hour) — past that the table is abandoned (and logged at ERROR) rather than rebuilt
 forever, since the common causes (no declared schema, data the schema cannot render) never recover

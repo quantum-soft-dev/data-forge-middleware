@@ -22,7 +22,7 @@ import java.util.function.Supplier;
  *   <li>{@code delta.batch-parquet.artifacts} — completed-batch artifacts settled, tagged
  *       {@code outcome=ready|failed|abandoned}; {@code abandoned} is a permanently 404-ing
  *       user-facing download and is the one worth alerting on (036)</li>
- *   <li>{@code delta.batch-parquet.duration} — time to replay a batch into one table's artifact</li>
+ *   <li>{@code delta.batch-parquet.duration} — time to replay and upload one claimed batch group</li>
  *   <li>{@code delta.batch-parquet.reclaims} — claims taken over after their build lease expired;
  *       a rising count means builds are outrunning {@code lease-seconds}</li>
  * </ul>
@@ -82,7 +82,7 @@ public class DeltaMetrics {
                 .description("Completed-batch Parquet claims taken over after their lease expired")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.batchParquetDuration = Timer.builder("delta.batch-parquet.duration")
-                .description("Time to replay a completed batch into one table's Parquet artifact")
+                .description("Time to replay and upload one completed-batch Parquet claim group")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
     }
 
@@ -112,7 +112,7 @@ public class DeltaMetrics {
         batchParquetReclaims.increment();
     }
 
-    /** Time one artifact build (replay + upload), whatever its outcome. */
+    /** Time one batch-level claim group (shared replay + uploads), whatever its outcomes. */
     public <T> T timeBatchParquetBuild(Supplier<T> build) {
         return batchParquetDuration.record(build);
     }

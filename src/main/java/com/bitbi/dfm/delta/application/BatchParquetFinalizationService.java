@@ -44,7 +44,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-/** Durable, idempotent finalization of one completed-batch Parquet per table (036, issue #93). */
+/** Durable batch-level fan-out into one completed-batch Parquet per table (036/038, issues #93/#97). */
 @Service
 public class BatchParquetFinalizationService {
 
