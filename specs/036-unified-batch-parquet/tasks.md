@@ -11,7 +11,7 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   table and operation, stable-sort by table, and defensively aggregate duplicate DTO rows in the
   frontend. Tests cover mixed operations, null legacy stats, total correctness, and one button.
 
-- [ ] **T03 — Durable artifact manifest.** Add V49 and the artifact aggregate/repository with
+- [x] **T03 — Durable artifact manifest.** Add V49 and the artifact aggregate/repository with
   unique `(batch_id, table_name)`, durable states, metadata, ordered claim query, and batch/site
   cleanup queries. Tests cover lifecycle transitions and concurrent claim behavior.
 
