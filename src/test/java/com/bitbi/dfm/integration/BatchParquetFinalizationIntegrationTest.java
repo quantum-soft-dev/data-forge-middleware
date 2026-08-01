@@ -74,6 +74,9 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
     private com.bitbi.dfm.batch.domain.BatchRepository batchRepository;
 
     @Autowired
+    private com.bitbi.dfm.delta.application.DeltaMetrics metrics;
+
+    @Autowired
     private PlatformTransactionManager transactionManager;
 
     @Autowired
@@ -243,14 +246,14 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     private BatchParquetFinalizationService service(S3CheckpointStorage storageToUse, int maxAttempts) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, batchRepository, storageToUse, transactionManager,
+                segmentService, schemaService, batchRepository, storageToUse, metrics, transactionManager,
                 tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600);
     }
 
     /** Same finalizer, but with an already-elapsed build lease so stale claims are reclaimed. */
     private BatchParquetFinalizationService leasedService(S3CheckpointStorage storageToUse) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, batchRepository, storageToUse, transactionManager,
+                segmentService, schemaService, batchRepository, storageToUse, metrics, transactionManager,
                 tempDir.toString(), 10_000_000L, 0, 5, 0);
     }
 

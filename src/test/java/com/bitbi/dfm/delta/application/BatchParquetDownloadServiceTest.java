@@ -3,7 +3,7 @@ package com.bitbi.dfm.delta.application;
 import com.bitbi.dfm.batch.infrastructure.S3PresignedUrlService;
 import com.bitbi.dfm.batch.infrastructure.S3PresignedUrlService.PresignedUrlResult;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService.PresignedDownload;
-import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService.BatchParquetNotReadyException;
+import com.bitbi.dfm.delta.application.BatchParquetDownloadService.BatchParquetNotReadyException;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import org.junit.jupiter.api.Test;
@@ -21,7 +21,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class DeltaSegmentParquetQueryServiceTest {
+class BatchParquetDownloadServiceTest {
 
     private static final UUID SITE_ID = UUID.randomUUID();
     private static final UUID BATCH_ID = UUID.randomUUID();
@@ -34,7 +34,7 @@ class DeltaSegmentParquetQueryServiceTest {
             mock(BatchParquetFinalizationWorker.class);
     private final S3PresignedUrlService presignedUrlService = mock(S3PresignedUrlService.class);
 
-    private final DeltaSegmentParquetQueryService service = new DeltaSegmentParquetQueryService(
+    private final BatchParquetDownloadService service = new BatchParquetDownloadService(
             artifactRepository, finalizationService, finalizationWorker, presignedUrlService);
 
     @Test
@@ -65,6 +65,21 @@ class DeltaSegmentParquetQueryServiceTest {
                 () -> service.presignBatchTableParquet(SITE_ID, BATCH_ID, "orders"));
 
         verify(finalizationService).enqueueBatchForSite(SITE_ID, BATCH_ID);
+        verify(finalizationWorker).wake();
+    }
+
+    @Test
+    void reportsAConcurrentlyBackfilledBatchAsFinalizingRatherThanMissing() {
+        // The enqueue is insert-if-absent, so a caller that loses the race inserts 0 rows. Treating
+        // that count as "nothing to build" would answer 404 for work another request just queued.
+        when(artifactRepository.findBySiteIdAndBatchIdAndTableName(SITE_ID, BATCH_ID, "orders"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders")));
+        when(finalizationService.enqueueBatchForSite(SITE_ID, BATCH_ID)).thenReturn(0);
+
+        assertThrows(BatchParquetNotReadyException.class,
+                () -> service.presignBatchTableParquet(SITE_ID, BATCH_ID, "orders"));
+
         verify(finalizationWorker).wake();
     }
 

@@ -68,7 +68,8 @@ class BatchParquetFinalizationServiceTest {
 
     private BatchParquetFinalizationService newService(int maxAttempts) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, batchRepository, storage,
+                segmentService, schemaService, batchRepository, storage, new DeltaMetrics(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
                 mock(PlatformTransactionManager.class), tempDir.toString(), 10_000_000L, 60,
                 maxAttempts, 1800);
     }

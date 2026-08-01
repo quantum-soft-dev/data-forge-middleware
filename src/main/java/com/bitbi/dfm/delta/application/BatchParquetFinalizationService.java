@@ -51,6 +51,7 @@ public class BatchParquetFinalizationService {
     private final SiteSchemaService schemaService;
     private final BatchRepository batchRepository;
     private final S3CheckpointStorage storage;
+    private final DeltaMetrics metrics;
     private final TransactionTemplate transactions;
     private final ScheduledExecutorService leaseRenewals;
     private final Path tempDirectory;
@@ -66,6 +67,7 @@ public class BatchParquetFinalizationService {
             SiteSchemaService schemaService,
             BatchRepository batchRepository,
             S3CheckpointStorage storage,
+            DeltaMetrics metrics,
             PlatformTransactionManager transactionManager,
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String tempDirectory,
             @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
@@ -78,6 +80,7 @@ public class BatchParquetFinalizationService {
         this.schemaService = schemaService;
         this.batchRepository = batchRepository;
         this.storage = storage;
+        this.metrics = metrics;
         // Explicit template rather than @Transactional on the steps below: they are called from
         // finalizeNext() on this same bean, and a self-invocation never reaches the proxy — the
         // annotation would silently do nothing, which is exactly what the claim must not do.
@@ -185,7 +188,7 @@ public class BatchParquetFinalizationService {
         BuildOutcome built;
         try {
             lease = renewLeaseWhileBuilding(claim);
-            built = BuildOutcome.succeeded(buildAndUpload(claim));
+            built = BuildOutcome.succeeded(metrics.timeBatchParquetBuild(() -> buildAndUpload(claim)));
         } catch (RuntimeException e) {
             built = BuildOutcome.failed(Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
         } finally {
@@ -210,6 +213,7 @@ public class BatchParquetFinalizationService {
         }
         BatchParquetArtifact artifact = next.get(0);
         if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
+            metrics.batchParquetReclaimed();
             log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
                     artifact.getBatchId(), artifact.getTableName());
         }
@@ -274,15 +278,18 @@ public class BatchParquetFinalizationService {
             FinalizedFile finalized = outcome.file();
             artifact.markReady(finalized.s3Key(), finalized.rowCount(), finalized.fileSize(),
                     finalized.checksum());
+            metrics.batchParquetReady();
             log.info("Unified batch Parquet ready: batchId={}, table={}, rows={}, bytes={}",
                     claim.batchId(), claim.tableName(), finalized.rowCount(), finalized.fileSize());
         } else if (artifact.getAttemptCount() >= maxAttempts) {
             artifact.markAbandoned(outcome.error());
+            metrics.batchParquetAbandoned();
             log.error("Unified batch Parquet abandoned after {} attempt(s): batchId={}, table={}, "
                             + "error={} — the table's download answers 404 until the row is reset",
                     artifact.getAttemptCount(), claim.batchId(), claim.tableName(), outcome.error());
         } else {
             artifact.markFailed(outcome.error());
+            metrics.batchParquetFailed();
             log.warn("Unified batch Parquet failed (attempt {}/{}): batchId={}, table={}, error={}",
                     artifact.getAttemptCount(), maxAttempts, claim.batchId(), claim.tableName(),
                     outcome.error());

@@ -25,14 +25,14 @@ import java.util.UUID;
  * @version 1.0.0
  */
 @Service
-public class DeltaSegmentParquetQueryService {
+public class BatchParquetDownloadService {
 
     private final BatchParquetArtifactRepository artifactRepository;
     private final BatchParquetFinalizationService finalizationService;
     private final BatchParquetFinalizationWorker finalizationWorker;
     private final S3PresignedUrlService presignedUrlService;
 
-    public DeltaSegmentParquetQueryService(BatchParquetArtifactRepository artifactRepository,
+    public BatchParquetDownloadService(BatchParquetArtifactRepository artifactRepository,
                                            BatchParquetFinalizationService finalizationService,
                                            BatchParquetFinalizationWorker finalizationWorker,
                                            S3PresignedUrlService presignedUrlService) {
@@ -88,11 +88,18 @@ public class DeltaSegmentParquetQueryService {
      * build, which keeps the existing 404 for an unknown table or a batch without segments.
      */
     private Optional<BatchParquetArtifact> backfill(UUID siteId, UUID batchId, String tableName) {
-        if (finalizationService.enqueueBatchForSite(siteId, batchId) == 0) {
-            return Optional.empty();
+        // Deliberately ignore the created count. The enqueue is insert-if-absent, so a request that
+        // loses the race to a concurrent one creates 0 rows even though the work is now queued;
+        // answering 404 off that count would contradict the readiness contract. Only the row is
+        // evidence — its absence still separates an unknown table / unfinished batch (404) from
+        // queued work (409).
+        finalizationService.enqueueBatchForSite(siteId, batchId);
+        Optional<BatchParquetArtifact> queued = artifactRepository
+                .findBySiteIdAndBatchIdAndTableName(siteId, batchId, tableName);
+        if (queued.isPresent()) {
+            finalizationWorker.wake();
         }
-        finalizationWorker.wake();
-        return artifactRepository.findBySiteIdAndBatchIdAndTableName(siteId, batchId, tableName);
+        return queued;
     }
 
     /** A manifest exists, but S3 publication has not completed yet. */

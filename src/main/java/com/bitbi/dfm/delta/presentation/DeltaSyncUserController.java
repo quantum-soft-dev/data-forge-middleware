@@ -3,7 +3,7 @@ package com.bitbi.dfm.delta.presentation;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
-import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService;
+import com.bitbi.dfm.delta.application.BatchParquetDownloadService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
@@ -63,7 +63,7 @@ public class DeltaSyncUserController {
     private final DeltaSyncStateService syncStateService;
     private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
-    private final DeltaSegmentParquetQueryService segmentParquetQueryService;
+    private final BatchParquetDownloadService batchParquetDownloadService;
     private final DeltaSiteWipeService wipeService;
     private final SiteService siteService;
     private final AuthorizationHelper authorizationHelper;
@@ -71,14 +71,14 @@ public class DeltaSyncUserController {
     public DeltaSyncUserController(DeltaSyncStateService syncStateService,
                                    DeltaRebaselineCancellationService cancellationService,
                                    DeltaCheckpointQueryService checkpointQueryService,
-                                   DeltaSegmentParquetQueryService segmentParquetQueryService,
+                                   BatchParquetDownloadService batchParquetDownloadService,
                                    DeltaSiteWipeService wipeService,
                                    SiteService siteService,
                                    AuthorizationHelper authorizationHelper) {
         this.syncStateService = syncStateService;
         this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
-        this.segmentParquetQueryService = segmentParquetQueryService;
+        this.batchParquetDownloadService = batchParquetDownloadService;
         this.wipeService = wipeService;
         this.siteService = siteService;
         this.authorizationHelper = authorizationHelper;
@@ -330,7 +330,7 @@ public class DeltaSyncUserController {
                                                                                    @PathVariable UUID batchId,
                                                                                    @PathVariable String tableName) {
         requireOwnedSite(siteId);
-        return segmentParquetQueryService.presignBatchTableParquet(siteId, batchId, tableName)
+        return batchParquetDownloadService.presignBatchTableParquet(siteId, batchId, tableName)
                 .map(download -> ResponseEntity.ok(DeltaCheckpointDownloadResponseDto.of(download)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }

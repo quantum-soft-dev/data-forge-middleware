@@ -260,7 +260,7 @@ class DeltaSiteWipeServiceTest {
     void shouldDeleteEgressObjects() {
         // The wipe resets the sequence counter, so these keys — derived from seq alone — are reused
         // by the new epoch. A survivor would be served as a post-wipe batch's delta by
-        // DeltaSegmentParquetQueryService whenever egress does not overwrite it.
+        // BatchParquetDownloadService whenever egress does not overwrite it.
         when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/")).thenReturn(List.of(
                 "egress/" + SITE_ID + "/orders/delta/seq=1-1000.parquet",
                 "egress/" + SITE_ID + "/items/delta/seq=1-1000.parquet"));

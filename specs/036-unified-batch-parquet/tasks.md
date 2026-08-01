@@ -57,3 +57,9 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   inside the published path and drain gracefully on shutdown. Tests: listener phases, the
   row-count guard, admin-delete ordering, provisional invisibility, insert idempotency, `409` UX,
   plus queue isolation between integration classes.
+
+- [x] **T12 — Review round 5.** Stop answering `404` when a concurrent backfill already queued the
+  work (the insert-if-absent count is not evidence — only the row is); add the Micrometer meters the
+  sibling egress path has (`delta.batch-parquet.{artifacts,duration,reclaims}`); bring `CLAUDE.md`
+  to V49/next V50 and add the 036 journal entry; rename `DeltaSegmentParquetQueryService` to
+  `BatchParquetDownloadService`, which is what it now is.

@@ -7,7 +7,7 @@ import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
-import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService.BatchParquetNotReadyException;
+import com.bitbi.dfm.delta.application.BatchParquetDownloadService.BatchParquetNotReadyException;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
