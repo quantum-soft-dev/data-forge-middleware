@@ -7,6 +7,7 @@ import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
+import com.bitbi.dfm.delta.application.DeltaSegmentParquetQueryService.BatchParquetNotReadyException;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
@@ -386,6 +387,17 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /** A durable unified artifact exists but has not completed publication yet (036, issue #93). */
+    @ExceptionHandler(BatchParquetNotReadyException.class)
+    public ResponseEntity<ErrorResponseDto> handleBatchParquetNotReady(
+            BatchParquetNotReadyException ex,
+            HttpServletRequest request) {
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(), HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
     }
 
     /**

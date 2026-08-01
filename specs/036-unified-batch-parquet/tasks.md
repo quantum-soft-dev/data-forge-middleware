@@ -23,7 +23,7 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   wake a bounded worker after commit, and finalize tables independently/idempotently from ordered
   non-provisional segments. Tests cover ordering, schema/render/upload failure, retry, and cleanup.
 
-- [ ] **T06 — Download and lifecycle cleanup.** Resolve the exact `READY` manifest from the owner
+- [x] **T06 — Download and lifecycle cleanup.** Resolve the exact `READY` manifest from the owner
   endpoint, return deterministic `409` vs `404`, and delete unified artifacts/rows during retention,
   admin batch deletion, and site-history wipe. Add unit and contract coverage.
 

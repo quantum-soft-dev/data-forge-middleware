@@ -8,6 +8,7 @@ import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
@@ -81,6 +82,7 @@ public class DeltaSiteWipeService {
     private final AccountPluginRepository accountPluginRepository;
     private final ChangelogSegmentRepository segmentRepository;
     private final CheckpointRepository checkpointRepository;
+    private final BatchParquetArtifactRepository artifactRepository;
     private final ErrorLogRepository errorLogRepository;
     private final SiteSchemaService siteSchemaService;
     private final S3FileStorageService s3FileStorageService;
@@ -97,6 +99,7 @@ public class DeltaSiteWipeService {
                                 AccountPluginRepository accountPluginRepository,
                                 ChangelogSegmentRepository segmentRepository,
                                 CheckpointRepository checkpointRepository,
+                                BatchParquetArtifactRepository artifactRepository,
                                 ErrorLogRepository errorLogRepository,
                                 SiteSchemaService siteSchemaService,
                                 S3FileStorageService s3FileStorageService,
@@ -112,6 +115,7 @@ public class DeltaSiteWipeService {
         this.accountPluginRepository = accountPluginRepository;
         this.segmentRepository = segmentRepository;
         this.checkpointRepository = checkpointRepository;
+        this.artifactRepository = artifactRepository;
         this.errorLogRepository = errorLogRepository;
         this.siteSchemaService = siteSchemaService;
         this.s3FileStorageService = s3FileStorageService;
@@ -274,6 +278,11 @@ public class DeltaSiteWipeService {
             }
         }
         int deletedCheckpoints = checkpointRepository.deleteBySiteId(siteId);
+
+        // Unified artifact objects are also covered by the post-commit egress-prefix walk, but the
+        // manifest gives us exact keys even if that listing later fails.
+        s3Keys.addAll(artifactRepository.findS3KeysBySiteId(siteId));
+        artifactRepository.deleteBySiteId(siteId);
 
         // 8. Error logs.
         int deletedErrorLogs = errorLogRepository.deleteBySiteId(siteId);

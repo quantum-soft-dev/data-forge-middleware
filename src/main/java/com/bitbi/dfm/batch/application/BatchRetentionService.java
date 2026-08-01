@@ -3,6 +3,8 @@ package com.bitbi.dfm.batch.application;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -31,6 +33,7 @@ public class BatchRetentionService {
     private final PluginSqlGenerationRepository sqlGenerationRepository;
     private final S3FileStorageService s3FileStorageService;
     private final ChangelogSegmentService changelogSegmentService;
+    private final BatchParquetArtifactRepository artifactRepository;
 
     public BatchRetentionService(
             BatchRepository batchRepository,
@@ -38,13 +41,15 @@ public class BatchRetentionService {
             UploadedFileRepository uploadedFileRepository,
             PluginSqlGenerationRepository sqlGenerationRepository,
             S3FileStorageService s3FileStorageService,
-            ChangelogSegmentService changelogSegmentService) {
+            ChangelogSegmentService changelogSegmentService,
+            BatchParquetArtifactRepository artifactRepository) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.sqlGenerationRepository = sqlGenerationRepository;
         this.s3FileStorageService = s3FileStorageService;
         this.changelogSegmentService = changelogSegmentService;
+        this.artifactRepository = artifactRepository;
     }
 
     public BatchCleanupSummary runCleanup(BatchCleanupRequest request) {
@@ -111,6 +116,7 @@ public class BatchRetentionService {
                 // This avoids a "DB still has records but files are gone" state if the DB stage fails.
                 List<UploadedFileRepository.FileKeySize> uploadedKeys = uploadedFileRepository.findS3KeysByBatchId(batchId);
                 List<PluginSqlGenerationRepository.S3KeySize> sqlKeys = sqlGenerationRepository.findS3KeysByBatchId(batchId);
+                List<BatchParquetArtifact> artifacts = artifactRepository.findByBatchId(batchId);
 
                 List<String> batchS3Keys = new ArrayList<>();
                 long batchBytes = 0L;
@@ -133,6 +139,15 @@ public class BatchRetentionService {
                     }
                 }
 
+                for (BatchParquetArtifact artifact : artifacts) {
+                    if (artifact.getS3Key() != null) {
+                        batchS3Keys.add(artifact.getS3Key());
+                    }
+                    if (artifact.getFileSize() != null) {
+                        batchBytes += artifact.getFileSize();
+                    }
+                }
+
                 if (dryRun) {
                     // Dry run reports what would be removed, but doesn't perform any deletions.
                     summary.deletedBytes += batchBytes;
@@ -143,6 +158,10 @@ public class BatchRetentionService {
                 // Prevent leaving plugin SQL generations referencing a deleted comparison batch.
                 sqlGenerationRepository.deleteByComparisonBatchId(batchId);
                 sqlGenerationRepository.deleteBySourceBatchId(batchId);
+
+                // Unified completed-batch artifacts name their S3 objects in the manifest; collect
+                // above, then remove rows before their parent batch.
+                artifactRepository.deleteByBatchId(batchId);
 
                 // Remove Delta v2 changelog segments (DB + S3) so the batch_id FK does not block delete.
                 changelogSegmentService.deleteByBatchId(batchId);

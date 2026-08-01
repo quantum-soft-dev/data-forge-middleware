@@ -311,8 +311,8 @@ public class DeltaSyncUserController {
     @Operation(
             summary = "Presign a batch delta Parquet download",
             description = "Issues a fresh presigned S3 URL (15-minute expiry) for the typed delta Parquet file that "
-                    + "the egress worker materialized for one table of the batch's changelog segment. 404 when the "
-                    + "batch has no segment or the table's file was never egressed (no declared schema)."
+                    + "the finalizer materialized from all of the completed batch's changelog segments. 409 while "
+                    + "finalization is pending; 404 when no artifact exists or that table failed independently."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Presigned URL issued",
@@ -320,6 +320,8 @@ public class DeltaSyncUserController {
             @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
             @ApiResponse(responseCode = "404", description = "Site, segment or delta Parquet file not found",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "Unified artifact is still finalizing",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class)))
     })
     public ResponseEntity<DeltaCheckpointDownloadResponseDto> downloadBatchParquet(@PathVariable UUID siteId,

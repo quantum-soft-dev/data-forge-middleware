@@ -3,6 +3,8 @@ package com.bitbi.dfm.batch.application;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -46,6 +48,9 @@ class BatchRetentionServiceTest {
     @Mock
     private ChangelogSegmentService changelogSegmentService;
 
+    @Mock
+    private BatchParquetArtifactRepository artifactRepository;
+
     private BatchRetentionService service;
 
     private UUID siteId;
@@ -60,7 +65,8 @@ class BatchRetentionServiceTest {
                 uploadedFileRepository,
                 sqlGenerationRepository,
                 s3FileStorageService,
-                changelogSegmentService
+                changelogSegmentService,
+                artifactRepository
         );
         siteId = UUID.randomUUID();
         accountId = UUID.randomUUID();
@@ -120,6 +126,10 @@ class BatchRetentionServiceTest {
         when(fileKey.getFileSize()).thenReturn(100L);
         when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of(fileKey));
         when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        artifact.markBuilding();
+        artifact.markReady("egress/batch/orders.parquet", 10, 400, "hash");
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact));
 
         when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(1, List.of()));
 
@@ -133,7 +143,10 @@ class BatchRetentionServiceTest {
         verify(sqlGenerationRepository).deleteBySourceBatchId(batchId);
         // Delta v2 changelog segments must be removed before the batch so the batch_id FK does not block it.
         verify(changelogSegmentService).deleteByBatchId(batchId);
+        verify(artifactRepository).deleteByBatchId(batchId);
         verify(batchRepository).deleteById(batchId);
+        assertThat(summary.deletedBytes()).isEqualTo(500L);
+        assertThat(summary.deletedFiles()).isEqualTo(2);
     }
 
     @Test

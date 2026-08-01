@@ -4,9 +4,10 @@ import com.bitbi.dfm.batch.application.BatchLifecycleService;
 import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.batch.domain.BatchStatus;
-import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.batch.presentation.dto.BatchDetailResponseDto;
 import com.bitbi.dfm.batch.presentation.dto.BatchSummaryDto;
+import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.shared.presentation.dto.PageResponseDto;
@@ -14,6 +15,7 @@ import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -62,17 +64,23 @@ public class BatchAdminController {
     private final UploadedFileRepository uploadedFileRepository;
     private final BatchLifecycleService batchLifecycleService;
     private final ChangelogSegmentService changelogSegmentService;
+    private final BatchParquetArtifactRepository artifactRepository;
+    private final S3FileStorageService s3FileStorageService;
 
     public BatchAdminController(BatchRepository batchRepository,
                                 SiteRepository siteRepository,
                                 UploadedFileRepository uploadedFileRepository,
                                 BatchLifecycleService batchLifecycleService,
-                                ChangelogSegmentService changelogSegmentService) {
+                                ChangelogSegmentService changelogSegmentService,
+                                BatchParquetArtifactRepository artifactRepository,
+                                S3FileStorageService s3FileStorageService) {
         this.batchRepository = batchRepository;
         this.siteRepository = siteRepository;
         this.uploadedFileRepository = uploadedFileRepository;
         this.batchLifecycleService = batchLifecycleService;
         this.changelogSegmentService = changelogSegmentService;
+        this.artifactRepository = artifactRepository;
+        this.s3FileStorageService = s3FileStorageService;
     }
 
     /**
@@ -164,7 +172,7 @@ public class BatchAdminController {
      */
     @Operation(
             summary = "Delete batch",
-            description = "Deletes batch metadata. Note: does not delete files from S3."
+            description = "Deletes batch metadata and its unified Delta Parquet artifacts."
     )
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Batch deleted successfully"),
@@ -178,9 +186,18 @@ public class BatchAdminController {
             return ResponseEntity.notFound().build();
         }
 
+        List<String> artifactKeys = artifactRepository.findS3KeysByBatchId(batchId);
+        artifactRepository.deleteByBatchId(batchId);
         // Remove Delta v2 changelog segments first so the batch_id FK does not block the delete.
         changelogSegmentService.deleteByBatchId(batchId);
         batchRepository.deleteById(batchId);
+        if (!artifactKeys.isEmpty()) {
+            S3FileStorageService.DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(artifactKeys);
+            if (!deleted.errors().isEmpty()) {
+                logger.warn("Batch {} deleted but {} unified artifact object(s) remain orphaned: {}",
+                        batchId, deleted.errors().size(), deleted.errors());
+            }
+        }
         return ResponseEntity.noContent().build();
     }
 }
