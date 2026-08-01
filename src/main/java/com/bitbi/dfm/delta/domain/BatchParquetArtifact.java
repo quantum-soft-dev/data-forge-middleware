@@ -164,6 +164,24 @@ public class BatchParquetArtifact {
                 || status == BatchParquetArtifactStatus.FAILED;
     }
 
+    /**
+     * Reset a terminal or displaced build to the start of a fresh operator-authorized lifecycle.
+     * Whether a {@code BUILDING} lease is old enough to displace is an application policy; the
+     * aggregate only enforces the two states for which recovery is meaningful.
+     */
+    public void requeue() {
+        if (status != BatchParquetArtifactStatus.ABANDONED
+                && status != BatchParquetArtifactStatus.BUILDING) {
+            throw new IllegalStateException("Cannot requeue artifact in status " + status);
+        }
+        status = BatchParquetArtifactStatus.PENDING;
+        attemptCount = 0;
+        claimToken = null;
+        lastError = null;
+        clearPublishedMetadata();
+        touch();
+    }
+
     /** @return the stable object key cleanup must remove even before metadata is published. */
     public String expectedS3Key() {
         return BatchParquetArtifactKey.of(siteId, batchId, tableName);

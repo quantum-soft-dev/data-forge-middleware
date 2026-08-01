@@ -26,6 +26,12 @@ public interface BatchParquetArtifactRepository {
 
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
 
+    /** Operator projection, constrained by both route owners and sorted for stable responses. */
+    List<BatchParquetArtifact> findBySiteIdAndBatchIdOrderByTableName(UUID siteId, UUID batchId);
+
+    /** Lock one route-constrained artifact so recovery cannot race a worker settlement. */
+    Optional<BatchParquetArtifact> findForUpdate(UUID artifactId, UUID siteId, UUID batchId);
+
     /** Current durable queue depth for one status, sampled by the queue gauge. */
     long countByStatus(BatchParquetArtifactStatus status);
 

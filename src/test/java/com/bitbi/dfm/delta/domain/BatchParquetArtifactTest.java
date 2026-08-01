@@ -101,4 +101,55 @@ class BatchParquetArtifactTest {
         assertThrows(IllegalStateException.class, artifact::markBuilding);
         assertThrows(IllegalStateException.class, () -> artifact.markFailed("late failure"));
     }
+
+    @Test
+    void requeueResetsAnAbandonedArtifactToANewPendingLifecycle() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+        artifact.markBuilding();
+        artifact.markAbandoned("schema mismatch");
+
+        artifact.requeue();
+
+        assertEquals(BatchParquetArtifactStatus.PENDING, artifact.getStatus());
+        assertEquals(0, artifact.getAttemptCount());
+        assertNull(artifact.getClaimToken());
+        assertNull(artifact.getLastError());
+        assertNull(artifact.getS3Key());
+        assertNull(artifact.getRowCount());
+        assertNull(artifact.getFileSize());
+        assertNull(artifact.getChecksum());
+        assertNull(artifact.getReadyAt());
+        assertTrue(artifact.isRetryable());
+    }
+
+    @Test
+    void requeueAcceptsBuildingButRejectsStatesThatNeedNoOperatorRecovery() {
+        BatchParquetArtifact building = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        building.markBuilding();
+
+        building.requeue();
+
+        assertEquals(BatchParquetArtifactStatus.PENDING, building.getStatus());
+        assertEquals(0, building.getAttemptCount());
+        assertNull(building.getClaimToken());
+
+        BatchParquetArtifact pending = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "customers");
+        assertThrows(IllegalStateException.class, pending::requeue);
+
+        BatchParquetArtifact failed = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "items");
+        failed.markBuilding();
+        failed.markFailed("transient");
+        assertThrows(IllegalStateException.class, failed::requeue);
+
+        BatchParquetArtifact ready = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "products");
+        ready.markBuilding();
+        ready.markReady("key", 1, 2, "hash");
+        assertThrows(IllegalStateException.class, ready::requeue);
+    }
 }

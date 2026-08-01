@@ -26,7 +26,10 @@ public enum AdminActionType {
      * schema, plugin SQL, error logs (issue #89). Adding a value here requires a migration
      * extending {@code chk_action_type} on {@code admin_action_logs} — see V23/V24/V48.
      */
-    SITE_HISTORY_WIPE("Wipe Site History");
+    SITE_HISTORY_WIPE("Wipe Site History"),
+
+    /** An operator reset an abandoned or expired completed-batch Parquet build. */
+    BATCH_PARQUET_REQUEUE("Requeue Batch Parquet Artifact");
 
     private final String displayName;
 
