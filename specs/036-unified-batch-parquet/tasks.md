@@ -7,7 +7,7 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
 - [x] **T01 — Design and change request.** Add the spec, plan, ordered tasks, and
   `docs/cr-unified-batch-parquet.md` documenting the compatibility boundary and artifact contract.
 
-- [ ] **T02 — Aggregate batch table statistics.** Merge every non-null segment statistics map by
+- [x] **T02 — Aggregate batch table statistics.** Merge every non-null segment statistics map by
   table and operation, stable-sort by table, and defensively aggregate duplicate DTO rows in the
   frontend. Tests cover mixed operations, null legacy stats, total correctness, and one button.
 

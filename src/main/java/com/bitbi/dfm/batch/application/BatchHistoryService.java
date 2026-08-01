@@ -13,6 +13,7 @@ import com.bitbi.dfm.batch.presentation.dto.DeltaTableStatsDto;
 import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.SegmentBatchAggregate;
+import com.bitbi.dfm.delta.domain.TableChangeStats;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.infrastructure.JpaSiteRepository;
 import org.slf4j.Logger;
@@ -27,6 +28,7 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -279,11 +281,17 @@ public class BatchHistoryService {
      * stable display order. Empty for v1 file-based batches (no changelog segment).
      */
     private static List<DeltaTableStatsDto> resolveDeltaStats(List<ChangelogSegment> segments) {
-        return segments.stream()
+        Map<String, TableChangeStats> byTable = new TreeMap<>();
+        segments.stream()
                 .map(ChangelogSegment::getStats)
                 .filter(Objects::nonNull)
                 .flatMap(stats -> stats.entrySet().stream())
-                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> byTable.merge(entry.getKey(), entry.getValue(), (left, right) ->
+                        new TableChangeStats(
+                                left.inserts() + right.inserts(),
+                                left.updates() + right.updates(),
+                                left.deletes() + right.deletes())));
+        return byTable.entrySet().stream()
                 .map(entry -> DeltaTableStatsDto.of(entry.getKey(), entry.getValue()))
                 .toList();
     }
