@@ -4,7 +4,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 
 - [x] **T01 — Design.** Record the batch claim, shared replay, bounded-memory model,
   compatibility boundary, and test strategy.
-- [ ] **T02 — Multi-table streaming writer.** Add red tests, then fan one replay out to all
+- [x] **T02 — Multi-table streaming writer.** Add red tests, then fan one replay out to all
   non-decimal tables and share one decimal-envelope scan across all decimal tables. Preserve
   per-table `_seq`, row counts, typed rows, output limits, and independent writer failures.
 - [ ] **T03 — Batch claim and finalization.** Add red service/repository/integration tests, then
