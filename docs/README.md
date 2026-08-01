@@ -56,8 +56,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 ### Delta Client v2 & Site Types
 
 - **[Delta Client v2 — Change Request](./cr-delta-client-v2.md)** - gRPC ingestion design (022)
-- **[Delta Client v2 — Client & Sync UI Guide](./delta-client-v2-guide.md)** - protocol, realtime segment egress, unified batch/table Parquet, and Delta Sync UI (022/023/025/036)
-- **[Unified Batch/Table Parquet — Change Request](./cr-unified-batch-parquet.md)** - one completed-session download per table with streaming finalization (036, issue #93)
+- **[Delta Client v2 — Client & Sync UI Guide](./delta-client-v2-guide.md)** - protocol, realtime segment egress, unified batch/table Parquet, and Delta Sync UI (022/023/025/036/038)
+- **[Unified Batch/Table Parquet — Change Request](./cr-unified-batch-parquet.md)** - one completed-session download per table with batch-level fan-out finalization (036/038, issues #93/#97)
 - **[Site History Wipe — Client Contract](./site-history-wipe-client-guide.md)** - generation epoch, wipe recovery sequence (035, issue #89)
 - **[Delta v2 Wire Contract — Answers](./delta-v2-wire-contract-answers.md)** - presence, typed error codes, recovery matrix, delivery order (dbf-data-extractor#130)
 - **[Site Types & POSTGRES_CDC — Change Request](./cr-site-types-postgres-cdc.md)** - DBF vs POSTGRES_CDC, site_schemas (019)
@@ -137,8 +137,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 | [api-unification.md](./api-unification.md) | API design patterns | Backend Developers |
 | [data-platform-concept.ru.md](./data-platform-concept.ru.md) | Data platform product concept with diagrams | Product, Architects, Developers |
 | [cr-delta-client-v2.md](./cr-delta-client-v2.md) | Delta Client v2 gRPC ingestion — change request (022) | Backend Developers |
-| [delta-client-v2-guide.md](./delta-client-v2-guide.md) | Delta v2 protocol, segment egress, unified batch/table Parquet, Sync UI (022/023/025/036) | Backend, Client integrators |
-| [cr-unified-batch-parquet.md](./cr-unified-batch-parquet.md) | Unified completed-batch Parquet contract and compatibility boundary (036, issue #93) | Backend, Architects |
+| [delta-client-v2-guide.md](./delta-client-v2-guide.md) | Delta v2 protocol, segment egress, unified batch/table Parquet, Sync UI (022/023/025/036/038) | Backend, Client integrators |
+| [cr-unified-batch-parquet.md](./cr-unified-batch-parquet.md) | Unified completed-batch Parquet contract, fan-out cost model, and compatibility boundary (036/038, issues #93/#97) | Backend, Architects |
 | [site-history-wipe-client-guide.md](./site-history-wipe-client-guide.md) | Generation epoch + post-wipe recovery for the Delta v2 client (035) | Client integrators, Backend |
 | [delta-v2-wire-contract-answers.md](./delta-v2-wire-contract-answers.md) | Wire-contract answers: presence, typed codes, recovery matrix, delivery order (dbf-data-extractor#130) | Client integrators, Backend |
 | [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) | Site types (DBF/POSTGRES_CDC) — change request (019) | Backend Developers |

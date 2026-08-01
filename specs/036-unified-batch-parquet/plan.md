@@ -4,9 +4,11 @@
 
 Keep sequential segment egress as-is and add an independent completed-batch artifact queue. A
 post-commit completion callback creates one `PENDING` manifest row per table from aggregated
-segment statistics (or raw-record discovery for legacy null stats). A bounded worker claims rows
-with `FOR UPDATE SKIP LOCKED`, streams raw segments twice, uploads a temp file with
-`RequestBody.fromFile`, and publishes metadata as `READY`.
+segment statistics (or raw-record discovery for legacy null stats). A bounded worker serializes a
+batch claim with a transaction-scoped advisory lock, claims its retryable rows with `FOR UPDATE`,
+fans one shared raw-segment replay into all non-decimal writers (or one shared decimal scan plus one
+shared write replay), uploads temp files with `RequestBody.fromFile`, and publishes each row's
+metadata as `READY` independently.
 
 ## Layers
 
@@ -23,17 +25,17 @@ with `FOR UPDATE SKIP LOCKED`, streams raw segments twice, uploads a temp file w
 
 ## Finalization algorithm
 
-1. Claim one retryable manifest row under a database row lock, minting a `claim_token` and
-   committing the claim *before* the build so a lost process still spends its attempt (T09/T10).
-   The owner renews the lease while it builds; a claim is reclaimable only once the lease lapses.
+1. Select the oldest retryable manifest row, acquire the batch's transaction-scoped advisory lock,
+   then row-lock and claim every currently retryable sibling, minting a `claim_token` per table.
+   Commit the claims *before* the build so a lost process still spends its attempts (T09/T10/038).
+   The owner renews every lease while it builds; a claim is reclaimable only once its lease lapses.
 2. Resolve all non-provisional batch segments ordered by `first_seq` and the current site schemas.
-3. Create a uniquely named temp file under the configured temp directory.
-4. First streaming pass, **only when the table declares a decimal column** (T08 — each pass is a
-   full replay of the changelog): visit only records for the target table and compute required
-   decimal precision after declared-scale rounding.
-5. Open one file-backed `AvroParquetWriter` with the widened schema.
-6. Second streaming pass: visit the same segments/table, assert strictly ascending `_seq`, and write
-   typed rows with `_op`, `_seq`, `_changed`, key, and data values.
+3. Create one uniquely named temp file per claimed/renderable table.
+4. If any claimed schema declares a decimal column, make one shared streaming pass over the batch
+   and compute required precision per table/column after declared-scale rounding.
+5. Open one file-backed `AvroParquetWriter` per table with its widened schema.
+6. Make one shared streaming write pass: route each record by table, assert strictly ascending
+   `_seq` per table, and write typed rows with `_op`, `_seq`, `_changed`, key, and data values.
 7. Enforce the configured byte ceiling as the writer emits the local file, then close it, compute
    file size and SHA-256 without loading it, upload from the path,
    then set `READY` metadata — but only if the row is still held by this claim's token; otherwise
@@ -41,6 +43,9 @@ with `FOR UPDATE SKIP LOCKED`, streams raw segments twice, uploads a temp file w
 8. On a transient failure mark only that artifact `FAILED`, or `ABANDONED` once it has used up
    `max-attempts` (T09); a deterministic byte-limit failure abandons immediately. Always delete the
    temp file. A retry overwrites the same stable S3 key and cannot append or duplicate rows.
+
+The cost is one batch replay without decimal columns or two shared replays when any decimal is
+present, independent of table count. Heap is bounded by open writers × a row-group buffer, not rows.
 
 ## Test strategy
 

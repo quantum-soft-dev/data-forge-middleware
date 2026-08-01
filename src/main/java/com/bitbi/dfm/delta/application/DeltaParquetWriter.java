@@ -152,39 +152,146 @@ public final class DeltaParquetWriter {
         }
     }
 
-    private static Map<String, Integer> scanDecimalPrecisions(Schema schema, String tableName,
-                                                               RecordReplay replay) {
-        Map<String, Integer> precisions = new LinkedHashMap<>();
-        Map<String, org.apache.avro.LogicalTypes.Decimal> decimals = new LinkedHashMap<>();
-        for (Schema.Field field : schema.getFields()) {
-            Schema fieldType = branch(field.schema());
-            if (fieldType.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal) {
-                decimals.put(field.name(), decimal);
-                precisions.put(field.name(), decimal.getPrecision());
+    /**
+     * Build every requested table from one shared write replay. When any request declares a
+     * decimal column, one shared scan replay first measures every decimal envelope. A render or
+     * output failure is isolated to its table; a failure in the replay source itself is propagated
+     * because no table can prove that it saw the complete changelog.
+     */
+    static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
+                                                    RecordReplay replay, long maxBytes) {
+        if (requests.isEmpty()) {
+            return new BatchWriteResult(Map.of(), Map.of());
+        }
+        Map<String, Schema> baseSchemas = new LinkedHashMap<>();
+        Map<String, Map<String, Integer>> decimalPrecisions = new LinkedHashMap<>();
+        Map<String, FileWriteFailure> failures = new LinkedHashMap<>();
+        boolean needsDecimalScan = false;
+        for (Map.Entry<String, TableWriteRequest> entry : requests.entrySet()) {
+            try {
+                Schema base = ParquetSchemaMapper.toDeltaAvroSchema(
+                        entry.getKey(), entry.getValue().schema());
+                Map<String, Integer> precisions = declaredDecimalPrecisions(base);
+                baseSchemas.put(entry.getKey(), base);
+                decimalPrecisions.put(entry.getKey(), precisions);
+                needsDecimalScan |= !precisions.isEmpty();
+            } catch (RuntimeException e) {
+                failures.put(entry.getKey(), failure(e));
             }
         }
-        if (decimals.isEmpty()) {
+
+        if (needsDecimalScan) {
+            replay.forEach(change -> {
+                Schema schema = baseSchemas.get(change.getTable());
+                if (schema == null || failures.containsKey(change.getTable())) {
+                    return;
+                }
+                try {
+                    updateDecimalPrecisions(schema, decimalPrecisions.get(change.getTable()), change);
+                } catch (RuntimeException e) {
+                    failures.put(change.getTable(), failure(e));
+                }
+            });
+        }
+
+        Map<String, TableWriter> writers = new LinkedHashMap<>();
+        for (Map.Entry<String, TableWriteRequest> entry : requests.entrySet()) {
+            String tableName = entry.getKey();
+            if (failures.containsKey(tableName)) {
+                continue;
+            }
+            try {
+                Schema avro = widenDecimals(baseSchemas.get(tableName), decimalPrecisions.get(tableName));
+                writers.put(tableName, new TableWriter(tableName, entry.getValue(), avro, maxBytes));
+            } catch (RuntimeException | IOException e) {
+                failures.put(tableName, failure(e));
+            }
+        }
+
+        RuntimeException replayFailure = null;
+        try {
+            replay.forEach(change -> {
+                TableWriter writer = writers.get(change.getTable());
+                if (writer == null || failures.containsKey(change.getTable())) {
+                    return;
+                }
+                try {
+                    writer.write(change);
+                } catch (RuntimeException e) {
+                    failures.put(change.getTable(), failure(e));
+                }
+            });
+        } catch (RuntimeException e) {
+            replayFailure = e;
+        }
+
+        Map<String, FileWriteResult> files = new LinkedHashMap<>();
+        for (Map.Entry<String, TableWriter> entry : writers.entrySet()) {
+            String tableName = entry.getKey();
+            TableWriter writer = entry.getValue();
+            try {
+                writer.close();
+            } catch (RuntimeException | IOException e) {
+                failures.putIfAbsent(tableName, failure(e));
+            }
+            if (replayFailure == null && !failures.containsKey(tableName)) {
+                try {
+                    files.put(tableName, writer.result());
+                } catch (RuntimeException e) {
+                    failures.put(tableName, failure(e));
+                }
+            }
+        }
+        if (replayFailure != null) {
+            throw replayFailure;
+        }
+        return new BatchWriteResult(Map.copyOf(files), Map.copyOf(failures));
+    }
+
+    private static Map<String, Integer> scanDecimalPrecisions(Schema schema, String tableName,
+                                                               RecordReplay replay) {
+        Map<String, Integer> precisions = declaredDecimalPrecisions(schema);
+        if (precisions.isEmpty()) {
             // Nothing to measure: skipping the pass halves the segment downloads for a table
             // without decimal columns, and finalization replays the changelog once per table.
             return precisions;
         }
         replay.forEach(change -> {
-            if (!tableName.equals(change.getTable())) {
-                return;
+            if (tableName.equals(change.getTable())) {
+                updateDecimalPrecisions(schema, precisions, change);
             }
-            decimals.forEach((column, decimal) -> {
-                Value value = change.getDataMap().containsKey(column)
-                        ? change.getDataMap().get(column)
-                        : change.getKeyMap().get(column);
-                Object java = value == null ? null : ValueMapper.toJava(value);
-                if (java != null) {
-                    int required = new BigDecimal(java.toString())
-                            .setScale(decimal.getScale(), RoundingMode.HALF_UP).precision();
-                    precisions.merge(column, required, Math::max);
-                }
-            });
         });
         return precisions;
+    }
+
+    private static Map<String, Integer> declaredDecimalPrecisions(Schema schema) {
+        Map<String, Integer> precisions = new LinkedHashMap<>();
+        for (Schema.Field field : schema.getFields()) {
+            Schema fieldType = branch(field.schema());
+            if (fieldType.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal) {
+                precisions.put(field.name(), decimal.getPrecision());
+            }
+        }
+        return precisions;
+    }
+
+    private static void updateDecimalPrecisions(Schema schema, Map<String, Integer> precisions,
+                                                ChangeRecord change) {
+        for (Schema.Field field : schema.getFields()) {
+            Schema fieldType = branch(field.schema());
+            if (!(fieldType.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal)) {
+                continue;
+            }
+            Value value = change.getDataMap().containsKey(field.name())
+                    ? change.getDataMap().get(field.name())
+                    : change.getKeyMap().get(field.name());
+            Object java = value == null ? null : ValueMapper.toJava(value);
+            if (java != null) {
+                int required = new BigDecimal(java.toString())
+                        .setScale(decimal.getScale(), RoundingMode.HALF_UP).precision();
+                precisions.merge(field.name(), required, Math::max);
+            }
+        }
     }
 
     private static Schema widenDecimals(Schema recordSchema, Map<String, Integer> precisions) {
@@ -259,6 +366,80 @@ public final class DeltaParquetWriter {
     }
 
     public record FileWriteResult(long rowCount, long fileSize, String checksum) {
+    }
+
+    record TableWriteRequest(Path output, TableSchema schema) {
+    }
+
+    record FileWriteFailure(String error, boolean permanent) {
+    }
+
+    record BatchWriteResult(Map<String, FileWriteResult> files,
+                            Map<String, FileWriteFailure> failures) {
+    }
+
+    private static FileWriteFailure failure(Throwable error) {
+        Throwable cause = error;
+        boolean permanent = false;
+        while (cause != null) {
+            if (cause instanceof ArtifactSizeLimitExceededException) {
+                permanent = true;
+                break;
+            }
+            cause = cause.getCause();
+        }
+        String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        return new FileWriteFailure(message, permanent);
+    }
+
+    private static final class TableWriter implements AutoCloseable {
+        private final String tableName;
+        private final TableWriteRequest request;
+        private final Schema avro;
+        private final ParquetWriter<GenericRecord> writer;
+        private long rowCount;
+        private long previousSeq = Long.MIN_VALUE;
+
+        private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes)
+                throws IOException {
+            this.tableName = tableName;
+            this.request = request;
+            this.avro = avro;
+            this.writer = AvroParquetWriter.<GenericRecord>builder(
+                            new FileOutputFile(request.output(), maxBytes))
+                    .withSchema(avro)
+                    .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                    .withConf(new PlainParquetConfiguration())
+                    .withCompressionCodec(CODEC)
+                    .build();
+        }
+
+        private void write(ChangeRecord change) {
+            if (change.getSeq() <= previousSeq) {
+                throw new IllegalArgumentException("Out-of-order sequence for table " + tableName
+                        + ": " + change.getSeq() + " after " + previousSeq);
+            }
+            previousSeq = change.getSeq();
+            try {
+                writer.write(toRecord(avro, request.schema(), change));
+                rowCount++;
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to write Parquet row for table " + tableName, e);
+            }
+        }
+
+        private FileWriteResult result() {
+            try {
+                return new FileWriteResult(rowCount, Files.size(request.output()), sha256(request.output()));
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to inspect Parquet file for table " + tableName, e);
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            writer.close();
+        }
     }
 
     /** Raised when a unified artifact would exceed its configured local-file policy. */

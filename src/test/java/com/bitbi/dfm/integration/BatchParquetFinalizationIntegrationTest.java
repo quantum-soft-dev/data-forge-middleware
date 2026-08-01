@@ -110,7 +110,6 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
         assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(2);
         assertThat(finalizationService.finalizeNext()).isTrue();
-        assertThat(finalizationService.finalizeNext()).isTrue();
         assertThat(finalizationService.finalizeNext()).isFalse();
 
         List<BatchParquetArtifact> artifacts = artifactRepository.findByBatchId(BATCH_ID);

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -237,6 +238,136 @@ class DeltaParquetWriterTest {
         assertEquals(2, result.rowCount());
         assertEquals(List.of(1L, 2L),
                 readBack(output).stream().map(row -> (Long) row.get("_seq")).toList());
+    }
+
+    @Test
+    void writesEveryNonDecimalTableFromOneSharedReplay() throws Exception {
+        TableSchema customersSchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("name", "varchar(255)", true)),
+                List.of("id"), List.of());
+        TableSchema ordersSchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("customer_id", "bigint", false)),
+                List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                changeForTable("customers", Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "name", strVal("Ann"))),
+                changeForTable("orders", Op.INSERT, 2L, Map.of("id", intVal(10)),
+                        Map.of("id", intVal(10), "customer_id", intVal(1))),
+                changeForTable("customers", Op.UPDATE, 3L, Map.of("id", intVal(1)),
+                        Map.of("name", strVal("Anne"))),
+                changeForTable("orders", Op.DELETE, 4L, Map.of("id", intVal(10)), Map.of()));
+        AtomicInteger passes = new AtomicInteger();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers.parquet"), customersSchema));
+        requests.put("orders", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("orders.parquet"), ordersSchema));
+
+        DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
+                requests, consumer -> {
+                    passes.incrementAndGet();
+                    records.forEach(consumer);
+                }, Long.MAX_VALUE);
+
+        assertEquals(1, passes.get(), "table count must not multiply raw changelog replay");
+        assertTrue(result.failures().isEmpty());
+        assertEquals(2, result.files().get("customers").rowCount());
+        assertEquals(2, result.files().get("orders").rowCount());
+        assertEquals(List.of(1L, 3L), readBack(requests.get("customers").output()).stream()
+                .map(row -> (Long) row.get("_seq")).toList());
+        assertEquals(List.of(2L, 4L), readBack(requests.get("orders").output()).stream()
+                .map(row -> (Long) row.get("_seq")).toList());
+    }
+
+    @Test
+    void sharesOneDecimalEnvelopePassAcrossAllTables() throws Exception {
+        TableSchema moneySchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("amount", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        TableSchema namesSchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("name", "varchar(255)", true)),
+                List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                changeForTable("payments", Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "amount", decVal("1234567.89"))),
+                changeForTable("customers", Op.INSERT, 2L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "name", strVal("Ann"))));
+        AtomicInteger passes = new AtomicInteger();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("payments.parquet"), moneySchema));
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers-decimal-batch.parquet"), namesSchema));
+
+        DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
+                requests, consumer -> {
+                    passes.incrementAndGet();
+                    records.forEach(consumer);
+                }, Long.MAX_VALUE);
+
+        assertEquals(2, passes.get(), "one shared decimal scan plus one shared write replay");
+        assertTrue(result.failures().isEmpty());
+        GenericRecord payment = readBack(requests.get("payments").output()).get(0);
+        LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(payment.getSchema(), "amount")
+                .getLogicalType();
+        assertEquals(9, decimal.getPrecision());
+        assertEquals(new BigDecimal("1234567.89"), payment.get("amount"));
+        assertEquals(1, result.files().get("customers").rowCount());
+    }
+
+    @Test
+    void isolatesAnOutOfOrderTableWhileOtherWritersFinish() throws Exception {
+        TableSchema schema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());
+        List<ChangeRecord> records = List.of(
+                changeForTable("customers", Op.INSERT, 1L, Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1))),
+                changeForTable("orders", Op.INSERT, 3L, Map.of("id", intVal(3)),
+                        Map.of("id", intVal(3))),
+                changeForTable("orders", Op.INSERT, 2L, Map.of("id", intVal(2)),
+                        Map.of("id", intVal(2))),
+                changeForTable("customers", Op.INSERT, 4L, Map.of("id", intVal(4)),
+                        Map.of("id", intVal(4))));
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers-isolated.parquet"), schema));
+        requests.put("orders", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("orders-out-of-order.parquet"), schema));
+
+        DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
+                requests, consumer -> records.forEach(consumer), Long.MAX_VALUE);
+
+        assertEquals(2, result.files().get("customers").rowCount());
+        assertEquals(List.of(1L, 4L), readBack(requests.get("customers").output()).stream()
+                .map(row -> (Long) row.get("_seq")).toList());
+        assertFalse(result.files().containsKey("orders"));
+        assertTrue(result.failures().get("orders").error().contains("Out-of-order sequence"));
+        assertFalse(result.failures().get("orders").permanent());
+    }
+
+    @Test
+    void isolatesAnInvalidDeclaredSchemaWhileOtherWritersFinish() throws Exception {
+        TableSchema valid = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());
+        TableSchema reservedColumn = new TableSchema(List.of(
+                new ColumnDefinition("_op", "varchar(20)", false)), List.of("_op"), List.of());
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers-valid-schema.parquet"), valid));
+        requests.put("broken", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("broken-schema.parquet"), reservedColumn));
+
+        DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
+                requests, consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
+                        Map.of("id", intVal(1)), Map.of("id", intVal(1)))), Long.MAX_VALUE);
+
+        assertEquals(1, result.files().get("customers").rowCount());
+        assertFalse(result.files().containsKey("broken"));
+        assertNotNull(result.failures().get("broken"));
     }
 
     @Test

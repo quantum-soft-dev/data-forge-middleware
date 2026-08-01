@@ -1,7 +1,7 @@
 # Change request: one batch-level Delta Parquet per table
 
 **Issue:** #93
-**Feature:** 036-unified-batch-parquet
+**Features:** 036-unified-batch-parquet, 038-batch-parquet-single-replay
 
 ## Decision
 
@@ -19,19 +19,30 @@ The batch download API resolves layer 3 only. It never scans or guesses among la
 ## Why raw segments are replayed
 
 Parquet files have independent footers and cannot be byte-concatenated. Raw protobuf records are
-therefore replayed in segment sequence order into one writer. A table that declares decimal columns
-is replayed twice: pass one computes the decimal precision envelope, preserving the existing
-lossless fallback for understated schemas; pass two writes typed records. A table with no decimal
-column has nothing to measure and is replayed once — finalization runs per table, so the skipped
-pass is a whole extra download of the batch changelog for every such table. Both passes stream, and
-the completed file stays on disk until uploaded.
+therefore replayed in segment sequence order. The finalizer opens one writer per claimed table and
+fans each record out by table name. With no decimal columns this is exactly one full changelog
+replay for the batch. If any claimed table declares decimal columns, one shared scan computes every
+decimal precision envelope, preserving the lossless fallback for understated schemas, and one
+shared write replay produces every file.
+
+For `T` claimed tables the replay cost is therefore `1` without decimals or `2` with decimals,
+instead of up to `2·T`. Table retries remain independent and may replay a smaller subset later.
+Both passes stream; no dataset is retained in memory. The heap bound is the number of simultaneously
+open table writers multiplied by one Parquet row-group buffer (plus fixed writer metadata), not the
+batch row count. Each completed file stays on disk until its own upload and keeps the existing
+per-artifact `delta.batch-parquet.max-temp-bytes` guard.
 
 ## Durability and retries
 
 The `batch_parquet_artifacts` manifest is the durable queue and public source of truth. A worker
-claims one row with PostgreSQL row locking, writes to a unique local file, uploads to a stable key,
-and sets `READY` only after `PutObject` succeeds. A crash or failure cannot expose the row as ready;
-retries rebuild and overwrite the same logical object. Table failures are isolated.
+selects the oldest retryable row, takes a transaction-scoped PostgreSQL advisory lock for its
+`batch_id`, then row-locks and claims every currently retryable sibling. The advisory lock closes
+the `SKIP LOCKED` race where two workers could select different table rows before either published
+`BUILDING`. The worker writes each table to a unique local file, uploads to its stable key, and sets
+`READY` only after that table's `PutObject` succeeds. A crash or failure cannot expose a row as
+ready; retries rebuild and overwrite the same logical object. Schema, render, size, row-count, and
+upload failures remain isolated per table; failure to replay an authoritative raw segment fails the
+whole claimed batch because no output can prove completeness.
 
 The claim is committed **before** the build runs, in its own transaction, and `BUILDING` — not a
 held row lock — is what keeps other replicas off the row. That is what makes the attempt ceiling
@@ -39,7 +50,7 @@ real: a process that dies mid-build (an OOM on a large batch, a pod eviction) ha
 incremented `attempt_count` durable, so the most expensive failure class cannot loop forever. It
 also keeps the long S3 work off a database connection.
 
-Each claim mints a `claim_token`, and its owner renews the lease (`updated_at`) every third of
+Each table claim mints a `claim_token`, and the batch owner renews every lease (`updated_at`) every third of
 `delta.batch-parquet.lease-seconds` (default 30 min) while it builds. The lease therefore bounds
 *worker death*, not how long a build may legitimately take — without the renewal it would be a hard
 ceiling on build time, and any batch slower than it would be reclaimed mid-flight and rebuilt from
@@ -75,6 +86,9 @@ times.
 
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.
+
+`delta.batch-parquet.duration` retains its metric name but now times one batch-level grouped build,
+including shared replay and per-table uploads, rather than one table replay.
 
 ## Compatibility
 
