@@ -16,5 +16,5 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   findings test-first, run the per-task gate, and record each outcome on the PR.
 - [x] **T07 — Review edge cases.** Start the metric TTL only after a successful grouped query,
   cover negative monotonic-clock values, and make the PostgreSQL lock assertion observable.
-- [ ] **T08 — Final review and synchronization.** Complete a clean repeat review, merge current
+- [x] **T08 — Final review and synchronization.** Complete a clean repeat review, merge current
   `origin/develop`, rerun all gates and CI, and stop at `status: ready to merge`.
