@@ -1,12 +1,14 @@
 package com.bitbi.dfm.delta.presentation;
 
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.BatchParquetQueueService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.delta.application.DeltaCheckpointRebuildService;
 import com.bitbi.dfm.delta.application.DeltaRebaselineCancellationService;
 import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointDownloadResponseDto;
+import com.bitbi.dfm.delta.presentation.dto.BatchParquetArtifactResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaCheckpointResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaSegmentResponseDto;
 import com.bitbi.dfm.delta.presentation.dto.DeltaSyncStateResponseDto;
@@ -34,6 +36,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
@@ -60,6 +63,7 @@ public class DeltaSyncAdminController {
     private static final int MAX_SEGMENTS_LIMIT = 100;
 
     private final DeltaSyncStateService syncStateService;
+    private final BatchParquetQueueService batchParquetQueueService;
     private final DeltaRebaselineCancellationService cancellationService;
     private final DeltaCheckpointQueryService checkpointQueryService;
     private final DeltaCheckpointRebuildService checkpointRebuildService;
@@ -68,6 +72,7 @@ public class DeltaSyncAdminController {
     private final SiteService siteService;
 
     public DeltaSyncAdminController(DeltaSyncStateService syncStateService,
+                                    BatchParquetQueueService batchParquetQueueService,
                                     DeltaRebaselineCancellationService cancellationService,
                                     DeltaCheckpointQueryService checkpointQueryService,
                                     DeltaCheckpointRebuildService checkpointRebuildService,
@@ -75,6 +80,7 @@ public class DeltaSyncAdminController {
                                     DeltaSiteWipeService wipeService,
                                     SiteService siteService) {
         this.syncStateService = syncStateService;
+        this.batchParquetQueueService = batchParquetQueueService;
         this.cancellationService = cancellationService;
         this.checkpointQueryService = checkpointQueryService;
         this.checkpointRebuildService = checkpointRebuildService;
@@ -144,6 +150,83 @@ public class DeltaSyncAdminController {
                 .map(DeltaCheckpointResponseDto::fromEntity)
                 .toList();
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * List the durable completed-batch Parquet work rows for one site and batch.
+     *
+     * @param siteId  site identifier
+     * @param batchId batch identifier
+     * @return queue rows sorted by table name
+     */
+    @GetMapping("/batches/{batchId}/parquet-artifacts")
+    @Operation(
+            summary = "List batch Parquet queue artifacts (admin)",
+            description = "Returns operational state for each completed-batch table artifact: status, attempts, "
+                    + "last error and timestamps. Storage keys and worker claim tokens are never exposed."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Artifact queue rows retrieved",
+                    content = @Content(mediaType = "application/json")),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site not found",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<List<BatchParquetArtifactResponseDto>> listBatchParquetArtifacts(
+            @PathVariable UUID siteId, @PathVariable UUID batchId) {
+        siteService.getSite(siteId);
+        List<BatchParquetArtifactResponseDto> response = batchParquetQueueService
+                .list(siteId, batchId).stream()
+                .map(BatchParquetArtifactResponseDto::fromEntity)
+                .toList();
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Reset one abandoned or expired-building artifact to a fresh pending lifecycle.
+     *
+     * @param siteId      site identifier
+     * @param batchId     batch identifier
+     * @param artifactId  artifact identifier
+     * @param httpRequest request context recorded in the audit trail
+     * @return the reset artifact projection
+     */
+    @PostMapping("/batches/{batchId}/parquet-artifacts/{artifactId}/requeue")
+    @Operation(
+            summary = "Requeue a batch Parquet artifact (admin)",
+            description = "Resets ABANDONED, or BUILDING after its configured lease expires, to PENDING with "
+                    + "zero attempts and cleared claim/error state. The action is written to the admin audit log."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Artifact requeued",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = BatchParquetArtifactResponseDto.class))),
+            @ApiResponse(responseCode = "403", description = "Requires ROLE_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "404", description = "Site or route-constrained artifact not found",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "Artifact state is not recoverable or its lease is live",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<BatchParquetArtifactResponseDto> requeueBatchParquetArtifact(
+            @PathVariable UUID siteId, @PathVariable UUID batchId, @PathVariable UUID artifactId,
+            HttpServletRequest httpRequest) {
+        Site site = siteService.getSite(siteId);
+        try {
+            return ResponseEntity.ok(BatchParquetArtifactResponseDto.fromEntity(
+                    batchParquetQueueService.requeue(site, batchId, artifactId,
+                            ipAddress(httpRequest), httpRequest.getHeader("User-Agent"))));
+        } catch (BatchParquetQueueService.ArtifactNotFoundException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage(), e);
+        } catch (BatchParquetQueueService.ArtifactNotRequeueableException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage(), e);
+        }
     }
 
     /**
@@ -356,5 +439,13 @@ public class DeltaSyncAdminController {
                 .map(DeltaSegmentResponseDto::fromEntity)
                 .toList();
         return ResponseEntity.ok(response);
+    }
+
+    private static String ipAddress(HttpServletRequest request) {
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        if (forwardedFor != null && !forwardedFor.isEmpty()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }

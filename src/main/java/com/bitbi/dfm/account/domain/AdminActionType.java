@@ -24,7 +24,7 @@ public enum AdminActionType {
     /**
      * All server-side history of one site destroyed — batches, files, changelog, checkpoints,
      * schema, plugin SQL, error logs (issue #89). Adding a value here requires a migration
-     * extending {@code chk_action_type} on {@code admin_action_logs} — see V23/V24/V48.
+     * extending {@code chk_action_type} on {@code admin_action_logs} — see V23/V24/V48/V50.
      */
     SITE_HISTORY_WIPE("Wipe Site History"),
 
