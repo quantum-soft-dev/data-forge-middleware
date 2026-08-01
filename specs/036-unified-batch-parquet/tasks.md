@@ -70,3 +70,10 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   worker's drain/shutdown guard (new `BatchParquetFinalizationWorkerTest`). Correct `CLAUDE.md` on
   what the site wipe does and on the renamed download service, bring `plan.md` forward to the
   shipped design, retire the stale limitation note in the 033 CR, and fix the `404` wording.
+
+- [x] **T14 — Review round 7.** Apply the attempt ceiling to a claim whose owner never returned:
+  `publish()` cannot run for a build that does not come back, so such a row was re-claimed every
+  lease forever and its download stayed `409` permanently — the reclaim now settles it as
+  `ABANDONED`. Make `BatchParquetFinalizationWorkerTest` actually revert-sensitive (it passed with
+  both the shutdown guard and the drain's catch removed; verified by reverting each in turn), and
+  correct the CR's claim that the site wipe cleans up exactly like retention.

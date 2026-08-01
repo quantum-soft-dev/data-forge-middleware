@@ -45,6 +45,9 @@ public class BatchParquetFinalizationService {
 
     private static final Logger log = LoggerFactory.getLogger(BatchParquetFinalizationService.class);
 
+    /** How many stranded claims one claim attempt will settle before giving the pool slot back. */
+    private static final int CLAIM_SCAN_LIMIT = 16;
+
     private final BatchParquetArtifactRepository artifactRepository;
     private final ChangelogSegmentRepository segmentRepository;
     private final ChangelogSegmentService segmentService;
@@ -204,23 +207,51 @@ public class BatchParquetFinalizationService {
         return true;
     }
 
-    /** Take one row and commit its {@code BUILDING} claim, so the attempt outlives this process. */
+    /**
+     * Take one row and commit its {@code BUILDING} claim, so the attempt outlives this process.
+     *
+     * <p>Reclaiming a stranded claim is also where the attempt ceiling has to be applied to it.
+     * {@link #publish} is the only path that abandons, and it cannot run for a build that never
+     * returns — an artifact whose build reliably kills its process would otherwise be re-claimed
+     * every lease forever, growing {@code attemptCount} without bound while the download answered
+     * {@code 409} for the life of the site. Settling it here turns that into the 404 the contract
+     * promises. Rows settled this way are skipped rather than returned, so one of them does not end
+     * the drain.</p>
+     */
     private Claim claimNext() {
-        List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
-                LocalDateTime.now(ZoneOffset.UTC), retryDelaySeconds, leaseSeconds, 1);
-        if (next.isEmpty()) {
-            return null;
+        for (int scanned = 0; scanned < CLAIM_SCAN_LIMIT; scanned++) {
+            List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
+                    LocalDateTime.now(ZoneOffset.UTC), retryDelaySeconds, leaseSeconds, 1);
+            if (next.isEmpty()) {
+                return null;
+            }
+            BatchParquetArtifact artifact = next.get(0);
+            if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
+                if (artifact.getAttemptCount() >= maxAttempts) {
+                    settleStrandedClaim(artifact);
+                    continue;
+                }
+                metrics.batchParquetReclaimed();
+                log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
+                        artifact.getBatchId(), artifact.getTableName());
+            }
+            artifact.markBuilding();
+            artifactRepository.save(artifact);
+            return new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
+                    artifact.getSiteId(), artifact.getTableName());
         }
-        BatchParquetArtifact artifact = next.get(0);
-        if (artifact.getStatus() == BatchParquetArtifactStatus.BUILDING) {
-            metrics.batchParquetReclaimed();
-            log.warn("Reclaiming unified batch Parquet whose build lease expired: batchId={}, table={}",
-                    artifact.getBatchId(), artifact.getTableName());
-        }
-        artifact.markBuilding();
+        return null;
+    }
+
+    /** Give up on a claim whose owner never came back and whose attempts are spent. */
+    private void settleStrandedClaim(BatchParquetArtifact artifact) {
+        artifact.markAbandoned("Build lease expired without an outcome after "
+                + artifact.getAttemptCount() + " attempt(s)");
         artifactRepository.save(artifact);
-        return new Claim(artifact.getId(), artifact.getClaimToken(), artifact.getBatchId(),
-                artifact.getSiteId(), artifact.getTableName());
+        metrics.batchParquetAbandoned();
+        log.error("Unified batch Parquet abandoned after {} attempt(s) that never returned: "
+                        + "batchId={}, table={} — the table's download answers 404 until the row is reset",
+                artifact.getAttemptCount(), artifact.getBatchId(), artifact.getTableName());
     }
 
     /**

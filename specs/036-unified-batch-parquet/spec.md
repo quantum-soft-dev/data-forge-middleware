@@ -21,7 +21,9 @@ Large snapshots therefore show duplicate table rows and repeatedly download an i
 - Artifact state is durable and idempotent. A row is downloadable only in `READY`; failures remain
   retryable up to a configured attempt ceiling, after which the row is terminal (deterministic
   failures must not be rebuilt forever). The claim is committed before the build, so an attempt is
-  spent even if the process never returns, and a claim is reclaimable only after its lease expires.
+  spent even if the process never returns; the ceiling applies to those attempts too, so a build
+  that always kills its process settles as terminal rather than being reclaimed forever. A claim is
+  reclaimable only after its lease expires.
 - Batches completed before this feature shipped keep a working download: a request with no manifest
   row enqueues that batch from its raw segments instead of answering `404`. Only a batch in a
   terminal status is enqueued this way — a running session would yield a truncated artifact that

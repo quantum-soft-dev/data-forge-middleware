@@ -1,19 +1,25 @@
 package com.bitbi.dfm.delta.application;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import com.bitbi.dfm.util.LogCapture;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * The worker owns two properties that only show up under a real thread: it drains the queue until
- * it runs dry, and it stops claiming the moment shutdown begins.
+ * The worker owns three properties that only show up under a real thread: it drains the queue until
+ * it runs dry, it stops claiming the moment shutdown begins, and a drain that blows up is reported
+ * with enough detail to act on.
  */
 class BatchParquetFinalizationWorkerTest {
 
@@ -56,35 +62,47 @@ class BatchParquetFinalizationWorkerTest {
         worker.wake();
         assertTrue(running.await(5, TimeUnit.SECONDS), "the worker never started draining");
 
+        long startedAt = System.nanoTime();
         worker.shutdown();
+        Duration took = Duration.ofNanos(System.nanoTime() - startedAt);
 
-        // A claim spends an attempt durably, so one taken on the way out would do no work and leave
-        // its row BUILDING until the lease expires. shutdown() also has to wait for the build in
-        // flight — returning early would tear down the lease-renewal executor underneath it.
+        // The elapsed time is the assertion that matters. Without the `!shuttingDown` guard the
+        // drain keeps claiming until the 30s grace runs out and the pool is force-terminated —
+        // the claim counter would settle either way, so only the promptness distinguishes them.
+        // A claim spends an attempt durably, so one taken on the way out does no work and leaves
+        // its row BUILDING until the lease expires.
+        assertTrue(took.toSeconds() < 5,
+                "shutdown waited " + took.toMillis() + "ms: the drain kept claiming until the grace expired");
         int afterShutdown = claims.get();
         Thread.sleep(100);
         assertEquals(afterShutdown, claims.get(), "the worker kept claiming after shutdown");
     }
 
     @Test
-    void aFailedDrainLeavesTheWorkerUsable() throws Exception {
-        AtomicInteger claims = new AtomicInteger();
-        CountDownLatch second = new CountDownLatch(2);
-        when(service.finalizeNext()).thenAnswer(invocation -> {
-            second.countDown();
-            if (claims.incrementAndGet() == 1) {
-                throw new IllegalStateException("claim transaction failed");
-            }
-            return false;
-        });
+    void reportsADrainFailureWithItsStackTrace() throws Exception {
+        when(service.finalizeNext()).thenThrow(new IllegalStateException("claim transaction failed"));
         BatchParquetFinalizationWorker worker = new BatchParquetFinalizationWorker(service, 1);
 
-        worker.wake();
-        Thread.sleep(50);
-        worker.wake();
+        try (LogCapture capture = LogCapture.attachTo(BatchParquetFinalizationWorker.class)) {
+            worker.wake();
 
-        assertTrue(second.await(5, TimeUnit.SECONDS),
-                "a drain that threw must not take the pool thread with it");
-        worker.shutdown();
+            ILoggingEvent failure = awaitEvent(capture);
+            assertEquals(Level.WARN, failure.getLevel());
+            // A build failure is recorded on the row itself; a claim or publish transaction failing
+            // surfaces only here, and the bare message is not enough to act on.
+            assertNotNull(failure.getThrowableProxy(), "the drain failure was logged without its cause");
+        } finally {
+            worker.shutdown();
+        }
+    }
+
+    private static ILoggingEvent awaitEvent(LogCapture capture) throws InterruptedException {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            if (!capture.events().isEmpty()) {
+                return capture.events().get(0);
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("the worker never reported the failed drain");
     }
 }

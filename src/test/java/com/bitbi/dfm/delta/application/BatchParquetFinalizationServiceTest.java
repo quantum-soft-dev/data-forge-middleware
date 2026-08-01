@@ -356,6 +356,49 @@ class BatchParquetFinalizationServiceTest {
                 "the renewal must carry the claim's own token, or it would extend a stranger's lease");
     }
 
+    @Test
+    void abandonsAClaimWhoseOwnerNeverReturnedOnceItsAttemptsAreSpent() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact stranded = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        stranded.markBuilding();
+        // Its owner died mid-build and the lease lapsed. publish() — the only path that abandons —
+        // never runs for a build that does not return, so without settling the row here it would be
+        // reclaimed every lease forever, and the download would answer 409 for the life of the site.
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(stranded))
+                .thenReturn(List.of());
+
+        assertFalse(newService(1).finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, stranded.getStatus());
+        assertFalse(stranded.isRetryable(), "the download must settle on 404, not a permanent 409");
+        assertEquals(1, stranded.getAttemptCount(), "a settled claim does not spend another attempt");
+        verify(segmentService, never()).forEachRecord(any(), any());
+    }
+
+    @Test
+    void reclaimsAStrandedClaimWhileItStillHasAttemptsLeft() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact stranded = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        stranded.markBuilding();
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(artifactRepository.findNextRetryable(any(LocalDateTime.class), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(stranded));
+        when(artifactRepository.findById(stranded.getId())).thenReturn(Optional.of(stranded));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
+
+        assertTrue(newService(7).finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, stranded.getStatus());
+        assertEquals(2, stranded.getAttemptCount(), "the lost attempt still counts against the cap");
+    }
+
     /** A row the claim query will hand out, wired for the re-read that {@code publish} performs. */
     private BatchParquetArtifact claimable(UUID batchId, UUID siteId, String tableName) {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, tableName);

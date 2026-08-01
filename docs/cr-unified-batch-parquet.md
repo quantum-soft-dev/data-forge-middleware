@@ -58,6 +58,13 @@ re-download and re-write the whole batch changelog on a loop. Past the cap the r
 worker already treats an unrenderable table (skip, don't wedge the queue). Resetting the row
 requeues it once the underlying cause is fixed.
 
+The ceiling is applied on **both** paths that can end an attempt. `publish()` cannot run for a build
+that never returns, so a claim whose owner died is settled when the next worker reclaims it: past
+the ceiling the reclaim abandons the row instead of taking it. Without that, an artifact whose build
+reliably kills its process would be re-claimed every lease forever — `attempt_count` growing without
+bound, the ERROR never logged, and the download answering `409 "still finalizing"` for the life of
+the site.
+
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.
 
@@ -69,10 +76,13 @@ closes. Authorization and short-lived presigned downloads retain the existing ro
 
 ## Lifecycle
 
-Batch retention and explicit batch deletion collect exact object keys, remove the manifest rows
-before their parent batches, and then delete the objects best-effort. A site-history wipe performs
-the same exact-key cleanup and also walks the complete `egress/{siteId}/` prefix so realtime segment
-egress and any orphan left by an interrupted cleanup are removed.
+Batch retention and explicit batch deletion **derive** each object key from the manifest row's
+`(site, batch, table)` rather than reading its recorded `s3_key` — a row that is mid-build, failed
+or abandoned records no key even though an attempt may already have uploaded the object, and once
+the rows are gone nothing else names it. They remove the rows before their parent batches, then
+delete the objects best-effort. A site-history wipe instead takes the recorded keys and relies on
+its walk of the complete `egress/{siteId}/` prefix for everything else, which also removes realtime
+segment egress and any orphan left by an interrupted cleanup.
 
 ## Download readiness contract
 
