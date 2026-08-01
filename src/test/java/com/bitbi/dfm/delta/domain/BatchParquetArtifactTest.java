@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,13 +14,32 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BatchParquetArtifactTest {
 
     @Test
-    void derivesItsExpectedObjectKeyInsideTheDeltaDomain() {
+    void keepsTheLegacyStableKeyAsACompatibilityFallback() {
         UUID batchId = UUID.randomUUID();
         UUID siteId = UUID.randomUUID();
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "sales orders");
 
         assertEquals("egress/%s/batches/%s/sales%%20orders.parquet".formatted(siteId, batchId),
                 artifact.expectedS3Key());
+    }
+
+    @Test
+    void derivesDistinctClaimAttemptKeysUnderOneBatchPrefix() {
+        UUID batchId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        UUID firstClaim = UUID.randomUUID();
+        UUID secondClaim = UUID.randomUUID();
+
+        String first = BatchParquetArtifactKey.attempt(siteId, batchId, "sales/orders", firstClaim);
+        String second = BatchParquetArtifactKey.attempt(siteId, batchId, "sales/orders", secondClaim);
+
+        assertEquals("egress/%s/batches/%s/".formatted(siteId, batchId),
+                BatchParquetArtifactKey.batchPrefix(siteId, batchId));
+        assertEquals("egress/%s/batches/%s/attempts/%s/sales%%2Forders.parquet"
+                        .formatted(siteId, batchId, firstClaim), first);
+        assertEquals("egress/%s/batches/%s/attempts/%s/sales%%2Forders.parquet"
+                        .formatted(siteId, batchId, secondClaim), second);
+        assertNotEquals(first, second);
     }
 
     @Test

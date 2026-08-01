@@ -427,7 +427,7 @@ public class BatchParquetFinalizationService {
                                 + " does not match segment stats " + expectedRows.getAsLong());
                     }
                     String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
-                            tableName, tempFiles.get(tableName));
+                            tableName, claim.token(), tempFiles.get(tableName));
                     outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
                             s3Key, result.rowCount(), result.fileSize(), result.checksum())));
                 } catch (RuntimeException e) {

@@ -111,7 +111,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         Path artifactFile = tempDir.resolve("customers.parquet");
         Files.write(artifactFile, new byte[]{1, 2, 3, 4});
         String artifactKey = checkpointStorage.uploadBatchParquet(
-                SITE_ID, batchId, "customers", artifactFile);
+                SITE_ID, batchId, "customers", UUID.randomUUID(), artifactFile);
         seedReadyArtifact(batchId, artifactKey);
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);

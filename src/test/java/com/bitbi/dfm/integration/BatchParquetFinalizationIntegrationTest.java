@@ -173,7 +173,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         doThrow(new S3CheckpointStorage.CheckpointStorageException("simulated upload failure", null))
                 .doCallRealMethod()
                 .when(flakyStorage).uploadBatchParquet(
-                        eq(SITE_ID), eq(BATCH_ID), eq("customers"), any(Path.class));
+                        eq(SITE_ID), eq(BATCH_ID), eq("customers"), any(UUID.class), any(Path.class));
         BatchParquetFinalizationService flakyService = service(flakyStorage, 5);
 
         assertThat(flakyService.finalizeNext()).isTrue();
@@ -224,7 +224,7 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
         assertThat(finalizationService.enqueueBatch(BATCH_ID)).isEqualTo(1);
         S3CheckpointStorage dyingStorage = spy(storage);
         doThrow(new OutOfMemoryError("row group buffer"))
-                .when(dyingStorage).uploadBatchParquet(any(), any(), any(), any(Path.class));
+                .when(dyingStorage).uploadBatchParquet(any(), any(), any(), any(), any(Path.class));
 
         // An Error is not caught by the finalizer: this is the "process died mid-build" shape.
         assertThatThrownBy(() -> service(dyingStorage, 5).finalizeNext())

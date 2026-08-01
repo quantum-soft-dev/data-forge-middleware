@@ -7,7 +7,7 @@ referencing #100.
 - [x] **T01 — Design.** Record the takeover race, token-scoped key layout, lifecycle reclamation,
   legacy compatibility boundary, documentation surfaces, and test strategy in `spec.md`,
   `plan.md`, and this task ledger.
-- [ ] **T02 — Attempt-key policy and storage.** Add failing domain/storage tests, then implement
+- [x] **T02 — Attempt-key policy and storage.** Add failing domain/storage tests, then implement
   deterministic batch prefixes and claim-token object keys in `BatchParquetArtifactKey` and require
   a claim token in `S3CheckpointStorage.uploadBatchParquet`. Keep legacy stable-key derivation for
   compatibility cleanup.

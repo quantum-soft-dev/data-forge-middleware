@@ -32,13 +32,15 @@ class S3CheckpointStorageBatchArtifactTest {
         S3CheckpointStorage storage = new S3CheckpointStorage(s3, "bucket");
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
+        UUID claimToken = UUID.randomUUID();
         Path file = tempDir.resolve("artifact.parquet");
         byte[] content = new byte[] {1, 2, 3, 4, 5};
         Files.write(file, content);
 
-        String key = storage.uploadBatchParquet(siteId, batchId, "orders/history", file);
+        String key = storage.uploadBatchParquet(siteId, batchId, "orders/history", claimToken, file);
 
-        assertEquals("egress/%s/batches/%s/orders%%2Fhistory.parquet".formatted(siteId, batchId), key);
+        assertEquals("egress/%s/batches/%s/attempts/%s/orders%%2Fhistory.parquet"
+                .formatted(siteId, batchId, claimToken), key);
         ArgumentCaptor<PutObjectRequest> request = ArgumentCaptor.forClass(PutObjectRequest.class);
         ArgumentCaptor<RequestBody> body = ArgumentCaptor.forClass(RequestBody.class);
         verify(s3).putObject(request.capture(), body.capture());

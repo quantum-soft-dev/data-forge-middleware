@@ -151,7 +151,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         Path artifactFile = tempDir.resolve("orders.parquet");
         Files.write(artifactFile, new byte[]{1, 2, 3, 4});
         String artifactKey = checkpointStorage.uploadBatchParquet(
-                siteId, eligibleBatchId, "orders", artifactFile);
+                siteId, eligibleBatchId, "orders", UUID.randomUUID(), artifactFile);
         jdbcTemplate.update("""
                 INSERT INTO batch_parquet_artifacts
                     (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
