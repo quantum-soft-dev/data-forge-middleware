@@ -1,8 +1,8 @@
 # Change request: one batch-level Delta Parquet per table
 
-**Issues:** #93, #97, #98
+**Issues:** #93, #97, #98, #100
 **Features:** 036-unified-batch-parquet, 038-batch-parquet-single-replay,
-039-batch-parquet-queue-ops
+039-batch-parquet-queue-ops, 040-batch-parquet-attempt-keys
 
 ## Decision
 
@@ -12,8 +12,9 @@ Delta v2 keeps three deliberately distinct storage layers:
    journal and remain bounded by ingestion seals.
 2. **Realtime segment egress** (`egress/{siteId}/{table}/delta/seq=*.parquet`) remains available to
    existing sequential consumers, including Parquet Export. This change does not remove or alter it.
-3. **Completed-batch downloads** (`egress/{siteId}/batches/{batchId}/*.parquet`) are new unified
-   user-facing artifacts: exactly one file for each table in a closed session.
+3. **Completed-batch downloads**
+   (`egress/{siteId}/batches/{batchId}/attempts/{claimToken}/*.parquet`) are unified user-facing
+   artifacts: the manifest exposes exactly one winning file for each table in a closed session.
 
 The batch download API resolves layer 3 only. It never scans or guesses among layer-2 objects.
 
@@ -39,11 +40,12 @@ The `batch_parquet_artifacts` manifest is the durable queue and public source of
 selects the oldest retryable row, takes a transaction-scoped PostgreSQL advisory lock for its
 `batch_id`, then row-locks and claims every currently retryable sibling. The advisory lock closes
 the `SKIP LOCKED` race where two workers could select different table rows before either published
-`BUILDING`. The worker writes each table to a unique local file, uploads to its stable key, and sets
-`READY` only after that table's `PutObject` succeeds. A crash or failure cannot expose a row as
-ready; retries rebuild and overwrite the same logical object. Schema, render, size, row-count, and
-upload failures remain isolated per table; failure to replay an authoritative raw segment fails the
-whole claimed batch because no output can prove completeness.
+`BUILDING`. The worker writes each table to a unique local file, uploads to a key containing that
+table claim's random token, and sets `READY` only after that table's `PutObject` succeeds while the
+same token still owns the row. A crash or failure cannot expose a row as ready; retries rebuild to
+new immutable attempt objects. Schema, render, size, row-count, and upload failures remain isolated
+per table; failure to replay an authoritative raw segment fails the whole claimed batch because no
+output can prove completeness.
 
 The claim is committed **before** the build runs, in its own transaction, and `BUILDING` — not a
 held row lock — is what keeps other replicas off the row. That is what makes the attempt ceiling
@@ -57,11 +59,12 @@ Each table claim mints a `claim_token`, and the batch owner renews every lease (
 ceiling on build time, and any batch slower than it would be reclaimed mid-flight and rebuilt from
 scratch by the next worker, spending an attempt and a pool slot on every lapse. The token settles
 the manifest race the lease cannot: a reclaim mints a new one, so a previous owner that surfaces
-late finds its token stale and cannot publish metadata over the successor. Both attempts still
-upload to the same stable object key, so a superseded `PutObject` that completes last can replace
-the successor's bytes before its stale metadata is discarded. The replay is deterministic and the
-bytes are expected to match, but attempt-scoped objects plus deterministic orphan cleanup are
-required to remove the race completely; that storage-layout change is tracked in #100.
+late finds its token stale and cannot publish metadata over the successor. The token also isolates
+the physical upload:
+`egress/{siteId}/batches/{batchId}/attempts/{claimToken}/{encodedTable}.parquet`. A superseded
+`PutObject` can therefore complete last without touching the successor's bytes. Its publisher
+deletes that exact stale key best-effort; if the process dies before publication, lifecycle cleanup
+can still find it under the deterministic batch/site prefixes.
 
 Retries are capped at `delta.batch-parquet.max-attempts` (default 7), with the failure backoff
 doubling per attempt. Seven attempts span `60+120+240+480+960+1920s ≈ 63 min`, so a transient S3
@@ -122,19 +125,20 @@ There is no Delta protobuf, owner/client, or download behavior change. Snapshot 
 continuous-session segment publication are unchanged. Unified artifacts are finalized only when
 the owning batch closes. Authorization and short-lived presigned downloads retain the existing
 route and DTO. V50 only widens the admin audit action constraint for the recovery event.
+Existing READY rows keep their recorded root-level stable keys and remain downloadable and
+cleanable without a migration; `s3_key` is treated as opaque metadata.
 
 ## Lifecycle
 
-Batch retention and explicit batch deletion **derive** each object key from the manifest row's
-`(site, batch, table)` rather than reading its recorded `s3_key` — a row that is mid-build, failed
-or abandoned records no key even though an attempt may already have uploaded the object, and once
-the rows are gone nothing else names it. Explicit admin deletion routes artifact rows, changelog
-segments, and the parent batch through one transactional application service, so a failed parent
-delete rolls the dependent-row changes back. Its irreversible object cleanup is registered only
-after that database transaction commits; a rollback therefore leaves both rows and objects intact.
-A site-history wipe instead takes the recorded keys and relies on
-its walk of the complete `egress/{siteId}/` prefix for everything else, which also removes realtime
-segment egress and any orphan left by an interrupted cleanup.
+Batch retention and explicit batch deletion keep each recorded `s3_key` (new attempt key or legacy
+stable key), retain legacy derivation as a null-key fallback, and paginate the complete
+`egress/{siteId}/batches/{batchId}/` prefix. The prefix catches uploads whose process died after
+`PutObject` but before manifest publication. Explicit admin deletion routes artifact rows,
+changelog segments, and the parent batch through one transactional application service, so a
+failed parent delete rolls the dependent-row changes back; prefix enumeration and irreversible
+object cleanup start only after that transaction commits. Listing/deletion remain best effort and
+fall back to exact recorded keys. A site-history wipe retains its paginated walk of the complete
+`egress/{siteId}/` prefix, which removes realtime segment egress and every unified attempt orphan.
 
 ## Download readiness contract
 

@@ -19,7 +19,7 @@ referencing #100.
   unreferenced attempt object and a legacy stable row. Then add paginated generic prefix listing,
   enumerate batch prefixes during retention and after committed explicit deletion, preserve exact
   fallback cleanup on list failure, and verify the existing site-prefix wipe covers attempts.
-- [ ] **T05 — Documentation and pre-PR gates.** Update the unified Parquet CR, Delta guide, docs
+- [x] **T05 — Documentation and pre-PR gates.** Update the unified Parquet CR, Delta guide, docs
   index, project journal, and completed task ledger; verify documentation consistency; run
   `./gradlew test -PexcludeIntegration` and `./gradlew integrationTest` before opening the PR.
 - [ ] **T06 — Review and synchronization.** Resolve every review finding test-first with one atomic
