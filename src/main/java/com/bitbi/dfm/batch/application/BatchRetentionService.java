@@ -4,6 +4,7 @@ import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
@@ -85,7 +86,17 @@ public class BatchRetentionService {
     protected BatchCleanupSummary cleanupSite(UUID siteId, LocalDateTime cutoff, int limit, boolean dryRun) {
         CleanupDbResult dbResult = cleanupSiteInDb(siteId, cutoff, limit, dryRun);
 
-        List<String> dedupedKeys = deduplicate(dbResult.s3Keys);
+        List<String> keys = new ArrayList<>(dbResult.s3Keys);
+        for (String prefix : dbResult.batchParquetPrefixes) {
+            try {
+                keys.addAll(s3FileStorageService.listAllKeys(prefix));
+            } catch (RuntimeException e) {
+                logger.warn("Could not enumerate batch Parquet objects under {}; exact-key cleanup continues",
+                        prefix, e);
+                dbResult.summary.errors.add("S3 list failed for " + prefix + ": " + e.getMessage());
+            }
+        }
+        List<String> dedupedKeys = deduplicate(keys);
         dbResult.summary.deletedFiles += dedupedKeys.size();
 
         if (!dryRun) {
@@ -108,6 +119,7 @@ public class BatchRetentionService {
         summary.candidates = candidates.size();
 
         List<String> s3Keys = new ArrayList<>();
+        List<String> batchParquetPrefixes = new ArrayList<>();
 
         for (Batch batch : candidates) {
             UUID batchId = batch.getId();
@@ -140,12 +152,11 @@ public class BatchRetentionService {
                 }
 
                 for (BatchParquetArtifact artifact : artifacts) {
-                    // Derive the key instead of reading s3_key: a row that is mid-build, failed or
-                    // abandoned has no recorded key, yet an earlier attempt may already have
-                    // uploaded the object — and after these rows are gone nothing else names it.
-                    // The key is a pure function of (site, batch, table), and deleting a key that
-                    // was never written is a no-op.
-                    batchS3Keys.add(artifact.expectedS3Key());
+                    // READY rows name both new attempt keys and legacy stable keys exactly. A row
+                    // without published metadata retains the legacy derived-key fallback; prefix
+                    // enumeration outside the database phase discovers attempt orphans.
+                    batchS3Keys.add(artifact.getS3Key() != null
+                            ? artifact.getS3Key() : artifact.expectedS3Key());
                     if (artifact.getFileSize() != null) {
                         batchBytes += artifact.getFileSize();
                     }
@@ -155,6 +166,7 @@ public class BatchRetentionService {
                     // Dry run reports what would be removed, but doesn't perform any deletions.
                     summary.deletedBytes += batchBytes;
                     s3Keys.addAll(batchS3Keys);
+                    batchParquetPrefixes.add(BatchParquetArtifactKey.batchPrefix(siteId, batchId));
                     continue;
                 }
 
@@ -173,13 +185,14 @@ public class BatchRetentionService {
                 summary.deletedBatches++;
                 summary.deletedBytes += batchBytes;
                 s3Keys.addAll(batchS3Keys);
+                batchParquetPrefixes.add(BatchParquetArtifactKey.batchPrefix(siteId, batchId));
             } catch (Exception e) {
                 logger.error("Failed to cleanup batch in DB: batchId={}, error={}", batchId, e.getMessage(), e);
                 summary.errors.add("Batch " + batchId + " cleanup failed: " + e.getMessage());
             }
         }
 
-        return new CleanupDbResult(summary, s3Keys);
+        return new CleanupDbResult(summary, s3Keys, batchParquetPrefixes);
     }
 
     private List<Site> resolveSites(UUID siteId, UUID accountId) {
@@ -201,7 +214,8 @@ public class BatchRetentionService {
         return keys.stream().distinct().toList();
     }
 
-    protected record CleanupDbResult(BatchCleanupSummary summary, List<String> s3Keys) {}
+    protected record CleanupDbResult(BatchCleanupSummary summary, List<String> s3Keys,
+                                     List<String> batchParquetPrefixes) {}
 
     public record BatchCleanupRequest(
             UUID siteId,

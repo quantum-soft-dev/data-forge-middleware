@@ -1,7 +1,10 @@
 package com.bitbi.dfm.batch.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
@@ -12,7 +15,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Application boundary for deleting one batch and its Delta-owned dependants. */
@@ -44,26 +49,31 @@ public class BatchDeletionService {
      */
     @Transactional
     public boolean deleteBatch(UUID batchId) {
-        if (!batchRepository.existsById(batchId)) {
+        Optional<Batch> found = batchRepository.findById(batchId);
+        if (found.isEmpty()) {
             return false;
         }
+        String batchParquetPrefix = BatchParquetArtifactKey.batchPrefix(
+                found.get().getSiteId(), batchId);
 
         List<String> objectKeys = new ArrayList<>(artifactRepository.findByBatchId(batchId).stream()
-                .map(artifact -> artifact.expectedS3Key())
+                .map(BatchDeletionService::cleanupKey)
                 .toList());
         artifactRepository.deleteByBatchId(batchId);
         objectKeys.addAll(segmentService.deleteMetadataByBatchId(batchId));
         batchRepository.deleteById(batchId);
 
-        deleteObjectsAfterCommit(List.copyOf(objectKeys), batchId);
+        deleteObjectsAfterCommit(List.copyOf(objectKeys), batchParquetPrefix, batchId);
         return true;
     }
 
-    private void deleteObjectsAfterCommit(List<String> objectKeys, UUID batchId) {
-        if (objectKeys.isEmpty()) {
-            return;
-        }
-        Runnable cleanup = () -> deleteObjects(objectKeys, batchId);
+    private static String cleanupKey(BatchParquetArtifact artifact) {
+        return artifact.getS3Key() != null ? artifact.getS3Key() : artifact.expectedS3Key();
+    }
+
+    private void deleteObjectsAfterCommit(List<String> objectKeys, String batchParquetPrefix,
+                                          UUID batchId) {
+        Runnable cleanup = () -> deleteObjects(objectKeys, batchParquetPrefix, batchId);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
@@ -78,9 +88,19 @@ public class BatchDeletionService {
         }
     }
 
-    private void deleteObjects(List<String> objectKeys, UUID batchId) {
+    private void deleteObjects(List<String> objectKeys, String batchParquetPrefix, UUID batchId) {
+        LinkedHashSet<String> discovered = new LinkedHashSet<>(objectKeys);
         try {
-            S3FileStorageService.DeleteObjectsResult deleted = storage.deleteObjects(objectKeys);
+            discovered.addAll(storage.listAllKeys(batchParquetPrefix));
+        } catch (RuntimeException e) {
+            log.warn("Batch {} deleted but its Parquet prefix could not be enumerated; "
+                    + "exact-key cleanup continues", batchId, e);
+        }
+        if (discovered.isEmpty()) {
+            return;
+        }
+        try {
+            S3FileStorageService.DeleteObjectsResult deleted = storage.deleteObjects(List.copyOf(discovered));
             if (!deleted.errors().isEmpty()) {
                 log.warn("Batch {} deleted but {} object(s) remain orphaned: {}",
                         batchId, deleted.errors().size(), deleted.errors());

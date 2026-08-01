@@ -1,9 +1,11 @@
 package com.bitbi.dfm.batch.application;
 
+import com.bitbi.dfm.batch.domain.Batch;
 import com.bitbi.dfm.batch.domain.BatchRepository;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -13,6 +15,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,13 +41,19 @@ class BatchDeletionServiceTest {
     void deletesTheThreeDatabaseAggregatesAtomicallyThenCleansObjectsAfterCommit() throws Exception {
         UUID batchId = UUID.randomUUID();
         UUID siteId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getSiteId()).thenReturn(siteId);
         BatchParquetArtifact building = BatchParquetArtifact.pending(batchId, siteId, "sales orders");
         building.markBuilding();
-        when(batchRepository.existsById(batchId)).thenReturn(true);
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
         when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(building));
         when(segmentService.deleteMetadataByBatchId(batchId))
                 .thenReturn(List.of("delta/site/segments/1.pb.gz"));
-        List<String> objectKeys = List.of(building.expectedS3Key(), "delta/site/segments/1.pb.gz");
+        String prefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
+        String orphanKey = prefix + "attempts/dead/sales%20orders.parquet";
+        when(storage.listAllKeys(prefix)).thenReturn(List.of(orphanKey));
+        List<String> objectKeys = List.of(
+                building.expectedS3Key(), "delta/site/segments/1.pb.gz", orphanKey);
         when(storage.deleteObjects(objectKeys))
                 .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
 
@@ -53,6 +62,7 @@ class BatchDeletionServiceTest {
             assertTrue(service.deleteBatch(batchId));
 
             verify(storage, never()).deleteObjects(objectKeys);
+            verify(storage, never()).listAllKeys(prefix);
             TransactionSynchronizationManager.getSynchronizations()
                     .forEach(TransactionSynchronization::afterCommit);
         } finally {
@@ -75,9 +85,11 @@ class BatchDeletionServiceTest {
     @Test
     void rollbackNeverDeletesObjectsWhoseDatabaseRowsAreRestored() {
         UUID batchId = UUID.randomUUID();
-        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
-                batchId, UUID.randomUUID(), "orders");
-        when(batchRepository.existsById(batchId)).thenReturn(true);
+        UUID siteId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getSiteId()).thenReturn(siteId);
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
         when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact));
         when(segmentService.deleteMetadataByBatchId(batchId))
                 .thenReturn(List.of("delta/site/segments/1.pb.gz"));
@@ -92,12 +104,13 @@ class BatchDeletionServiceTest {
         }
 
         verify(storage, never()).deleteObjects(org.mockito.ArgumentMatchers.anyList());
+        verify(storage, never()).listAllKeys(org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test
     void unknownBatchTouchesNoDependentAggregate() {
         UUID batchId = UUID.randomUUID();
-        when(batchRepository.existsById(batchId)).thenReturn(false);
+        when(batchRepository.findById(batchId)).thenReturn(Optional.empty());
 
         assertFalse(service.deleteBatch(batchId));
 

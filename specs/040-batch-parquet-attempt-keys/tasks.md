@@ -15,7 +15,7 @@ referencing #100.
   coverage that pauses the old upload, reclaims the lease, publishes the successor, and completes
   different old bytes last. Then pass claim tokens into uploads, delete stale attempt keys safely,
   and prove manifest bytes/size/SHA-256 belong to the winner.
-- [ ] **T04 — Lifecycle reclamation.** Add failing retention/deletion/site-wipe tests for an
+- [x] **T04 — Lifecycle reclamation.** Add failing retention/deletion/site-wipe tests for an
   unreferenced attempt object and a legacy stable row. Then add paginated generic prefix listing,
   enumerate batch prefixes during retention and after committed explicit deletion, preserve exact
   fallback cleanup on list failure, and verify the existing site-prefix wipe covers attempts.
