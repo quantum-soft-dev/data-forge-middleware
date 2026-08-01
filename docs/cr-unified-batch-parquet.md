@@ -1,7 +1,8 @@
 # Change request: one batch-level Delta Parquet per table
 
-**Issue:** #93
-**Features:** 036-unified-batch-parquet, 038-batch-parquet-single-replay
+**Issues:** #93, #97, #98
+**Features:** 036-unified-batch-parquet, 038-batch-parquet-single-replay,
+039-batch-parquet-queue-ops
 
 ## Decision
 
@@ -69,8 +70,9 @@ are deterministic and never recover — a table with no declared schema, data th
 cannot render, or a batch whose segments a re-baseline removed — and rebuilding them forever would
 re-download and re-write the whole batch changelog on a loop. Past the cap the row becomes
 `ABANDONED`, logged at ERROR, and is never claimed again, which matches how the per-segment egress
-worker already treats an unrenderable table (skip, don't wedge the queue). Resetting the row
-requeues it once the underlying cause is fixed.
+worker already treats an unrenderable table (skip, don't wedge the queue). Once the underlying
+cause is fixed, an operator can use the audited admin recovery endpoint below; direct SQL is not
+part of the runbook.
 
 The ceiling is applied on **both** paths that can end an attempt. `publish()` cannot run for a build
 that never returns, so before each claim the worker bulk-abandons expired `BUILDING` rows whose
@@ -90,11 +92,36 @@ attempts is work in progress, and the download must say so rather than claim the
 `delta.batch-parquet.duration` retains its metric name but now times one batch-level grouped build,
 including shared replay and per-table uploads, rather than one table replay.
 
+## Operations and recovery
+
+Current queue depth is exported as `delta.batch-parquet.queue{status=...}` for all five durable
+states (`pending`, `building`, `ready`, `failed`, `abandoned`). Each Prometheus scrape runs a
+single grouped database count, shared by all status gauges for at most five seconds; the gauges are
+not reconstructed from process-local event counters.
+Useful alerts include sustained `pending` growth, `building` rows that survive longer than the
+configured lease, and any increase in `abandoned`.
+
+Two ROLE_ADMIN routes provide the supported runbook:
+
+- `GET /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts` lists table name, status,
+  attempts, last error, and timestamps. It does not expose S3 keys, checksums, claim tokens, or the
+  optimistic-lock version.
+- `POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue`
+  resets `ABANDONED`, or `BUILDING` after its lease expired, to `PENDING`. Attempts become zero and
+  the claim token, last error, and unpublished metadata are cleared. `PENDING`, `FAILED`, `READY`,
+  and a live `BUILDING` claim return `409`; a route mismatch returns `404`.
+
+Recovery locks the manifest row, so it serializes with worker settlement. A worker displaced from
+an expired build cannot renew or publish after the reset because its old claim token no longer
+matches. The committed reset is stored as `BATCH_PARQUET_REQUEUE` in `admin_action_logs`, with the
+site/account, artifact, batch, table, previous status, caller IP, and user agent.
+
 ## Compatibility
 
-There is no Delta protobuf or client behavior change. Snapshot sealing and continuous-session
-segment publication are unchanged. Unified artifacts are finalized only when the owning batch
-closes. Authorization and short-lived presigned downloads retain the existing route and DTO.
+There is no Delta protobuf, owner/client, or download behavior change. Snapshot sealing and
+continuous-session segment publication are unchanged. Unified artifacts are finalized only when
+the owning batch closes. Authorization and short-lived presigned downloads retain the existing
+route and DTO. V50 only widens the admin audit action constraint for the recovery event.
 
 ## Lifecycle
 

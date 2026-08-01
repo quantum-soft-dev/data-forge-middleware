@@ -35,7 +35,13 @@ class MetricsScrapeContractTest extends BaseIntegrationTest {
         mockMvc.perform(get("/actuator/prometheus"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_sessions_started_total")))
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_sessions_overflow_total")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_sessions_overflow_total")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_batch_parquet_queue")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"pending\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"building\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"ready\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"failed\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"abandoned\"")));
     }
 
     @Test

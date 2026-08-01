@@ -26,6 +26,15 @@ public interface BatchParquetArtifactRepository {
 
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
 
+    /** Operator projection, constrained by both route owners and sorted for stable responses. */
+    List<BatchParquetArtifact> findBySiteIdAndBatchIdOrderByTableName(UUID siteId, UUID batchId);
+
+    /** Lock one route-constrained artifact so recovery cannot race a worker settlement. */
+    Optional<BatchParquetArtifact> findForUpdate(UUID artifactId, UUID siteId, UUID batchId);
+
+    /** All durable queue depths in one grouped query; absent statuses have zero rows. */
+    List<BatchParquetQueueDepth> countByStatusGrouped();
+
     /**
      * Work worth another attempt: never-claimed rows, failures whose backoff has elapsed, and
      * claims whose owner disappeared (their build lease expired). {@code ABANDONED} rows are

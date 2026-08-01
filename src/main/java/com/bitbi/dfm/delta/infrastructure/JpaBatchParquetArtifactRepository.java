@@ -2,9 +2,13 @@ package com.bitbi.dfm.delta.infrastructure;
 
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
+import com.bitbi.dfm.delta.domain.BatchParquetArtifactStatus;
+import com.bitbi.dfm.delta.domain.BatchParquetQueueDepth;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -12,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.time.LocalDateTime;
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface JpaBatchParquetArtifactRepository
@@ -23,6 +28,27 @@ public interface JpaBatchParquetArtifactRepository
 
     @Override
     List<BatchParquetArtifact> findByBatchId(UUID batchId);
+
+    @Override
+    List<BatchParquetArtifact> findBySiteIdAndBatchIdOrderByTableName(UUID siteId, UUID batchId);
+
+    @Override
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            SELECT a FROM BatchParquetArtifact a
+            WHERE a.id = :artifactId AND a.siteId = :siteId AND a.batchId = :batchId
+            """)
+    Optional<BatchParquetArtifact> findForUpdate(@Param("artifactId") UUID artifactId,
+                                                 @Param("siteId") UUID siteId,
+                                                 @Param("batchId") UUID batchId);
+
+    @Override
+    @Query("""
+            SELECT new com.bitbi.dfm.delta.domain.BatchParquetQueueDepth(a.status, COUNT(a))
+            FROM BatchParquetArtifact a
+            GROUP BY a.status
+            """)
+    List<BatchParquetQueueDepth> countByStatusGrouped();
 
     /**
      * The row lock only serializes the claim itself — the claim transaction commits {@code BUILDING}
