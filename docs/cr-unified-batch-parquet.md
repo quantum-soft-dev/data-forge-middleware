@@ -1,6 +1,6 @@
 # Change request: one batch-level Delta Parquet per table
 
-**Issue:** #93  
+**Issue:** #93
 **Feature:** 036-unified-batch-parquet
 
 ## Decision
@@ -39,7 +39,15 @@ closes. Authorization and short-lived presigned downloads retain the existing ro
 
 ## Lifecycle
 
-Batch retention and explicit batch deletion remove the batch artifact rows and objects. A site
-history wipe includes the batch-artifact prefix with the rest of `egress/{siteId}/`, and database
-cascades remove the manifests with their batches.
+Batch retention and explicit batch deletion collect exact object keys, remove the manifest rows
+before their parent batches, and then delete the objects best-effort. A site-history wipe performs
+the same exact-key cleanup and also walks the complete `egress/{siteId}/` prefix so realtime segment
+egress and any orphan left by an interrupted cleanup are removed.
 
+## Download readiness contract
+
+The existing owner route is unchanged. It resolves the exact `(site, batch, table)` manifest and
+returns the existing short-lived presigned-download DTO only for `READY`. `PENDING` or `BUILDING`
+returns `409 Conflict`; an absent or `FAILED` row returns `404 Not Found`. Batch Detail aggregates
+segment statistics by table, so rolling deployments and legacy duplicate DTO entries still render
+one row and one request per table.

@@ -7,4 +7,3 @@ public enum BatchParquetArtifactStatus {
     READY,
     FAILED
 }
-

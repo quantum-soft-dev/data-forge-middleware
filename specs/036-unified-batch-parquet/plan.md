@@ -43,4 +43,3 @@ segments twice, uploads a temp file with `RequestBody.fromFile`, and publishes m
 - Contract: ownership isolation plus `READY`/not-ready/not-found response taxonomy.
 - Integration: PostgreSQL + LocalStack multi-segment/mixed-table finalization, ordered complete
   Parquet contents, upload failure retry, retention, and wipe cleanup.
-

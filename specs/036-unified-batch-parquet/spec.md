@@ -40,4 +40,3 @@ Large snapshots therefore show duplicate table rows and repeatedly download an i
 
 The key is stable and unique for the logical artifact. S3 `PutObject` completion precedes the
 manifest transition to `READY`, so a partial upload is never advertised.
-

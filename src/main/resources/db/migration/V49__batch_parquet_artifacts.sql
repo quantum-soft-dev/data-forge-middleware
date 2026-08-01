@@ -36,4 +36,3 @@ CREATE INDEX idx_batch_parquet_artifacts_site
 
 COMMENT ON TABLE batch_parquet_artifacts IS
     'Durable manifest and retry queue for one unified completed-batch Parquet per table.';
-

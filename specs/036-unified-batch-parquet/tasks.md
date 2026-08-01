@@ -27,6 +27,6 @@ and `npm test` when frontend is touched). Before PR: `./gradlew integrationTest`
   endpoint, return deterministic `409` vs `404`, and delete unified artifacts/rows during retention,
   admin batch deletion, and site-history wipe. Add unit and contract coverage.
 
-- [ ] **T07 — Integration and delivery docs.** PostgreSQL + LocalStack coverage for multi-segment
+- [x] **T07 — Integration and delivery docs.** PostgreSQL + LocalStack coverage for multi-segment
   mixed-table output, ordered completeness, retry, retention, and wipe; update the Delta guide and
   docs index; run the before-PR integration gate.

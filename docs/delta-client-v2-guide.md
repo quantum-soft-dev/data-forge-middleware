@@ -1,7 +1,7 @@
 # Delta Client v2 Integration Guide
 
-**Document Version**: 1.0.0
-**Last Updated**: 2026-06-06
+**Document Version**: 1.1.0
+**Last Updated**: 2026-08-01
 **Audience**: Developers building a client that streams database changes into Data Forge Middleware over the Delta Client v2 gRPC API
 **Contract**: [`src/main/proto/delta-ingestion.proto`](../src/main/proto/delta-ingestion.proto) · **Design**: [`docs/cr-delta-client-v2.md`](./cr-delta-client-v2.md)
 
@@ -41,7 +41,8 @@ A client integration is three RPCs:
 
 1. **`GetSyncState`** — ask the server where it is (its applied watermark) before opening a session.
 2. **`SubmitSchema`** — declare table structure (columns, primary keys). Required before the first session and re-sent only when the source structure changes.
-3. **`StreamChanges`** — the session: open it, push change records in `seq` order, end it. One session = one **batch** = one changelog **segment**.
+3. **`StreamChanges`** — the session: open it, push change records in `seq` order, end it. One
+   session is one **batch**, backed by one or more bounded changelog **segments**.
 
 > **A "full snapshot" is just a changelog frame whose records are all `INSERT`.** There is no separate
 > snapshot message — bootstrap and re-baseline use the same `StreamChanges` stream with `mode = FULL_SNAPSHOT`.
@@ -52,7 +53,7 @@ A client integration is three RPCs:
 |---|---|
 | **`seq`** | A per-site, strictly-increasing sequence number stamped on every change record. The server's durable high-water mark is `last_applied_seq`. |
 | **Session** | One `StreamChanges` stream: `SessionStart` → `ChangeRecord*` → `SessionEnd`. Maps onto one Batch. |
-| **Segment** | The changelog slice written when a session commits, addressed by an S3 key. |
+| **Segment** | An internal bounded changelog slice sealed during a session. A batch owns one or more segments; segment boundaries are not user-facing backup boundaries. |
 | **Checkpoint** | A server-materialized full snapshot at a `seq`, produced asynchronously. You never write it. |
 | **Watermark** | `last_applied_seq` — the highest `seq` the server has durably committed for your site. |
 
@@ -527,9 +528,12 @@ the remaining tables.
 
 You don't write these — they're how downstream tools read your data:
 
+- **Durable raw journal**: every batch is stored as one or more compressed protobuf changelog
+  segments. Ingestion seals bound memory and failure recovery; they are authoritative inputs for
+  checkpoints and Parquet materialization, but are not exposed as individual backup downloads.
 - **Bit BI** keeps using `GET /api/v1/plugins/bit-bi/sites/{siteId}/files`; the CSV it downloads is the
   **reconstructed checkpoint** (latest `snapshot.csv.gz` per table), unchanged for Bit BI.
-- **Analytics consumers** read a **sequential delta Parquet stream** per table:
+- **Realtime analytics consumers** keep reading a **sequential segment Parquet stream** per table:
   `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (zero-padded sequences — listing order is
   apply order). Each file is one committed session segment: typed columns from your submitted schema
   (all nullable) plus service columns `_op` (`INSERT`/`UPDATE`/`DELETE`), `_seq`, and `_changed`.
@@ -543,21 +547,33 @@ You don't write these — they're how downstream tools read your data:
   than the session buffer is sealed into several segments, so one table's snapshot can span several
   files (see [re-baseline](#recovery-gaps-resume-re-baseline)). Only tables with a submitted schema
   are materialized.
+- **Completed-batch download**: when a session closes, the server asynchronously replays all of its
+  non-provisional raw segments in sequence order and writes exactly one unified artifact per table:
+  `egress/{siteId}/batches/{batchId}/{table}.parquet`. This is the artifact returned by the Batch
+  Detail Parquet button. It contains every applicable batch record once in ascending `_seq` order;
+  physical seal boundaries do not appear in the UI or download contract. Finalization uses a
+  two-pass streaming replay (decimal envelope, then write), a local file-backed writer, and an S3
+  file upload, so heap use does not grow with batch size.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
   UI (presigned URL, 15 min). Parquet is the target format; the checkpoint CSV is the legacy Bit BI
   path and will go away once Bit BI migrates.
 
-Delta files appear **within seconds of `SessionCommitted`** — a session commit wakes a bounded egress
-worker pool (no cron involved). The Bit BI checkpoint CSV is still built by the async scheduler.
+Realtime segment files appear **within seconds of `SessionCommitted`**. The commit also enqueues the
+unified batch/table artifacts in a durable manifest and wakes a separate bounded worker pool. A
+manifest becomes `READY` only after its stable S3 object is complete; failed table artifacts retry
+independently. The Bit BI checkpoint CSV is still built by the async scheduler. Operators can tune
+the completed-batch pool and disk policy with `DELTA_BATCH_PARQUET_MAX_CONCURRENT`,
+`DELTA_BATCH_PARQUET_SWEEP_MS`, `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`,
+`DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`, and `DELTA_BATCH_PARQUET_TEMP_DIR`.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
 A Delta v2 session writes no `uploaded_files` — the `Batch` row it produces always has
 `uploadedFilesCount=0`. The dashboard's Upload History surfaces the real per-run signal instead:
 `GET /api/v1/history/batches/{batchId}` returns `deltaStats: [{table, inserts, updates, deletes}]`
-(computed once at commit from the accepted records and persisted on the segment), and the list
+(summed by table across every segment in the batch), and the list
 endpoint returns lightweight `deltaRecordCount`/`deltaTableCount` totals. Both are empty/null for
 v1 file-based batches. The batch detail additionally carries the session `mode`
 (DELTA / CONTINUOUS / FULL_SNAPSHOT) and `seqRange {first, last}` (feature 023, B9).
@@ -574,7 +590,7 @@ ownership, admin routes require ROLE_ADMIN):
 | `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags; 404 until the client first connects |
 | `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with `hasCsv`/`hasParquet` presence flags |
 | `.../delta/checkpoints/{table}/download?format=csv\|parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click |
-| `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for one table's **delta** Parquet of a session's segment (feature 025); 404 when the table has no declared schema / not yet egressed. Admin twin descoped 2026-07-08 — no admin batch-detail surface |
+| `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while its manifest is `PENDING`/`BUILDING`; `404` when absent or failed (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
 | `/api/v1/sites/{siteId}/delta/segments?limit=20` | GET | admin | Recent changelog segments (seq range, records, mode, createdAt) |
 | `/api/v1/sites/{siteId}/delta/checkpoints/rebuild` | POST | admin | Forced out-of-schedule checkpoint rebuild (sets `rebuild_requested`, cleared on completion) |
 | `.../delta/rebaseline` | POST | owner · admin | Sets persistent `rebaseline_requested` (V35) → `GetSyncState` answers `NEED_REBASELINE` on next connect; cleared when the FULL_SNAPSHOT session **commits**, so a snapshot that drops part-way re-arms a clean retry |
@@ -623,10 +639,12 @@ actually *stop* an uploading snapshot would mean aborting the session (refusing 
 unsafe — it is the silent FULL_SNAPSHOT-as-delta downgrade 030/T05 guards against); that is not
 implemented.
 
-**Delta Parquet in the UI (feature 025)**: the delta Batch Detail's "Table changes" card carries a
-per-table **Parquet** pill for completed sessions — one click presigns and opens the segment's
-egressed delta file (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`). Tables without a
-declared schema have no file (the egress worker skips them).
+**Unified Delta Parquet in the UI (feature 036, issue #93)**: the delta Batch Detail sums insert,
+update, and delete counts across all batch segments before rendering. The "Table changes" card has
+exactly one row and one **Parquet** pill per table. One click presigns the manifest's unified object
+(`egress/{siteId}/batches/{batchId}/{table}.parquet`), never the first realtime segment slice. While
+finalization is running the endpoint returns `409`; a missing/failed artifact returns `404`. Tables
+without a declared/renderable schema fail independently and do not block other tables.
 
 **Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
 server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily
@@ -739,15 +757,16 @@ baselines, so no SQL is produced while there is nothing consistent to base it on
 `DELTA_AUTO_REINIT` entry lands in `plugin_audit_logs`. **An ordinary re-baseline is unchanged** and
 still needs a manual reinit.
 
-**Egress Parquet goes too.** Nothing in the database names the objects under `egress/{siteId}/…`, so
-they are enumerated with a paginated prefix walk after the transaction commits and deleted with the
-rest. This is correctness, not housekeeping: the egress key is derived from sequence numbers alone
-(`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe is the one operation that
-sends those numbers back to zero, so a surviving pre-wipe file whose `(first, last)` pair recurs in
-the new epoch would be served as the new batch's delta by the Parquet download endpoint — and listed
-by the Parquet Export catalog — for any table egress does not overwrite (a table absent from the new
-segment, or skipped by the per-table coercion guard). A listing failure is logged and the wipe still
-reports success: the rows are already gone.
+**Both egress layers go too.** Unified completed-batch keys are collected from
+`batch_parquet_artifacts` before those manifest rows and their parent batches are deleted. Realtime
+segment objects have no dedicated object manifest, so the wipe also performs a paginated walk of
+`egress/{siteId}/…`; that fallback covers every segment file and any unified object left by an
+interrupted cleanup. This is correctness, not housekeeping: realtime keys are derived from sequence
+numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe sends those numbers
+back to zero. A listing failure is logged and the wipe still reports success because the database
+rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
+the unified manifest rows and exact S3 objects for the affected batch; realtime segment cleanup
+remains on its existing lifecycle path.
 
 **Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are
 after a re-baseline. They are addressed by key from the live `checkpoints` rows, so no stale read is
