@@ -1,0 +1,7 @@
+interface:
+  display_name: "Multi-review Until Ready"
+  short_description: "Review and fix until every reviewer approves"
+  default_prompt: "Use $multi-review-until-ready in the current session branch until every reviewer returns READY_TO_MERGE."
+
+policy:
+  allow_implicit_invocation: false
