@@ -164,6 +164,11 @@ public class BatchParquetArtifact {
                 || status == BatchParquetArtifactStatus.FAILED;
     }
 
+    /** @return the stable object key cleanup must remove even before metadata is published. */
+    public String expectedS3Key() {
+        return BatchParquetArtifactKey.of(siteId, batchId, tableName);
+    }
+
     private void requireBuilding() {
         if (status != BatchParquetArtifactStatus.BUILDING) {
             throw new IllegalStateException("Artifact is not BUILDING: " + status);

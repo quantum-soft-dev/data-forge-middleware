@@ -13,6 +13,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BatchParquetArtifactTest {
 
     @Test
+    void derivesItsExpectedObjectKeyInsideTheDeltaDomain() {
+        UUID batchId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "sales orders");
+
+        assertEquals("egress/%s/batches/%s/sales%%20orders.parquet".formatted(siteId, batchId),
+                artifact.expectedS3Key());
+    }
+
+    @Test
     void lifecyclePublishesMetadataOnlyAfterBuilding() {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(
                 UUID.randomUUID(), UUID.randomUUID(), "orders");
