@@ -13,5 +13,9 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T04 — Queue and publish policy.** Bulk-settle spent expired claims, remove the scan loop,
   compute aggregate stats once, enforce the byte ceiling during file output, and abandon an
   oversized deterministic artifact immediately. Tests first.
-- [x] **T05 — Documentation and pre-PR gate.** Update 036/037 docs, `AGENTS.md`, and the project
-  journal; run the full backend and integration gates before opening the PR.
+- [x] **T05 — Documentation and initial pre-PR gate.** Update 036/037 docs, `AGENTS.md`, and the
+  project journal; run the full backend and integration gates before opening the PR.
+- [x] **T06 — Review hardening and final gates.** Start post-commit enqueue in `REQUIRES_NEW`,
+  contain callback failures, and defer segment/artifact object cleanup until the atomic database
+  deletion commits. Add transaction-boundary and rollback regression tests first; rerun
+  `./gradlew test -PexcludeIntegration` and `./gradlew integrationTest` after the review fix.
