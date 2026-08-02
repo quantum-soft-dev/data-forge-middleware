@@ -151,7 +151,9 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
         Path artifactFile = tempDir.resolve("orders.parquet");
         Files.write(artifactFile, new byte[]{1, 2, 3, 4});
         String artifactKey = checkpointStorage.uploadBatchParquet(
-                siteId, eligibleBatchId, "orders", artifactFile);
+                siteId, eligibleBatchId, "orders", UUID.randomUUID(), artifactFile);
+        String orphanAttemptKey = checkpointStorage.uploadBatchParquet(
+                siteId, eligibleBatchId, "orders", UUID.randomUUID(), artifactFile);
         jdbcTemplate.update("""
                 INSERT INTO batch_parquet_artifacts
                     (id, site_id, batch_id, table_name, status, s3_key, row_count, file_size,
@@ -160,6 +162,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
                 """, UUID.randomUUID(), siteId, eligibleBatchId, artifactKey);
         assertThat(checkpointStorage.exists(artifactKey)).isTrue();
+        assertThat(checkpointStorage.exists(orphanAttemptKey)).isTrue();
 
         BatchRetentionService.BatchCleanupSummary summary = batchRetentionService.runCleanup(
                 new BatchCleanupRequest(siteId, null, null, null, 100, false)
@@ -178,6 +181,7 @@ class BatchRetentionIntegrationTest extends AbstractIntegrationTest {
                 "SELECT COUNT(*) FROM batch_parquet_artifacts WHERE batch_id = ?",
                 Long.class, eligibleBatchId)).isZero();
         assertThat(checkpointStorage.exists(artifactKey)).isFalse();
+        assertThat(checkpointStorage.exists(orphanAttemptKey)).isFalse();
     }
 
     @Test

@@ -180,7 +180,8 @@ class BatchParquetFinalizationServiceTest {
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("first", record(1, Op.INSERT), record(2, Op.INSERT));
         stream("second", record(3, Op.INSERT), record(4, Op.UPDATE));
-        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(Path.class)))
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
                 .thenReturn("egress/orders.parquet");
 
         assertTrue(service.finalizeNext());
@@ -215,9 +216,11 @@ class BatchParquetFinalizationServiceTest {
                 "customers", schema(), "orders", schema()));
         stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT),
                 record("customers", 3, Op.INSERT), record("orders", 4, Op.DELETE));
-        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("customers"), any(Path.class)))
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("customers"), any(UUID.class), any(Path.class)))
                 .thenReturn("egress/customers.parquet");
-        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(Path.class)))
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
                 .thenReturn("egress/orders.parquet");
 
         assertTrue(service.finalizeNext());
@@ -245,7 +248,8 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("customers", schema()));
         stream("mixed", record("customers", 1, Op.INSERT), record("ghost", 2, Op.INSERT));
-        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("customers"), any(Path.class)))
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("customers"), any(UUID.class), any(Path.class)))
                 .thenReturn("egress/customers.parquet");
 
         assertTrue(service.finalizeNext());
@@ -266,7 +270,7 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any()))
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
                 .thenReturn("egress/orders.parquet");
 
         assertTrue(service.finalizeNext());
@@ -276,7 +280,7 @@ class BatchParquetFinalizationServiceTest {
         InOrder order = inOrder(artifactRepository, segmentService, storage);
         order.verify(artifactRepository).save(any(BatchParquetArtifact.class));
         order.verify(segmentService).forEachRecord(any(), any());
-        order.verify(storage).uploadBatchParquet(any(), any(), any(), any());
+        order.verify(storage).uploadBatchParquet(any(), any(), any(), any(), any());
         assertEquals(1, artifact.getAttemptCount());
     }
 
@@ -290,7 +294,8 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(Path.class)))
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
                 .thenThrow(new S3CheckpointStorage.CheckpointStorageException("upload failed", null));
 
         assertTrue(service.finalizeNext());
@@ -318,7 +323,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
         assertFalse(artifact.isRetryable());
         assertTrue(artifact.getLastError().contains("No declared schema"));
-        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
+        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -337,7 +342,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
         assertEquals(1, artifact.getAttemptCount());
         assertTrue(artifact.getLastError().contains("exceeds temp-file limit"));
-        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
+        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any(), any());
         try (java.util.stream.Stream<Path> files = Files.list(tempDir)) {
             assertTrue(files.findAny().isEmpty(), "partial oversized file is deleted");
         }
@@ -386,7 +391,8 @@ class BatchParquetFinalizationServiceTest {
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
                 "customers", schema(), "orders", schema()));
         stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT));
-        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), any(), any(Path.class)))
+        when(storage.uploadBatchParquet(
+                eq(siteId), eq(batchId), any(), any(UUID.class), any(Path.class)))
                 .thenAnswer(invocation -> "egress/" + invocation.getArgument(2) + ".parquet");
         doAnswer(invocation -> {
             BatchParquetArtifact saved = invocation.getArgument(0);
@@ -415,7 +421,7 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             // A site wipe removed the manifest row while this build was streaming from S3.
             when(artifactRepository.findById(artifact.getId())).thenReturn(Optional.empty());
             return "egress/orders.parquet";
@@ -439,10 +445,11 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+        String staleAttemptKey = "egress/site/batches/batch/attempts/old/orders.parquet";
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             // Our lease lapsed and another worker reclaimed the row while we were still uploading.
             artifact.markBuilding();
-            return "egress/orders.parquet";
+            return staleAttemptKey;
         });
 
         assertTrue(service.finalizeNext());
@@ -451,6 +458,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.BUILDING, artifact.getStatus());
         assertEquals(2, artifact.getAttemptCount());
         assertNull(artifact.getS3Key());
+        verify(storage).deleteBatchParquet(staleAttemptKey);
     }
 
     @Test
@@ -470,7 +478,7 @@ class BatchParquetFinalizationServiceTest {
         // Publishing it would advertise a silently truncated download as complete.
         assertEquals(BatchParquetArtifactStatus.FAILED, artifact.getStatus());
         assertTrue(artifact.getLastError().contains("does not match segment stats"));
-        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any());
+        verify(storage, never()).uploadBatchParquet(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -482,7 +490,8 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(legacy));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("legacy", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/orders.parquet");
 
         assertTrue(service.finalizeNext());
 
@@ -510,7 +519,7 @@ class BatchParquetFinalizationServiceTest {
         // The upload holds the build open until a renewal lands: without one, lease-seconds would
         // be a hard ceiling on build time and a long build would be reclaimed mid-flight.
         AtomicReference<UUID> tokenDuringBuild = new AtomicReference<>();
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             tokenDuringBuild.set(artifact.getClaimToken());
             assertTrue(renewed.await(10, TimeUnit.SECONDS), "the build lease was never renewed");
             return "egress/orders.parquet";
@@ -546,7 +555,7 @@ class BatchParquetFinalizationServiceTest {
             renewed.countDown();
             return 1;
         });
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation -> {
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             assertTrue(renewed.await(10, TimeUnit.SECONDS), "both sibling leases were not renewed");
             return "egress/" + invocation.getArgument(2) + ".parquet";
         });
@@ -572,7 +581,7 @@ class BatchParquetFinalizationServiceTest {
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of(
                 "customers", schema(), "orders", schema()));
         stream("mixed", record("customers", 1, Op.INSERT), record("orders", 2, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenAnswer(invocation ->
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any())).thenAnswer(invocation ->
                 "egress/" + invocation.getArgument(2) + ".parquet");
         AtomicBoolean publishing = new AtomicBoolean();
         AtomicBoolean renewedDuringPublish = new AtomicBoolean();
@@ -613,7 +622,8 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/orders.parquet");
 
         assertTrue(newService(7).finalizeNext());
 
@@ -639,7 +649,8 @@ class BatchParquetFinalizationServiceTest {
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
         stream("only", record(1, Op.INSERT));
-        when(storage.uploadBatchParquet(any(), any(), any(), any())).thenReturn("egress/orders.parquet");
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/orders.parquet");
 
         assertTrue(newService(7).finalizeNext());
 

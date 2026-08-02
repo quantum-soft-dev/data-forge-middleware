@@ -117,8 +117,9 @@ public class S3CheckpointStorage {
     }
 
     /** Upload one completed batch/table artifact directly from a local file. */
-    public String uploadBatchParquet(UUID siteId, UUID batchId, String tableName, Path file) {
-        String s3Key = batchParquetKey(siteId, batchId, tableName);
+    public String uploadBatchParquet(UUID siteId, UUID batchId, String tableName,
+                                     UUID claimToken, Path file) {
+        String s3Key = BatchParquetArtifactKey.attempt(siteId, batchId, tableName, claimToken);
         try {
             long size = java.nio.file.Files.size(file);
             PutObjectRequest request = PutObjectRequest.builder()
@@ -155,6 +156,11 @@ public class S3CheckpointStorage {
     /** Stable, unique object key for one logical batch/table artifact. */
     public static String batchParquetKey(UUID siteId, UUID batchId, String tableName) {
         return BatchParquetArtifactKey.of(siteId, batchId, tableName);
+    }
+
+    /** Deterministic namespace used to reclaim every attempt belonging to one batch. */
+    public static String batchParquetPrefix(UUID siteId, UUID batchId) {
+        return BatchParquetArtifactKey.batchPrefix(siteId, batchId);
     }
 
     /** @return the delta Parquet key for one table's slice of a segment (feature 025). */

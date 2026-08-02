@@ -111,7 +111,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         Path artifactFile = tempDir.resolve("customers.parquet");
         Files.write(artifactFile, new byte[]{1, 2, 3, 4});
         String artifactKey = checkpointStorage.uploadBatchParquet(
-                SITE_ID, batchId, "customers", artifactFile);
+                SITE_ID, batchId, "customers", UUID.randomUUID(), artifactFile);
         seedReadyArtifact(batchId, artifactKey);
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
@@ -152,7 +152,15 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         // resolves to — pre-wipe rows served as the new batch's delta.
         checkpointStorage.uploadDelta(SITE_ID, "customers", 1L, 2L, new byte[]{1, 2, 3});
         checkpointStorage.uploadDelta(SITE_ID, "orders", 3L, 4L, new byte[]{4, 5, 6});
-        assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).hasSize(2);
+        try {
+            Path orphan = tempDir.resolve("orphan-attempt.parquet");
+            Files.write(orphan, new byte[]{7, 8, 9});
+            checkpointStorage.uploadBatchParquet(
+                    SITE_ID, UUID.randomUUID(), "customers", UUID.randomUUID(), orphan);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).hasSize(3);
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 

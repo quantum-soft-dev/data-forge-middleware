@@ -549,16 +549,17 @@ You don't write these — they're how downstream tools read your data:
   are materialized.
 - **Completed-batch download**: when a session closes, the server asynchronously replays all of its
   non-provisional raw segments in sequence order and writes exactly one unified artifact per table:
-  `egress/{siteId}/batches/{batchId}/{table}.parquet`. This is the artifact returned by the Batch
-  Detail Parquet button. It contains every applicable batch record once in ascending `_seq` order;
-  physical seal boundaries do not appear in the UI or download contract. One batch claim opens a
-  file-backed writer per retryable table and fans a shared streaming replay out by table name. With
-  no decimal columns the changelog is read once; if any claimed table declares decimals, one shared
-  envelope scan precedes one shared write replay. Replay cost is therefore one or two full reads,
-  independent of table count. Heap is bounded by open writers × one Parquet row-group buffer rather
-  than batch rows. `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` is enforced per artifact during the write;
-  an artifact that crosses it is abandoned on its first deterministic attempt rather than fully
-  rewritten on every retry.
+  `egress/{siteId}/batches/{batchId}/attempts/{claimToken}/{encodedTable}.parquet`. The manifest's
+  winning key is the artifact returned by the Batch Detail Parquet button. It contains every
+  applicable batch record once in ascending `_seq` order; physical seal boundaries do not appear in
+  the UI or download contract. One batch claim opens a file-backed writer per retryable table and
+  fans a shared streaming replay out by table name. With no decimal columns the changelog is read
+  once; if any claimed table declares decimals, one shared envelope scan precedes one shared write
+  replay. Replay cost is therefore one or two full reads, independent of table count. Heap is
+  bounded by open writers × one Parquet row-group buffer rather than batch rows.
+  `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` is enforced per artifact during the write; an artifact that
+  crosses it is abandoned on its first deterministic attempt rather than fully rewritten on every
+  retry.
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
@@ -670,11 +671,12 @@ implemented.
 **Unified Delta Parquet in the UI (feature 036, issue #93)**: the delta Batch Detail sums insert,
 update, and delete counts across all batch segments before rendering. The "Table changes" card has
 exactly one row and one **Parquet** pill per table. One click presigns the manifest's unified object
-(`egress/{siteId}/batches/{batchId}/{table}.parquet`), never the first realtime segment slice. While
-an attempt is queued, running or awaiting retry the endpoint returns `409`; a missing or abandoned
-artifact returns `404`. Tables without a declared/renderable schema fail independently and do not
-block other tables. A finished batch that predates the feature is enqueued by the first click
-(`409`) and downloads on the next one.
+(`egress/{siteId}/batches/{batchId}/attempts/{claimToken}/{encodedTable}.parquet` for new claims),
+never the first realtime segment slice. Existing manifests may still point to the compatible
+root-level stable layout. While an attempt is queued, running or awaiting retry the endpoint returns
+`409`; a missing or abandoned artifact returns `404`. Tables without a declared/renderable schema
+fail independently and do not block other tables. A finished batch that predates the feature is
+enqueued by the first click (`409`) and downloads on the next one.
 
 **Download error toasts (review rounds 2–3)**: a failed pill click shows exactly one toast. The
 server's `ErrorResponseDto.message` wins when present (e.g. the 503 "Object storage is temporarily
@@ -787,17 +789,21 @@ baselines, so no SQL is produced while there is nothing consistent to base it on
 `DELTA_AUTO_REINIT` entry lands in `plugin_audit_logs`. **An ordinary re-baseline is unchanged** and
 still needs a manual reinit.
 
-**Both egress layers go too.** Unified completed-batch keys are collected from
-`batch_parquet_artifacts` before those manifest rows and their parent batches are deleted. Realtime
-segment objects have no dedicated object manifest, so the wipe also performs a paginated walk of
-`egress/{siteId}/…`; that fallback covers every segment file and any unified object left by an
-interrupted cleanup. This is correctness, not housekeeping: realtime keys are derived from sequence
-numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe sends those numbers
-back to zero. A listing failure is logged and the wipe still reports success because the database
-rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
-the unified manifest rows and exact S3 objects for the affected batch; explicit admin deletion
-defers those object removes until its database transaction commits. Realtime segment cleanup
-remains on its existing lifecycle path.
+**Both egress layers go too.** Unified completed-batch manifests record the exact winning key. New
+claims write immutable
+`egress/{siteId}/batches/{batchId}/attempts/{claimToken}/{encodedTable}.parquet` objects; rows made
+before feature 040 keep their root-level stable keys and need no migration. Realtime segment objects
+have no dedicated object manifest, so the wipe performs a paginated walk of
+`egress/{siteId}/…`; that covers every segment file, every unified attempt, and any object left by
+an interrupted publication or cleanup. This is correctness, not housekeeping: realtime keys are
+derived from sequence numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe
+sends those numbers back to zero. A listing failure is logged and the wipe still reports success
+because the database rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
+the unified manifest rows, preserve recorded/legacy exact-key fallbacks, and paginate the complete
+batch prefix so a process-death attempt with no published metadata is still found. Explicit admin
+deletion defers prefix enumeration and object removal until its database transaction commits.
+Listing/deletion failures remain best effort. Realtime segment cleanup remains on its existing
+lifecycle path.
 
 **Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are
 after a re-baseline. They are addressed by key from the live `checkpoints` rows, so no stale read is

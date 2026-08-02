@@ -130,12 +130,16 @@ class BatchRetentionServiceTest {
         when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
         artifact.markBuilding();
-        artifact.markReady("egress/batch/orders.parquet", 10, 400, "hash");
+        String batchPrefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
+        String winnerKey = batchPrefix + "attempts/winner/orders.parquet";
+        String orphanKey = batchPrefix + "attempts/dead/items.parquet";
+        artifact.markReady(winnerKey, 10, 400, "hash");
         // Mid-build: no recorded key, yet an attempt may already have uploaded the object. Reading
         // s3_key here would silently orphan it — the key has to be derived from the row's identity.
         BatchParquetArtifact building = BatchParquetArtifact.pending(batchId, siteId, "items");
         building.markBuilding();
         when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact, building));
+        when(s3FileStorageService.listAllKeys(batchPrefix)).thenReturn(List.of(winnerKey, orphanKey));
 
         ArgumentCaptor<List<String>> deleted = ArgumentCaptor.forClass(List.class);
         when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(1, List.of()));
@@ -147,8 +151,7 @@ class BatchRetentionServiceTest {
         assertThat(summary.deletedBatches()).isEqualTo(1);
         verify(s3FileStorageService).deleteObjects(deleted.capture());
         assertThat(deleted.getValue()).contains(
-                S3CheckpointStorage.batchParquetKey(siteId, batchId, "orders"),
-                S3CheckpointStorage.batchParquetKey(siteId, batchId, "items"));
+                winnerKey, orphanKey, S3CheckpointStorage.batchParquetKey(siteId, batchId, "items"));
         verify(sqlGenerationRepository).deleteByComparisonBatchId(batchId);
         verify(sqlGenerationRepository).deleteBySourceBatchId(batchId);
         // Delta v2 changelog segments must be removed before the batch so the batch_id FK does not block it.
@@ -156,7 +159,40 @@ class BatchRetentionServiceTest {
         verify(artifactRepository).deleteByBatchId(batchId);
         verify(batchRepository).deleteById(batchId);
         assertThat(summary.deletedBytes()).isEqualTo(500L);
-        assertThat(summary.deletedFiles()).isEqualTo(3);
+        assertThat(summary.deletedFiles()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("prefix listing failure preserves exact-key cleanup and committed DB deletion")
+    void cleanupFallsBackToRecordedKeysWhenPrefixListingFails() {
+        Site site = mock(Site.class);
+        Batch batch = mock(Batch.class);
+        when(site.getId()).thenReturn(siteId);
+        when(site.getRetentionDays()).thenReturn(45);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
+                .thenReturn(List.of(batch));
+        when(batch.getId()).thenReturn(batchId);
+        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        BatchParquetArtifact legacy = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        legacy.markBuilding();
+        String legacyKey = legacy.expectedS3Key();
+        legacy.markReady(legacyKey, 1, 4, "hash");
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(legacy));
+        when(s3FileStorageService.listAllKeys(S3CheckpointStorage.batchParquetPrefix(siteId, batchId)))
+                .thenThrow(new S3FileStorageService.FileStorageException("list denied"));
+        when(s3FileStorageService.deleteObjects(List.of(legacyKey)))
+                .thenReturn(new DeleteObjectsResult(1, List.of()));
+
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
+                new BatchRetentionService.BatchCleanupRequest(
+                        siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+
+        assertThat(summary.deletedBatches()).isEqualTo(1);
+        assertThat(summary.errors()).anyMatch(error -> error.contains("list denied"));
+        verify(s3FileStorageService).deleteObjects(List.of(legacyKey));
+        verify(batchRepository).deleteById(batchId);
     }
 
     @Test
