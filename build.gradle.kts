@@ -148,6 +148,11 @@ tasks.withType<Test> {
 // tests only, skipping the Testcontainers integration suite (fast, no Docker required).
 // Default `./gradlew test` (CI) still runs everything.
 tasks.named<Test>("test") {
+    inputs.files("AGENTS.md", "CLAUDE.md")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir("src/main/resources/db/migration")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
     }
