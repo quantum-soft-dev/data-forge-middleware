@@ -5,7 +5,7 @@
 #
 #   - Backend changes  -> ./gradlew test -PexcludeIntegration  (unit + contract, no Docker)
 #   - Frontend changes -> tsc --noEmit + eslint + npm --prefix frontend test
-#   - Docs/config-only -> skipped
+#   - Docs/config-only -> skipped, except the focused migration-documentation guard
 #
 # Integration (Testcontainers) tests are NOT run here — they are the before-PR gate
 # (`./gradlew integrationTest`) and the CI required check on PRs to develop.
@@ -27,17 +27,30 @@ staged="$(git diff --cached --name-status --diff-filter=ACMDR | awk '{ for (i = 
 
 backend_changed=false
 frontend_changed=false
+migration_guidance_changed=false
 
 while IFS= read -r f; do
   case "$f" in
     frontend/*)
       frontend_changed=true ;;
+    AGENTS.md|CLAUDE.md|src/main/resources/db/migration/*)
+      migration_guidance_changed=true ;;
     *.java|build.gradle.kts|settings.gradle.kts|gradle.properties|gradle/*|gradlew*)
       backend_changed=true ;;
   esac
 done <<< "$staged"
 
 status=0
+
+if [ "$migration_guidance_changed" = true ] && [ "$backend_changed" = false ]; then
+  echo "▶ pre-commit: migration documentation consistency"
+  if ! ./gradlew test -PexcludeIntegration \
+      --tests com.bitbi.dfm.documentation.MigrationDocumentationConsistencyTest \
+      --no-daemon --console=plain; then
+    echo "✖ Migration documentation drift detected — commit blocked."
+    status=1
+  fi
+fi
 
 if [ "$backend_changed" = true ]; then
   echo "▶ pre-commit: backend tests (./gradlew test -PexcludeIntegration)"
@@ -69,7 +82,8 @@ if [ "$frontend_changed" = true ]; then
   fi
 fi
 
-if [ "$backend_changed" = false ] && [ "$frontend_changed" = false ]; then
+if [ "$backend_changed" = false ] && [ "$frontend_changed" = false ] \
+    && [ "$migration_guidance_changed" = false ]; then
   echo "▶ pre-commit: no backend/frontend changes staged — test gate skipped."
 fi
 
