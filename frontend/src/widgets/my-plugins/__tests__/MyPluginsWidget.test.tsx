@@ -26,6 +26,7 @@ vi.mock('@/features/my-plugins/api/myPluginsQueries', () => ({
 vi.mock('@/features/my-plugins/api/myPluginsMutations', () => ({
   useActivatePluginMutation: vi.fn(),
   useDeactivatePluginMutation: vi.fn(),
+  useRotatePluginSecretMutation: vi.fn(),
 }))
 
 vi.mock('@/features/my-plugins/api/pluginLogsQueries', () => ({
@@ -107,6 +108,7 @@ describe('MyPluginsWidget', () => {
     // Default mock implementations
     vi.mocked(myPluginsMutations.useActivatePluginMutation).mockReturnValue(mockMutationResult as any)
     vi.mocked(myPluginsMutations.useDeactivatePluginMutation).mockReturnValue(mockMutationResult as any)
+    vi.mocked(myPluginsMutations.useRotatePluginSecretMutation).mockReturnValue(mockMutationResult as any)
   })
 
   describe('Loading State', () => {

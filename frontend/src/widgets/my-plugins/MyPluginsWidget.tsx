@@ -15,6 +15,7 @@ import {
   useAvailablePluginsQuery,
   useActivatePluginMutation,
   useDeactivatePluginMutation,
+  useRotatePluginSecretMutation,
 } from '@/features/my-plugins'
 import { PluginList } from '@/features/my-plugins/ui/PluginList'
 import { PluginLogsTab } from '@/features/my-plugins/ui/PluginLogsTab'
@@ -48,6 +49,9 @@ export function MyPluginsWidget() {
     onSecretRevealed: setRevealedSecret,
   })
   const deactivatePluginMutation = useDeactivatePluginMutation()
+  const rotateSecretMutation = useRotatePluginSecretMutation({
+    onSecretRevealed: setRevealedSecret,
+  })
 
   // Track pending plugin IDs with useMemo to prevent unnecessary re-renders
   const pendingPluginIds = useMemo(() => {
@@ -58,12 +62,17 @@ export function MyPluginsWidget() {
     if (deactivatePluginMutation.isPending && deactivatePluginMutation.variables) {
       ids.add(deactivatePluginMutation.variables)
     }
+    if (rotateSecretMutation.isPending && rotateSecretMutation.variables) {
+      ids.add(rotateSecretMutation.variables)
+    }
     return ids
   }, [
     activatePluginMutation.isPending,
     activatePluginMutation.variables,
     deactivatePluginMutation.isPending,
     deactivatePluginMutation.variables,
+    rotateSecretMutation.isPending,
+    rotateSecretMutation.variables,
   ])
 
   // Handlers
@@ -78,6 +87,10 @@ export function MyPluginsWidget() {
   const handleDeactivate = useCallback((pluginId: string) => {
     deactivatePluginMutation.mutate(pluginId)
   }, [deactivatePluginMutation])
+
+  const handleRotateSecret = useCallback((pluginId: string) => {
+    rotateSecretMutation.mutate(pluginId)
+  }, [rotateSecretMutation])
 
   const handleDialogClose = useCallback(() => {
     setDialogOpen(false)
@@ -135,6 +148,7 @@ export function MyPluginsWidget() {
               pendingPluginIds={pendingPluginIds}
               onActivate={handleActivateClick}
               onDeactivate={handleDeactivate}
+              onRotateSecret={handleRotateSecret}
             />
           </TabsContent>
 

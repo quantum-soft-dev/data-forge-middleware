@@ -7,7 +7,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { pluginKeys } from '@/entities/plugin/api/keys'
-import { activatePlugin, deactivatePlugin } from './myPluginsApi'
+import { activatePlugin, deactivatePlugin, rotatePluginSecret } from './myPluginsApi'
 import { parsePluginSecret } from '../model/pluginSecret'
 import type { PluginSecret } from '../model/pluginSecret'
 import type { ActivatePluginRequest, PluginActivationResponse } from '../model/types'
@@ -79,6 +79,39 @@ export function useDeactivatePluginMutation() {
     onError: (error: Error) => {
       // Show error toast
       toast.error('Failed to deactivate plugin', {
+        description: error.message,
+      })
+    },
+  })
+}
+
+interface RotatePluginSecretMutationOptions {
+  /** Called with the reissued secret — the single chance to show it. */
+  onSecretRevealed?: (secret: PluginSecret) => void
+}
+
+/**
+ * Hook to reissue a plugin's secret for the current account.
+ *
+ * The previous secret stops authenticating immediately, so the new value is
+ * handed straight to the caller and never cached or toasted.
+ */
+export function useRotatePluginSecretMutation(
+  options: RotatePluginSecretMutationOptions = {}
+) {
+  const { onSecretRevealed } = options
+
+  return useMutation({
+    mutationFn: (pluginId: string) => rotatePluginSecret(pluginId),
+    onSuccess: (secret: PluginSecret) => {
+      // Deliberately without the secret itself
+      toast.success('Secret rotated', {
+        description: 'The previous value has stopped working.',
+      })
+      onSecretRevealed?.(secret)
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to rotate secret', {
         description: error.message,
       })
     },

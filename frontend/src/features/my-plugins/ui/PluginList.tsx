@@ -24,6 +24,8 @@ interface PluginListProps {
   onActivate?: (pluginId: string) => void
   /** Callback when deactivate button is clicked */
   onDeactivate?: (pluginId: string) => void
+  /** Callback when the rotate-secret button is clicked */
+  onRotateSecret?: (pluginId: string) => void
 }
 
 export function PluginList({
@@ -34,6 +36,7 @@ export function PluginList({
   pendingPluginIds = new Set(),
   onActivate,
   onDeactivate,
+  onRotateSecret,
 }: PluginListProps) {
   if (isLoading) {
     return (
@@ -86,6 +89,7 @@ export function PluginList({
           isPending={pendingPluginIds.has(plugin.pluginId)}
           onActivate={onActivate}
           onDeactivate={onDeactivate}
+          onRotateSecret={onRotateSecret}
         />
       ))}
       {/* Then unactivated available plugins */}
