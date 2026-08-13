@@ -24,6 +24,9 @@ export type {
   BatchSqlStatus,
 } from './model/types'
 
+export type { PluginSecret } from './model/pluginSecret'
+export { parsePluginSecret, PARQUET_EXPORT_PLUGIN_ID } from './model/pluginSecret'
+
 // API Functions
 export {
   myPluginsApi,
