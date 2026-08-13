@@ -20,7 +20,8 @@ import { PluginList } from '@/features/my-plugins/ui/PluginList'
 import { PluginLogsTab } from '@/features/my-plugins/ui/PluginLogsTab'
 import { BatchSqlTab } from '@/features/my-plugins/ui/BatchSqlTab'
 import { PluginActivationDialog } from '@/features/my-plugins/ui/PluginActivationDialog'
-import type { AvailablePlugin, ActivatePluginRequest } from '@/features/my-plugins'
+import { PluginSecretDialog } from '@/features/my-plugins/ui/PluginSecretDialog'
+import type { AvailablePlugin, ActivatePluginRequest, PluginSecret } from '@/features/my-plugins'
 
 export function MyPluginsWidget() {
   // Queries
@@ -35,13 +36,18 @@ export function MyPluginsWidget() {
     isLoading: isLoadingAvailablePlugins,
   } = useAvailablePluginsQuery()
 
-  // Mutations
-  const activatePluginMutation = useActivatePluginMutation()
-  const deactivatePluginMutation = useDeactivatePluginMutation()
-
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedPlugin, setSelectedPlugin] = useState<AvailablePlugin | null>(null)
+
+  // Issued secret, held only while the reveal dialog is open — it is never cached
+  const [revealedSecret, setRevealedSecret] = useState<PluginSecret | null>(null)
+
+  // Mutations
+  const activatePluginMutation = useActivatePluginMutation({
+    onSecretRevealed: setRevealedSecret,
+  })
+  const deactivatePluginMutation = useDeactivatePluginMutation()
 
   // Track pending plugin IDs with useMemo to prevent unnecessary re-renders
   const pendingPluginIds = useMemo(() => {
@@ -147,6 +153,16 @@ export function MyPluginsWidget() {
           onClose={handleDialogClose}
           onSubmit={handleDialogSubmit}
           isLoading={activatePluginMutation.isPending}
+        />
+
+        <PluginSecretDialog
+          secret={revealedSecret}
+          pluginName={
+            revealedSecret
+              ? availablePlugins?.find((p) => p.pluginId === revealedSecret.pluginId)?.displayName
+              : undefined
+          }
+          onClose={() => setRevealedSecret(null)}
         />
       </CardContent>
     </Card>

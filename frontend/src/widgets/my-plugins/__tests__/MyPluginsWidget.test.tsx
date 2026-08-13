@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement, type ReactNode } from 'react'
@@ -262,6 +262,36 @@ describe('MyPluginsWidget', () => {
         },
         expect.any(Object)
       )
+    })
+
+    it('should reveal the issued secret when the activation returns one', async () => {
+      vi.mocked(myPluginsQueries.useAccountPluginsQuery).mockReturnValue({
+        data: mockAccountPluginsResponse,
+        isLoading: false,
+        error: null,
+      } as any)
+      vi.mocked(myPluginsQueries.useAvailablePluginsQuery).mockReturnValue({
+        data: mockAvailablePlugins,
+        isLoading: false,
+        error: null,
+      } as any)
+
+      render(<MyPluginsWidget />, { wrapper: createWrapper() })
+
+      // The widget subscribes to the secret through the activation mutation.
+      const options = vi.mocked(myPluginsMutations.useActivatePluginMutation).mock.calls.at(-1)?.[0]
+      expect(options?.onSecretRevealed).toBeTypeOf('function')
+
+      act(() => {
+        options!.onSecretRevealed!({
+          kind: 'api-key',
+          pluginId: 'bit-bi',
+          value: 'plk_revealed_secret_value',
+        })
+      })
+
+      expect(await screen.findByText('plk_revealed_secret_value')).toBeInTheDocument()
+      expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument()
     })
   })
 
