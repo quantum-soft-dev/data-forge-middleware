@@ -150,7 +150,9 @@ Used for accessing SQL changes and site data after plugin is activated.
 ### Rotating the API Key
 
 The account owner rotates the key over HTTP, authenticated with their own OAuth2 token — the
-same shape as the Parquet Export plugin's `rotate-password`.
+same shape as the Parquet Export plugin's `rotate-password`. The same action sits in the UI as
+**Rotate API key** on the plugin card in Dashboard → My Plugins, which shows the new key once in
+a copy-and-acknowledge dialog.
 
 ```bash
 curl -X POST https://api.dataforge.com/api/v1/account/plugins/bit-bi/rotate-api-key \
@@ -258,7 +260,12 @@ curl -X POST https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/activate \
 }
 ```
 
-> **Important**: Store the `apiKey` securely. It is returned **only during activation** and cannot be retrieved later. If lost, re-activate the plugin to generate a new key.
+> **Important**: Store the `apiKey` securely. It is returned **only for a new activation or a
+> reactivation** and cannot be retrieved later. Re-posting `activate` for an already-active
+> plugin updates the configuration and returns no key. If the key is lost, rotate it —
+> `POST /api/v1/account/plugins/bit-bi/rotate-api-key` (owner Auth0 token), or the **Rotate API
+> key** action on the plugin card in Dashboard → My Plugins. The new key is shown once and the
+> previous one stops authenticating immediately.
 
 ### Step 4: Store API Key
 
