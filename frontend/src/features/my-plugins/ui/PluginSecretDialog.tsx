@@ -87,8 +87,13 @@ export function PluginSecretDialog({ secret, pluginName, onClose }: PluginSecret
   const isBasicAuth = secret.kind === 'basic-auth'
 
   return (
-    <AlertDialog open onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <AlertDialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+    // Dismissal is deliberately limited to the acknowledge button: Escape or a
+    // stray outside click would discard a value the backend cannot reissue.
+    <AlertDialog open>
+      <AlertDialogContent
+        className="max-h-[90vh] max-w-lg overflow-y-auto"
+        onEscapeKeyDown={(event) => event.preventDefault()}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>
             {isBasicAuth ? 'Save your credentials' : 'Save your API key'}

@@ -75,6 +75,15 @@ export function MyPluginsWidget() {
     rotateSecretMutation.variables,
   ])
 
+  // Rotation is tracked apart from activate/deactivate so the card can label it
+  const rotatingPluginIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (rotateSecretMutation.isPending && rotateSecretMutation.variables) {
+      ids.add(rotateSecretMutation.variables)
+    }
+    return ids
+  }, [rotateSecretMutation.isPending, rotateSecretMutation.variables])
+
   // Handlers
   const handleActivateClick = useCallback((pluginId: string) => {
     const plugin = availablePlugins?.find((p) => p.pluginId === pluginId)
@@ -146,6 +155,7 @@ export function MyPluginsWidget() {
               isLoading={isLoading}
               error={accountPluginsError}
               pendingPluginIds={pendingPluginIds}
+              rotatingPluginIds={rotatingPluginIds}
               onActivate={handleActivateClick}
               onDeactivate={handleDeactivate}
               onRotateSecret={handleRotateSecret}

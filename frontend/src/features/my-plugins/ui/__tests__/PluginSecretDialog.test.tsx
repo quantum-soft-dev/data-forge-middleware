@@ -91,6 +91,17 @@ describe('PluginSecretDialog', () => {
     expect(writeText).toHaveBeenCalledWith('Kf82abcdefghijklmnopqrstuvwxyz12')
   })
 
+  it('should survive an Escape keypress so the one-shot secret is not lost', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    render(<PluginSecretDialog secret={apiKeySecret} onClose={onClose} />)
+
+    await user.keyboard('{Escape}')
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByText('plk_abcdefghijklmnopqrstuvwxyz012345')).toBeInTheDocument()
+  })
+
   it('should call onClose when the acknowledge button is clicked', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()

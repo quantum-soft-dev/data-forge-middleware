@@ -85,6 +85,19 @@ describe('PluginCard', () => {
 
       expect(screen.getByRole('button', { name: /rotate api key/i })).toBeDisabled()
     })
+
+    it('should show progress on the rotate button while rotating', () => {
+      render(<PluginCard plugin={mockActivePlugin} isPending isRotating />)
+
+      expect(screen.getByRole('button', { name: /rotating/i })).toBeDisabled()
+    })
+
+    it('should not claim deactivation while a rotation is in flight', () => {
+      render(<PluginCard plugin={mockActivePlugin} isPending isRotating />)
+
+      expect(screen.getByRole('button', { name: 'Deactivate' })).toBeInTheDocument()
+      expect(screen.queryByText('Deactivating...')).not.toBeInTheDocument()
+    })
   })
 
   describe('Display', () => {

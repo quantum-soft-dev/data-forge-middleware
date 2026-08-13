@@ -29,6 +29,8 @@ interface PluginCardProps {
   onRotateSecret?: (pluginId: string) => void
   /** Whether an operation is pending */
   isPending?: boolean
+  /** Whether the pending operation is a secret rotation */
+  isRotating?: boolean
 }
 
 export function PluginCard({
@@ -39,6 +41,7 @@ export function PluginCard({
   onDeactivate,
   onRotateSecret,
   isPending = false,
+  isRotating = false,
 }: PluginCardProps) {
   const pluginId = plugin?.pluginId || availablePlugin?.pluginId || ''
   const pluginName = plugin?.pluginName || availablePlugin?.displayName || ''
@@ -104,7 +107,7 @@ export function PluginCard({
             disabled={isPending}
           >
             <KeyRound className="mr-1 h-3.5 w-3.5" />
-            {rotateLabel}
+            {isRotating ? 'Rotating...' : rotateLabel}
           </Button>
         )}
         {isActive ? (
@@ -115,7 +118,7 @@ export function PluginCard({
             onClick={() => onDeactivate?.(pluginId)}
             disabled={isPending}
           >
-            {isPending ? 'Deactivating...' : 'Deactivate'}
+            {isPending && !isRotating ? 'Deactivating...' : 'Deactivate'}
           </Button>
         ) : (
           <Button
