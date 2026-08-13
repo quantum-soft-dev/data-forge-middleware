@@ -20,10 +20,14 @@ interface PluginListProps {
   error?: Error | null
   /** IDs of plugins currently being processed */
   pendingPluginIds?: Set<string>
+  /** IDs of plugins whose pending operation is a secret rotation */
+  rotatingPluginIds?: Set<string>
   /** Callback when activate button is clicked */
   onActivate?: (pluginId: string) => void
   /** Callback when deactivate button is clicked */
   onDeactivate?: (pluginId: string) => void
+  /** Callback when the rotate-secret button is clicked */
+  onRotateSecret?: (pluginId: string) => void
 }
 
 export function PluginList({
@@ -32,8 +36,10 @@ export function PluginList({
   isLoading = false,
   error = null,
   pendingPluginIds = new Set(),
+  rotatingPluginIds = new Set(),
   onActivate,
   onDeactivate,
+  onRotateSecret,
 }: PluginListProps) {
   if (isLoading) {
     return (
@@ -84,8 +90,10 @@ export function PluginList({
           key={plugin.pluginId}
           plugin={plugin}
           isPending={pendingPluginIds.has(plugin.pluginId)}
+          isRotating={rotatingPluginIds.has(plugin.pluginId)}
           onActivate={onActivate}
           onDeactivate={onDeactivate}
+          onRotateSecret={onRotateSecret}
         />
       ))}
       {/* Then unactivated available plugins */}

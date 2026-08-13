@@ -24,6 +24,9 @@ export type {
   BatchSqlStatus,
 } from './model/types'
 
+export type { PluginSecret } from './model/pluginSecret'
+export { parsePluginSecret, PARQUET_EXPORT_PLUGIN_ID } from './model/pluginSecret'
+
 // API Functions
 export {
   myPluginsApi,
@@ -31,6 +34,8 @@ export {
   fetchAvailablePlugins,
   activatePlugin,
   deactivatePlugin,
+  rotatePluginSecret,
+  supportsSecretRotation,
 } from './api/myPluginsApi'
 
 export {
@@ -50,12 +55,14 @@ export { usePluginLogsQuery } from './api/pluginLogsQueries'
 export {
   useActivatePluginMutation,
   useDeactivatePluginMutation,
+  useRotatePluginSecretMutation,
 } from './api/myPluginsMutations'
 
 // UI Components
 export { PluginCard } from './ui/PluginCard'
 export { PluginList } from './ui/PluginList'
 export { PluginActivationDialog } from './ui/PluginActivationDialog'
+export { PluginSecretDialog } from './ui/PluginSecretDialog'
 export { PluginLogsTab } from './ui/PluginLogsTab'
 export { PluginTabFilters, type LogsFilterState, type SqlFilterState } from './ui/PluginTabFilters'
 export { BatchSqlTab } from './ui/BatchSqlTab'

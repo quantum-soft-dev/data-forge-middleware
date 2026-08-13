@@ -38,6 +38,68 @@ describe('PluginCard', () => {
     isEnabled: true,
   }
 
+  describe('Secret rotation', () => {
+    it('should offer rotation for an active bit-bi plugin', () => {
+      render(<PluginCard plugin={mockActivePlugin} />)
+
+      expect(screen.getByRole('button', { name: /rotate api key/i })).toBeInTheDocument()
+    })
+
+    it('should offer password rotation for an active parquet-export plugin', () => {
+      render(
+        <PluginCard
+          plugin={{ ...mockActivePlugin, pluginId: 'parquet-export', pluginName: 'Parquet Export' }}
+        />
+      )
+
+      expect(screen.getByRole('button', { name: /rotate password/i })).toBeInTheDocument()
+    })
+
+    it('should not offer rotation for a plugin without a rotatable secret', () => {
+      render(
+        <PluginCard plugin={{ ...mockActivePlugin, pluginId: 'analytics', pluginName: 'Analytics' }} />
+      )
+
+      expect(screen.queryByRole('button', { name: /rotate/i })).not.toBeInTheDocument()
+    })
+
+    it('should not offer rotation for an inactive plugin', () => {
+      render(<PluginCard plugin={{ ...mockActivePlugin, isActive: false }} />)
+
+      expect(screen.queryByRole('button', { name: /rotate/i })).not.toBeInTheDocument()
+    })
+
+    it('should call onRotateSecret with the plugin id', async () => {
+      const user = userEvent.setup()
+      const onRotateSecret = vi.fn()
+
+      render(<PluginCard plugin={mockActivePlugin} onRotateSecret={onRotateSecret} />)
+
+      await user.click(screen.getByRole('button', { name: /rotate api key/i }))
+
+      expect(onRotateSecret).toHaveBeenCalledWith('bit-bi')
+    })
+
+    it('should disable rotation while an operation is pending', () => {
+      render(<PluginCard plugin={mockActivePlugin} isPending />)
+
+      expect(screen.getByRole('button', { name: /rotate api key/i })).toBeDisabled()
+    })
+
+    it('should show progress on the rotate button while rotating', () => {
+      render(<PluginCard plugin={mockActivePlugin} isPending isRotating />)
+
+      expect(screen.getByRole('button', { name: /rotating/i })).toBeDisabled()
+    })
+
+    it('should not claim deactivation while a rotation is in flight', () => {
+      render(<PluginCard plugin={mockActivePlugin} isPending isRotating />)
+
+      expect(screen.getByRole('button', { name: 'Deactivate' })).toBeInTheDocument()
+      expect(screen.queryByText('Deactivating...')).not.toBeInTheDocument()
+    })
+  })
+
   describe('Display', () => {
     it('should render plugin name', () => {
       render(<PluginCard plugin={mockActivePlugin} />)

@@ -40,6 +40,12 @@ won consume lives ~60 seconds — the residual exposure window.
    Returns `{login, password}` once; the old password stops authenticating immediately.
    Already-registered links are credential-independent and stay valid.
 
+4. The same two operations exist in the UI — Dashboard → **My Plugins** → *Plugins* tab. An
+   activation that issued credentials opens a one-shot dialog with the login and the password
+   as separate copyable fields, and an active plugin card carries a **Rotate password** action
+   that reissues them through the same dialog. Closing the dialog discards the value: the
+   browser never stores it, and the only way back is another rotation.
+
 ## Listing files
 
 ```

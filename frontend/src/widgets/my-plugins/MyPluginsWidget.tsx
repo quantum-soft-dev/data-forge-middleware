@@ -15,12 +15,14 @@ import {
   useAvailablePluginsQuery,
   useActivatePluginMutation,
   useDeactivatePluginMutation,
+  useRotatePluginSecretMutation,
 } from '@/features/my-plugins'
 import { PluginList } from '@/features/my-plugins/ui/PluginList'
 import { PluginLogsTab } from '@/features/my-plugins/ui/PluginLogsTab'
 import { BatchSqlTab } from '@/features/my-plugins/ui/BatchSqlTab'
 import { PluginActivationDialog } from '@/features/my-plugins/ui/PluginActivationDialog'
-import type { AvailablePlugin, ActivatePluginRequest } from '@/features/my-plugins'
+import { PluginSecretDialog } from '@/features/my-plugins/ui/PluginSecretDialog'
+import type { AvailablePlugin, ActivatePluginRequest, PluginSecret } from '@/features/my-plugins'
 
 export function MyPluginsWidget() {
   // Queries
@@ -35,13 +37,21 @@ export function MyPluginsWidget() {
     isLoading: isLoadingAvailablePlugins,
   } = useAvailablePluginsQuery()
 
-  // Mutations
-  const activatePluginMutation = useActivatePluginMutation()
-  const deactivatePluginMutation = useDeactivatePluginMutation()
-
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedPlugin, setSelectedPlugin] = useState<AvailablePlugin | null>(null)
+
+  // Issued secret, held only while the reveal dialog is open — it is never cached
+  const [revealedSecret, setRevealedSecret] = useState<PluginSecret | null>(null)
+
+  // Mutations
+  const activatePluginMutation = useActivatePluginMutation({
+    onSecretRevealed: setRevealedSecret,
+  })
+  const deactivatePluginMutation = useDeactivatePluginMutation()
+  const rotateSecretMutation = useRotatePluginSecretMutation({
+    onSecretRevealed: setRevealedSecret,
+  })
 
   // Track pending plugin IDs with useMemo to prevent unnecessary re-renders
   const pendingPluginIds = useMemo(() => {
@@ -52,13 +62,27 @@ export function MyPluginsWidget() {
     if (deactivatePluginMutation.isPending && deactivatePluginMutation.variables) {
       ids.add(deactivatePluginMutation.variables)
     }
+    if (rotateSecretMutation.isPending && rotateSecretMutation.variables) {
+      ids.add(rotateSecretMutation.variables)
+    }
     return ids
   }, [
     activatePluginMutation.isPending,
     activatePluginMutation.variables,
     deactivatePluginMutation.isPending,
     deactivatePluginMutation.variables,
+    rotateSecretMutation.isPending,
+    rotateSecretMutation.variables,
   ])
+
+  // Rotation is tracked apart from activate/deactivate so the card can label it
+  const rotatingPluginIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (rotateSecretMutation.isPending && rotateSecretMutation.variables) {
+      ids.add(rotateSecretMutation.variables)
+    }
+    return ids
+  }, [rotateSecretMutation.isPending, rotateSecretMutation.variables])
 
   // Handlers
   const handleActivateClick = useCallback((pluginId: string) => {
@@ -72,6 +96,10 @@ export function MyPluginsWidget() {
   const handleDeactivate = useCallback((pluginId: string) => {
     deactivatePluginMutation.mutate(pluginId)
   }, [deactivatePluginMutation])
+
+  const handleRotateSecret = useCallback((pluginId: string) => {
+    rotateSecretMutation.mutate(pluginId)
+  }, [rotateSecretMutation])
 
   const handleDialogClose = useCallback(() => {
     setDialogOpen(false)
@@ -127,8 +155,10 @@ export function MyPluginsWidget() {
               isLoading={isLoading}
               error={accountPluginsError}
               pendingPluginIds={pendingPluginIds}
+              rotatingPluginIds={rotatingPluginIds}
               onActivate={handleActivateClick}
               onDeactivate={handleDeactivate}
+              onRotateSecret={handleRotateSecret}
             />
           </TabsContent>
 
@@ -147,6 +177,16 @@ export function MyPluginsWidget() {
           onClose={handleDialogClose}
           onSubmit={handleDialogSubmit}
           isLoading={activatePluginMutation.isPending}
+        />
+
+        <PluginSecretDialog
+          secret={revealedSecret}
+          pluginName={
+            revealedSecret
+              ? availablePlugins?.find((p) => p.pluginId === revealedSecret.pluginId)?.displayName
+              : undefined
+          }
+          onClose={() => setRevealedSecret(null)}
         />
       </CardContent>
     </Card>

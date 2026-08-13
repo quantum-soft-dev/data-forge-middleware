@@ -6,10 +6,12 @@
  */
 
 import { formatDistanceToNow } from 'date-fns'
-import { Plug, Clock, Calendar } from 'lucide-react'
+import { Plug, Clock, Calendar, KeyRound } from 'lucide-react'
 import { Button } from '@/shared/ui/ui/button'
 import { Badge } from '@/shared/ui/ui/badge'
 import { monitoringTokens, severityTokens } from '@/shared/ui/tokens'
+import { supportsSecretRotation } from '../api/myPluginsApi'
+import { PARQUET_EXPORT_PLUGIN_ID } from '../model/pluginSecret'
 import type { AccountPluginSummary, AvailablePlugin } from '../model/types'
 
 interface PluginCardProps {
@@ -23,8 +25,12 @@ interface PluginCardProps {
   onActivate?: (pluginId: string) => void
   /** Callback when deactivate button is clicked */
   onDeactivate?: (pluginId: string) => void
+  /** Callback when the rotate-secret button is clicked */
+  onRotateSecret?: (pluginId: string) => void
   /** Whether an operation is pending */
   isPending?: boolean
+  /** Whether the pending operation is a secret rotation */
+  isRotating?: boolean
 }
 
 export function PluginCard({
@@ -33,12 +39,17 @@ export function PluginCard({
   isActivated = false,
   onActivate,
   onDeactivate,
+  onRotateSecret,
   isPending = false,
+  isRotating = false,
 }: PluginCardProps) {
   const pluginId = plugin?.pluginId || availablePlugin?.pluginId || ''
   const pluginName = plugin?.pluginName || availablePlugin?.displayName || ''
   const isActive = plugin?.isActive ?? isActivated
   const version = availablePlugin?.version
+  const canRotateSecret = isActive && supportsSecretRotation(pluginId)
+  const rotateLabel =
+    pluginId === PARQUET_EXPORT_PLUGIN_ID ? 'Rotate password' : 'Rotate API key'
 
   return (
     <div className="rounded-lg bg-white p-4 shadow-panel">
@@ -86,7 +97,19 @@ export function PluginCard({
       </div>
 
       {/* Actions */}
-      <div className="mt-4">
+      <div className="mt-4 space-y-2">
+        {canRotateSecret && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            onClick={() => onRotateSecret?.(pluginId)}
+            disabled={isPending}
+          >
+            <KeyRound className="mr-1 h-3.5 w-3.5" />
+            {isRotating ? 'Rotating...' : rotateLabel}
+          </Button>
+        )}
         {isActive ? (
           <Button
             variant="destructive-outline"
@@ -95,7 +118,7 @@ export function PluginCard({
             onClick={() => onDeactivate?.(pluginId)}
             disabled={isPending}
           >
-            {isPending ? 'Deactivating...' : 'Deactivate'}
+            {isPending && !isRotating ? 'Deactivating...' : 'Deactivate'}
           </Button>
         ) : (
           <Button

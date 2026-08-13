@@ -119,6 +119,94 @@ describe('myPluginsMutations', () => {
       })
     })
 
+    it('should hand the revealed secret to the caller when the response carries one', async () => {
+      vi.mocked(api.activatePlugin).mockResolvedValue({ ...mockResponse, apiKey: 'plk_secret123' })
+      const onSecretRevealed = vi.fn()
+
+      const { result } = renderHook(() => useActivatePluginMutation({ onSecretRevealed }), {
+        wrapper,
+      })
+
+      act(() => {
+        result.current.mutate({
+          pluginId: 'bit-bi',
+          request: { pluginData: { tenantId: 'test-tenant' } },
+        })
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(onSecretRevealed).toHaveBeenCalledWith({
+        kind: 'api-key',
+        pluginId: 'bit-bi',
+        value: 'plk_secret123',
+      })
+    })
+
+    it('should split parquet-export credentials before handing them over', async () => {
+      vi.mocked(api.activatePlugin).mockResolvedValue({
+        ...mockResponse,
+        pluginId: 'parquet-export',
+        pluginName: 'Parquet Export',
+        apiKey: 'pex_login12345:pw123456',
+      })
+      const onSecretRevealed = vi.fn()
+
+      const { result } = renderHook(() => useActivatePluginMutation({ onSecretRevealed }), {
+        wrapper,
+      })
+
+      act(() => {
+        result.current.mutate({ pluginId: 'parquet-export', request: { pluginData: {} } })
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(onSecretRevealed).toHaveBeenCalledWith({
+        kind: 'basic-auth',
+        pluginId: 'parquet-export',
+        login: 'pex_login12345',
+        password: 'pw123456',
+      })
+    })
+
+    it('should not hand over a secret when the response carries none', async () => {
+      vi.mocked(api.activatePlugin).mockResolvedValue(mockResponse)
+      const onSecretRevealed = vi.fn()
+
+      const { result } = renderHook(() => useActivatePluginMutation({ onSecretRevealed }), {
+        wrapper,
+      })
+
+      act(() => {
+        result.current.mutate({
+          pluginId: 'bit-bi',
+          request: { pluginData: { tenantId: 'test-tenant' } },
+        })
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(onSecretRevealed).not.toHaveBeenCalled()
+    })
+
+    it('should keep the secret out of the toast', async () => {
+      vi.mocked(api.activatePlugin).mockResolvedValue({ ...mockResponse, apiKey: 'plk_secret123' })
+
+      const { result } = renderHook(() => useActivatePluginMutation(), { wrapper })
+
+      act(() => {
+        result.current.mutate({
+          pluginId: 'bit-bi',
+          request: { pluginData: { tenantId: 'test-tenant' } },
+        })
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(JSON.stringify(vi.mocked(toast.success).mock.calls)).not.toContain('plk_secret123')
+    })
+
     it('should show error toast on failure', async () => {
       const mockError = new Error('Validation failed: tenantId is required')
       vi.mocked(api.activatePlugin).mockRejectedValue(mockError)

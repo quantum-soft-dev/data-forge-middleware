@@ -71,6 +71,12 @@ export interface PluginActivationResponse {
   activatedAt: string
   /** When the plugin was last used, null if never (ISO 8601) */
   lastUsedAt: string | null
+  /**
+   * Freshly minted secret, present only for a new activation or a reactivation.
+   * bit-bi sends the raw API key, parquet-export sends `login:password`.
+   * Shown once and never retrievable again — see {@link parsePluginSecret}.
+   */
+  apiKey?: string | null
 }
 
 /**

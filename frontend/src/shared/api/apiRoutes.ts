@@ -101,6 +101,10 @@ export const SETTINGS_BATCH_RETENTION_SCHEDULE = `${ADMIN_SETTINGS}/batch-retent
 export const ACCOUNT_PLUGINS = `${ADMIN_API_BASE}/account/plugins`;
 export const ACCOUNT_PLUGIN_LOGS = (pluginId: string) => `${ACCOUNT_PLUGINS}/${pluginId}/logs`;
 
+// Account Plugin secret rotation (User-facing, owner OAuth2; new secret shown once)
+export const ACCOUNT_PLUGIN_ROTATE_API_KEY = `${ACCOUNT_PLUGINS}/bit-bi/rotate-api-key`;
+export const ACCOUNT_PLUGIN_ROTATE_PASSWORD = `${ACCOUNT_PLUGINS}/parquet-export/rotate-password`;
+
 // Account Plugin Batch SQL Management (User-facing)
 export const ACCOUNT_PLUGIN_BATCHES = (pluginId: string) =>
   `${ACCOUNT_PLUGINS}/${pluginId}/batches`;

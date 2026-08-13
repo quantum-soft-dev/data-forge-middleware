@@ -8,10 +8,14 @@
 import { apiClient } from '@/shared/api/client'
 import {
   ACCOUNT_PLUGINS,
+  ACCOUNT_PLUGIN_ROTATE_API_KEY,
+  ACCOUNT_PLUGIN_ROTATE_PASSWORD,
   PLUGINS,
   PLUGINS_ACTIVATE,
   PLUGINS_DEACTIVATE,
 } from '@/shared/api/apiRoutes'
+import { PARQUET_EXPORT_PLUGIN_ID } from '../model/pluginSecret'
+import type { PluginSecret } from '../model/pluginSecret'
 import type {
   AccountPluginListResponse,
   AccountPluginsFilters,
@@ -81,9 +85,51 @@ export async function deactivatePlugin(pluginId: string): Promise<void> {
   await apiClient.delete(PLUGINS_DEACTIVATE(pluginId))
 }
 
+/** Plugin id of the Bit BI integration, whose secret is a single API key. */
+const BIT_BI_PLUGIN_ID = 'bit-bi'
+
+/**
+ * Whether a plugin can reissue its secret.
+ *
+ * Rotation is the only way back to a working integration once the one-shot
+ * activation secret is lost, and only these two plugins expose an endpoint.
+ */
+export function supportsSecretRotation(pluginId: string): boolean {
+  return pluginId === BIT_BI_PLUGIN_ID || pluginId === PARQUET_EXPORT_PLUGIN_ID
+}
+
+/**
+ * Reissue a plugin's secret. The previous value stops authenticating immediately
+ * and the new one is returned exactly once.
+ *
+ * @param pluginId - Plugin identifier, must satisfy {@link supportsSecretRotation}
+ * @returns the freshly issued secret
+ */
+export async function rotatePluginSecret(pluginId: string): Promise<PluginSecret> {
+  if (pluginId === BIT_BI_PLUGIN_ID) {
+    const response = await apiClient.post<{ apiKey: string }>(ACCOUNT_PLUGIN_ROTATE_API_KEY)
+    return { kind: 'api-key', pluginId, value: response.data.apiKey }
+  }
+
+  if (pluginId === PARQUET_EXPORT_PLUGIN_ID) {
+    const response = await apiClient.post<{ login: string; password: string }>(
+      ACCOUNT_PLUGIN_ROTATE_PASSWORD
+    )
+    return {
+      kind: 'basic-auth',
+      pluginId,
+      login: response.data.login,
+      password: response.data.password,
+    }
+  }
+
+  throw new Error(`Plugin ${pluginId} has no rotatable secret`)
+}
+
 export const myPluginsApi = {
   fetchAccountPlugins,
   fetchAvailablePlugins,
   activatePlugin,
   deactivatePlugin,
+  rotatePluginSecret,
 }

@@ -134,11 +134,13 @@ describe('PluginList', () => {
         />
       )
 
-      const pluginCards = screen.getAllByRole('button')
-      // First should be Deactivate (for active plugin)
-      expect(pluginCards[0]).toHaveTextContent('Deactivate')
-      // Second should be Activate (for unactivated plugin)
-      expect(pluginCards[1]).toHaveTextContent('Activate')
+      // An active bit-bi card leads with its rotation action, then Deactivate;
+      // the unactivated plugin's Activate comes after both.
+      const buttonLabels = screen
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim())
+
+      expect(buttonLabels).toEqual(['Rotate API key', 'Deactivate', 'Activate'])
     })
   })
 
