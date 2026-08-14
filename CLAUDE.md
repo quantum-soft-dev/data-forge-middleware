@@ -460,17 +460,20 @@ pages/{feature}/            # Route pages
   under a new `seq` and replaces the key, and since #113 a build that cannot materialize Parquet
   nulls it outright — so every earlier object was already unreferenced and nothing else sweeps that
   prefix (retention prunes segments; no lifecycle rule here). The walk also removes the
-  `_frame/seq={seq}/frame.pb.gz` reload frames, which no row ever named: a survivor is a correctness
-  problem, since the post-wipe epoch restarts at seq 0 and would fold a pre-wipe frame back in on
-  reaching the same sequence. Same belt-and-braces shape the unified batch artifacts already use —
-  exact keys from the rows **plus** a post-commit prefix walk — and each prefix is listed
-  independently, so one failing listing costs neither the other prefix nor the recorded keys; the
-  final key list is de-duplicated. A prefix that could not be enumerated adds one to
-  `s3DeleteErrors` (same field, wider meaning — the response's only channel for "the slate is not
-  clean"), because a swallowed checkpoint listing means *every* frame survived, not a few stray
-  objects. `S3CheckpointStorage.checkpointPrefix(siteId)` joins
-  `egressPrefix`. No API shape, migration, configuration or frontend change. See
-  `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
+  `_frame/seq={seq}/frame.pb.gz` reload frames, which no row ever named, so nothing else could ever
+  remove them — dead bytes, **not** a stale-read path: a build writes its frame at the seq it ends on
+  and advances the pointer only afterwards, so the frame the next build reads is always the one that
+  epoch just wrote, overwriting any pre-wipe namesake. Same belt-and-braces shape the unified batch
+  artifacts already use — exact keys from the rows **plus** a post-commit prefix walk — and each
+  prefix is listed independently, so one failing listing costs neither the other prefix nor the
+  recorded keys; the final key list is de-duplicated. The S3 phase also stops throwing: it now issues
+  one round trip per thousand keys, and a client-side failure escaping `deleteObjects` would report a
+  committed wipe as a 500, so it is caught and every key handed over is reported as
+  `s3DeleteErrors`. `S3CheckpointStorage.checkpointPrefix(siteId)` joins `egressPrefix`. No API
+  shape, DTO, migration, configuration or frontend change. Follow-up #122: the walk has no
+  `lastModified` cut-off, so a concurrent post-commit build's object can be swept (true for
+  `egress/` since 036). See `docs/delta-client-v2-guide.md` ("Site history wipe and the generation
+  epoch").
 - checkpoint-csv-removal: The V2 checkpoint build stopped writing `snapshot.csv.gz` (issue #113).
   Only the typed Parquet is materialized, so a build no longer copies the whole folded state into a
   second row representation (`ValueMapper`) and gzips it into an on-heap `byte[]`. A table with no

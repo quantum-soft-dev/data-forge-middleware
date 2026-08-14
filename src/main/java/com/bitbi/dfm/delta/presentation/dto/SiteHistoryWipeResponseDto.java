@@ -15,9 +15,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * @param deletedSqlGenerations plugin SQL generations removed
  * @param deletedErrorLogs      error log rows removed
  * @param deletedBytes          bytes accounted for by the removed files
- * @param s3DeleteErrors        objects the bucket refused to delete, plus one per whole-site prefix
- *                              that could not be enumerated (orphans, not data loss — but a non-zero
- *                              value means the slate is not clean and the wipe is worth repeating)
+ * @param s3DeleteErrors        objects the bucket refused to delete, or every object handed to a
+ *                              delete phase that failed outright (orphans, not data loss)
  * @param baselineBatchDetached whether a plugin activation's baseline batch had to be nulled
  */
 @Schema(description = "Summary of a completed site history wipe")

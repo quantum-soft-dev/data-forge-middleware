@@ -160,28 +160,15 @@ public class DeltaSiteWipeService {
         WipedRows wiped = transactionTemplate.execute(
                 status -> wipeRows(site, initiator, ipAddress, userAgent));
 
-        PrefixWalk egress = unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId()));
-        PrefixWalk checkpoints =
-                unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId()));
-
         List<String> objects = new ArrayList<>(wiped.s3Keys());
-        objects.addAll(egress.keys());
-        objects.addAll(checkpoints.keys());
-
-        DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(objects.stream().distinct().toList());
-        if (!deleted.errors().isEmpty()) {
-            log.warn("Site history wipe left {} orphaned S3 object(s) for site {}: {}",
-                    deleted.errors().size(), site.getId(), deleted.errors());
-        }
-        // A prefix that could not be listed is counted alongside the objects the bucket refused: both
-        // mean the slate is not clean, and the caller has nothing else to learn it from.
-        int notSwept = deleted.errors().size()
-                + (egress.enumerated() ? 0 : 1) + (checkpoints.enumerated() ? 0 : 1);
+        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId())));
+        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId())));
 
         SiteHistoryWipeSummary summary = new SiteHistoryWipeSummary(
                 wiped.generation(), wiped.deletedBatches(), wiped.deletedSegments(),
                 wiped.deletedCheckpoints(), wiped.deletedFiles(), wiped.deletedSqlGenerations(),
-                wiped.deletedErrorLogs(), wiped.deletedBytes(), notSwept,
+                wiped.deletedErrorLogs(), wiped.deletedBytes(),
+                deleteObjects(site.getId(), objects.stream().distinct().toList()),
                 wiped.baselineBatchDetached());
         log.info("Site history wiped by {}: siteId={}, generation={}, batches={}, segments={}, "
                         + "checkpoints={}, files={}, sqlGenerations={}, errorLogs={}, bytes={}, "
@@ -191,6 +178,39 @@ public class DeltaSiteWipeService {
                 summary.deletedSqlGenerations(), summary.deletedErrorLogs(), summary.deletedBytes(),
                 summary.s3DeleteErrors(), summary.baselineBatchDetached());
         return summary;
+    }
+
+    /**
+     * Delete the collected objects, reporting rather than throwing.
+     *
+     * <p>The rows are already committed as gone, so every outcome here is "orphans left behind, no
+     * data lost" and none of them may surface as a 500 on a wipe that actually happened. The AWS SDK
+     * makes that easy to get wrong: {@code DeleteObjects} answers per-object errors inside a 200,
+     * which {@link S3FileStorageService#deleteObjects} already collects, but a client-side failure
+     * (connect/read timeout, connection reset) arrives as {@code SdkClientException} — a sibling of
+     * {@code S3Exception}, not a subclass — and escapes it. Rare per call, but this phase now issues
+     * one round trip per thousand keys, and a wiped site's checkpoint prefix can be thousands.</p>
+     *
+     * @param siteId  the site being wiped, for the log line
+     * @param objects the keys to delete, already de-duplicated
+     * @return how many objects were left behind
+     */
+    private int deleteObjects(UUID siteId, List<String> objects) {
+        try {
+            DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(objects);
+            if (!deleted.errors().isEmpty()) {
+                log.warn("Site history wipe left {} orphaned S3 object(s) for site {}: {}",
+                        deleted.errors().size(), siteId, deleted.errors());
+            }
+            return deleted.errors().size();
+        } catch (RuntimeException e) {
+            // Nothing is known about how far the phase got, so every key it was given counts as
+            // possibly left behind — the honest upper bound, and the caller's cue to run it again.
+            log.warn("Site history wipe could not complete the S3 phase for site {}; up to {} "
+                    + "object(s) are left as orphans — the rows are already gone, so re-running the "
+                    + "wipe is safe and is how they get swept", siteId, objects.size(), e);
+            return objects.size();
+        }
     }
 
     /**
@@ -212,41 +232,30 @@ public class DeltaSiteWipeService {
      * the moment it is superseded — and {@link Checkpoint#detachParquet()} drops the last reference
      * outright when a build advances the row without materializing a file. Nothing else sweeps them:
      * changelog retention prunes segments, and no lifecycle rule covers this prefix. The
-     * {@code _frame/seq={seq}/frame.pb.gz} reload frames are named by no row at all, and a survivor
-     * is worse than untidy — the new epoch reaching the same {@code seq} would fold a pre-wipe frame
-     * back in as its own state.</p>
+     * {@code _frame/seq={seq}/frame.pb.gz} reload frames go the same way: no row has ever named one,
+     * so the wipe is the only thing that can remove them. They are dead bytes rather than a stale
+     * read — a build writes its frame at the seq it ends on and only then advances the pointer, so
+     * the frame the next build reads is always the one this epoch just wrote, overwriting any
+     * pre-wipe namesake at that key.</p>
      *
      * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
      * and the objects are only reachable through keys the rows never held. The keys recorded on the
-     * rows are collected too and stay the fallback, so one prefix failing to list — swallowed, since
-     * the rows are already gone and failing here would report a completed wipe as a 500 — costs
-     * neither the other prefix nor the exact keys. It is not silent, though: the caller counts the
-     * failure into {@code s3DeleteErrors}, because for the checkpoint prefix the difference between
-     * "a few orphaned objects" and "every reload frame survived" is not visible anywhere else.</p>
+     * rows are collected too and stay the fallback, so one prefix failing to list — logged and
+     * swallowed, since the rows are already gone and failing here would report a completed wipe as a
+     * 500 — costs neither the other prefix nor the exact keys.</p>
      *
      * @param siteId the site being wiped, for the log line
      * @param prefix the whole-site prefix to enumerate
-     * @return the keys under the prefix, and whether the listing succeeded at all
+     * @return every key under the prefix, or an empty list when it could not be listed
      */
-    private PrefixWalk unreferencedObjects(UUID siteId, String prefix) {
+    private List<String> unreferencedObjects(UUID siteId, String prefix) {
         try {
-            return new PrefixWalk(checkpointStorage.listAllKeys(prefix), true);
+            return checkpointStorage.listAllKeys(prefix);
         } catch (RuntimeException e) {
-            log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans, "
-                    + "a later build reusing their sequence numbers may resolve to one, and the wipe "
-                    + "is worth repeating once listing works again", prefix, siteId, e);
-            return new PrefixWalk(List.of(), false);
+            log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans "
+                    + "and the wipe is worth repeating once listing works again", prefix, siteId, e);
+            return List.of();
         }
-    }
-
-    /**
-     * One post-commit prefix walk: what it found, and whether it got to look at all.
-     *
-     * @param keys       the keys found under the prefix; empty both when the prefix is empty and when
-     *                   the listing failed
-     * @param enumerated whether the listing succeeded — a false here means unknown, not empty
-     */
-    private record PrefixWalk(List<String> keys, boolean enumerated) {
     }
 
     /**

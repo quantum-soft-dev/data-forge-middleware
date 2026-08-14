@@ -298,37 +298,25 @@ class DeltaSiteWipeServiceTest {
         // The rows are already committed as gone; reporting a completed wipe as a 500 would be worse.
         assertThat(summary.deletedBatches()).isEqualTo(7);
         verify(s3FileStorageService).deleteObjects(anyList());
-        // ...but the operator has to learn that both prefixes were left untouched, or the wipe
-        // claims a clean slate it did not achieve.
+    }
+
+    @Test
+    @DisplayName("a delete phase that throws is reported, not raised: the rows are already gone")
+    void shouldReportADeletePhaseThatThrows() {
+        // DeleteObjects answers per-object failures inside a 200, but a client-side failure (read
+        // timeout, connection reset) arrives as an exception — and this phase now issues one round
+        // trip per thousand keys, so a wiped site's checkpoint prefix makes that far likelier.
+        // Letting it out would report a committed wipe as a 500.
+        when(segmentRepository.findAllS3KeysBySiteId(SITE_ID))
+                .thenReturn(List.of("segments/1.pb.gz", "segments/2.pb.gz"));
+        when(s3FileStorageService.deleteObjects(anyList())).thenThrow(new RuntimeException("reset by peer"));
+        when(batchRepository.deleteBySiteId(SITE_ID)).thenReturn(7);
+
+        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.deletedBatches()).isEqualTo(7);
+        // Nothing is known about how far it got, so every key handed over counts as left behind.
         assertThat(summary.s3DeleteErrors()).isEqualTo(2);
-    }
-
-    @Test
-    @DisplayName("counts a prefix it could not enumerate, so a silent orphan is never reported clean")
-    void shouldReportAnUnenumerablePrefix() {
-        // The frames under checkpoints/ are named by no row at all: when this listing fails they all
-        // survive, and the next epoch folds a pre-wipe frame back in on reaching its sequence.
-        // s3DeleteErrors is the only channel that says so.
-        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/"))
-                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
-        when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/")).thenReturn(List.of());
-
-        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
-
-        assertThat(summary.s3DeleteErrors()).isEqualTo(1);
-    }
-
-    @Test
-    @DisplayName("adds the refused objects to the prefixes it could not enumerate")
-    void shouldAddRefusedObjectsToUnenumerablePrefixes() {
-        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/"))
-                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
-        when(s3FileStorageService.deleteObjects(anyList()))
-                .thenReturn(new DeleteObjectsResult(0, List.of("a: AccessDenied", "b: AccessDenied")));
-
-        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
-
-        assertThat(summary.s3DeleteErrors()).isEqualTo(3);
     }
 
     @Test
