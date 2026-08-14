@@ -10,13 +10,13 @@ egress queue-depth gauge.
    the new `delta.egress.duration`. The cycle is `{phase=total}` on the same name:
    Prometheus rejects mixed tagged/untagged series.
 2. Streaming replay attribution lives next to the I/O, not by buffering segments:
-   - `ChangelogSegmentService.forEachRecord` uses a thread-bound `ReplayPhaseClock`
-     that counts `GetObject`/stream-read nanos as `download` and parse-minus-consumer
-     as `decode`. Callers that mock the service are unaffected.
-   - `DeltaParquetWriter.writeBatchDeltaParquet` reports only the decimal-scan
-     consumer and the write/close work through an optional `PhaseListener`.
-   - `BatchParquetFinalizationService` binds the clock around the shared replay,
-     records writer phases, and times each `uploadBatchParquet`.
+   - `ChangelogSegmentService.forEachRecord(s3Key, consumer, clock)` takes an
+     explicit `PhaseClock` (null = untimed). The 2-arg overload stays for mocks.
+     GetObject / stream-read nanos are `download`; parse-minus-consumer is `decode`.
+   - `DeltaParquetWriter.writeBatchDeltaParquet` writes `decimalScan` / `write`
+     onto the same `PhaseClock`. It does not know meter tag names.
+   - `BatchParquetFinalizationService` allocates the clock, passes it through
+     replay and the writer, and maps totals onto `DeltaMetrics` in a `finally`.
 3. `DeltaEgressService.egressSegment` times `readRecords` as `download`,
    `toDeltaParquet` as `write`, and `uploadDelta` as `upload`, plus an untagged
    cycle around the same work.

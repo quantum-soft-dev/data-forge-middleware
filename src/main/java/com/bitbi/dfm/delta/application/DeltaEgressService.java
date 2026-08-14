@@ -75,10 +75,7 @@ public class DeltaEgressService {
      */
     @Transactional
     public void egressSegment(ChangelogSegment segment) {
-        metrics.timeEgress(() -> {
-            egressSegmentTimed(segment);
-            return null;
-        });
+        metrics.timeEgress(() -> egressSegmentTimed(segment));
     }
 
     private void egressSegmentTimed(ChangelogSegment segment) {
@@ -113,11 +110,9 @@ public class DeltaEgressService {
                         table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
                 return;
             }
-            metrics.timeEgressPhase("upload", () -> {
-                storage.uploadDelta(segment.getSiteId(), table, segment.getFirstSeq(),
-                        segment.getLastSeq(), parquet);
-                return null;
-            });
+            metrics.timeEgressPhase("upload", () -> storage.uploadDelta(
+                    segment.getSiteId(), table, segment.getFirstSeq(),
+                    segment.getLastSeq(), parquet));
         });
 
         segment.markEgressed();

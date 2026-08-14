@@ -325,7 +325,7 @@ class DeltaParquetWriterTest {
                 new ColumnDefinition("id", "bigint", false),
                 new ColumnDefinition("amount", "numeric(7,2)", false)),
                 List.of("id"), List.of());
-        Map<String, Long> phases = new LinkedHashMap<>();
+        PhaseClock clock = new PhaseClock();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
                 tempDir.resolve("payments-phased.parquet"), moneySchema));
@@ -336,10 +336,12 @@ class DeltaParquetWriterTest {
                         Map.of("id", intVal(1)),
                         Map.of("id", intVal(1), "amount", decVal("1.00")))),
                 Long.MAX_VALUE,
-                (phase, nanos) -> phases.merge(phase, nanos, Long::sum));
+                clock);
 
-        assertTrue(phases.getOrDefault("decimal_scan", 0L) > 0L, "decimal scan is its own phase");
-        assertTrue(phases.getOrDefault("write", 0L) > 0L, "write/close is its own phase");
+        assertTrue(clock.decimalScanAttempted());
+        assertTrue(clock.decimalScanNanos() > 0L, "decimal scan is its own phase");
+        assertTrue(clock.writeAttempted());
+        assertTrue(clock.writeNanos() > 0L, "write/close is its own phase");
     }
 
     @Test
@@ -348,7 +350,7 @@ class DeltaParquetWriterTest {
                 new ColumnDefinition("id", "bigint", false),
                 new ColumnDefinition("name", "varchar(255)", true)),
                 List.of("id"), List.of());
-        Map<String, Long> phases = new LinkedHashMap<>();
+        PhaseClock clock = new PhaseClock();
         Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
         requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
                 tempDir.resolve("customers-phased.parquet"), namesSchema));
@@ -358,10 +360,35 @@ class DeltaParquetWriterTest {
                 consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
                         Map.of("id", intVal(1)), Map.of("id", intVal(1), "name", strVal("Ann")))),
                 Long.MAX_VALUE,
-                (phase, nanos) -> phases.merge(phase, nanos, Long::sum));
+                clock);
 
-        assertFalse(phases.containsKey("decimal_scan"));
-        assertTrue(phases.getOrDefault("write", 0L) > 0L);
+        assertFalse(clock.decimalScanAttempted());
+        assertTrue(clock.writeAttempted());
+        assertTrue(clock.writeNanos() > 0L);
+    }
+
+    @Test
+    void recordsDecimalScanWhenTheScanReplayThrows() {
+        TableSchema moneySchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("amount", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        PhaseClock clock = new PhaseClock();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("payments-scan-throw.parquet"), moneySchema));
+
+        assertThrows(IllegalStateException.class, () ->
+                DeltaParquetWriter.writeBatchDeltaParquet(
+                        requests,
+                        consumer -> {
+                            throw new IllegalStateException("scan source failed");
+                        },
+                        Long.MAX_VALUE,
+                        clock));
+
+        assertTrue(clock.decimalScanAttempted());
+        assertFalse(clock.writeAttempted());
     }
 
     @Test

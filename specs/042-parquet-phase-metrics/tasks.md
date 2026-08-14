@@ -17,3 +17,6 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   Parquet CR and project journal; run the required gates and open the PR.
 - [x] **T07 — Review fixes.** Record download/decode on replay failure, stop `write`
   before SHA-256, and tighten the guide's phase definitions.
+- [x] **T08 — Ultra structural pass.** Replace the ThreadLocal clock and writer
+  `PhaseListener` with an explicit `PhaseClock`, close GetObject/`decimal_scan`
+  failure attribution, and add `Runnable` timer overloads.

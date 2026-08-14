@@ -130,15 +130,35 @@ public class ChangelogSegmentService {
      * throw while reading the header, and the wrapper that would have closed it is never created.
      */
     public void forEachRecord(String s3Key, Consumer<ChangeRecord> consumer) {
-        ReplayPhaseClock clock = ReplayPhaseClock.current();
+        forEachRecord(s3Key, consumer, null);
+    }
+
+    /**
+     * Stream a raw segment. When {@code clock} is present, GetObject / stream {@code read} is
+     * download and parse-minus-consumer is decode — including when {@code open} throws.
+     */
+    void forEachRecord(String s3Key, Consumer<ChangeRecord> consumer, PhaseClock clock) {
         long openedAt = System.nanoTime();
-        try (InputStream content = storage.open(s3Key)) {
+        InputStream content = null;
+        try {
+            content = storage.open(s3Key);
             if (clock != null) {
                 clock.addDownload(System.nanoTime() - openedAt);
             }
             replay(content, consumer, clock);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to close changelog segment " + s3Key, e);
+        } catch (RuntimeException e) {
+            if (clock != null && content == null) {
+                clock.addDownload(System.nanoTime() - openedAt);
+            }
+            throw e;
+        } finally {
+            if (content != null) {
+                try {
+                    content.close();
+                } catch (IOException e) {
+                    throw new UncheckedIOException("Failed to close changelog segment " + s3Key, e);
+                }
+            }
         }
     }
 
@@ -146,7 +166,7 @@ public class ChangelogSegmentService {
      * Stream records from an already-open segment. When {@code clock} is present, stream
      * {@code read} time is download and parse-minus-consumer is decode.
      */
-    static void replay(InputStream content, Consumer<ChangeRecord> consumer, ReplayPhaseClock clock) {
+    static void replay(InputStream content, Consumer<ChangeRecord> consumer, PhaseClock clock) {
         if (clock == null) {
             ChangelogCodec.forEach(content, consumer);
             return;

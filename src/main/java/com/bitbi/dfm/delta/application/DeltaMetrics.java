@@ -159,9 +159,20 @@ public class DeltaMetrics {
         return batchParquetPhases.get(phase).record(work);
     }
 
+    /** Time one completed-batch Parquet inner phase with no return value. */
+    public void timeBatchParquetPhase(String phase, Runnable work) {
+        requirePhase(BATCH_PARQUET_PHASES, phase);
+        batchParquetPhases.get(phase).record(work);
+    }
+
     /** Time one per-segment egress cycle (download + write + upload). */
     public <T> T timeEgress(Supplier<T> work) {
         return timeEgressPhase(PHASE_TOTAL, work);
+    }
+
+    /** Time one per-segment egress cycle with no return value. */
+    public void timeEgress(Runnable work) {
+        timeEgressPhase(PHASE_TOTAL, work);
     }
 
     /** Record one per-segment egress inner phase. Negative nanos are ignored. */
@@ -175,6 +186,12 @@ public class DeltaMetrics {
         return egressPhases.get(phase).record(work);
     }
 
+    /** Time one per-segment egress inner phase with no return value. */
+    public void timeEgressPhase(String phase, Runnable work) {
+        requirePhase(EGRESS_PHASES, phase);
+        egressPhases.get(phase).record(work);
+    }
+
     /** Record one checkpoint inner phase. Negative nanos are ignored. */
     public void recordCheckpointPhase(String phase, long nanos) {
         recordPhase(checkpointPhases, CHECKPOINT_PHASES, phase, nanos);
@@ -184,6 +201,12 @@ public class DeltaMetrics {
     public <T> T timeCheckpointPhase(String phase, Supplier<T> work) {
         requirePhase(CHECKPOINT_PHASES, phase);
         return checkpointPhases.get(phase).record(work);
+    }
+
+    /** Time one checkpoint inner phase with no return value. */
+    public void timeCheckpointPhase(String phase, Runnable work) {
+        requirePhase(CHECKPOINT_PHASES, phase);
+        checkpointPhases.get(phase).record(work);
     }
 
     private static void recordPhase(Map<String, Timer> timers, Set<String> allowed,

@@ -422,19 +422,24 @@ public class BatchParquetFinalizationService {
                 tempFiles.put(claim.tableName(), output);
                 requests.put(claim.tableName(), new DeltaParquetWriter.TableWriteRequest(output, schema));
             }
+            PhaseClock clock = new PhaseClock();
             DeltaParquetWriter.BatchWriteResult written;
-            try (ReplayPhaseClock.Scope scope = ReplayPhaseClock.bind()) {
-                try {
-                    written = DeltaParquetWriter.writeBatchDeltaParquet(
-                            requests,
-                            consumer -> segments.forEach(segment ->
-                                    segmentService.forEachRecord(segment.getS3Key(), consumer)),
-                            maxTempBytes,
-                            metrics::recordBatchParquetPhase);
-                } finally {
-                    if (scope.clock().hasSamples()) {
-                        metrics.recordBatchParquetPhase("download", scope.clock().downloadNanos());
-                        metrics.recordBatchParquetPhase("decode", scope.clock().decodeNanos());
+            try {
+                written = DeltaParquetWriter.writeBatchDeltaParquet(
+                        requests,
+                        consumer -> segments.forEach(segment ->
+                                segmentService.forEachRecord(segment.getS3Key(), consumer, clock)),
+                        maxTempBytes,
+                        clock);
+            } finally {
+                if (clock.hasSamples()) {
+                    metrics.recordBatchParquetPhase("download", clock.downloadNanos());
+                    metrics.recordBatchParquetPhase("decode", clock.decodeNanos());
+                    if (clock.decimalScanAttempted()) {
+                        metrics.recordBatchParquetPhase("decimal_scan", clock.decimalScanNanos());
+                    }
+                    if (clock.writeAttempted()) {
+                        metrics.recordBatchParquetPhase("write", clock.writeNanos());
                     }
                 }
             }

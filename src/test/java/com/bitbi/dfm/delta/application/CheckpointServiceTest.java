@@ -53,7 +53,12 @@ class CheckpointServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         when(metrics.timeCheckpoint(any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(0)).get());
-        when(metrics.timeCheckpointPhase(any(), any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(1)).get());
+        when(metrics.timeCheckpointPhase(any(), any(Supplier.class)))
+                .thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(1)).get());
+        doAnswer(inv -> {
+            ((Runnable) inv.getArgument(1)).run();
+            return null;
+        }).when(metrics).timeCheckpointPhase(any(), any(Runnable.class));
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 0L));
 
         ChangelogSegment segment = ChangelogSegment.create(
@@ -171,10 +176,10 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(metrics).timeCheckpointPhase(eq("fold"), any());
-        verify(metrics).timeCheckpointPhase(eq("parquet"), any());
-        verify(metrics, atLeastOnce()).timeCheckpointPhase(eq("upload"), any());
-        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any());
+        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(metrics).timeCheckpointPhase(eq("parquet"), any(Supplier.class));
+        verify(metrics, atLeastOnce()).timeCheckpointPhase(eq("upload"), any(Runnable.class));
+        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
     }
 
     @Test
@@ -194,9 +199,9 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(metrics).timeCheckpointPhase(eq("download_frame"), any());
+        verify(metrics).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
         verify(checkpointStorage).downloadFrame(SITE, 2L);
-        verify(metrics).timeCheckpointPhase(eq("fold"), any());
+        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
     }
 
     @Test

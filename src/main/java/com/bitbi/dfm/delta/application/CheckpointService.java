@@ -141,10 +141,8 @@ public class CheckpointService {
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
 
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
-            metrics.timeCheckpointPhase("upload", () -> {
-                checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
-                return null;
-            });
+            metrics.timeCheckpointPhase("upload", () ->
+                    checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv)));
 
             TableSchema tableSchema = schemas.get(tableName);
             if (tableSchema != null) {
@@ -155,11 +153,9 @@ public class CheckpointService {
                 try {
                     byte[] parquet = metrics.timeCheckpointPhase("parquet",
                             () -> ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows)));
-                    metrics.timeCheckpointPhase("upload", () -> {
-                        checkpoint.attachParquet(checkpointStorage.uploadParquet(
-                                siteId, tableName, seq, parquet));
-                        return null;
-                    });
+                    metrics.timeCheckpointPhase("upload", () ->
+                            checkpoint.attachParquet(checkpointStorage.uploadParquet(
+                                    siteId, tableName, seq, parquet)));
                 } catch (RuntimeException e) {
                     log.warn("Checkpoint Parquet failed for table {} of site {} — skipping Parquet, "
                             + "CSV still written (check the declared schema against the data)",
@@ -171,10 +167,9 @@ public class CheckpointService {
         });
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
-        metrics.timeCheckpointPhase("upload", () -> {
-            checkpointStorage.uploadFrame(siteId, seq, ChangelogCodec.serialize(CheckpointFrame.toRecords(state)));
-            return null;
-        });
+        metrics.timeCheckpointPhase("upload", () ->
+                checkpointStorage.uploadFrame(siteId, seq,
+                        ChangelogCodec.serialize(CheckpointFrame.toRecords(state))));
         syncStateService.recordCheckpoint(siteId, seq);
         // The single choke point every checkpoint build passes through, scheduled or forced. The
         // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the

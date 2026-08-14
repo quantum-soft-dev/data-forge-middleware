@@ -108,6 +108,20 @@ class DeltaMetricsTest {
     }
 
     @Test
+    void timesARunnablePhaseWithoutADummyReturn() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+        java.util.concurrent.atomic.AtomicBoolean ran = new java.util.concurrent.atomic.AtomicBoolean();
+
+        metrics.timeEgress(() -> ran.set(true));
+        metrics.timeCheckpointPhase("upload", () -> { });
+
+        assertTrue(ran.get());
+        assertEquals(1L, phaseTimer(registry, "delta.egress.duration", "total").count());
+        assertEquals(1L, phaseTimer(registry, "delta.checkpoint.duration", "upload").count());
+    }
+
+    @Test
     void rejectsUnknownPhaseTags() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaMetrics metrics = new DeltaMetrics(registry);
