@@ -191,6 +191,7 @@ public class BatchParquetFinalizationService {
      *         caller should keep draining
      */
     public boolean finalizeNext() {
+        settleExpiredClaims();
         List<Claim> claims = transactions.execute(status -> claimNext());
         if (claims == null) {
             return false;
@@ -249,19 +250,31 @@ public class BatchParquetFinalizationService {
      * <p>Spent claims whose owners never returned are bulk-settled first. The claim query then
      * excludes them, so any number of stranded rows cannot hide real work until another sweep.</p>
      */
-    private List<Claim> claimNext() {
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        String expiredError = "Build lease expired without an outcome after the configured attempt limit";
-        int abandoned = artifactRepository.abandonExpiredClaims(
-                now, leaseSeconds, maxAttempts, expiredError);
-        for (int index = 0; index < abandoned; index++) {
+    /**
+     * Settle spent expired claims in their own short transaction. Catalog visibility for
+     * {@code ABANDONED} uses {@code updated_at}, so the timestamp must be stamped after the
+     * previous publisher has committed — the same lock {@link #publish} takes.
+     */
+    private void settleExpiredClaims() {
+        Integer abandoned = transactions.execute(status -> {
+            artifactRepository.lockCatalogPublish();
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+            String expiredError = "Build lease expired without an outcome after the configured attempt limit";
+            return artifactRepository.abandonExpiredClaims(
+                    now, leaseSeconds, maxAttempts, expiredError);
+        });
+        int abandonedCount = abandoned == null ? 0 : abandoned;
+        for (int index = 0; index < abandonedCount; index++) {
             metrics.batchParquetAbandoned();
         }
-        if (abandoned > 0) {
+        if (abandonedCount > 0) {
             log.error("Abandoned {} unified batch Parquet claim(s) whose owners never returned",
-                    abandoned);
+                    abandonedCount);
         }
+    }
 
+    private List<Claim> claimNext() {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
                 now, retryDelaySeconds, leaseSeconds, maxAttempts, 1);
         if (next.isEmpty()) {
@@ -332,6 +345,10 @@ public class BatchParquetFinalizationService {
      * late writer must not clobber any of them.
      */
     private void publish(Claim claim, BuildOutcome outcome) {
+        // Assign ready_at / updated_at only after the previous publisher committed. A wall-clock
+        // stamp taken before commit can land earlier than a sibling that committed first, and a
+        // client that advanced since= to that sibling would never see this row.
+        artifactRepository.lockCatalogPublish();
         Optional<BatchParquetArtifact> found = artifactRepository.findById(claim.artifactId());
         if (found.isEmpty()) {
             log.warn("Unified batch Parquet finished for an artifact that no longer exists: batchId={}, table={}",

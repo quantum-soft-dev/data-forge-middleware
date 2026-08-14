@@ -38,6 +38,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -191,6 +192,12 @@ class BatchParquetFinalizationServiceTest {
         assertEquals("egress/orders.parquet", artifact.getS3Key());
         assertEquals(1L, artifact.getFirstSeq());
         assertEquals(4L, artifact.getLastSeq());
+        InOrder publishOrder = inOrder(artifactRepository);
+        publishOrder.verify(artifactRepository).save(any(BatchParquetArtifact.class));
+        publishOrder.verify(artifactRepository).lockCatalogPublish();
+        publishOrder.verify(artifactRepository).findById(artifact.getId());
+        publishOrder.verify(artifactRepository).save(any(BatchParquetArtifact.class));
+        assertNotNull(artifact.getReadyAt());
         // One replay in segment order: the table declares no decimal column, so the precision
         // scan pass is skipped rather than re-downloading every segment.
         InOrder reads = inOrder(segmentService);
@@ -680,7 +687,10 @@ class BatchParquetFinalizationServiceTest {
         assertTrue(newService(7).finalizeNext());
 
         assertEquals(BatchParquetArtifactStatus.READY, retryable.getStatus());
-        verify(artifactRepository).abandonExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7), any());
+        InOrder settleOrder = inOrder(artifactRepository);
+        settleOrder.verify(artifactRepository).lockCatalogPublish();
+        settleOrder.verify(artifactRepository).abandonExpiredClaims(
+                any(LocalDateTime.class), eq(1800), eq(7), any());
     }
 
     @Test

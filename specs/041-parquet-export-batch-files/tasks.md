@@ -21,3 +21,11 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T07 — Review fixes.** Scope the catalog seq fallback join, distrust mixed null-stats
   when recording `seqRange`, split the `since` predicate so READY can use the V51 index, and
   correct the OpenAPI download-URL sentence.
+- [x] **T08 — Catalog publish order.** Serialize READY/ABANDONED publication with a transaction
+  advisory lock so `ready_at`/`updated_at` cannot land before a sibling that already committed.
+- [ ] **T09 — Persist seq on abandon.** Keep `first_seq`/`last_seq` through abandon/requeue;
+  drop the live LATERAL fallback; document that `lastSeq == null` never skips.
+- [ ] **T10 — Skip rule.** Skip only `ready` / `delta` / `checkpoint`; always surface abandoned.
+- [ ] **T11 — artifactId in the catalog.** Add `artifactId` to batch listing rows and the guide.
+- [ ] **T12 — Catalog index and cursor.** Align V51 with UNION ALL branches on
+  `(ready_at, s3_key)` and `(updated_at, id)`.

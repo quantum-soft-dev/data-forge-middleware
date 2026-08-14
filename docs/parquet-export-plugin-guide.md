@@ -74,7 +74,8 @@ Authorization: Basic base64(login:password)
 `abandoned`). For delta files it is the segment's `egress_at`; for checkpoints, `updated_at`.
 The `since` filter is strictly greater-than. A late artifact that finishes after retries — or
 that an operator requeues and that later becomes `READY` — appears with a new `ready_at` and
-will show up in the next sweep.
+will show up in the next sweep. `ready_at` / `updated_at` are stamped inside a short serialized
+DB publication, so they cannot land before a sibling that already committed.
 
 **Sync protocol (mandatory reading):**
 

@@ -89,6 +89,14 @@ public interface JpaBatchParquetArtifactRepository
 
     @Override
     @Query(value = """
+            SELECT true FROM (
+                SELECT pg_advisory_xact_lock(hashtextextended('parquet-export-catalog-publish', 0))
+            ) AS locked
+            """, nativeQuery = true)
+    void lockCatalogPublish();
+
+    @Override
+    @Query(value = """
             SELECT * FROM batch_parquet_artifacts
             WHERE batch_id = :batchId
               AND (status = 'PENDING'

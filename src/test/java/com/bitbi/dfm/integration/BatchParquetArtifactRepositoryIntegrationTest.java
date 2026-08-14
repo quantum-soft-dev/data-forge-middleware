@@ -127,6 +127,60 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     }
 
     @Test
+    void catalogPublishLockKeepsReadyAtAlignedWithCommitOrder() throws Exception {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        UUID firstBatch = UUID.randomUUID();
+        UUID secondBatch = UUID.randomUUID();
+        try {
+            Future<LocalDateTime> first = executor.submit(() -> transaction.execute(status -> {
+                repository.lockCatalogPublish();
+                BatchParquetArtifact artifact = BatchParquetArtifact.pending(firstBatch, SITE_ID, "first");
+                artifact.markBuilding();
+                artifact.markReady("egress/first.parquet", 1, 1, "aaa");
+                repository.save(artifact);
+                holding.countDown();
+                try {
+                    assertTrue(release.await(10, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                return artifact.getReadyAt();
+            }));
+            assertTrue(holding.await(10, TimeUnit.SECONDS));
+
+            Future<LocalDateTime> second = executor.submit(() -> transaction.execute(status -> {
+                repository.lockCatalogPublish();
+                BatchParquetArtifact artifact = BatchParquetArtifact.pending(secondBatch, SITE_ID, "second");
+                artifact.markBuilding();
+                artifact.markReady("egress/second.parquet", 1, 1, "bbb");
+                repository.save(artifact);
+                return artifact.getReadyAt();
+            }));
+            assertFalse(second.isDone(), "the second publisher must wait for the first commit");
+
+            release.countDown();
+            LocalDateTime firstReadyAt = first.get(10, TimeUnit.SECONDS);
+            LocalDateTime secondReadyAt = second.get(10, TimeUnit.SECONDS);
+            assertTrue(!secondReadyAt.isBefore(firstReadyAt),
+                    "a later commit must not stamp an earlier catalog watermark: first="
+                            + firstReadyAt + " second=" + secondReadyAt);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            transaction.execute(status -> {
+                repository.deleteByBatchId(firstBatch);
+                repository.deleteByBatchId(secondBatch);
+                return null;
+            });
+        }
+    }
+
+    @Test
     void advisoryLockAllowsOnlyOneBatchClaimTransaction() throws Exception {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);

@@ -13,11 +13,17 @@
 ## Decision: `since` / sort on `ready_at`, not batch close time
 
 - **Decision**: `producedAt` for `READY` is `ready_at`. For `ABANDONED` it is `updated_at`.
+  Both timestamps are assigned inside a short transaction that first takes a process-wide
+  PostgreSQL advisory lock (`parquet-export-catalog-publish`), so a later commit cannot stamp
+  an earlier watermark than a sibling that already became visible.
 - **Rationale**: a retried artifact can become ready long after the session ended. If `since`
   used `batches.completed_at`, a client that already advanced its watermark would never see it.
-  The same rule makes an 039 requeue reappear after a new `READY`.
+  The same rule makes an 039 requeue reappear after a new `READY`. A wall-clock stamp taken
+  before commit would still lose a slow publisher: worker A stamps `t1` and stalls, B stamps
+  `t2 > t1` and commits, the client stores `since=t2`, then A commits and vanishes forever.
 - **Alternatives considered**: sort by `completed_at` (loses late files); sort by `created_at`
-  (PENDING time, not when the file exists).
+  (PENDING time, not when the file exists); client-side overlap + dedup (requires `artifactId`
+  and a protocol change).
 
 ## Decision: show `ABANDONED`, hide intermediate statuses
 
