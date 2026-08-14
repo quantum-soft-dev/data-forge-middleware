@@ -1038,12 +1038,16 @@ of the same name). `{phase="total"}` is the whole cycle. Inner phases:
 
 **Row-group budget.** Every V2 Parquet writer — checkpoint snapshot, per-segment egress and
 completed-batch artifact — takes its row-group size from `DELTA_PARQUET_ROW_GROUP_BYTES`
-(`delta.parquet.row-group-bytes`, default 8 MiB). A writer buffers one row group in heap before
+(`delta.parquet.row-group-bytes`, default 16 MiB). A writer buffers one row group in heap before
 flushing it, so with file-backed writers this value, times the number of writers open at once, is
 what bounds a build's memory: a batch claim opens one writer per claimed table, and parquet-mr's
 own default (~128 MB) multiplied that way does not fit a 2–3 Gi pod. It is a **memory ceiling, not
 a compression knob** — lowering it costs a little compression ratio and adds row-group metadata,
-raising it buys nothing but risk. Raise it only with the pod's heap raised alongside. The
+raising it buys nothing but risk above the heap it costs. It is also the floor on how many row
+groups a big artifact carries: a multi-GB completed-batch file at 16 MiB keeps its footer (row
+groups × columns, parsed in full before a reader touches data) in the hundreds of entries, which is
+why the default sits at the top of the range rather than the bottom. Move it only together with the
+pod's heap. The
 per-segment egress writer renders its (seal-bounded, ≤ 16 MiB of records) file in memory, so there
 the budget bounds only the encoder's own buffer; it takes the same key deliberately, because all
 three writers share one pod's heap and one tuning decision.

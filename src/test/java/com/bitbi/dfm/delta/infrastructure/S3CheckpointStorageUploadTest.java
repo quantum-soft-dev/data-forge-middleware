@@ -28,9 +28,9 @@ import static org.mockito.Mockito.when;
  * (issue #112), and every failure of that upload must leave as one {@link CheckpointStorageException}.
  *
  * <p>The file is opened lazily by the SDK's {@code RequestBody.fromFile}, which wraps a read failure
- * in an {@link UncheckedIOException}. Letting that escape unconverted would give an S3-side failure
- * a different blast radius from an {@link S3Exception} in {@code CheckpointService}, which reads the
- * exception type to tell "this table failed" from "the local disk failed".</p>
+ * in an {@link UncheckedIOException}. Converting it keeps the storage layer's contract one type
+ * wide, instead of leaking an SDK internal past a caller that catches
+ * {@link S3Exception}-shaped failures.</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("S3CheckpointStorage.uploadParquet()")

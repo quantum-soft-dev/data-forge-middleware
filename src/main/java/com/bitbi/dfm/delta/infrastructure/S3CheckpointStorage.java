@@ -71,8 +71,7 @@ public class S3CheckpointStorage {
             return s3Key;
             // RequestBody.fromFile opens the file lazily, wrapping a read failure in an
             // UncheckedIOException: convert it too, so every failure of this upload reaches the
-            // caller as one type. CheckpointService reads the type to tell a table-level failure
-            // from local-disk trouble, and an S3-side failure must not pass for the latter.
+            // caller as one type instead of leaking the SDK's internals into the caller's catch.
         } catch (S3Exception | IOException | UncheckedIOException e) {
             throw new CheckpointStorageException("Failed to store checkpoint Parquet: " + s3Key, e);
         }

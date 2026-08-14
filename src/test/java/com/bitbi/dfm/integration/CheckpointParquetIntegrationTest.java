@@ -62,6 +62,10 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    /** Resolved exactly as CheckpointService resolves it, so the leak assertion cannot go vacuous. */
+    @org.springframework.beans.factory.annotation.Value("${delta.checkpoint.temp-dir:${java.io.tmpdir}}")
+    private String checkpointTempDirectory;
+
     @Test
     void materializesTypedParquetSnapshotMatchingSiteSchema() throws Exception {
         seedCustomersSchema();
@@ -152,10 +156,9 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
         assertEquals(scratchBefore, scratchSnapshots(), "the build must not leave scratch files behind");
     }
 
-    /** The checkpoint scratch files of this site in the configured temp directory. */
+    /** The checkpoint scratch files of this site in the directory the service actually writes to. */
     private List<Path> scratchSnapshots() throws Exception {
-        Path scratch = Path.of(System.getProperty("java.io.tmpdir"));
-        try (java.util.stream.Stream<Path> files = Files.list(scratch)) {
+        try (java.util.stream.Stream<Path> files = Files.list(Path.of(checkpointTempDirectory))) {
             return files.filter(path -> path.getFileName().toString().startsWith("checkpoint-" + SITE))
                     .sorted().toList();
         }

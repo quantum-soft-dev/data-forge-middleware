@@ -475,7 +475,9 @@ pages/{feature}/            # Route pages
   stays in heap, and so does the all-tables frame the build serializes at the end** — off-heap
   folding and streaming the frame (#126) are deliberately separate tickets, and
   `delta.checkpoint.duration{phase=fold}` is the meter that shows when it starts to matter. New keys: `delta.parquet.row-group-bytes`
-  (`DELTA_PARQUET_ROW_GROUP_BYTES`, default **8 MiB**) applied at all four `AvroParquetWriter`
+  (`DELTA_PARQUET_ROW_GROUP_BYTES`, default **16 MiB** — an eighth of parquet-mr's implicit
+  default, kept high enough that a multi-GB batch artifact's footer stays in the hundreds of row
+  groups) applied at all four `AvroParquetWriter`
   builders — one budget for the checkpoint, egress and batch paths, since they share one pod's heap;
   `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes` (`DELTA_CHECKPOINT_TEMP_DIR`,
   `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, default 10 GiB) mirror the batch-parquet pair. Crossing the

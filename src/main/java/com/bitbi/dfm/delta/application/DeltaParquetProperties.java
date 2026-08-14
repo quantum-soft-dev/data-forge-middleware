@@ -23,11 +23,13 @@ import org.springframework.stereotype.Component;
 public class DeltaParquetProperties {
 
     /**
-     * Default row-group budget in bytes (8 MiB). Small enough that a few dozen concurrently open
-     * writers stay in the low hundreds of MB, large enough that readers still get row groups worth
-     * seeking to (sub-MB groups multiply footer metadata and hurt scan throughput).
+     * Default row-group budget in bytes (16 MiB) — an eighth of parquet-mr's implicit default.
+     * Small enough that a dozen concurrently open writers stay in the low hundreds of MB, large
+     * enough to keep the row-group count of a multi-GB completed-batch artifact in the hundreds:
+     * footer metadata grows with row groups × columns, and a reader parses the whole footer before
+     * it reads a byte.
      */
-    public static final String DEFAULT_ROW_GROUP_BYTES = "8388608";
+    public static final String DEFAULT_ROW_GROUP_BYTES = "16777216";
 
     private final long rowGroupBytes;
 

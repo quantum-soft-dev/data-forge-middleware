@@ -240,8 +240,9 @@ delta:
     # completed-batch artifacts). A writer buffers one row group in heap before flushing, so with
     # file-backed output this is the last multiplier of peak memory: open writers x this value.
     # parquet-mr's implicit default is ~128 MB, which a grouped batch build (one writer per claimed
-    # table) multiplies past a 2-3 Gi pod. Lowering it costs a little compression, not correctness.
-    row-group-bytes: ${DELTA_PARQUET_ROW_GROUP_BYTES:8388608}
+    # table) multiplies past a 2-3 Gi pod. Lowering it further costs compression and, on a multi-GB
+    # batch artifact, multiplies the footer metadata every reader parses up front.
+    row-group-bytes: ${DELTA_PARQUET_ROW_GROUP_BYTES:16777216}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}
