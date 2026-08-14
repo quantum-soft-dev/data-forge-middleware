@@ -59,7 +59,8 @@ can report.
 **Acceptance Scenarios**:
 
 1. **Given** an `ABANDONED` artifact, **When** listed, **Then** `producedAt` is `updated_at`,
-   `status` is `abandoned`, and no one-time link is registered.
+   `status` is `abandoned`, and no one-time link is registered. Clients must surface this row
+   even when `lastSeq <= applied_seq`.
 2. **Given** a mixed page of `READY` and `ABANDONED` rows, **When** the client walks `nextCursor`,
    **Then** every row is returned exactly once.
 

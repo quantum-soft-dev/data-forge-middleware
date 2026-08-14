@@ -119,10 +119,12 @@ exhausted its build attempts: `downloadUrl` and `linkExpiresAt` are null and no
 `PENDING` / `BUILDING` / `FAILED` rows are omitted; they appear later as `ready` (or
 `abandoned`).
 
-The client skip rule is unchanged: `lastSeq <= applied_seq → skip`. Only the file granularity
-changed. `lastSeq == null` means the range is unknown — **never skip** that file (in JavaScript
-`null <= n` is `true`). Abandoned rows keep a stored range when one was published; they do not
-fall back to live changelog segments.
+Skip applies only to downloadable rows: `status=ready`, `type=delta`, and `type=checkpoint`.
+`lastSeq <= applied_seq → skip` is unchanged for those. `status=abandoned` must **always** be
+surfaced — it is an alert, not a file the watermark can swallow, even when sibling READY
+tables already cover the same `lastSeq`. `lastSeq == null` means the range is unknown —
+**never skip** that file (in JavaScript `null <= n` is `true`). Abandoned rows keep a stored
+range when one was published; they do not fall back to live changelog segments.
 
 `nextCursor` is non-null exactly when `hasMore` is `true`.
 
@@ -155,10 +157,12 @@ A scheduled job deletes consumed/expired `download_links` rows older than the re
 
 ## Trade-offs of the batch default
 
-- **Latency.** A batch file appears only after the Delta session closes and the finalizer
-  publishes `READY`. Per-segment files appear seconds after a seal. For "one session = one
-  extract run" this is invisible. A site that holds a continuous session open for hours will
-  wait until that session ends; those clients should stay on `type=delta`.
+- **Latency.** The default listing shows a table only after `SessionEnd` and the batch-Parquet
+  worker has published `READY` (or `ABANDONED`). The worker is woken by `AFTER_COMMIT`
+  `BatchCompletedEvent` (enqueue + wake), a 60 s sweep, and owner-download backfill. The
+  catalog does **not** enqueue missing history on list. Per-segment files appear seconds after
+  a seal. A site that holds a continuous session open for hours will wait until that session
+  ends; those clients should stay on `type=delta`.
 - **Retention.** Batch artifacts are deleted with the batch. The client poll interval must be
   shorter than the retention window, or unread files disappear.
 - **Checkpoints.** A snapshot batch already yields one file per table, so the first batch

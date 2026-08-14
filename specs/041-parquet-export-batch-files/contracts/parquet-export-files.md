@@ -35,7 +35,9 @@ Breaking change: omitted `type` lists **batch artifacts only**.
 ```
 
 Abandoned item: `status=abandoned`, `downloadUrl=null`, `linkExpiresAt=null`,
-`producedAt` is the row's `updated_at`. No `download_links` insert.
+`producedAt` is the row's `updated_at`. No `download_links` insert. Clients skip
+`lastSeq <= applied_seq` only for `status=ready` and for `delta`/`checkpoint`. An
+`abandoned` row is always an alert. `lastSeq == null` is never skippable.
 
 ## Client migration
 
