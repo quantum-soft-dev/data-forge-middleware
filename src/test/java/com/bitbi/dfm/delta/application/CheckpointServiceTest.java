@@ -15,11 +15,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -40,6 +45,15 @@ class CheckpointServiceTest {
 
     private static final UUID SITE = UUID.randomUUID();
 
+    @org.junit.jupiter.api.io.TempDir
+    Path tempDirectory;
+
+    /** What one upload saw: the file it was handed, its size, and how many snapshots were on disk. */
+    private record UploadedSnapshot(Path path, long sizeAtUpload, long snapshotsOnDisk) {
+    }
+
+    private final List<UploadedSnapshot> uploaded = new ArrayList<>();
+
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
     private final CheckpointRepository checkpointRepository = mock(CheckpointRepository.class);
@@ -50,14 +64,16 @@ class CheckpointServiceTest {
     private final org.springframework.context.ApplicationEventPublisher eventPublisher =
             mock(org.springframework.context.ApplicationEventPublisher.class);
 
-    private final CheckpointService service = new CheckpointService(
-            segmentRepository, changelogSegmentService, checkpointRepository,
-            syncStateService, checkpointStorage, siteSchemaService, metrics,
-            new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher);
+    private CheckpointService service;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
+        service = new CheckpointService(
+                segmentRepository, changelogSegmentService, checkpointRepository,
+                syncStateService, checkpointStorage, siteSchemaService, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                tempDirectory.toString(), Long.MAX_VALUE);
         when(metrics.timeCheckpoint(any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(0)).get());
         when(metrics.timeCheckpointPhase(any(), any(Supplier.class)))
                 .thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(1)).get());
@@ -79,14 +95,13 @@ class CheckpointServiceTest {
     @Test
     void attachesFullParquetSnapshotWhenTableSchemaDeclared() {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
-        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
-                .thenReturn("checkpoints/parquet-key");
+        recordUploads("checkpoints/parquet-key");
 
         service.buildCheckpoint(SITE);
 
-        ArgumentCaptor<byte[]> parquet = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), parquet.capture());
-        assertTrue(parquet.getValue().length > 0, "parquet bytes must be written");
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        assertEquals(1, uploaded.size(), "one snapshot uploaded");
+        assertTrue(uploaded.get(0).sizeAtUpload() > 0, "the uploaded file must carry the snapshot");
 
         ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(saved.capture());
@@ -99,8 +114,7 @@ class CheckpointServiceTest {
         // The point of #113: one pass, one buffer. Parquet is the only object the build uploads
         // per table, so the folded state is never copied into a second row representation.
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
-        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
-                .thenReturn("checkpoints/parquet-key");
+        recordUploads("checkpoints/parquet-key");
 
         service.buildCheckpoint(SITE);
 
@@ -140,8 +154,7 @@ class CheckpointServiceTest {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
                 "customers", customersSchema(),
                 "orders", ordersSchema()));
-        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
-                .thenReturn("checkpoints/parquet-key");
+        recordUploads("checkpoints/parquet-key");
 
         service.buildCheckpoint(SITE);
 
@@ -217,13 +230,14 @@ class CheckpointServiceTest {
     @Test
     void recordsFoldParquetAndUploadPhasesOnAFullBuild() {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
-        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
-                .thenReturn("checkpoints/parquet-key");
+        recordUploads("checkpoints/parquet-key");
 
         service.buildCheckpoint(SITE);
 
         verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
-        verify(metrics).timeCheckpointPhase(eq("parquet"), any(Supplier.class));
+        // The parquet phase times a void, file-backed write since #112 — the meter name and its
+        // "parquet" tag are unchanged, only the timed shape is.
+        verify(metrics).timeCheckpointPhase(eq("parquet"), any(Runnable.class));
         verify(metrics, atLeastOnce()).timeCheckpointPhase(eq("upload"), any(Runnable.class));
         verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
     }
@@ -240,8 +254,7 @@ class CheckpointServiceTest {
                 record("customers", 3L, 3, "Cara"),
                 record("customers", 4L, 4, "Dan")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
-        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
-                .thenReturn("checkpoints/parquet-key");
+        recordUploads("checkpoints/parquet-key");
 
         service.buildCheckpoint(SITE);
 
@@ -262,7 +275,68 @@ class CheckpointServiceTest {
                 "buildCheckpoint must not open a transaction spanning S3 round-trips");
     }
 
+    @Test
+    void writesTheSnapshotToDiskAndRemovesItAfterUploading() throws IOException {
+        // The snapshot is a file handed to S3, not a byte[] held in heap — and the file is this
+        // build's litter: leaving it behind fills the node one checkpoint cycle at a time.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1, uploaded.size());
+        assertTrue(uploaded.get(0).sizeAtUpload() > 0, "the file must hold the snapshot at upload time");
+        assertEquals(List.of(), snapshotsOnDisk(), "the temporary snapshot must not outlive the build");
+    }
+
+    @Test
+    void removesTheTemporarySnapshotWhenTheUploadFails() throws IOException {
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), any(), anyLong(), any(Path.class)))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(List.of(), snapshotsOnDisk(), "a failed table must not leak its temporary file");
+        verify(metrics).checkpointTableUnmaterialized("parquet_failed");
+    }
+
+    @Test
+    void keepsOnlyOneTableSnapshotOnDiskAtATime() {
+        // Table by table: fold rows -> file -> upload -> drop the file. Holding every table's
+        // snapshot at once would put the peak back in proportion to the table count.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(2, uploaded.size(), "both tables uploaded");
+        assertTrue(uploaded.stream().allMatch(snapshot -> snapshot.snapshotsOnDisk() == 1),
+                "at most one table snapshot may exist on disk at any moment");
+    }
+
     // --- helpers ---
+
+    /** Stub the upload, recording what each call saw on disk before the file is cleaned up. */
+    private void recordUploads(String s3Key) {
+        when(checkpointStorage.uploadParquet(eq(SITE), any(), anyLong(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    Path file = invocation.getArgument(3);
+                    uploaded.add(new UploadedSnapshot(file, Files.size(file), snapshotsOnDisk().size()));
+                    return s3Key;
+                });
+    }
+
+    private List<Path> snapshotsOnDisk() throws IOException {
+        try (Stream<Path> files = Files.list(tempDirectory)) {
+            return files.toList();
+        }
+    }
 
     private static TableSchema customersSchema() {
         return new TableSchema(

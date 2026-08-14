@@ -229,6 +229,12 @@ delta:
     # Orphaned provisional segments (a snapshot whose pod died mid-stream) collected per sweep pass.
     provisional-sweep-batch: ${DELTA_PROVISIONAL_SWEEP_BATCH:500}
     provisional-sweep-millis: ${DELTA_PROVISIONAL_SWEEP_MILLIS:900000}
+  checkpoint:
+    # A checkpoint snapshot is written to a local file per table and streamed to S3 from there
+    # (issue #112), so a table is never materialized in heap. Point temp-dir at a scratch volume if
+    # the node's default tmpdir is small; max-temp-bytes refuses a table that would fill it.
+    temp-dir: ${DELTA_CHECKPOINT_TEMP_DIR:${java.io.tmpdir}}
+    max-temp-bytes: ${DELTA_CHECKPOINT_MAX_TEMP_BYTES:10737418240}
   parquet:
     # Row-group budget for every V2 Parquet writer (checkpoint snapshots, per-segment egress and
     # completed-batch artifacts). A writer buffers one row group in heap before flushing, so with

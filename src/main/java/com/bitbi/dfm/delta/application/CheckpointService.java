@@ -16,6 +16,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +51,8 @@ public class CheckpointService {
     private final DeltaMetrics metrics;
     private final DeltaParquetProperties parquetProperties;
     private final ApplicationEventPublisher eventPublisher;
+    private final Path tempDirectory;
+    private final long maxTempBytes;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
@@ -56,7 +62,12 @@ public class CheckpointService {
                              SiteSchemaService siteSchemaService,
                              DeltaMetrics metrics,
                              DeltaParquetProperties parquetProperties,
-                             ApplicationEventPublisher eventPublisher) {
+                             ApplicationEventPublisher eventPublisher,
+                             // fully qualified: the delta wire Value is imported above
+                             @org.springframework.beans.factory.annotation.Value(
+                                     "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
+                             @org.springframework.beans.factory.annotation.Value(
+                                     "${delta.checkpoint.max-temp-bytes:10737418240}") long maxTempBytes) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
@@ -66,6 +77,8 @@ public class CheckpointService {
         this.metrics = metrics;
         this.parquetProperties = parquetProperties;
         this.eventPublisher = eventPublisher;
+        this.tempDirectory = Path.of(tempDirectory);
+        this.maxTempBytes = maxTempBytes;
     }
 
     /**
@@ -136,6 +149,16 @@ public class CheckpointService {
 
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
+        // Every table's snapshot goes through the same scratch directory, one at a time. Creating
+        // it is systemic, not per-table: if it fails, no table can be materialized this build, so
+        // let it fail the build loudly instead of counting every table as its own skip.
+        try {
+            Files.createDirectories(tempDirectory);
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "Cannot prepare the checkpoint scratch directory " + tempDirectory, e);
+        }
+
         // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
         // additionally materializes the full per-table load as typed Parquet (the only format V2
         // produces since issue #113) plus the frame seed.
@@ -158,14 +181,20 @@ public class CheckpointService {
                 // build: the pointer would freeze, retention would stop, and segments would grow
                 // unbounded. Skip that table and keep going — the same skip-and-continue contract
                 // as DeltaEgressService.
+                Path snapshot = null;
                 try {
-                    byte[] parquet = metrics.timeCheckpointPhase("parquet",
-                            () -> ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows),
-                                    parquetProperties.rowGroupBytes()));
+                    // One table at a time: write this table's rows to disk, hand the file to S3,
+                    // drop it. Nothing but one row-group buffer and one scratch file exists at a
+                    // time, so the peak no longer grows with the number of tables.
+                    snapshot = Files.createTempFile(tempDirectory, "checkpoint-" + siteId + "-", ".parquet");
+                    Path output = snapshot;
+                    metrics.timeCheckpointPhase("parquet", () ->
+                            ParquetCheckpointWriter.writeParquet(output, tableName, tableSchema,
+                                    dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes()));
                     metrics.timeCheckpointPhase("upload", () ->
                             checkpoint.attachParquet(checkpointStorage.uploadParquet(
-                                    siteId, tableName, seq, parquet)));
-                } catch (RuntimeException e) {
+                                    siteId, tableName, seq, output)));
+                } catch (IOException | RuntimeException e) {
                     // The row's seq and rowCount advance regardless (the fold succeeded), so the
                     // previous build's key would now sit beside a newer seq and be served as its
                     // snapshot. Detach it: an absent file is honest, stale rows under a fresh seq
@@ -175,6 +204,10 @@ public class CheckpointService {
                     log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
                             + "artifact this build (check the declared schema against the data)",
                             tableName, siteId, e);
+                } finally {
+                    // The scratch file is this build's litter whichever way the table ended: kept,
+                    // it would fill the node one checkpoint cycle at a time.
+                    deleteQuietly(snapshot, tableName, siteId);
                 }
             }
 
@@ -200,8 +233,24 @@ public class CheckpointService {
         return state;
     }
 
-    private static List<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
-        return rows.values().stream().map(FoldedRow::data).toList();
+    /**
+     * A lazily iterated view of one table's folded rows — the writer traverses it (twice at most,
+     * for the decimal envelope) instead of receiving a materialized copy of the state.
+     */
+    private static Iterable<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
+        return () -> rows.values().stream().map(FoldedRow::data).iterator();
+    }
+
+    private static void deleteQuietly(Path snapshot, String tableName, UUID siteId) {
+        if (snapshot == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(snapshot);
+        } catch (IOException e) {
+            log.warn("Could not delete the temporary checkpoint snapshot {} of table {} for site {}",
+                    snapshot, tableName, siteId, e);
+        }
     }
 
     private Checkpoint findOrCreate(UUID siteId, String tableName, long seq, long rowCount) {

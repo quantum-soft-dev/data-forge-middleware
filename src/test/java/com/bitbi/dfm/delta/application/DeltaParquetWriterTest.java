@@ -454,7 +454,7 @@ class DeltaParquetWriterTest {
                 new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());
         Path output = tempDir.resolve("bounded.parquet");
 
-        assertThrows(DeltaParquetWriter.ArtifactSizeLimitExceededException.class,
+        assertThrows(ArtifactSizeLimitExceededException.class,
                 () -> DeltaParquetWriter.writeDeltaParquet(output, "customers", noDecimals,
                         consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
                                 Map.of("id", intVal(1)), Map.of("id", intVal(1)))), 8, ROW_GROUP_BYTES));
