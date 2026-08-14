@@ -59,6 +59,21 @@ public interface BatchParquetArtifactRepository {
      */
     boolean tryLockBatch(UUID batchId);
 
+    /**
+     * Serialize catalog-visible publication ({@code READY}/{@code ABANDONED}) so {@code ready_at}
+     * / {@code updated_at} are assigned after the previous publisher has committed. Without this,
+     * a slower transaction can stamp an earlier wall-clock and vanish from {@code since}.
+     */
+    void lockCatalogPublish();
+
+    /**
+     * Next catalog-visible timestamp: {@code max(previous + 1µs, clock_timestamp())}. Must run
+     * in the same transaction as {@link #lockCatalogPublish()} so two publishers cannot observe
+     * the same watermark. Survives pod clock skew that a plain {@code LocalDateTime.now()} would
+     * not.
+     */
+    LocalDateTime nextCatalogWatermark();
+
     /** Retryable siblings of a selected batch, locked for the duration of the claim transaction. */
     List<BatchParquetArtifact> findRetryableByBatchId(UUID batchId, LocalDateTime now,
                                                       int retryDelaySeconds, int leaseSeconds,
@@ -69,7 +84,8 @@ public interface BatchParquetArtifactRepository {
      *
      * @return number of rows moved to {@code ABANDONED}
      */
-    int abandonExpiredClaims(LocalDateTime now, int leaseSeconds, int maxAttempts, String error);
+    int abandonExpiredClaims(LocalDateTime now, LocalDateTime publishedAt, int leaseSeconds,
+                             int maxAttempts, String error);
 
     /**
      * Create one PENDING work row unless it already exists. Idempotent by

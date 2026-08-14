@@ -38,6 +38,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,6 +48,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -54,6 +56,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class BatchParquetFinalizationServiceTest {
+
+    private static final LocalDateTime CATALOG_WATERMARK = LocalDateTime.of(2026, 8, 14, 12, 0);
 
     @TempDir
     Path tempDir;
@@ -69,6 +73,7 @@ class BatchParquetFinalizationServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(artifactRepository.nextCatalogWatermark()).thenReturn(CATALOG_WATERMARK);
         service = newService(5);
     }
 
@@ -189,6 +194,15 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
         assertEquals(4, artifact.getRowCount());
         assertEquals("egress/orders.parquet", artifact.getS3Key());
+        assertEquals(1L, artifact.getFirstSeq());
+        assertEquals(4L, artifact.getLastSeq());
+        InOrder publishOrder = inOrder(artifactRepository);
+        publishOrder.verify(artifactRepository).save(any(BatchParquetArtifact.class));
+        publishOrder.verify(artifactRepository).lockCatalogPublish();
+        publishOrder.verify(artifactRepository).findById(artifact.getId());
+        publishOrder.verify(artifactRepository).nextCatalogWatermark();
+        publishOrder.verify(artifactRepository).save(any(BatchParquetArtifact.class));
+        assertEquals(CATALOG_WATERMARK, artifact.getReadyAt());
         // One replay in segment order: the table declares no decimal column, so the precision
         // scan pass is skipped rather than re-downloading every segment.
         InOrder reads = inOrder(segmentService);
@@ -323,6 +337,9 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
         assertFalse(artifact.isRetryable());
         assertTrue(artifact.getLastError().contains("No declared schema"));
+        assertEquals(1L, artifact.getFirstSeq(),
+                "an abandon after a failed build must keep the table range from the segments");
+        assertEquals(1L, artifact.getLastSeq());
         verify(storage, never()).uploadBatchParquet(any(), any(), any(), any(), any());
     }
 
@@ -497,6 +514,56 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
         assertEquals(1, artifact.getRowCount());
+        assertEquals(1L, artifact.getFirstSeq(), "legacy rows fall back to the batch-wide published range");
+        assertEquals(1L, artifact.getLastSeq());
+    }
+
+    @Test
+    void recordsTheSeqRangeOfSegmentsThatMentionTheTable() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment itemsOnly = segment(siteId, batchId, "items", 1, 10,
+                Map.of("items", new TableChangeStats(10, 0, 0)));
+        ChangelogSegment ordersTail = segment(siteId, batchId, "orders", 11, 20,
+                Map.of("orders", new TableChangeStats(2, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId))
+                .thenReturn(List.of(itemsOnly, ordersTail));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("items");
+        stream("orders", record(11, Op.INSERT), record(12, Op.INSERT));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        assertEquals(11L, artifact.getFirstSeq());
+        assertEquals(20L, artifact.getLastSeq());
+    }
+
+    @Test
+    void usesBatchWideSeqRangeWhenAnyPublishedSegmentHasNoStats() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment named = segment(siteId, batchId, "named", 1, 10,
+                Map.of("orders", new TableChangeStats(2, 0, 0)));
+        ChangelogSegment legacyTail = segment(siteId, batchId, "legacy", 11, 20, null);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId))
+                .thenReturn(List.of(named, legacyTail));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("named", record(1, Op.INSERT), record(2, Op.INSERT));
+        stream("legacy", record(11, Op.INSERT));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        assertEquals(1L, artifact.getFirstSeq(),
+                "a null-stats tail must not shrink lastSeq below the batch-wide published range");
+        assertEquals(20L, artifact.getLastSeq());
     }
 
     @Test
@@ -617,7 +684,8 @@ class BatchParquetFinalizationServiceTest {
         BatchParquetArtifact retryable = claimable(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.abandonExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7), any()))
+        when(artifactRepository.abandonExpiredClaims(any(LocalDateTime.class), any(LocalDateTime.class),
+                eq(1800), eq(7), any()))
                 .thenReturn(17);
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
@@ -628,7 +696,11 @@ class BatchParquetFinalizationServiceTest {
         assertTrue(newService(7).finalizeNext());
 
         assertEquals(BatchParquetArtifactStatus.READY, retryable.getStatus());
-        verify(artifactRepository).abandonExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7), any());
+        InOrder settleOrder = inOrder(artifactRepository);
+        settleOrder.verify(artifactRepository).lockCatalogPublish();
+        settleOrder.verify(artifactRepository).nextCatalogWatermark();
+        settleOrder.verify(artifactRepository).abandonExpiredClaims(
+                any(LocalDateTime.class), eq(CATALOG_WATERMARK), eq(1800), eq(7), any());
     }
 
     @Test

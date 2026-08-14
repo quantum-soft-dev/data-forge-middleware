@@ -89,6 +89,29 @@ public interface JpaBatchParquetArtifactRepository
 
     @Override
     @Query(value = """
+            SELECT true FROM (
+                SELECT pg_advisory_xact_lock(hashtextextended('parquet-export-catalog-publish', 0))
+            ) AS locked
+            """, nativeQuery = true)
+    void lockCatalogPublish();
+
+    @Override
+    @Query(value = """
+            WITH next AS (
+                UPDATE batch_parquet_catalog_watermark
+                   SET published_at = GREATEST(
+                           published_at + INTERVAL '1 microsecond',
+                           CAST(clock_timestamp() AT TIME ZONE 'UTC' AS timestamp)
+                       )
+                 WHERE id = 1
+             RETURNING published_at
+            )
+            SELECT published_at FROM next
+            """, nativeQuery = true)
+    LocalDateTime nextCatalogWatermark();
+
+    @Override
+    @Query(value = """
             SELECT * FROM batch_parquet_artifacts
             WHERE batch_id = :batchId
               AND (status = 'PENDING'
@@ -111,13 +134,17 @@ public interface JpaBatchParquetArtifactRepository
     @Transactional
     @Query(value = """
             UPDATE batch_parquet_artifacts
-            SET status = 'ABANDONED', claim_token = NULL, last_error = :error, updated_at = :now,
-                version = version + 1
+            SET status = 'ABANDONED', claim_token = NULL, last_error = :error,
+                updated_at = :publishedAt, version = version + 1
             WHERE status = 'BUILDING' AND attempt_count >= :maxAttempts AND updated_at
                 < CAST(:now AS timestamp) - make_interval(secs =>
                     CAST(:leaseSeconds AS double precision))
             """, nativeQuery = true)
-    int abandonExpiredClaims(LocalDateTime now, int leaseSeconds, int maxAttempts, String error);
+    int abandonExpiredClaims(@Param("now") LocalDateTime now,
+                             @Param("publishedAt") LocalDateTime publishedAt,
+                             @Param("leaseSeconds") int leaseSeconds,
+                             @Param("maxAttempts") int maxAttempts,
+                             @Param("error") String error);
 
     @Override
     @Modifying(flushAutomatically = true)

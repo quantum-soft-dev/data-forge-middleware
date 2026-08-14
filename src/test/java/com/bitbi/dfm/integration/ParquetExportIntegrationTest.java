@@ -73,6 +73,7 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
     void activateAndSeed() {
         jdbc.update("DELETE FROM download_links");
         jdbc.update("DELETE FROM account_plugins WHERE plugin_id = 'parquet-export'");
+        jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE_STORE_01);
 
         ActivationResult activation = activationService.activate(ACCOUNT_1, "parquet-export", Map.of());
         assertNotNull(activation.apiKey(), "first activation must return login:password once");
@@ -121,17 +122,24 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should list delta + checkpoint files and register one link per file")
-    void shouldListFilesAndRegisterLinks() throws Exception {
+    @DisplayName("Should list only batch files by default, ignoring segment and checkpoint seeds")
+    void shouldDefaultToBatchFilesOnly() throws Exception {
         mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files").isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should list delta or checkpoint files when the type is requested explicitly")
+    void shouldListDeltaAndCheckpointWhenTypeRequested() throws Exception {
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()).param("type", "delta"))
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.files[?(@.type=='delta')].fileName").value(
-                        org.hamcrest.Matchers.hasItem("orders_seq100-250.parquet")))
+                        org.hamcrest.Matchers.hasItem("orders_seq100-250.parquet")));
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()).param("type", "checkpoint"))
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.files[?(@.type=='checkpoint')].fileName").value(
                         org.hamcrest.Matchers.hasItem("orders_seq250.parquet")));
-
-        Integer linkCount = jdbc.queryForObject("SELECT count(*) FROM download_links", Integer.class);
-        assertEquals(2, linkCount);
     }
 
     @Test
@@ -157,7 +165,8 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
         int pages = 0;
         boolean hasMore = true;
         while (hasMore && pages < 10) {
-            var request = get(FILES_PATH).header("Authorization", basicAuth()).param("size", "2");
+            var request = get(FILES_PATH).header("Authorization", basicAuth())
+                    .param("type", "delta").param("size", "2");
             if (cursor != null) {
                 request = request.param("cursor", cursor);
             }
@@ -286,17 +295,173 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                 Integer.class);
         assertEquals(0, oldRows, "aged consumed link must be purged");
         Integer freshRows = jdbc.queryForObject("SELECT count(*) FROM download_links", Integer.class);
-        assertTrue(freshRows >= 2, "fresh unconsumed links must be retained");
+        assertTrue(freshRows >= 1, "fresh unconsumed links must be retained");
+    }
+
+    @Test
+    @DisplayName("Should list a READY batch artifact by ready_at and hide intermediate statuses")
+    void shouldListReadyBatchArtifactByReadyAt() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        UUID artifactId = UUID.fromString("0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        insertArtifact(artifactId, batchId, SITE_STORE_01, "orders", "READY",
+                "egress/orders.parquet", 100L, 250L,
+                "2026-07-27 10:16:00", "2026-07-27 10:16:00");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "pending_tbl", "PENDING",
+                null, null, null, null, "2026-07-27 10:16:00");
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth())
+                        .param("since", "2026-07-27T10:15:00"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files", org.hamcrest.Matchers.hasSize(1)))
+                .andExpect(jsonPath("$.files[0].type").value("batch"))
+                .andExpect(jsonPath("$.files[0].status").value("ready"))
+                .andExpect(jsonPath("$.files[0].batchId").value(batchId.toString()))
+                .andExpect(jsonPath("$.files[0].artifactId").value(artifactId.toString()))
+                .andExpect(jsonPath("$.files[0].firstSeq").value(100))
+                .andExpect(jsonPath("$.files[0].lastSeq").value(250))
+                .andExpect(jsonPath("$.files[0].fileName").value("orders_batch" + batchId + ".parquet"))
+                .andExpect(jsonPath("$.files[0].downloadUrl").isNotEmpty());
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth())
+                        .param("since", "2026-07-27T10:16:00"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files").isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should emit a null seq range when the artifact never stored one")
+    void shouldEmitNullSeqWhenArtifactRangeIsUnknown() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "READY",
+                "egress/orders.parquet", null, null,
+                "2026-07-27 10:16:00", "2026-07-27 10:16:00");
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].firstSeq").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.files[0].lastSeq").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    @DisplayName("Should keep the stored seq range after changelog segments are pruned")
+    void shouldKeepStoredSeqRangeAfterSegmentsArePruned() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "READY",
+                "egress/orders.parquet", 100L, 250L,
+                "2026-07-27 10:16:00", "2026-07-27 10:16:00");
+        jdbc.update("DELETE FROM changelog_segments WHERE batch_id = ?", batchId);
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].firstSeq").value(100))
+                .andExpect(jsonPath("$.files[0].lastSeq").value(250));
+    }
+
+    @Test
+    @DisplayName("Should list an abandoned artifact without a download URL")
+    void shouldListAbandonedArtifactWithoutDownloadUrl() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "ABANDONED",
+                null, 100L, 250L, null, "2026-07-27 11:00:00");
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files", org.hamcrest.Matchers.hasSize(1)))
+                .andExpect(jsonPath("$.files[0].status").value("abandoned"))
+                .andExpect(jsonPath("$.files[0].downloadUrl").value(org.hamcrest.Matchers.nullValue()));
+
+        Integer linkCount = jdbc.queryForObject("SELECT count(*) FROM download_links", Integer.class);
+        assertEquals(0, linkCount);
+    }
+
+    @Test
+    @DisplayName("Should show a requeued artifact again after it becomes READY with a new ready_at")
+    void shouldRelistAfterRequeueBecomesReady() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        UUID artifactId = UUID.randomUUID();
+        insertArtifact(artifactId, batchId, SITE_STORE_01, "orders", "READY",
+                "egress/orders-v1.parquet", 100L, 250L,
+                "2026-07-20 10:00:00", "2026-07-20 10:00:00");
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth())
+                        .param("since", "2026-07-19T00:00:00"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files", org.hamcrest.Matchers.hasSize(1)));
+
+        jdbc.update("""
+                UPDATE batch_parquet_artifacts
+                   SET status = 'READY', s3_key = 'egress/orders-v2.parquet',
+                       row_count = 10, file_size = 100, checksum = 'def',
+                       ready_at = '2026-07-27 12:00:00', updated_at = '2026-07-27 12:00:00'
+                 WHERE id = ?
+                """, artifactId);
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth())
+                        .param("since", "2026-07-20T10:00:00"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files", org.hamcrest.Matchers.hasSize(1)))
+                .andExpect(jsonPath("$.files[0].producedAt").value("2026-07-27T12:00:00"));
+    }
+
+    @Test
+    @DisplayName("Should walk mixed READY and ABANDONED batch files via nextCursor")
+    void shouldWalkMixedBatchStatusesViaCursor() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "t_alpha", "READY",
+                "egress/a.parquet", 1L, 2L, "2026-07-27 12:00:00", "2026-07-27 12:00:00");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "t_beta", "ABANDONED",
+                null, 1L, 2L, null, "2026-07-27 12:00:01");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "t_gamma", "READY",
+                "egress/c.parquet", 1L, 2L, "2026-07-27 12:00:02", "2026-07-27 12:00:02");
+
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        String cursor = null;
+        int pages = 0;
+        boolean hasMore = true;
+        while (hasMore && pages < 10) {
+            var request = get(FILES_PATH).header("Authorization", basicAuth()).param("size", "2");
+            if (cursor != null) {
+                request = request.param("cursor", cursor);
+            }
+            MvcResult result = mockMvc.perform(request).andExpect(status().isOk()).andReturn();
+            JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+            for (JsonNode file : body.get("files")) {
+                assertTrue(seen.add(file.get("table").asText()), "table listed twice: " + file);
+            }
+            hasMore = body.get("hasMore").asBoolean();
+            cursor = body.hasNonNull("nextCursor") ? body.get("nextCursor").asText() : null;
+            pages++;
+        }
+
+        assertEquals(java.util.Set.of("t_alpha", "t_beta", "t_gamma"), seen);
+        assertEquals(2, pages);
     }
 
     /** Perform a listing and return the first file's one-time download URL. */
     private String firstDownloadUrl() throws Exception {
-        MvcResult result = mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+        MvcResult result = mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth())
+                        .param("type", "delta"))
                 .andExpect(status().isOk())
                 .andReturn();
         JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
         JsonNode files = body.get("files");
         assertTrue(files.size() >= 1, "expected at least one listed file");
         return files.get(0).get("downloadUrl").asText();
+    }
+
+    private void insertArtifact(UUID id, UUID batchId, UUID siteId, String table, String status,
+                                String s3Key, Long firstSeq, Long lastSeq,
+                                String readyAt, String updatedAt) {
+        jdbc.update("""
+                INSERT INTO batch_parquet_artifacts
+                    (id, batch_id, site_id, table_name, status, s3_key, row_count, file_size, checksum,
+                     attempt_count, first_seq, last_seq, created_at, updated_at, ready_at, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, COALESCE(?::timestamp, now()),
+                        COALESCE(?::timestamp, now()), ?::timestamp, 0)
+                """, id, batchId, siteId, table, status, s3Key,
+                "READY".equals(status) ? 10L : null,
+                "READY".equals(status) ? 100L : null,
+                "READY".equals(status) ? "abc" : null,
+                firstSeq, lastSeq, updatedAt, updatedAt, readyAt);
     }
 }

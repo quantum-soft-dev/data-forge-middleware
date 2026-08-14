@@ -1,8 +1,9 @@
 # Change request: one batch-level Delta Parquet per table
 
-**Issues:** #93, #97, #98, #100
+**Issues:** #93, #97, #98, #100, #109
 **Features:** 036-unified-batch-parquet, 038-batch-parquet-single-replay,
-039-batch-parquet-queue-ops, 040-batch-parquet-attempt-keys
+039-batch-parquet-queue-ops, 040-batch-parquet-attempt-keys,
+041-parquet-export-batch-files
 
 ## Decision
 
@@ -11,12 +12,16 @@ Delta v2 keeps three deliberately distinct storage layers:
 1. **Raw changelog segments** (`delta/{siteId}/segments/*.pb.gz`) are the authoritative durable
    journal and remain bounded by ingestion seals.
 2. **Realtime segment egress** (`egress/{siteId}/{table}/delta/seq=*.parquet`) remains available to
-   existing sequential consumers, including Parquet Export. This change does not remove or alter it.
+   existing sequential consumers. Parquet Export still lists it behind explicit `type=delta`.
 3. **Completed-batch downloads**
    (`egress/{siteId}/batches/{batchId}/attempts/{claimToken}/*.parquet`) are unified user-facing
    artifacts: the manifest exposes exactly one winning file for each table in a closed session.
 
-The batch download API resolves layer 3 only. It never scans or guesses among layer-2 objects.
+The owner/admin batch download API resolves layer 3 only. It never scans or guesses among
+layer-2 objects. Feature 041 (#109) also lists layer 3 on
+`GET /api/v1/plugins/parquet-export/files` as `type=batch` (the unversioned default). Segment
+and checkpoint files stay available as explicit filters. Abandoned artifacts are returned
+without a download URL so the client can alert rather than silently drift.
 
 ## Why raw segments are replayed
 

@@ -22,10 +22,11 @@ import java.util.UUID;
 @Repository
 public class ParquetExportCatalogDao {
 
-    /** One catalog row; {@code seq} is set for checkpoints, {@code firstSeq/lastSeq} for deltas. */
+    /** One catalog row. Batch rows set {@code batchId}/{@code status}/{@code artifactId}. */
     public record CatalogRow(UUID siteId, String siteDomain, String table, FileType type,
                              Long firstSeq, Long lastSeq, Long seq,
-                             LocalDateTime producedAt, String s3Key) {
+                             LocalDateTime producedAt, String s3Key,
+                             UUID batchId, String status, UUID artifactId) {
     }
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -64,7 +65,8 @@ public class ParquetExportCatalogDao {
         return jdbc.query(sql.toString(), params, (rs, i) -> new CatalogRow(
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.DELTA, rs.getLong("first_seq"), rs.getLong("last_seq"), null,
-                rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key")));
+                rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
+                null, null, null));
     }
 
     /**
@@ -92,7 +94,70 @@ public class ParquetExportCatalogDao {
         return jdbc.query(sql.toString(), params, (rs, i) -> new CatalogRow(
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.CHECKPOINT, null, null, rs.getLong("seq"),
-                rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key")));
+                rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
+                null, null, null));
+    }
+
+    /**
+     * Ready and abandoned completed-batch Parquet artifacts, ordered by
+     * {@code (produced_at, s3_key)}. Each status is a limited UNION ALL branch so the
+     * {@code READY} index {@code (ready_at, s3_key)} and the {@code ABANDONED}
+     * index {@code (updated_at, 'abandoned/' || id)} can serve the page.
+     */
+    public List<CatalogRow> findBatchFiles(UUID accountId, LocalDateTime since, UUID siteId,
+                                           String table, LocalDateTime cursorAt, String cursorKey,
+                                           int limit) {
+        MapSqlParameterSource params = baseParams(accountId, since, limit);
+        if (cursorAt != null) {
+            params.addValue("cursorAt", cursorAt);
+            params.addValue("cursorKey", cursorKey == null ? "" : cursorKey);
+        }
+        StringBuilder sql = new StringBuilder("""
+                SELECT f.site_id, f.domain, f.table_name, f.batch_id, f.status, f.artifact_id,
+                       f.first_seq, f.last_seq, f.produced_at, f.s3_key
+                FROM (
+                """);
+        appendBatchBranch(sql, params, siteId, table, cursorAt != null,
+                "READY", "a.ready_at", "a.s3_key", "a.s3_key");
+        sql.append("                UNION ALL\n");
+        appendBatchBranch(sql, params, siteId, table, cursorAt != null,
+                "ABANDONED", "a.updated_at", "('abandoned/' || a.id::text)",
+                "'abandoned/' || a.id::text");
+        sql.append("""
+                ) f
+                ORDER BY f.produced_at, f.s3_key
+                LIMIT :limit
+                """);
+        return jdbc.query(sql.toString(), params, (rs, i) -> new CatalogRow(
+                rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
+                FileType.BATCH, rs.getObject("first_seq", Long.class), rs.getObject("last_seq", Long.class),
+                null, rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
+                rs.getObject("batch_id", UUID.class), rs.getString("status"),
+                rs.getObject("artifact_id", UUID.class)));
+    }
+
+    private static void appendBatchBranch(StringBuilder sql, MapSqlParameterSource params,
+                                          UUID siteId, String table, boolean hasCursor,
+                                          String status, String atColumn, String orderKey,
+                                          String selectKey) {
+        sql.append("                (SELECT a.site_id, st.domain, a.table_name, a.batch_id,\n")
+                .append("                        LOWER(a.status) AS status, a.id AS artifact_id,\n")
+                .append("                        a.first_seq, a.last_seq,\n")
+                .append("                        ").append(atColumn).append(" AS produced_at,\n")
+                .append("                        ").append(selectKey).append(" AS s3_key\n")
+                .append("                 FROM batch_parquet_artifacts a\n")
+                .append("                 JOIN sites st ON st.id = a.site_id\n")
+                .append("                 WHERE st.account_id = :accountId\n")
+                .append("                   AND a.status = '").append(status).append("'\n")
+                .append("                   AND ").append(atColumn).append(" > :since\n");
+        appendInnerFilters(sql, params, siteId, table, "a.site_id", "a.table_name");
+        if (hasCursor) {
+            sql.append("                   AND (").append(atColumn).append(" > :cursorAt OR (")
+                    .append(atColumn).append(" = :cursorAt AND ").append(orderKey)
+                    .append(" > :cursorKey))\n");
+        }
+        sql.append("                 ORDER BY ").append(atColumn).append(", ").append(orderKey)
+                .append("\n                 LIMIT :limit)\n");
     }
 
     private static MapSqlParameterSource baseParams(UUID accountId, LocalDateTime since, int limit) {

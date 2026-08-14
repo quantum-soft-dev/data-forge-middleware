@@ -39,7 +39,7 @@ Query parameters:
 | `since` | ISO 8601 datetime (offset accepted, normalized to UTC) | epoch | strictly-greater filter on `producedAt` |
 | `siteId` | UUID | — | must belong to the account (else empty result) |
 | `table` | string | — | table name filter |
-| `type` | `delta` \| `checkpoint` | both | |
+| `type` | `batch` \| `delta` \| `checkpoint` | `batch` | breaking change in 041: omitted type is batch-only |
 | `cursor` | opaque string | — | previous response's `nextCursor` (keyset over `(producedAt, s3Key)`) |
 | `size` | int 1..100 | 50 | |
 

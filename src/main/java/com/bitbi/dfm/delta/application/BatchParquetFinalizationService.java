@@ -191,6 +191,7 @@ public class BatchParquetFinalizationService {
      *         caller should keep draining
      */
     public boolean finalizeNext() {
+        settleExpiredClaims();
         List<Claim> claims = transactions.execute(status -> claimNext());
         if (claims == null) {
             return false;
@@ -243,25 +244,31 @@ public class BatchParquetFinalizationService {
     }
 
     /**
-     * Take one batch and commit every retryable sibling's {@code BUILDING} claim, so the attempts
-     * outlive this process.
-     *
-     * <p>Spent claims whose owners never returned are bulk-settled first. The claim query then
-     * excludes them, so any number of stranded rows cannot hide real work until another sweep.</p>
+     * Settle spent expired claims in their own short transaction. Catalog visibility for
+     * {@code ABANDONED} uses {@code updated_at}, so the timestamp must be the DB watermark
+     * taken under the same lock {@link #publish} uses.
      */
-    private List<Claim> claimNext() {
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        String expiredError = "Build lease expired without an outcome after the configured attempt limit";
-        int abandoned = artifactRepository.abandonExpiredClaims(
-                now, leaseSeconds, maxAttempts, expiredError);
-        for (int index = 0; index < abandoned; index++) {
+    private void settleExpiredClaims() {
+        Integer abandoned = transactions.execute(status -> {
+            artifactRepository.lockCatalogPublish();
+            LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+            LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
+            String expiredError = "Build lease expired without an outcome after the configured attempt limit";
+            return artifactRepository.abandonExpiredClaims(
+                    now, publishedAt, leaseSeconds, maxAttempts, expiredError);
+        });
+        int abandonedCount = abandoned == null ? 0 : abandoned;
+        for (int index = 0; index < abandonedCount; index++) {
             metrics.batchParquetAbandoned();
         }
-        if (abandoned > 0) {
+        if (abandonedCount > 0) {
             log.error("Abandoned {} unified batch Parquet claim(s) whose owners never returned",
-                    abandoned);
+                    abandonedCount);
         }
+    }
 
+    private List<Claim> claimNext() {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         List<BatchParquetArtifact> next = artifactRepository.findNextRetryable(
                 now, retryDelaySeconds, leaseSeconds, maxAttempts, 1);
         if (next.isEmpty()) {
@@ -332,6 +339,10 @@ public class BatchParquetFinalizationService {
      * late writer must not clobber any of them.
      */
     private void publish(Claim claim, BuildOutcome outcome) {
+        // Assign ready_at / updated_at only after the previous publisher committed. A wall-clock
+        // stamp taken before commit can land earlier than a sibling that committed first, and a
+        // client that advanced since= to that sibling would never see this row.
+        artifactRepository.lockCatalogPublish();
         Optional<BatchParquetArtifact> found = artifactRepository.findById(claim.artifactId());
         if (found.isEmpty()) {
             log.warn("Unified batch Parquet finished for an artifact that no longer exists: batchId={}, table={}",
@@ -359,13 +370,15 @@ public class BatchParquetFinalizationService {
         }
         if (outcome.file() != null) {
             FinalizedFile finalized = outcome.file();
+            LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
             artifact.markReady(finalized.s3Key(), finalized.rowCount(), finalized.fileSize(),
-                    finalized.checksum());
+                    finalized.checksum(), finalized.firstSeq(), finalized.lastSeq(), publishedAt);
             metrics.batchParquetReady();
             log.info("Unified batch Parquet ready: batchId={}, table={}, rows={}, bytes={}",
                     claim.batchId(), claim.tableName(), finalized.rowCount(), finalized.fileSize());
         } else if (outcome.permanentFailure() || artifact.getAttemptCount() >= maxAttempts) {
-            artifact.markAbandoned(outcome.error());
+            LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
+            artifact.markAbandoned(outcome.error(), outcome.firstSeq(), outcome.lastSeq(), publishedAt);
             metrics.batchParquetAbandoned();
             log.error("Unified batch Parquet abandoned after {} attempt(s): batchId={}, table={}, "
                             + "error={} — the table's download answers 404 until the row is reset",
@@ -397,8 +410,10 @@ public class BatchParquetFinalizationService {
             for (Claim claim : claims) {
                 TableSchema schema = schemas.get(claim.tableName());
                 if (schema == null) {
+                    SeqRange range = seqRange(segments, claim.tableName());
                     outcomes.put(claim.artifactId(),
-                            BuildOutcome.failed("No declared schema for table " + claim.tableName()));
+                            BuildOutcome.failed("No declared schema for table " + claim.tableName(),
+                                    range.firstSeq(), range.lastSeq()));
                     continue;
                 }
                 Path output = Files.createTempFile(tempDirectory,
@@ -414,9 +429,10 @@ public class BatchParquetFinalizationService {
                     : written.failures().entrySet()) {
                 Claim claim = claimsByTable.get(entry.getKey());
                 DeltaParquetWriter.FileWriteFailure failure = entry.getValue();
+                SeqRange range = seqRange(segments, claim.tableName());
                 outcomes.put(claim.artifactId(), failure.permanent()
-                        ? BuildOutcome.permanentlyFailed(failure.error())
-                        : BuildOutcome.failed(failure.error()));
+                        ? BuildOutcome.permanentlyFailed(failure.error(), range.firstSeq(), range.lastSeq())
+                        : BuildOutcome.failed(failure.error(), range.firstSeq(), range.lastSeq()));
             }
             for (Map.Entry<String, DeltaParquetWriter.FileWriteResult> entry : written.files().entrySet()) {
                 String tableName = entry.getKey();
@@ -430,11 +446,15 @@ public class BatchParquetFinalizationService {
                     }
                     String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
                             tableName, claim.token(), tempFiles.get(tableName));
+                    SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
-                            s3Key, result.rowCount(), result.fileSize(), result.checksum())));
+                            s3Key, result.rowCount(), result.fileSize(), result.checksum(),
+                            range.firstSeq(), range.lastSeq())));
                 } catch (RuntimeException e) {
+                    SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.failed(
-                            Objects.toString(e.getMessage(), e.getClass().getSimpleName())));
+                            Objects.toString(e.getMessage(), e.getClass().getSimpleName()),
+                            range.firstSeq(), range.lastSeq()));
                 }
             }
             return outcomes;
@@ -483,21 +503,66 @@ public class BatchParquetFinalizationService {
     private record Claim(UUID artifactId, UUID token, UUID batchId, UUID siteId, String tableName) {
     }
 
-    private record FinalizedFile(String s3Key, long rowCount, long fileSize, String checksum) {
+    private record FinalizedFile(String s3Key, long rowCount, long fileSize, String checksum,
+                                 Long firstSeq, Long lastSeq) {
+    }
+
+    private record SeqRange(Long firstSeq, Long lastSeq) {
+    }
+
+    /**
+     * Inclusive seq range of published segments that mention {@code tableName} in stats.
+     * Falls back to the batch-wide published range when any segment has null stats (the
+     * file still contains those records) or when no segment names the table.
+     */
+    static SeqRange seqRange(List<ChangelogSegment> segments, String tableName) {
+        long tableFirst = Long.MAX_VALUE;
+        long tableLast = Long.MIN_VALUE;
+        long batchFirst = Long.MAX_VALUE;
+        long batchLast = Long.MIN_VALUE;
+        boolean anyNullStats = false;
+        for (ChangelogSegment segment : segments) {
+            batchFirst = Math.min(batchFirst, segment.getFirstSeq());
+            batchLast = Math.max(batchLast, segment.getLastSeq());
+            if (segment.getStats() == null) {
+                anyNullStats = true;
+                continue;
+            }
+            if (segment.getStats().containsKey(tableName)) {
+                tableFirst = Math.min(tableFirst, segment.getFirstSeq());
+                tableLast = Math.max(tableLast, segment.getLastSeq());
+            }
+        }
+        if (!anyNullStats && tableFirst != Long.MAX_VALUE) {
+            return new SeqRange(tableFirst, tableLast);
+        }
+        if (batchFirst != Long.MAX_VALUE) {
+            return new SeqRange(batchFirst, batchLast);
+        }
+        return new SeqRange(null, null);
     }
 
     /** Either the finished file or the error that stopped this attempt. */
-    private record BuildOutcome(FinalizedFile file, String error, boolean permanentFailure) {
+    private record BuildOutcome(FinalizedFile file, String error, boolean permanentFailure,
+                                Long firstSeq, Long lastSeq) {
         static BuildOutcome succeeded(FinalizedFile file) {
-            return new BuildOutcome(file, null, false);
+            return new BuildOutcome(file, null, false, file.firstSeq(), file.lastSeq());
         }
 
         static BuildOutcome failed(String error) {
-            return new BuildOutcome(null, error, false);
+            return failed(error, null, null);
+        }
+
+        static BuildOutcome failed(String error, Long firstSeq, Long lastSeq) {
+            return new BuildOutcome(null, error, false, firstSeq, lastSeq);
         }
 
         static BuildOutcome permanentlyFailed(String error) {
-            return new BuildOutcome(null, error, true);
+            return permanentlyFailed(error, null, null);
+        }
+
+        static BuildOutcome permanentlyFailed(String error, Long firstSeq, Long lastSeq) {
+            return new BuildOutcome(null, error, true, firstSeq, lastSeq);
         }
     }
 }

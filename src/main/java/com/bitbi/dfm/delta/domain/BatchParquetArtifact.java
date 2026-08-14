@@ -73,6 +73,20 @@ public class BatchParquetArtifact {
     @Column(name = "ready_at")
     private LocalDateTime readyAt;
 
+    /**
+     * Inclusive first sequence of this table in the batch. Set on {@link #markReady} and kept
+     * through abandon/requeue so the catalog does not depend on live changelog segments.
+     */
+    @Column(name = "first_seq")
+    private Long firstSeq;
+
+    /**
+     * Inclusive last sequence of this table in the batch. Set on {@link #markReady} and kept
+     * through abandon/requeue so the catalog does not depend on live changelog segments.
+     */
+    @Column(name = "last_seq")
+    private Long lastSeq;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;
@@ -122,16 +136,42 @@ public class BatchParquetArtifact {
 
     /** Publish immutable metadata only after the stable S3 object has completed uploading. */
     public void markReady(String key, long rows, long bytes, String sha256) {
+        markReady(key, rows, bytes, sha256, null, null);
+    }
+
+    /**
+     * Publish metadata and the inclusive seq range covered by this table's file.
+     * Both bounds null means "unknown" (legacy rows); a partial pair is rejected.
+     */
+    public void markReady(String key, long rows, long bytes, String sha256, Long firstSeq, Long lastSeq) {
+        markReady(key, rows, bytes, sha256, firstSeq, lastSeq, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * Publish metadata with a catalog-visible timestamp assigned under the publish lock.
+     * Callers that participate in the parquet-export listing must pass the DB watermark,
+     * not a pod-local clock.
+     */
+    public void markReady(String key, long rows, long bytes, String sha256, Long firstSeq, Long lastSeq,
+                          LocalDateTime publishedAt) {
         requireBuilding();
+        if ((firstSeq == null) != (lastSeq == null)) {
+            throw new IllegalArgumentException("firstSeq and lastSeq must both be set or both be null");
+        }
+        if (firstSeq != null && lastSeq < firstSeq) {
+            throw new IllegalArgumentException("lastSeq must be >= firstSeq");
+        }
         s3Key = Objects.requireNonNull(key, "key");
         rowCount = rows;
         fileSize = bytes;
         checksum = Objects.requireNonNull(sha256, "sha256");
+        this.firstSeq = firstSeq;
+        this.lastSeq = lastSeq;
         status = BatchParquetArtifactStatus.READY;
         lastError = null;
         claimToken = null;
-        readyAt = LocalDateTime.now(ZoneOffset.UTC);
-        updatedAt = readyAt;
+        readyAt = Objects.requireNonNull(publishedAt, "publishedAt");
+        updatedAt = publishedAt;
     }
 
     /** Record a retryable, table-local failure without publishing object metadata. */
@@ -149,12 +189,36 @@ public class BatchParquetArtifact {
      * download answers 404, which separates "we stopped trying" from a failure still being retried.
      */
     public void markAbandoned(String error) {
+        markAbandoned(error, null, null, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    public void markAbandoned(String error, LocalDateTime publishedAt) {
+        markAbandoned(error, null, null, publishedAt);
+    }
+
+    /**
+     * Abandon with the table seq range already known from the batch's segments, so the
+     * catalog does not depend on those segments still being present after retention.
+     * A {@code null}/{@code null} pair means "unknown on this attempt" and leaves a
+     * previously stored range in place — the batch and table do not change across requeue.
+     */
+    public void markAbandoned(String error, Long firstSeq, Long lastSeq, LocalDateTime publishedAt) {
         requireBuilding();
+        if ((firstSeq == null) != (lastSeq == null)) {
+            throw new IllegalArgumentException("firstSeq and lastSeq must both be set or both be null");
+        }
+        if (firstSeq != null && lastSeq < firstSeq) {
+            throw new IllegalArgumentException("lastSeq must be >= firstSeq");
+        }
         status = BatchParquetArtifactStatus.ABANDONED;
         clearPublishedMetadata();
+        if (firstSeq != null) {
+            this.firstSeq = firstSeq;
+            this.lastSeq = lastSeq;
+        }
         lastError = Objects.requireNonNull(error, "error");
         claimToken = null;
-        touch();
+        updatedAt = Objects.requireNonNull(publishedAt, "publishedAt");
     }
 
     /** @return true while a worker is expected to make another attempt. */

@@ -61,6 +61,42 @@ class BatchParquetArtifactTest {
         assertEquals(4096L, artifact.getFileSize());
         assertEquals("abc123", artifact.getChecksum());
         assertNull(artifact.getLastError());
+        assertNull(artifact.getFirstSeq());
+        assertNull(artifact.getLastSeq());
+    }
+
+    @Test
+    void markReadyRecordsTheTableSeqRange() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        artifact.markReady("key", 10, 20, "hash", 100L, 250L);
+
+        assertEquals(100L, artifact.getFirstSeq());
+        assertEquals(250L, artifact.getLastSeq());
+    }
+
+    @Test
+    void markReadyRejectsAnInvertedSeqRange() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> artifact.markReady("key", 10, 20, "hash", 250L, 100L));
+    }
+
+    @Test
+    void markReadyRejectsAPartialSeqRange() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> artifact.markReady("key", 10, 20, "hash", 100L, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> artifact.markReady("key", 10, 20, "hash", null, 250L));
     }
 
     @Test
@@ -120,6 +156,42 @@ class BatchParquetArtifactTest {
 
         assertThrows(IllegalStateException.class, artifact::markBuilding);
         assertThrows(IllegalStateException.class, () -> artifact.markFailed("late failure"));
+    }
+
+    @Test
+    void markAbandonedRecordsTheSeqRangeWhenProvided() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        artifact.markAbandoned("gave up", 100L, 250L, artifact.getUpdatedAt());
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
+        assertNull(artifact.getS3Key());
+        assertEquals(100L, artifact.getFirstSeq());
+        assertEquals(250L, artifact.getLastSeq());
+
+        artifact.requeue();
+
+        assertEquals(100L, artifact.getFirstSeq(), "requeue must not wipe a stored abandon range");
+        assertEquals(250L, artifact.getLastSeq());
+    }
+
+    @Test
+    void markAbandonedWithUnknownRangeKeepsTheStoredPair() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+        artifact.markAbandoned("gave up", 100L, 250L, artifact.getUpdatedAt());
+
+        artifact.requeue();
+        artifact.markBuilding();
+        artifact.markAbandoned("build exploded", null, null, artifact.getUpdatedAt());
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
+        assertEquals(100L, artifact.getFirstSeq(),
+                "a later abandon with no new bounds must not erase the stored range");
+        assertEquals(250L, artifact.getLastSeq());
     }
 
     @Test

@@ -48,41 +48,63 @@ class ParquetExportFileServiceTest {
         service = new ParquetExportFileService(catalogDao, checkpointStorage);
     }
 
+    private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+
     private CatalogRow deltaRow(String table, long firstSeq, long lastSeq, LocalDateTime producedAt) {
         return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.DELTA,
                 firstSeq, lastSeq, null, producedAt,
-                S3CheckpointStorage.deltaKey(SITE_ID, table, firstSeq, lastSeq));
+                S3CheckpointStorage.deltaKey(SITE_ID, table, firstSeq, lastSeq),
+                null, null, null);
     }
 
     private CatalogRow checkpointRow(String table, long seq, LocalDateTime producedAt) {
         return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.CHECKPOINT,
                 null, null, seq, producedAt, "checkpoints/" + SITE_ID + "/" + table + "/seq=" + seq
-                + "/snapshot.parquet");
+                + "/snapshot.parquet", null, null, null);
+    }
+
+    private CatalogRow batchRow(String table, String status, long firstSeq, long lastSeq,
+                                LocalDateTime producedAt, String s3Key) {
+        return new CatalogRow(SITE_ID, "shop.example.com", table, FileType.BATCH,
+                firstSeq, lastSeq, null, producedAt, s3Key, BATCH_ID, status, UUID.randomUUID());
     }
 
     @Test
-    @DisplayName("Should map delta and checkpoint rows to items with filenames")
-    void shouldMapRowsToItems() {
-        when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(51)))
-                .thenReturn(List.of(deltaRow("orders", 100, 250, T1)));
-        when(catalogDao.findCheckpointFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(51)))
-                .thenReturn(List.of(checkpointRow("orders", 250, T2)));
-        when(checkpointStorage.deltaExists(SITE_ID, "orders", 100, 250)).thenReturn(true);
+    @DisplayName("Should map ready batch rows to items with filenames and skip the S3 probe")
+    void shouldMapReadyBatchRowsToItems() {
+        when(catalogDao.findBatchFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(51)))
+                .thenReturn(List.of(batchRow("orders", "ready", 100, 250, T1,
+                        "egress/" + SITE_ID + "/batches/" + BATCH_ID + "/orders.parquet")));
 
         FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 50);
 
-        assertEquals(2, listing.files().size());
-        ParquetFileItem delta = listing.files().get(0);
-        assertEquals(FileType.DELTA, delta.type());
-        assertEquals("orders_seq100-250.parquet", delta.fileName());
-        assertEquals(100L, delta.firstSeq());
-        assertNull(delta.seq());
-        ParquetFileItem checkpoint = listing.files().get(1);
-        assertEquals(FileType.CHECKPOINT, checkpoint.type());
-        assertEquals("orders_seq250.parquet", checkpoint.fileName());
-        assertEquals(250L, checkpoint.seq());
+        assertEquals(1, listing.files().size());
+        ParquetFileItem batch = listing.files().get(0);
+        assertEquals(FileType.BATCH, batch.type());
+        assertEquals(BATCH_ID, batch.batchId());
+        assertNotNull(batch.artifactId());
+        assertEquals("ready", batch.status());
+        assertEquals("orders_batch" + BATCH_ID + ".parquet", batch.fileName());
+        assertEquals(100L, batch.firstSeq());
+        assertEquals(250L, batch.lastSeq());
+        assertNull(batch.seq());
         assertFalse(listing.hasMore());
-        assertNull(listing.nextCursor());
+        verifyNoInteractions(checkpointStorage);
+    }
+
+    @Test
+    @DisplayName("Should list abandoned batch rows without an S3 key")
+    void shouldListAbandonedBatchRowsWithoutS3Key() {
+        when(catalogDao.findBatchFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(batchRow("orders", "abandoned", 100, 250, T1,
+                        "abandoned/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")));
+
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.BATCH, null, 50);
+
+        assertEquals(1, listing.files().size());
+        assertEquals("abandoned", listing.files().get(0).status());
+        assertNull(listing.files().get(0).s3Key());
+        verifyNoInteractions(checkpointStorage);
     }
 
     @Test
@@ -94,11 +116,9 @@ class ParquetExportFileServiceTest {
         CatalogRow c = deltaRow("c_table", 1, 2, T1);
         when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(3)))
                 .thenReturn(List.of(a, b, c));
-        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
-                .thenReturn(List.of());
         when(checkpointStorage.deltaExists(eq(SITE_ID), any(), anyLong(), anyLong())).thenReturn(true);
 
-        FileListing pageOne = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 2);
+        FileListing pageOne = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, null, 2);
 
         assertEquals(2, pageOne.files().size());
         assertTrue(pageOne.hasMore());
@@ -109,7 +129,7 @@ class ParquetExportFileServiceTest {
                 eq(T1), eq(b.s3Key()), eq(3)))
                 .thenReturn(List.of(c));
 
-        FileListing pageTwo = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, pageOne.nextCursor(), 2);
+        FileListing pageTwo = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, pageOne.nextCursor(), 2);
 
         assertEquals(1, pageTwo.files().size());
         assertEquals("c_table", pageTwo.files().get(0).table());
@@ -124,12 +144,10 @@ class ParquetExportFileServiceTest {
         CatalogRow later = deltaRow("orders", 3, 4, T2);
         when(catalogDao.findDeltaFiles(eq(ACCOUNT_ID), eq(EPOCH), isNull(), isNull(), isNull(), isNull(), eq(3)))
                 .thenReturn(List.of(present, missing, later));
-        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
-                .thenReturn(List.of());
         when(checkpointStorage.deltaExists(SITE_ID, "orders", 1, 2)).thenReturn(true);
         when(checkpointStorage.deltaExists(SITE_ID, "poison", 1, 2)).thenReturn(false);
 
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 2);
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, null, 2);
 
         // Page shorter than size while hasMore stays true — cursor points at the dropped candidate.
         assertEquals(1, listing.files().size());
@@ -142,24 +160,25 @@ class ParquetExportFileServiceTest {
                 .thenReturn(List.of(later));
         when(checkpointStorage.deltaExists(SITE_ID, "orders", 3, 4)).thenReturn(true);
 
-        FileListing next = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, listing.nextCursor(), 2);
+        FileListing next = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.DELTA, listing.nextCursor(), 2);
         assertEquals(1, next.files().size());
         assertEquals(3L, next.files().get(0).firstSeq());
     }
 
     @Test
-    @DisplayName("Should merge delta and checkpoint sources by (producedAt, s3Key)")
-    void shouldMergeSourcesInOrder() {
-        when(catalogDao.findDeltaFiles(any(), any(), any(), any(), any(), any(), anyInt()))
-                .thenReturn(List.of(deltaRow("orders", 1, 2, T1), deltaRow("orders", 3, 4, T2.plusHours(2))));
-        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
-                .thenReturn(List.of(checkpointRow("orders", 2, T2)));
-        when(checkpointStorage.deltaExists(eq(SITE_ID), any(), anyLong(), anyLong())).thenReturn(true);
+    @DisplayName("Should walk mixed ready and abandoned batch rows by (producedAt, s3Key)")
+    void shouldWalkMixedBatchStatusesInOrder() {
+        CatalogRow ready = batchRow("orders", "ready", 1, 2, T1, "egress/orders.parquet");
+        CatalogRow abandoned = batchRow("items", "abandoned", 1, 2, T2, "abandoned/" + UUID.randomUUID());
+        when(catalogDao.findBatchFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(List.of(ready, abandoned));
 
-        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 50);
+        FileListing listing = service.listFiles(ACCOUNT_ID, EPOCH, null, null, FileType.BATCH, null, 50);
 
-        assertEquals(List.of(T1, T2, T2.plusHours(2)),
-                listing.files().stream().map(ParquetFileItem::producedAt).toList());
+        assertEquals(List.of(T1, T2), listing.files().stream().map(ParquetFileItem::producedAt).toList());
+        assertEquals("ready", listing.files().get(0).status());
+        assertEquals("abandoned", listing.files().get(1).status());
+        assertNull(listing.files().get(1).s3Key());
     }
 
     @Test
@@ -172,6 +191,7 @@ class ParquetExportFileServiceTest {
 
         assertTrue(listing.files().isEmpty());
         verify(catalogDao, never()).findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt());
+        verify(catalogDao, never()).findBatchFiles(any(), any(), any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -205,17 +225,17 @@ class ParquetExportFileServiceTest {
     }
 
     @Test
-    @DisplayName("Should request at most size+1 rows per source (bounded window)")
-    void shouldRequestBoundedWindow() {
-        when(catalogDao.findDeltaFiles(any(), any(), any(), any(), any(), any(), anyInt()))
-                .thenReturn(List.of());
-        when(catalogDao.findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt()))
+    @DisplayName("Should request at most size+1 batch rows when type is omitted")
+    void shouldRequestBoundedBatchWindowByDefault() {
+        when(catalogDao.findBatchFiles(any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(List.of());
 
         service.listFiles(ACCOUNT_ID, EPOCH, null, null, null, null, 50);
 
         ArgumentCaptor<Integer> limitCaptor = ArgumentCaptor.forClass(Integer.class);
-        verify(catalogDao).findDeltaFiles(any(), any(), any(), any(), any(), any(), limitCaptor.capture());
+        verify(catalogDao).findBatchFiles(any(), any(), any(), any(), any(), any(), limitCaptor.capture());
         assertEquals(51, limitCaptor.getValue());
+        verify(catalogDao, never()).findDeltaFiles(any(), any(), any(), any(), any(), any(), anyInt());
+        verify(catalogDao, never()).findCheckpointFiles(any(), any(), any(), any(), any(), any(), anyInt());
     }
 }

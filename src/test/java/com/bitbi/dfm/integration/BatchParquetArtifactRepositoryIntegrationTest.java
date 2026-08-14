@@ -37,6 +37,9 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @Test
     void claimsOnlyRetryableRowsAndResolvesExactManifest() {
         BatchParquetArtifact pending = repository.save(
@@ -127,6 +130,60 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     }
 
     @Test
+    void catalogWatermarkAdvancesPastAPlantedFutureStamp() {
+        jdbc.update("UPDATE batch_parquet_catalog_watermark SET published_at = '2099-01-01 00:00:00'");
+
+        LocalDateTime first = repository.nextCatalogWatermark();
+        LocalDateTime second = repository.nextCatalogWatermark();
+
+        assertTrue(first.isAfter(LocalDateTime.of(2099, 1, 1, 0, 0)),
+                "a lagging clock must not reuse or undercut the stored watermark: " + first);
+        assertTrue(second.isAfter(first),
+                "two ticks in one transaction must be strictly increasing: first="
+                        + first + " second=" + second);
+    }
+
+    @Test
+    void catalogPublishLockKeepsReadyAtAlignedWithCommitOrder() throws Exception {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<LocalDateTime> first = executor.submit(() -> transaction.execute(status -> {
+                repository.lockCatalogPublish();
+                LocalDateTime stamped = repository.nextCatalogWatermark();
+                holding.countDown();
+                try {
+                    assertTrue(release.await(10, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                return stamped;
+            }));
+            assertTrue(holding.await(10, TimeUnit.SECONDS));
+
+            Future<LocalDateTime> second = executor.submit(() -> transaction.execute(status -> {
+                repository.lockCatalogPublish();
+                return repository.nextCatalogWatermark();
+            }));
+            assertFalse(second.isDone(), "the second publisher must wait for the first commit");
+
+            release.countDown();
+            LocalDateTime firstReadyAt = first.get(10, TimeUnit.SECONDS);
+            LocalDateTime secondReadyAt = second.get(10, TimeUnit.SECONDS);
+            assertTrue(secondReadyAt.isAfter(firstReadyAt),
+                    "a later commit must stamp a strictly later catalog watermark: first="
+                            + firstReadyAt + " second=" + secondReadyAt);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void advisoryLockAllowsOnlyOneBatchClaimTransaction() throws Exception {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -169,7 +226,7 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         repository.save(retryable);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
 
-        assertEquals(1, repository.abandonExpiredClaims(now, 0, 1, "lease expired"));
+        assertEquals(1, repository.abandonExpiredClaims(now, now, 0, 1, "lease expired"));
 
         assertEquals(BatchParquetArtifactStatus.ABANDONED,
                 repository.findById(spent.getId()).orElseThrow().getStatus());
