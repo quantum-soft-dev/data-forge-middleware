@@ -9,6 +9,7 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -48,17 +50,17 @@ class DeltaEgressServiceTest {
     private SiteSchemaService siteSchemaService;
     @Mock
     private S3CheckpointStorage storage;
-    @Mock
-    private DeltaMetrics metrics;
 
+    private SimpleMeterRegistry registry;
     private DeltaEgressService service;
 
     private ChangelogSegment segment;
 
     @BeforeEach
     void setUp() {
+        registry = new SimpleMeterRegistry();
         service = new DeltaEgressService(segmentRepository, changelogSegmentService,
-                siteSchemaService, storage, metrics);
+                siteSchemaService, storage, new DeltaMetrics(registry));
         segment = ChangelogSegment.create(SITE_ID, UUID.randomUUID(), 1L, 2L, 2L,
                 "hash", "changelog/key", "DELTA", null);
     }
@@ -82,7 +84,28 @@ class DeltaEgressServiceTest {
         verify(storage, never()).uploadDelta(eq(SITE_ID), eq("bad"), anyLong(), anyLong(), any(byte[].class));
         assertNotNull(segment.getEgressAt(), "segment leaves the pending queue despite the poison table");
         verify(segmentRepository).save(segment);
-        verify(metrics).segmentEgressed();
+        assertEquals(1.0, registry.get("delta.egress.segments").counter().count());
+        assertEquals(1L, phaseCount("download"));
+        assertEquals(2L, phaseCount("write"), "poison render and the surviving table are each a write");
+        assertEquals(1L, phaseCount("upload"));
+        assertEquals(1L, phaseCount("total"));
+    }
+
+    @Test
+    void shouldRecordEgressPhasesOnASuccessfulSegment() {
+        when(changelogSegmentService.readRecords("changelog/key")).thenReturn(List.of(
+                insert("good", 1L, Map.of("id", intVal(1)))));
+        when(siteSchemaService.getTableSchemas(SITE_ID)).thenReturn(Map.of(
+                "good", new TableSchema(List.of(
+                        new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of())));
+
+        service.egressSegment(segment);
+
+        assertEquals(1L, phaseCount("download"));
+        assertEquals(1L, phaseCount("write"));
+        assertEquals(1L, phaseCount("upload"));
+        assertEquals(1L, phaseCount("total"));
+        assertEquals(1.0, registry.get("delta.egress.segments").counter().count());
     }
 
     @Test
@@ -103,6 +126,10 @@ class DeltaEgressServiceTest {
     private static ChangeRecord insert(String table, long seq, Map<String, Value> data) {
         return ChangeRecord.newBuilder().setTable(table).setOp(Op.INSERT).setSeq(seq)
                 .putAllKey(Map.of("id", data.get("id"))).putAllData(data).build();
+    }
+
+    private long phaseCount(String phase) {
+        return registry.get("delta.egress.duration").tag("phase", phase).timer().count();
     }
 
     private static Value intVal(long v) {

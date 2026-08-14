@@ -6,6 +6,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
@@ -16,13 +20,19 @@ import java.util.function.Supplier;
  *   <li>{@code delta.reconciliation.failures} — sessions rejected at SessionEnd (CR §10)</li>
  *   <li>{@code delta.sessions.overflow} — sessions rejected for exceeding the per-session buffer
  *       cap (the OOM guard), tagged {@code reason=records|bytes} by which cap tripped</li>
- *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint</li>
+ *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint;
+ *       {@code phase=total} is the cycle, {@code download_frame|fold|parquet|upload} are
+ *       the inner steps (042)</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
+ *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
+ *       {@code download|write|upload}</li>
  *   <li>{@code delta.batch-parquet.artifacts} — completed-batch artifacts settled, tagged
  *       {@code outcome=ready|failed|abandoned}; {@code abandoned} is a permanently 404-ing
  *       user-facing download and is the one worth alerting on (036)</li>
- *   <li>{@code delta.batch-parquet.duration} — time to replay and upload one claimed batch group</li>
+ *   <li>{@code delta.batch-parquet.duration} — time to replay and upload one claimed batch group;
+ *       {@code phase=total} is the cycle, {@code download|decode|decimal_scan|write|upload}
+ *       are the inner steps (042)</li>
  *   <li>{@code delta.batch-parquet.reclaims} — claims taken over after their build lease expired;
  *       a rising count means builds are outrunning {@code lease-seconds}</li>
  * </ul>
@@ -35,13 +45,19 @@ public class DeltaMetrics {
 
     private static final String APP_TAG_KEY = "application";
     private static final String APP_TAG_VALUE = "data-forge-middleware";
+    private static final String PHASE_TAG = "phase";
+    static final String PHASE_TOTAL = "total";
+    static final Set<String> BATCH_PARQUET_PHASES =
+            Set.of("download", "decode", "decimal_scan", "write", "upload", PHASE_TOTAL);
+    static final Set<String> EGRESS_PHASES = Set.of("download", "write", "upload", PHASE_TOTAL);
+    static final Set<String> CHECKPOINT_PHASES =
+            Set.of("download_frame", "fold", "parquet", "upload", PHASE_TOTAL);
 
     private final Counter sessionsStarted;
     private final Counter sessionsCommitted;
     private final Counter reconciliationFailures;
     private final Counter sessionOverflowsRecords;
     private final Counter sessionOverflowsBytes;
-    private final Timer checkpointDuration;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
     private final Counter checkpointNoSchema;
@@ -50,7 +66,9 @@ public class DeltaMetrics {
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
     private final Counter batchParquetReclaims;
-    private final Timer batchParquetDuration;
+    private final Map<String, Timer> batchParquetPhases;
+    private final Map<String, Timer> egressPhases;
+    private final Map<String, Timer> checkpointPhases;
 
     public DeltaMetrics(MeterRegistry registry) {
         this.sessionsStarted = Counter.builder("delta.sessions.started")
@@ -68,9 +86,6 @@ public class DeltaMetrics {
         this.sessionOverflowsBytes = Counter.builder("delta.sessions.overflow")
                 .description("Delta sessions rejected for exceeding the per-session buffer cap")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", "bytes").register(registry);
-        this.checkpointDuration = Timer.builder("delta.checkpoint.duration")
-                .description("Time to materialize a delta checkpoint")
-                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.seqLag = DistributionSummary.builder("delta.seq.lag")
                 .description("Committed seq beyond the last checkpoint at session commit")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
@@ -85,9 +100,25 @@ public class DeltaMetrics {
         this.batchParquetReclaims = Counter.builder("delta.batch-parquet.reclaims")
                 .description("Completed-batch Parquet claims taken over after their lease expired")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
-        this.batchParquetDuration = Timer.builder("delta.batch-parquet.duration")
-                .description("Time to replay and upload one completed-batch Parquet claim group")
-                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.batchParquetPhases = phaseTimers(registry, "delta.batch-parquet.duration",
+                "Time spent in one completed-batch Parquet phase", BATCH_PARQUET_PHASES);
+        this.egressPhases = phaseTimers(registry, "delta.egress.duration",
+                "Time spent in one per-segment egress phase", EGRESS_PHASES);
+        this.checkpointPhases = phaseTimers(registry, "delta.checkpoint.duration",
+                "Time spent in one checkpoint materialization phase", CHECKPOINT_PHASES);
+    }
+
+    private static Map<String, Timer> phaseTimers(MeterRegistry registry, String name,
+                                                  String description, Set<String> phases) {
+        Map<String, Timer> timers = new LinkedHashMap<>();
+        for (String phase : phases) {
+            timers.put(phase, Timer.builder(name)
+                    .description(description)
+                    .tag(APP_TAG_KEY, APP_TAG_VALUE)
+                    .tag(PHASE_TAG, phase)
+                    .register(registry));
+        }
+        return Map.copyOf(timers);
     }
 
     private static Counter checkpointUnmaterialized(MeterRegistry registry, String reason) {
@@ -141,7 +172,83 @@ public class DeltaMetrics {
 
     /** Time one batch-level claim group (shared replay + uploads), whatever its outcomes. */
     public <T> T timeBatchParquetBuild(Supplier<T> build) {
-        return batchParquetDuration.record(build);
+        return timeBatchParquetPhase(PHASE_TOTAL, build);
+    }
+
+    /** Record one completed-batch Parquet inner phase. Negative nanos are ignored. */
+    public void recordBatchParquetPhase(String phase, long nanos) {
+        recordPhase(batchParquetPhases, BATCH_PARQUET_PHASES, phase, nanos);
+    }
+
+    /** Time one completed-batch Parquet inner phase and return the supplier's value. */
+    public <T> T timeBatchParquetPhase(String phase, Supplier<T> work) {
+        requirePhase(BATCH_PARQUET_PHASES, phase);
+        return batchParquetPhases.get(phase).record(work);
+    }
+
+    /** Time one completed-batch Parquet inner phase with no return value. */
+    public void timeBatchParquetPhase(String phase, Runnable work) {
+        requirePhase(BATCH_PARQUET_PHASES, phase);
+        batchParquetPhases.get(phase).record(work);
+    }
+
+    /** Time one per-segment egress cycle (download + write + upload). */
+    public <T> T timeEgress(Supplier<T> work) {
+        return timeEgressPhase(PHASE_TOTAL, work);
+    }
+
+    /** Time one per-segment egress cycle with no return value. */
+    public void timeEgress(Runnable work) {
+        timeEgressPhase(PHASE_TOTAL, work);
+    }
+
+    /** Record one per-segment egress inner phase. Negative nanos are ignored. */
+    public void recordEgressPhase(String phase, long nanos) {
+        recordPhase(egressPhases, EGRESS_PHASES, phase, nanos);
+    }
+
+    /** Time one per-segment egress inner phase and return the supplier's value. */
+    public <T> T timeEgressPhase(String phase, Supplier<T> work) {
+        requirePhase(EGRESS_PHASES, phase);
+        return egressPhases.get(phase).record(work);
+    }
+
+    /** Time one per-segment egress inner phase with no return value. */
+    public void timeEgressPhase(String phase, Runnable work) {
+        requirePhase(EGRESS_PHASES, phase);
+        egressPhases.get(phase).record(work);
+    }
+
+    /** Record one checkpoint inner phase. Negative nanos are ignored. */
+    public void recordCheckpointPhase(String phase, long nanos) {
+        recordPhase(checkpointPhases, CHECKPOINT_PHASES, phase, nanos);
+    }
+
+    /** Time one checkpoint inner phase and return the supplier's value. */
+    public <T> T timeCheckpointPhase(String phase, Supplier<T> work) {
+        requirePhase(CHECKPOINT_PHASES, phase);
+        return checkpointPhases.get(phase).record(work);
+    }
+
+    /** Time one checkpoint inner phase with no return value. */
+    public void timeCheckpointPhase(String phase, Runnable work) {
+        requirePhase(CHECKPOINT_PHASES, phase);
+        checkpointPhases.get(phase).record(work);
+    }
+
+    private static void recordPhase(Map<String, Timer> timers, Set<String> allowed,
+                                    String phase, long nanos) {
+        requirePhase(allowed, phase);
+        if (nanos < 0) {
+            return;
+        }
+        timers.get(phase).record(nanos, TimeUnit.NANOSECONDS);
+    }
+
+    private static void requirePhase(Set<String> allowed, String phase) {
+        if (!allowed.contains(phase)) {
+            throw new IllegalArgumentException("Unknown duration phase: " + phase);
+        }
     }
 
     /** A new ingestion session opened a batch. */
@@ -178,7 +285,7 @@ public class DeltaMetrics {
 
     /** Time a checkpoint build, returning the supplier's value. */
     public <T> T timeCheckpoint(Supplier<T> build) {
-        return checkpointDuration.record(build);
+        return timeCheckpointPhase(PHASE_TOTAL, build);
     }
 
     /** A changelog segment's delta Parquet egress was materialized. */

@@ -15,6 +15,8 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 /**
@@ -126,6 +128,63 @@ class ChangelogSegmentServiceTest {
         List<UUID> keyIds = keyIdCaptor.getAllValues();
         assertEquals(2, keyIds.size());
         assertNotEquals(keyIds.get(0), keyIds.get(1));
+    }
+
+    @Test
+    void replayStillRecordsDownloadAndDecodeWhenTheConsumerThrows() {
+        ChangeRecord record = rec("orders", Op.INSERT, 1);
+        byte[] payload = ChangelogCodec.serialize(List.of(record));
+        java.io.ByteArrayInputStream slow = new java.io.ByteArrayInputStream(payload) {
+            @Override
+            public int read(byte[] b, int off, int len) {
+                java.util.concurrent.locks.LockSupport.parkNanos(
+                        java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(8));
+                return super.read(b, off, len);
+            }
+        };
+
+        PhaseClock clock = new PhaseClock();
+        assertThrows(IllegalStateException.class, () ->
+                ChangelogSegmentService.replay(slow, ignored -> {
+                    throw new IllegalStateException("poison record");
+                }, clock));
+        assertTrue(clock.hasSamples());
+        assertTrue(clock.downloadNanos() >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(8));
+    }
+
+    @Test
+    void replayAttributesDownloadAndDecodeOnATimedStream() {
+        ChangeRecord record = rec("orders", Op.INSERT, 1);
+        byte[] payload = ChangelogCodec.serialize(List.of(record));
+        java.io.ByteArrayInputStream slow = new java.io.ByteArrayInputStream(payload) {
+            @Override
+            public int read(byte[] b, int off, int len) {
+                java.util.concurrent.locks.LockSupport.parkNanos(
+                        java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(8));
+                return super.read(b, off, len);
+            }
+        };
+
+        java.util.concurrent.atomic.AtomicInteger seen = new java.util.concurrent.atomic.AtomicInteger();
+        PhaseClock clock = new PhaseClock();
+        ChangelogSegmentService.replay(slow, ignored -> seen.incrementAndGet(), clock);
+        assertEquals(1, seen.get());
+        assertTrue(clock.hasSamples());
+        assertTrue(clock.downloadNanos() >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(8),
+                "stream read time belongs to download");
+        assertTrue(clock.decodeNanos() >= 0L);
+    }
+
+    @Test
+    void forEachRecordRecordsDownloadWhenOpenThrows() {
+        when(storage.open("delta/seg")).thenThrow(
+                new S3ChangelogSegmentStorage.SegmentStorageException("GetObject failed", null));
+
+        PhaseClock clock = new PhaseClock();
+        assertThrows(S3ChangelogSegmentStorage.SegmentStorageException.class,
+                () -> service.forEachRecord("delta/seg", ignored -> { }, clock));
+        assertTrue(clock.hasSamples());
+        assertTrue(clock.downloadNanos() >= 0L);
     }
 
     private static ChangeRecord rec(String table, Op op, long seq) {

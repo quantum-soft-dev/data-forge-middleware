@@ -320,6 +320,78 @@ class DeltaParquetWriterTest {
     }
 
     @Test
+    void reportsDecimalScanAndWritePhasesSeparately() throws Exception {
+        TableSchema moneySchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("amount", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        PhaseClock clock = new PhaseClock();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("payments-phased.parquet"), moneySchema));
+
+        DeltaParquetWriter.writeBatchDeltaParquet(
+                requests,
+                consumer -> consumer.accept(changeForTable("payments", Op.INSERT, 1L,
+                        Map.of("id", intVal(1)),
+                        Map.of("id", intVal(1), "amount", decVal("1.00")))),
+                Long.MAX_VALUE,
+                clock);
+
+        assertTrue(clock.decimalScanAttempted());
+        assertTrue(clock.decimalScanNanos() > 0L, "decimal scan is its own phase");
+        assertTrue(clock.writeAttempted());
+        assertTrue(clock.writeNanos() > 0L, "write/close is its own phase");
+    }
+
+    @Test
+    void skipsDecimalScanPhaseWhenNoTableDeclaresDecimals() throws Exception {
+        TableSchema namesSchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("name", "varchar(255)", true)),
+                List.of("id"), List.of());
+        PhaseClock clock = new PhaseClock();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("customers", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("customers-phased.parquet"), namesSchema));
+
+        DeltaParquetWriter.writeBatchDeltaParquet(
+                requests,
+                consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
+                        Map.of("id", intVal(1)), Map.of("id", intVal(1), "name", strVal("Ann")))),
+                Long.MAX_VALUE,
+                clock);
+
+        assertFalse(clock.decimalScanAttempted());
+        assertTrue(clock.writeAttempted());
+        assertTrue(clock.writeNanos() > 0L);
+    }
+
+    @Test
+    void recordsDecimalScanWhenTheScanReplayThrows() {
+        TableSchema moneySchema = new TableSchema(List.of(
+                new ColumnDefinition("id", "bigint", false),
+                new ColumnDefinition("amount", "numeric(7,2)", false)),
+                List.of("id"), List.of());
+        PhaseClock clock = new PhaseClock();
+        Map<String, DeltaParquetWriter.TableWriteRequest> requests = new LinkedHashMap<>();
+        requests.put("payments", new DeltaParquetWriter.TableWriteRequest(
+                tempDir.resolve("payments-scan-throw.parquet"), moneySchema));
+
+        assertThrows(IllegalStateException.class, () ->
+                DeltaParquetWriter.writeBatchDeltaParquet(
+                        requests,
+                        consumer -> {
+                            throw new IllegalStateException("scan source failed");
+                        },
+                        Long.MAX_VALUE,
+                        clock));
+
+        assertTrue(clock.decimalScanAttempted());
+        assertFalse(clock.writeAttempted());
+    }
+
+    @Test
     void isolatesAnOutOfOrderTableWhileOtherWritersFinish() throws Exception {
         TableSchema schema = new TableSchema(List.of(
                 new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());

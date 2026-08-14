@@ -115,6 +115,12 @@ public interface ChangelogSegmentRepository {
     List<ChangelogSegment> findNextPendingEgress(int limit);
 
     /**
+     * Segments still waiting for delta-Parquet egress ({@code egress_at IS NULL}), including any
+     * row that is the durable queue entry. Used by {@code delta.egress.pending}.
+     */
+    long countPendingEgress();
+
+    /**
      * Pick pending Bit BI plugin SQL work (026-bitbi-delta-sql): for every site with segments
      * awaiting SQL generation, the earliest one (lowest {@code first_seq}) — so generations are
      * created in seq order per site — locked with {@code FOR UPDATE SKIP LOCKED} so concurrent

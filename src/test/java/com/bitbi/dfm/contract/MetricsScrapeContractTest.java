@@ -41,7 +41,14 @@ class MetricsScrapeContractTest extends BaseIntegrationTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"building\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"ready\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"failed\"")))
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"abandoned\"")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("status=\"abandoned\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_egress_pending")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_batch_parquet_duration_seconds")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("delta_egress_duration_seconds")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("phase=\"download\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("phase=\"decimal_scan\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("phase=\"download_frame\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("phase=\"total\"")));
     }
 
     @Test
