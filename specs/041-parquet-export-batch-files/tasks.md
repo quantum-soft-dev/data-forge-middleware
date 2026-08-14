@@ -37,3 +37,5 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T16 — FR-008.** Spec must not describe the removed LATERAL fallback.
 - [x] **T17 — Keep stored range on a later abandon.** `markAbandoned(null, null)` must not
   erase a range already kept through abandon/requeue (the finalize catch path has no bounds).
+- [x] **T18 — Refresh the plan.** `plan.md` matches UNION ALL + two partial indexes, stored
+  range on ready/abandon, and the monotonic DB watermark.
