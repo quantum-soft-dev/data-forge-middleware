@@ -4,7 +4,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 
 - [x] **T01 — Design.** Record the catalog contract, default-type break, abandoned visibility,
   `ready_at` watermark, V51 columns/index, writer seq-range rule, and documentation surfaces.
-- [ ] **T02 — Schema and aggregate.** Red tests for `first_seq`/`last_seq` lifecycle on
+- [x] **T02 — Schema and aggregate.** Red tests for `first_seq`/`last_seq` lifecycle on
   `BatchParquetArtifact`, then V51 plus entity fields. Update AGENTS.md / CLAUDE.md migration
   pointers so `MigrationDocumentationConsistencyTest` stays green.
 - [ ] **T03 — Writer records the seq range.** Red finalization tests, then persist the table

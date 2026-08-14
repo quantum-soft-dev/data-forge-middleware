@@ -61,6 +61,42 @@ class BatchParquetArtifactTest {
         assertEquals(4096L, artifact.getFileSize());
         assertEquals("abc123", artifact.getChecksum());
         assertNull(artifact.getLastError());
+        assertNull(artifact.getFirstSeq());
+        assertNull(artifact.getLastSeq());
+    }
+
+    @Test
+    void markReadyRecordsTheTableSeqRange() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        artifact.markReady("key", 10, 20, "hash", 100L, 250L);
+
+        assertEquals(100L, artifact.getFirstSeq());
+        assertEquals(250L, artifact.getLastSeq());
+    }
+
+    @Test
+    void markReadyRejectsAnInvertedSeqRange() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> artifact.markReady("key", 10, 20, "hash", 250L, 100L));
+    }
+
+    @Test
+    void markReadyRejectsAPartialSeqRange() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> artifact.markReady("key", 10, 20, "hash", 100L, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> artifact.markReady("key", 10, 20, "hash", null, 250L));
     }
 
     @Test

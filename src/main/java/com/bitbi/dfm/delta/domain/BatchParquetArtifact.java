@@ -73,6 +73,14 @@ public class BatchParquetArtifact {
     @Column(name = "ready_at")
     private LocalDateTime readyAt;
 
+    /** Inclusive first sequence of this table in the batch; set only on {@link #markReady}. */
+    @Column(name = "first_seq")
+    private Long firstSeq;
+
+    /** Inclusive last sequence of this table in the batch; set only on {@link #markReady}. */
+    @Column(name = "last_seq")
+    private Long lastSeq;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;
@@ -122,11 +130,27 @@ public class BatchParquetArtifact {
 
     /** Publish immutable metadata only after the stable S3 object has completed uploading. */
     public void markReady(String key, long rows, long bytes, String sha256) {
+        markReady(key, rows, bytes, sha256, null, null);
+    }
+
+    /**
+     * Publish metadata and the inclusive seq range covered by this table's file.
+     * Both bounds null means "unknown" (legacy rows); a partial pair is rejected.
+     */
+    public void markReady(String key, long rows, long bytes, String sha256, Long firstSeq, Long lastSeq) {
         requireBuilding();
+        if ((firstSeq == null) != (lastSeq == null)) {
+            throw new IllegalArgumentException("firstSeq and lastSeq must both be set or both be null");
+        }
+        if (firstSeq != null && lastSeq < firstSeq) {
+            throw new IllegalArgumentException("lastSeq must be >= firstSeq");
+        }
         s3Key = Objects.requireNonNull(key, "key");
         rowCount = rows;
         fileSize = bytes;
         checksum = Objects.requireNonNull(sha256, "sha256");
+        this.firstSeq = firstSeq;
+        this.lastSeq = lastSeq;
         status = BatchParquetArtifactStatus.READY;
         lastError = null;
         claimToken = null;
@@ -199,6 +223,8 @@ public class BatchParquetArtifact {
         fileSize = null;
         checksum = null;
         readyAt = null;
+        firstSeq = null;
+        lastSeq = null;
     }
 
     private void touch() {
