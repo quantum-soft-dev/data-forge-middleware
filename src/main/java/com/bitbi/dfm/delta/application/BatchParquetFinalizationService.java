@@ -244,24 +244,18 @@ public class BatchParquetFinalizationService {
     }
 
     /**
-     * Take one batch and commit every retryable sibling's {@code BUILDING} claim, so the attempts
-     * outlive this process.
-     *
-     * <p>Spent claims whose owners never returned are bulk-settled first. The claim query then
-     * excludes them, so any number of stranded rows cannot hide real work until another sweep.</p>
-     */
-    /**
      * Settle spent expired claims in their own short transaction. Catalog visibility for
-     * {@code ABANDONED} uses {@code updated_at}, so the timestamp must be stamped after the
-     * previous publisher has committed — the same lock {@link #publish} takes.
+     * {@code ABANDONED} uses {@code updated_at}, so the timestamp must be the DB watermark
+     * taken under the same lock {@link #publish} uses.
      */
     private void settleExpiredClaims() {
         Integer abandoned = transactions.execute(status -> {
             artifactRepository.lockCatalogPublish();
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+            LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
             String expiredError = "Build lease expired without an outcome after the configured attempt limit";
             return artifactRepository.abandonExpiredClaims(
-                    now, leaseSeconds, maxAttempts, expiredError);
+                    now, publishedAt, leaseSeconds, maxAttempts, expiredError);
         });
         int abandonedCount = abandoned == null ? 0 : abandoned;
         for (int index = 0; index < abandonedCount; index++) {
@@ -376,13 +370,15 @@ public class BatchParquetFinalizationService {
         }
         if (outcome.file() != null) {
             FinalizedFile finalized = outcome.file();
+            LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
             artifact.markReady(finalized.s3Key(), finalized.rowCount(), finalized.fileSize(),
-                    finalized.checksum(), finalized.firstSeq(), finalized.lastSeq());
+                    finalized.checksum(), finalized.firstSeq(), finalized.lastSeq(), publishedAt);
             metrics.batchParquetReady();
             log.info("Unified batch Parquet ready: batchId={}, table={}, rows={}, bytes={}",
                     claim.batchId(), claim.tableName(), finalized.rowCount(), finalized.fileSize());
         } else if (outcome.permanentFailure() || artifact.getAttemptCount() >= maxAttempts) {
-            artifact.markAbandoned(outcome.error());
+            LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
+            artifact.markAbandoned(outcome.error(), publishedAt);
             metrics.batchParquetAbandoned();
             log.error("Unified batch Parquet abandoned after {} attempt(s): batchId={}, table={}, "
                             + "error={} — the table's download answers 404 until the row is reset",

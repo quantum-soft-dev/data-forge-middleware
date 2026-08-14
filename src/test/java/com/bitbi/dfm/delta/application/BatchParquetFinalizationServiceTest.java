@@ -48,6 +48,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -55,6 +56,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class BatchParquetFinalizationServiceTest {
+
+    private static final LocalDateTime CATALOG_WATERMARK = LocalDateTime.of(2026, 8, 14, 12, 0);
 
     @TempDir
     Path tempDir;
@@ -70,6 +73,7 @@ class BatchParquetFinalizationServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(artifactRepository.nextCatalogWatermark()).thenReturn(CATALOG_WATERMARK);
         service = newService(5);
     }
 
@@ -196,8 +200,9 @@ class BatchParquetFinalizationServiceTest {
         publishOrder.verify(artifactRepository).save(any(BatchParquetArtifact.class));
         publishOrder.verify(artifactRepository).lockCatalogPublish();
         publishOrder.verify(artifactRepository).findById(artifact.getId());
+        publishOrder.verify(artifactRepository).nextCatalogWatermark();
         publishOrder.verify(artifactRepository).save(any(BatchParquetArtifact.class));
-        assertNotNull(artifact.getReadyAt());
+        assertEquals(CATALOG_WATERMARK, artifact.getReadyAt());
         // One replay in segment order: the table declares no decimal column, so the precision
         // scan pass is skipped rather than re-downloading every segment.
         InOrder reads = inOrder(segmentService);
@@ -676,7 +681,8 @@ class BatchParquetFinalizationServiceTest {
         BatchParquetArtifact retryable = claimable(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
-        when(artifactRepository.abandonExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7), any()))
+        when(artifactRepository.abandonExpiredClaims(any(LocalDateTime.class), any(LocalDateTime.class),
+                eq(1800), eq(7), any()))
                 .thenReturn(17);
         when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
         when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
@@ -689,8 +695,9 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, retryable.getStatus());
         InOrder settleOrder = inOrder(artifactRepository);
         settleOrder.verify(artifactRepository).lockCatalogPublish();
+        settleOrder.verify(artifactRepository).nextCatalogWatermark();
         settleOrder.verify(artifactRepository).abandonExpiredClaims(
-                any(LocalDateTime.class), eq(1800), eq(7), any());
+                any(LocalDateTime.class), eq(CATALOG_WATERMARK), eq(1800), eq(7), any());
     }
 
     @Test

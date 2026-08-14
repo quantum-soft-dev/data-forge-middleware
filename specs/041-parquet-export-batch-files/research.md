@@ -23,7 +23,9 @@
   `t2 > t1` and commits, the client stores `since=t2`, then A commits and vanishes forever.
 - **Alternatives considered**: sort by `completed_at` (loses late files); sort by `created_at`
   (PENDING time, not when the file exists); client-side overlap + dedup (requires `artifactId`
-  and a protocol change).
+  and a protocol change); pod-local `LocalDateTime.now()` under the lock (still loses a row
+  when a replica clock lags). The lock is kept; the stamp is
+  `GREATEST(previous + 1µs, clock_timestamp())` from `batch_parquet_catalog_watermark`.
 
 ## Decision: show `ABANDONED`, hide intermediate statuses
 

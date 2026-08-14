@@ -31,3 +31,16 @@ COMMENT ON COLUMN batch_parquet_artifacts.first_seq IS
     'Inclusive first sequence of this table in the batch; set when the artifact becomes READY.';
 COMMENT ON COLUMN batch_parquet_artifacts.last_seq IS
     'Inclusive last sequence of this table in the batch; set when the artifact becomes READY.';
+
+-- Single-row catalog watermark: GREATEST(previous + 1µs, clock_timestamp()) so a replica
+-- whose wall clock lags cannot stamp ready_at/updated_at at or before an already-visible row.
+CREATE TABLE batch_parquet_catalog_watermark (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    published_at TIMESTAMP NOT NULL
+);
+
+INSERT INTO batch_parquet_catalog_watermark (id, published_at)
+VALUES (1, TIMESTAMP '-infinity');
+
+COMMENT ON TABLE batch_parquet_catalog_watermark IS
+    'Monotonic published_at for parquet-export catalog visibility (READY/ABANDONED).';

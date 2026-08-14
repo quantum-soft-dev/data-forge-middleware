@@ -144,6 +144,16 @@ public class BatchParquetArtifact {
      * Both bounds null means "unknown" (legacy rows); a partial pair is rejected.
      */
     public void markReady(String key, long rows, long bytes, String sha256, Long firstSeq, Long lastSeq) {
+        markReady(key, rows, bytes, sha256, firstSeq, lastSeq, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * Publish metadata with a catalog-visible timestamp assigned under the publish lock.
+     * Callers that participate in the parquet-export listing must pass the DB watermark,
+     * not a pod-local clock.
+     */
+    public void markReady(String key, long rows, long bytes, String sha256, Long firstSeq, Long lastSeq,
+                          LocalDateTime publishedAt) {
         requireBuilding();
         if ((firstSeq == null) != (lastSeq == null)) {
             throw new IllegalArgumentException("firstSeq and lastSeq must both be set or both be null");
@@ -160,8 +170,8 @@ public class BatchParquetArtifact {
         status = BatchParquetArtifactStatus.READY;
         lastError = null;
         claimToken = null;
-        readyAt = LocalDateTime.now(ZoneOffset.UTC);
-        updatedAt = readyAt;
+        readyAt = Objects.requireNonNull(publishedAt, "publishedAt");
+        updatedAt = publishedAt;
     }
 
     /** Record a retryable, table-local failure without publishing object metadata. */
@@ -179,12 +189,17 @@ public class BatchParquetArtifact {
      * download answers 404, which separates "we stopped trying" from a failure still being retried.
      */
     public void markAbandoned(String error) {
+        markAbandoned(error, LocalDateTime.now(ZoneOffset.UTC));
+    }
+
+    /** Abandon with a catalog-visible timestamp assigned under the publish lock. */
+    public void markAbandoned(String error, LocalDateTime publishedAt) {
         requireBuilding();
         status = BatchParquetArtifactStatus.ABANDONED;
         clearPublishedMetadata();
         lastError = Objects.requireNonNull(error, "error");
         claimToken = null;
-        touch();
+        updatedAt = Objects.requireNonNull(publishedAt, "publishedAt");
     }
 
     /** @return true while a worker is expected to make another attempt. */

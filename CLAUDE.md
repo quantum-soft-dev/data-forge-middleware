@@ -459,8 +459,9 @@ pages/{feature}/            # Route pages
   accepts `type=batch` from `batch_parquet_artifacts` (`READY`/`ABANDONED`); omitted `type` is
   now batch-only — **existing clients that still read per-segment files must add `type=delta`**.
   Sort/`since` use `ready_at` (or `updated_at` for abandoned) so a late or requeued artifact
-  reappears; those timestamps are stamped under a short advisory lock so a slow commit cannot
-  land earlier than a sibling already visible. Abandoned rows have `status=abandoned`,
+  reappears; those timestamps are {@code GREATEST(previous + 1µs, clock_timestamp())} under a
+  short advisory lock so a lagging replica clock cannot land at or before an already-visible
+  sibling. Abandoned rows have `status=abandoned`,
   `artifactId` for admin requeue, and no download URL. V51 adds nullable
   `first_seq`/`last_seq` (writer-filled; kept on abandon; catalog never live-queries segments)
   and partial catalog indexes for READY `(ready_at, s3_key)` / ABANDONED `(updated_at, abandoned/id)`.
