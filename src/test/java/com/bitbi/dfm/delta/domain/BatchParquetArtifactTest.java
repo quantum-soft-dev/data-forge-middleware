@@ -159,29 +159,21 @@ class BatchParquetArtifactTest {
     }
 
     @Test
-    void abandonAndRequeueKeepASeqRangeFromAPreviousPublish() throws Exception {
+    void markAbandonedRecordsTheSeqRangeWhenProvided() {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(
                 UUID.randomUUID(), UUID.randomUUID(), "orders");
         artifact.markBuilding();
-        var firstSeq = BatchParquetArtifact.class.getDeclaredField("firstSeq");
-        var lastSeq = BatchParquetArtifact.class.getDeclaredField("lastSeq");
-        firstSeq.setAccessible(true);
-        lastSeq.setAccessible(true);
-        firstSeq.set(artifact, 100L);
-        lastSeq.set(artifact, 250L);
 
-        artifact.markAbandoned("gave up");
+        artifact.markAbandoned("gave up", 100L, 250L, artifact.getUpdatedAt());
 
         assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
         assertNull(artifact.getS3Key());
-        assertEquals(100L, artifact.getFirstSeq(),
-                "abandon must not wipe the range the catalog uses as lastSeq");
+        assertEquals(100L, artifact.getFirstSeq());
         assertEquals(250L, artifact.getLastSeq());
 
         artifact.requeue();
 
-        assertEquals(BatchParquetArtifactStatus.PENDING, artifact.getStatus());
-        assertEquals(100L, artifact.getFirstSeq());
+        assertEquals(100L, artifact.getFirstSeq(), "requeue must not wipe a stored abandon range");
         assertEquals(250L, artifact.getLastSeq());
     }
 

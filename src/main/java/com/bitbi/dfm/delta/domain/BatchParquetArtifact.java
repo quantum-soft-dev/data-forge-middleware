@@ -189,14 +189,29 @@ public class BatchParquetArtifact {
      * download answers 404, which separates "we stopped trying" from a failure still being retried.
      */
     public void markAbandoned(String error) {
-        markAbandoned(error, LocalDateTime.now(ZoneOffset.UTC));
+        markAbandoned(error, null, null, LocalDateTime.now(ZoneOffset.UTC));
     }
 
-    /** Abandon with a catalog-visible timestamp assigned under the publish lock. */
     public void markAbandoned(String error, LocalDateTime publishedAt) {
+        markAbandoned(error, null, null, publishedAt);
+    }
+
+    /**
+     * Abandon with the table seq range already known from the batch's segments, so the
+     * catalog does not depend on those segments still being present after retention.
+     */
+    public void markAbandoned(String error, Long firstSeq, Long lastSeq, LocalDateTime publishedAt) {
         requireBuilding();
+        if ((firstSeq == null) != (lastSeq == null)) {
+            throw new IllegalArgumentException("firstSeq and lastSeq must both be set or both be null");
+        }
+        if (firstSeq != null && lastSeq < firstSeq) {
+            throw new IllegalArgumentException("lastSeq must be >= firstSeq");
+        }
         status = BatchParquetArtifactStatus.ABANDONED;
         clearPublishedMetadata();
+        this.firstSeq = firstSeq;
+        this.lastSeq = lastSeq;
         lastError = Objects.requireNonNull(error, "error");
         claimToken = null;
         updatedAt = Objects.requireNonNull(publishedAt, "publishedAt");

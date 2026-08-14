@@ -337,6 +337,9 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
         assertFalse(artifact.isRetryable());
         assertTrue(artifact.getLastError().contains("No declared schema"));
+        assertEquals(1L, artifact.getFirstSeq(),
+                "an abandon after a failed build must keep the table range from the segments");
+        assertEquals(1L, artifact.getLastSeq());
         verify(storage, never()).uploadBatchParquet(any(), any(), any(), any(), any());
     }
 

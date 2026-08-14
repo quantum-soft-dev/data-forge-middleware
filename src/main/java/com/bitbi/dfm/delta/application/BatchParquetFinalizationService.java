@@ -378,7 +378,7 @@ public class BatchParquetFinalizationService {
                     claim.batchId(), claim.tableName(), finalized.rowCount(), finalized.fileSize());
         } else if (outcome.permanentFailure() || artifact.getAttemptCount() >= maxAttempts) {
             LocalDateTime publishedAt = artifactRepository.nextCatalogWatermark();
-            artifact.markAbandoned(outcome.error(), publishedAt);
+            artifact.markAbandoned(outcome.error(), outcome.firstSeq(), outcome.lastSeq(), publishedAt);
             metrics.batchParquetAbandoned();
             log.error("Unified batch Parquet abandoned after {} attempt(s): batchId={}, table={}, "
                             + "error={} — the table's download answers 404 until the row is reset",
@@ -410,8 +410,10 @@ public class BatchParquetFinalizationService {
             for (Claim claim : claims) {
                 TableSchema schema = schemas.get(claim.tableName());
                 if (schema == null) {
+                    SeqRange range = seqRange(segments, claim.tableName());
                     outcomes.put(claim.artifactId(),
-                            BuildOutcome.failed("No declared schema for table " + claim.tableName()));
+                            BuildOutcome.failed("No declared schema for table " + claim.tableName(),
+                                    range.firstSeq(), range.lastSeq()));
                     continue;
                 }
                 Path output = Files.createTempFile(tempDirectory,
@@ -427,9 +429,10 @@ public class BatchParquetFinalizationService {
                     : written.failures().entrySet()) {
                 Claim claim = claimsByTable.get(entry.getKey());
                 DeltaParquetWriter.FileWriteFailure failure = entry.getValue();
+                SeqRange range = seqRange(segments, claim.tableName());
                 outcomes.put(claim.artifactId(), failure.permanent()
-                        ? BuildOutcome.permanentlyFailed(failure.error())
-                        : BuildOutcome.failed(failure.error()));
+                        ? BuildOutcome.permanentlyFailed(failure.error(), range.firstSeq(), range.lastSeq())
+                        : BuildOutcome.failed(failure.error(), range.firstSeq(), range.lastSeq()));
             }
             for (Map.Entry<String, DeltaParquetWriter.FileWriteResult> entry : written.files().entrySet()) {
                 String tableName = entry.getKey();
@@ -448,8 +451,10 @@ public class BatchParquetFinalizationService {
                             s3Key, result.rowCount(), result.fileSize(), result.checksum(),
                             range.firstSeq(), range.lastSeq())));
                 } catch (RuntimeException e) {
+                    SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.failed(
-                            Objects.toString(e.getMessage(), e.getClass().getSimpleName())));
+                            Objects.toString(e.getMessage(), e.getClass().getSimpleName()),
+                            range.firstSeq(), range.lastSeq()));
                 }
             }
             return outcomes;
@@ -538,17 +543,26 @@ public class BatchParquetFinalizationService {
     }
 
     /** Either the finished file or the error that stopped this attempt. */
-    private record BuildOutcome(FinalizedFile file, String error, boolean permanentFailure) {
+    private record BuildOutcome(FinalizedFile file, String error, boolean permanentFailure,
+                                Long firstSeq, Long lastSeq) {
         static BuildOutcome succeeded(FinalizedFile file) {
-            return new BuildOutcome(file, null, false);
+            return new BuildOutcome(file, null, false, file.firstSeq(), file.lastSeq());
         }
 
         static BuildOutcome failed(String error) {
-            return new BuildOutcome(null, error, false);
+            return failed(error, null, null);
+        }
+
+        static BuildOutcome failed(String error, Long firstSeq, Long lastSeq) {
+            return new BuildOutcome(null, error, false, firstSeq, lastSeq);
         }
 
         static BuildOutcome permanentlyFailed(String error) {
-            return new BuildOutcome(null, error, true);
+            return permanentlyFailed(error, null, null);
+        }
+
+        static BuildOutcome permanentlyFailed(String error, Long firstSeq, Long lastSeq) {
+            return new BuildOutcome(null, error, true, firstSeq, lastSeq);
         }
     }
 }

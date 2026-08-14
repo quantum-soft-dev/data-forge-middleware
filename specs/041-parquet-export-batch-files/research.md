@@ -48,7 +48,9 @@
 
 - **Decision**: writer writes min/max seq of published, non-provisional segments whose `stats`
   contain the table; if none, the batch-wide published min/max. `clearPublishedMetadata` keeps
-  that pair. The catalog reads only the stored columns. `lastSeq == null` is unknown — never skip.
+  that pair. A failed publish that becomes `ABANDONED` writes the same range through
+  `markAbandoned` (it is never assigned only on `markReady`). The catalog reads only the stored
+  columns. `lastSeq == null` is unknown — never skip.
 - **Rationale**: the file contains every record of that table for the batch. A live
   `MIN`/`MAX` over `changelog_segments` becomes NULL once retention prunes the batch, and
   JavaScript `null <= n` is `true`, so clients would skip a still-listed READY/ABANDONED file.
