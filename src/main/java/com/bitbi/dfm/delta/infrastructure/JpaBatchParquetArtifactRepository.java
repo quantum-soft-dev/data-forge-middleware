@@ -130,20 +130,24 @@ public interface JpaBatchParquetArtifactRepository
                                                       int maxAttempts);
 
     /**
+     * A claim whose owner never returned and whose attempt budget is spent. One text, shared by
+     * the probe and the update it guards: a probe that silently drifted narrower than the update
+     * would stop settling these rows altogether, and each query's own test would stay green.
+     */
+    String SPENT_EXPIRED_CLAIM = """
+            status = 'BUILDING' AND attempt_count >= :maxAttempts AND updated_at
+                < CAST(:now AS timestamp) - make_interval(secs =>
+                    CAST(:leaseSeconds AS double precision))
+            """;
+
+    /**
      * Same predicate as {@link #abandonExpiredClaims}, read-only. {@code status = 'BUILDING'} with
      * an ordered {@code updated_at} is served by idx_batch_parquet_artifacts_claim, so the idle
      * answer is one index probe instead of an advisory lock plus a watermark write.
      */
     @Override
-    @Query(value = """
-            SELECT EXISTS (
-                SELECT 1 FROM batch_parquet_artifacts
-                WHERE status = 'BUILDING' AND attempt_count >= :maxAttempts AND updated_at
-                    < CAST(:now AS timestamp) - make_interval(secs =>
-                        CAST(:leaseSeconds AS double precision))
-                LIMIT 1
-            )
-            """, nativeQuery = true)
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM batch_parquet_artifacts WHERE "
+            + SPENT_EXPIRED_CLAIM + " LIMIT 1)", nativeQuery = true)
     boolean hasSpentExpiredClaims(@Param("now") LocalDateTime now,
                                   @Param("leaseSeconds") int leaseSeconds,
                                   @Param("maxAttempts") int maxAttempts);
@@ -155,10 +159,7 @@ public interface JpaBatchParquetArtifactRepository
             UPDATE batch_parquet_artifacts
             SET status = 'ABANDONED', claim_token = NULL, last_error = :error,
                 updated_at = :publishedAt, version = version + 1
-            WHERE status = 'BUILDING' AND attempt_count >= :maxAttempts AND updated_at
-                < CAST(:now AS timestamp) - make_interval(secs =>
-                    CAST(:leaseSeconds AS double precision))
-            """, nativeQuery = true)
+            WHERE """ + " " + SPENT_EXPIRED_CLAIM, nativeQuery = true)
     int abandonExpiredClaims(@Param("now") LocalDateTime now,
                              @Param("publishedAt") LocalDateTime publishedAt,
                              @Param("leaseSeconds") int leaseSeconds,

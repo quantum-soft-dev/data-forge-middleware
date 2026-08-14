@@ -256,8 +256,12 @@ public class BatchParquetFinalizationService {
      * settle — the row stays claimable until some transaction actually stamps it.</p>
      */
     private void settleExpiredClaims() {
-        if (!artifactRepository.hasSpentExpiredClaims(
-                LocalDateTime.now(ZoneOffset.UTC), leaseSeconds, maxAttempts)) {
+        // Templated like every other step here, and for the same reason: nothing in this method may
+        // join a caller's transaction. A native query that did would flush that caller's whole
+        // persistence context and hold its connection for the rest of the drain.
+        Boolean expired = transactions.execute(status -> artifactRepository.hasSpentExpiredClaims(
+                LocalDateTime.now(ZoneOffset.UTC), leaseSeconds, maxAttempts));
+        if (!Boolean.TRUE.equals(expired)) {
             return;
         }
         Integer abandoned = transactions.execute(status -> {
