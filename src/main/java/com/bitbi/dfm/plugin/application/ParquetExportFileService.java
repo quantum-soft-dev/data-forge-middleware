@@ -37,12 +37,13 @@ public class ParquetExportFileService {
 
     public static final int MAX_PAGE_SIZE = 100;
 
-    public enum FileType { DELTA, CHECKPOINT }
+    public enum FileType { DELTA, CHECKPOINT, BATCH }
 
-    /** One downloadable Parquet file. Delta files carry a seq range, checkpoints a single seq. */
+    /** One catalogued Parquet file. Batch files carry batchId/status; abandoned ones have a null s3Key. */
     public record ParquetFileItem(UUID siteId, String siteDomain, String table, FileType type,
                                   Long firstSeq, Long lastSeq, Long seq,
-                                  LocalDateTime producedAt, String fileName, String s3Key) {
+                                  LocalDateTime producedAt, String fileName, String s3Key,
+                                  UUID batchId, String status) {
     }
 
     public record FileListing(List<ParquetFileItem> files, int size, boolean hasMore, String nextCursor) {
@@ -64,7 +65,7 @@ public class ParquetExportFileService {
      * @param since     strictly-greater producedAt bound (delta: egress_at, checkpoint: updated_at)
      * @param siteId    optional site filter; a site not owned by the account yields an empty result
      * @param table     optional table-name filter
-     * @param type      optional file-type filter; null = both
+     * @param type      file-type filter; {@code null} defaults to {@link FileType#BATCH}
      * @param cursor    opaque keyset cursor from a previous response's {@code nextCursor}; null = start
      * @param size      page size, capped at {@value #MAX_PAGE_SIZE}
      */
@@ -74,17 +75,23 @@ public class ParquetExportFileService {
         if (size < 1 || size > MAX_PAGE_SIZE) {
             throw new IllegalArgumentException("Invalid page size: 1 <= size <= " + MAX_PAGE_SIZE);
         }
+        FileType effectiveType = type == null ? FileType.BATCH : type;
         Cursor position = Cursor.decode(cursor);
         LocalDateTime cursorAt = position == null ? null : position.producedAt();
         String cursorKey = position == null ? null : position.s3Key();
         int fetch = size + 1;
 
-        List<CatalogRow> delta = type == FileType.CHECKPOINT ? List.of()
-                : catalogDao.findDeltaFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch);
-        List<CatalogRow> checkpoints = type == FileType.DELTA ? List.of()
-                : catalogDao.findCheckpointFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch);
+        List<CatalogRow> batch = effectiveType == FileType.BATCH
+                ? catalogDao.findBatchFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch)
+                : List.of();
+        List<CatalogRow> delta = effectiveType == FileType.DELTA
+                ? catalogDao.findDeltaFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch)
+                : List.of();
+        List<CatalogRow> checkpoints = effectiveType == FileType.CHECKPOINT
+                ? catalogDao.findCheckpointFiles(accountId, since, siteId, table, cursorAt, cursorKey, fetch)
+                : List.of();
 
-        List<CatalogRow> merged = mergeSorted(delta, checkpoints, fetch);
+        List<CatalogRow> merged = mergeSorted(mergeSorted(batch, delta, fetch), checkpoints, fetch);
         boolean hasMore = merged.size() > size;
         List<CatalogRow> pageCandidates = merged.subList(0, Math.min(size, merged.size()));
         String nextCursor = hasMore
@@ -122,11 +129,15 @@ public class ParquetExportFileService {
     }
 
     private static ParquetFileItem toItem(CatalogRow row) {
-        String fileName = row.type() == FileType.DELTA
-                ? "%s_seq%d-%d.parquet".formatted(row.table(), row.firstSeq(), row.lastSeq())
-                : "%s_seq%d.parquet".formatted(row.table(), row.seq());
+        String fileName = switch (row.type()) {
+            case DELTA -> "%s_seq%d-%d.parquet".formatted(row.table(), row.firstSeq(), row.lastSeq());
+            case CHECKPOINT -> "%s_seq%d.parquet".formatted(row.table(), row.seq());
+            case BATCH -> "%s_batch%s.parquet".formatted(row.table(), row.batchId());
+        };
+        String s3Key = "abandoned".equals(row.status()) ? null : row.s3Key();
         return new ParquetFileItem(row.siteId(), row.siteDomain(), row.table(), row.type(),
-                row.firstSeq(), row.lastSeq(), row.seq(), row.producedAt(), fileName, row.s3Key());
+                row.firstSeq(), row.lastSeq(), row.seq(), row.producedAt(), fileName, s3Key,
+                row.batchId(), row.status());
     }
 
     /** Opaque keyset position: base64url of {@code producedAt|s3Key}. */

@@ -9,7 +9,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   pointers so `MigrationDocumentationConsistencyTest` stays green.
 - [x] **T03 — Writer records the seq range.** Red finalization tests, then persist the table
   (or batch-wide fallback) range in `markReady`.
-- [ ] **T04 — Catalog query and default listing.** Red unit/contract tests for `type=batch`,
+- [x] **T04 — Catalog query and default listing.** Red unit/contract tests for `type=batch`,
   omitted `type`, abandoned rows without a download URL, and cursor walk; then
   `findBatchFiles`, `FileType.BATCH`, DTO fields, and link registration that skips abandoned.
 - [ ] **T05 — Integration coverage.** Red Testcontainers cases: default listing ignores

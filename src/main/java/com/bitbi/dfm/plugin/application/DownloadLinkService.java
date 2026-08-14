@@ -64,6 +64,10 @@ public class DownloadLinkService {
         Duration ttl = Duration.ofSeconds(properties.getLinkTtlSeconds());
         List<DownloadLink> links = new ArrayList<>(files.size());
         for (ParquetFileItem file : files) {
+            if (file.s3Key() == null) {
+                links.add(null);
+                continue;
+            }
             links.add(downloadLinkRepository.save(
                     DownloadLink.register(accountPluginId, file.s3Key(), file.fileName(), ttl)));
         }

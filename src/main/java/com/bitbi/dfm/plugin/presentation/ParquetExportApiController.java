@@ -77,7 +77,7 @@ public class ParquetExportApiController {
     @GetMapping("/files")
     @Operation(summary = "List Parquet files with one-time download links",
             description = "Basic Auth. Filters: since (ISO 8601, strictly greater), siteId, table, "
-                    + "type (delta|checkpoint). Pagination is a keyset cursor: pass the previous "
+                    + "type (batch|delta|checkpoint; default batch). Pagination is a keyset cursor: pass the previous "
                     + "response's nextCursor to continue; iterate until hasMore=false (a page may "
                     + "hold fewer than size entries). Every listed file gets a freshly registered "
                     + "single-use download URL (TTL 1 hour by default).")
@@ -116,7 +116,8 @@ public class ParquetExportApiController {
         for (int i = 0; i < listing.files().size(); i++) {
             ParquetFileItem item = listing.files().get(i);
             DownloadLink link = links.get(i);
-            files.add(ParquetFileResponseDto.of(item, link, urlPrefix + link.getToken()));
+            String downloadUrl = link == null ? null : urlPrefix + link.getToken();
+            files.add(ParquetFileResponseDto.of(item, link, downloadUrl));
         }
 
         Map<String, Object> filters = new HashMap<>();
@@ -170,12 +171,12 @@ public class ParquetExportApiController {
 
     private FileType parseType(String type) {
         if (type == null || type.isBlank()) {
-            return null;
+            return FileType.BATCH;
         }
         try {
             return FileType.valueOf(type.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid 'type' value, expected delta or checkpoint");
+            throw new IllegalArgumentException("Invalid 'type' value, expected batch, delta or checkpoint");
         }
     }
 

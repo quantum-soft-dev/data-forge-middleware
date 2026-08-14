@@ -79,7 +79,15 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
     private ParquetFileItem deltaItem() {
         return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.DELTA,
                 100L, 250L, null, PRODUCED_AT, "orders_seq100-250.parquet",
-                "egress/" + SITE_ID + "/orders/delta/seq=100-250.parquet");
+                "egress/" + SITE_ID + "/orders/delta/seq=100-250.parquet",
+                null, null);
+    }
+
+    private ParquetFileItem batchItem(String status, String s3Key) {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.BATCH,
+                100L, 250L, null, PRODUCED_AT, "orders_batch" + batchId + ".parquet",
+                s3Key, batchId, status);
     }
 
     @Test
@@ -113,6 +121,49 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.nextCursor").value(nullValue()));
 
         verify(pluginAuditService).logFilesListed(eq("parquet-export"), eq(ACCOUNT_ID), any(), eq(1));
+        verify(fileService).listFiles(eq(ACCOUNT_ID), any(), any(), any(), eq(FileType.BATCH), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("Should return a ready batch file with batchId, status and a download URL")
+    void shouldReturnReadyBatchFile() throws Exception {
+        ParquetFileItem item = batchItem("ready", "egress/orders.parquet");
+        DownloadLink link = DownloadLink.register(ACCOUNT_PLUGIN_ID, item.s3Key(), item.fileName(),
+                Duration.ofHours(1));
+        when(fileService.listFiles(eq(ACCOUNT_ID), any(), any(), any(), eq(FileType.BATCH), any(), anyInt()))
+                .thenReturn(new FileListing(List.of(item), 50, false, null));
+        when(downloadLinkService.registerLinks(ACCOUNT_PLUGIN_ID, List.of(item)))
+                .thenReturn(List.of(link));
+
+        mockMvc.perform(get(FILES_PATH)
+                        .header("Authorization", basicAuth("pex_testLogin001:goodPassword"))
+                        .param("type", "batch"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].type").value("batch"))
+                .andExpect(jsonPath("$.files[0].batchId").value(item.batchId().toString()))
+                .andExpect(jsonPath("$.files[0].status").value("ready"))
+                .andExpect(jsonPath("$.files[0].fileName").value(item.fileName()))
+                .andExpect(jsonPath("$.files[0].downloadUrl",
+                        containsString("/api/v1/plugins/parquet-export/download/" + link.getToken())));
+    }
+
+    @Test
+    @DisplayName("Should return an abandoned batch file without a download URL")
+    void shouldReturnAbandonedBatchFileWithoutDownloadUrl() throws Exception {
+        ParquetFileItem item = batchItem("abandoned", null);
+        when(fileService.listFiles(eq(ACCOUNT_ID), any(), any(), any(), eq(FileType.BATCH), any(), anyInt()))
+                .thenReturn(new FileListing(List.of(item), 50, false, null));
+        when(downloadLinkService.registerLinks(ACCOUNT_PLUGIN_ID, List.of(item)))
+                .thenReturn(java.util.Collections.singletonList(null));
+
+        mockMvc.perform(get(FILES_PATH)
+                        .header("Authorization", basicAuth("pex_testLogin001:goodPassword"))
+                        .param("type", "batch"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].type").value("batch"))
+                .andExpect(jsonPath("$.files[0].status").value("abandoned"))
+                .andExpect(jsonPath("$.files[0].downloadUrl").value(nullValue()))
+                .andExpect(jsonPath("$.files[0].linkExpiresAt").value(nullValue()));
     }
 
     @Test

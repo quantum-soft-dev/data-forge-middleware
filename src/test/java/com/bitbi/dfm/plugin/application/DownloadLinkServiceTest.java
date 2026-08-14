@@ -69,7 +69,15 @@ class DownloadLinkServiceTest {
     private ParquetFileItem fileItem(String table) {
         return new ParquetFileItem(SITE_ID, "shop.example.com", table, FileType.DELTA,
                 1L, 2L, null, LocalDateTime.of(2026, 7, 20, 10, 0),
-                table + "_seq1-2.parquet", "egress/" + SITE_ID + "/" + table + "/delta/seq=1-2.parquet");
+                table + "_seq1-2.parquet", "egress/" + SITE_ID + "/" + table + "/delta/seq=1-2.parquet",
+                null, null);
+    }
+
+    private ParquetFileItem abandonedBatchItem() {
+        return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.BATCH,
+                1L, 2L, null, LocalDateTime.of(2026, 7, 20, 10, 0),
+                "orders_batch" + UUID.randomUUID() + ".parquet", null,
+                UUID.randomUUID(), "abandoned");
     }
 
     @Nested
@@ -90,6 +98,18 @@ class DownloadLinkServiceTest {
             assertTrue(first.getS3Key().contains("orders"));
             long ttlSeconds = ChronoUnit.SECONDS.between(first.getCreatedAt(), first.getExpiresAt());
             assertEquals(properties.getLinkTtlSeconds(), ttlSeconds);
+        }
+
+        @Test
+        @DisplayName("Should skip abandoned files that have no S3 key")
+        void shouldSkipAbandonedFilesWithoutS3Key() {
+            List<DownloadLink> links = service.registerLinks(ACCOUNT_PLUGIN_ID,
+                    List.of(fileItem("orders"), abandonedBatchItem()));
+
+            assertEquals(2, links.size());
+            assertNotNull(links.get(0));
+            assertNull(links.get(1));
+            verify(downloadLinkRepository, times(1)).save(any(DownloadLink.class));
         }
     }
 
