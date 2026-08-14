@@ -94,6 +94,7 @@ class BatchParquetFinalizationServiceTest {
                                                        long maxTempBytes, SimpleMeterRegistry registry) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
                 segmentService, schemaService, batchRepository, storage, new DeltaMetrics(registry),
+                new DeltaParquetProperties(8L * 1024 * 1024),
                 mock(PlatformTransactionManager.class), tempDir.toString(), maxTempBytes, 60,
                 maxAttempts, leaseSeconds);
     }

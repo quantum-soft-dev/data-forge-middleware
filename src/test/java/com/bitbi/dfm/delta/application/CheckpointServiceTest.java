@@ -52,7 +52,8 @@ class CheckpointServiceTest {
 
     private final CheckpointService service = new CheckpointService(
             segmentRepository, changelogSegmentService, checkpointRepository,
-            syncStateService, checkpointStorage, siteSchemaService, metrics, eventPublisher);
+            syncStateService, checkpointStorage, siteSchemaService, metrics,
+            new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher);
 
     @BeforeEach
     @SuppressWarnings("unchecked")

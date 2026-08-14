@@ -45,6 +45,7 @@ public class CheckpointService {
     private final S3CheckpointStorage checkpointStorage;
     private final SiteSchemaService siteSchemaService;
     private final DeltaMetrics metrics;
+    private final DeltaParquetProperties parquetProperties;
     private final ApplicationEventPublisher eventPublisher;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
@@ -54,6 +55,7 @@ public class CheckpointService {
                              S3CheckpointStorage checkpointStorage,
                              SiteSchemaService siteSchemaService,
                              DeltaMetrics metrics,
+                             DeltaParquetProperties parquetProperties,
                              ApplicationEventPublisher eventPublisher) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
@@ -62,6 +64,7 @@ public class CheckpointService {
         this.checkpointStorage = checkpointStorage;
         this.siteSchemaService = siteSchemaService;
         this.metrics = metrics;
+        this.parquetProperties = parquetProperties;
         this.eventPublisher = eventPublisher;
     }
 
@@ -157,7 +160,8 @@ public class CheckpointService {
                 // as DeltaEgressService.
                 try {
                     byte[] parquet = metrics.timeCheckpointPhase("parquet",
-                            () -> ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows)));
+                            () -> ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows),
+                                    parquetProperties.rowGroupBytes()));
                     metrics.timeCheckpointPhase("upload", () ->
                             checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                     siteId, tableName, seq, parquet)));

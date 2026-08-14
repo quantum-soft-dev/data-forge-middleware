@@ -62,9 +62,11 @@ public final class DeltaParquetWriter {
      * @param tableName   table name (Parquet record name)
      * @param tableSchema the stored PG schema for the table
      * @param records     the segment's change records for this table, in seq order
+     * @param rowGroupBytes the configured row-group budget ({@link DeltaParquetProperties})
      * @return Parquet file bytes
      */
-    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records) {
+    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
+                                        long rowGroupBytes) {
         List<Map<String, Value>> cellRows = new ArrayList<>(records.size());
         for (ChangeRecord change : records) {
             Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
@@ -92,27 +94,20 @@ public final class DeltaParquetWriter {
             }
             rows.add(row);
         }
-        return ParquetCheckpointWriter.write(avro, rows, tableName);
+        return ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
     }
 
     /**
-     * Build one table's unified batch artifact with bounded heap use. The replay source is invoked
-     * once to write rows to the file, preceded by a scan pass <em>only</em> when the table declares
-     * decimal columns whose precision has to be measured losslessly.
-     * Records for other tables are ignored, allowing callers to replay mixed-table segments.
-     */
-    public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
-                                                    RecordReplay replay) {
-        return writeDeltaParquet(output, tableName, tableSchema, replay, Long.MAX_VALUE);
-    }
-
-    /**
-     * Write a unified artifact while refusing to put more than {@code maxBytes} on local disk.
+     * Build one table's unified batch artifact with bounded heap use, refusing to put more than
+     * {@code maxBytes} on local disk. The replay source is invoked once to write rows to the file,
+     * preceded by a scan pass <em>only</em> when the table declares decimal columns whose precision
+     * has to be measured losslessly. Records for other tables are ignored, allowing callers to
+     * replay mixed-table segments.
      *
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross the limit
      */
     public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
-                                                    RecordReplay replay, long maxBytes) {
+                                                    RecordReplay replay, long maxBytes, long rowGroupBytes) {
         Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
         Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
         AtomicLong rowCount = new AtomicLong();
@@ -123,6 +118,7 @@ public final class DeltaParquetWriter {
                 .withSchema(avro)
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())
+                .withRowGroupSize(rowGroupBytes)
                 .withCompressionCodec(CODEC)
                 .build()) {
             replay.forEach(change -> {
@@ -159,13 +155,14 @@ public final class DeltaParquetWriter {
      * because no table can prove that it saw the complete changelog.
      */
     static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
-                                                    RecordReplay replay, long maxBytes) {
-        return writeBatchDeltaParquet(requests, replay, maxBytes, null);
+                                                    RecordReplay replay, long maxBytes,
+                                                    long rowGroupBytes) {
+        return writeBatchDeltaParquet(requests, replay, maxBytes, rowGroupBytes, null);
     }
 
     static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
                                                     RecordReplay replay, long maxBytes,
-                                                    PhaseClock clock) {
+                                                    long rowGroupBytes, PhaseClock clock) {
         if (requests.isEmpty()) {
             return new BatchWriteResult(Map.of(), Map.of());
         }
@@ -218,7 +215,8 @@ public final class DeltaParquetWriter {
             }
             try {
                 Schema avro = widenDecimals(baseSchemas.get(tableName), decimalPrecisions.get(tableName));
-                writers.put(tableName, new TableWriter(tableName, entry.getValue(), avro, maxBytes));
+                writers.put(tableName, new TableWriter(tableName, entry.getValue(), avro, maxBytes,
+                        rowGroupBytes));
             } catch (RuntimeException | IOException e) {
                 failures.put(tableName, failure(e));
             }
@@ -426,8 +424,8 @@ public final class DeltaParquetWriter {
         private long rowCount;
         private long previousSeq = Long.MIN_VALUE;
 
-        private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes)
-                throws IOException {
+        private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes,
+                            long rowGroupBytes) throws IOException {
             this.tableName = tableName;
             this.request = request;
             this.avro = avro;
@@ -436,6 +434,7 @@ public final class DeltaParquetWriter {
                     .withSchema(avro)
                     .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                     .withConf(new PlainParquetConfiguration())
+                    .withRowGroupSize(rowGroupBytes)
                     .withCompressionCodec(CODEC)
                     .build();
         }

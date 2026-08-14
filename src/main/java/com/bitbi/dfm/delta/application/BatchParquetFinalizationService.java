@@ -57,6 +57,7 @@ public class BatchParquetFinalizationService {
     private final BatchRepository batchRepository;
     private final S3CheckpointStorage storage;
     private final DeltaMetrics metrics;
+    private final DeltaParquetProperties parquetProperties;
     private final TransactionTemplate transactions;
     private final ScheduledExecutorService leaseRenewals;
     private final Path tempDirectory;
@@ -73,6 +74,7 @@ public class BatchParquetFinalizationService {
             BatchRepository batchRepository,
             S3CheckpointStorage storage,
             DeltaMetrics metrics,
+            DeltaParquetProperties parquetProperties,
             PlatformTransactionManager transactionManager,
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String tempDirectory,
             @Value("${delta.batch-parquet.max-temp-bytes:10737418240}") long maxTempBytes,
@@ -86,6 +88,7 @@ public class BatchParquetFinalizationService {
         this.batchRepository = batchRepository;
         this.storage = storage;
         this.metrics = metrics;
+        this.parquetProperties = parquetProperties;
         // Explicit template rather than @Transactional on the steps below: they are called from
         // finalizeNext() on this same bean, and a self-invocation never reaches the proxy — the
         // annotation would silently do nothing, which is exactly what the claim must not do.
@@ -445,6 +448,7 @@ public class BatchParquetFinalizationService {
                         consumer -> segments.forEach(segment ->
                                 segmentService.forEachRecord(segment.getS3Key(), consumer, clock)),
                         maxTempBytes,
+                        parquetProperties.rowGroupBytes(),
                         clock);
             } finally {
                 if (clock.hasSamples()) {

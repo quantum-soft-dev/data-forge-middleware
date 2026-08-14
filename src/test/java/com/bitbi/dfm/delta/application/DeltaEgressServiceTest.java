@@ -60,7 +60,8 @@ class DeltaEgressServiceTest {
     void setUp() {
         registry = new SimpleMeterRegistry();
         service = new DeltaEgressService(segmentRepository, changelogSegmentService,
-                siteSchemaService, storage, new DeltaMetrics(registry));
+                siteSchemaService, storage, new DeltaMetrics(registry),
+                new DeltaParquetProperties(8L * 1024 * 1024));
         segment = ChangelogSegment.create(SITE_ID, UUID.randomUUID(), 1L, 2L, 2L,
                 "hash", "changelog/key", "DELTA", null);
     }

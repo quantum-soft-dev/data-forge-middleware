@@ -60,30 +60,33 @@ public final class ParquetCheckpointWriter {
     /**
      * Write the rows to an in-memory Parquet file typed from the table schema.
      *
-     * @param tableName   table name (Parquet record name)
-     * @param tableSchema the stored PG schema for the table
-     * @param rows        each row's column → wire value (present columns only; absent = null cell)
+     * @param tableName     table name (Parquet record name)
+     * @param tableSchema   the stored PG schema for the table
+     * @param rows          each row's column → wire value (present columns only; absent = null cell)
+     * @param rowGroupBytes the configured row-group budget ({@link DeltaParquetProperties})
      * @return Parquet file bytes
      */
-    public static byte[] toParquet(String tableName, TableSchema tableSchema, List<Map<String, Value>> rows) {
+    public static byte[] toParquet(String tableName, TableSchema tableSchema, List<Map<String, Value>> rows,
+                                   long rowGroupBytes) {
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
         List<GenericRecord> records = new java.util.ArrayList<>(rows.size());
         for (Map<String, Value> row : rows) {
             records.add(toRecord(avro, tableSchema, row));
         }
-        return write(avro, records, tableName);
+        return write(avro, records, tableName, rowGroupBytes);
     }
 
     /**
      * Write pre-built Avro records to an in-memory Parquet file (shared by the checkpoint and
      * delta writers).
      */
-    static byte[] write(Schema avro, List<GenericRecord> records, String tableName) {
+    static byte[] write(Schema avro, List<GenericRecord> records, String tableName, long rowGroupBytes) {
         InMemoryOutputFile output = new InMemoryOutputFile();
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(output)
                 .withSchema(avro)
                 .withDataModel(logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())
+                .withRowGroupSize(rowGroupBytes)
                 .withCompressionCodec(CODEC)
                 .build()) {
             for (GenericRecord record : records) {

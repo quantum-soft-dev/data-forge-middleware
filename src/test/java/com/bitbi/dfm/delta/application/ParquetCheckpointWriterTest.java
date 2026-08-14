@@ -36,6 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParquetCheckpointWriterTest {
 
+    private static final long ROW_GROUP_BYTES = 8L * 1024 * 1024;
+
     @TempDir
     Path tempDir;
 
@@ -72,7 +74,7 @@ class ParquetCheckpointWriterTest {
         row2.put("created_on", strVal("2024-02-20"));
         row2.put("created_at", strVal("2024-02-20T00:00:00Z"));
 
-        byte[] parquet = ParquetCheckpointWriter.toParquet("customers", schema, List.of(row1, row2));
+        byte[] parquet = ParquetCheckpointWriter.toParquet("customers", schema, List.of(row1, row2), ROW_GROUP_BYTES);
 
         assertTrue(parquet.length > 0, "parquet bytes written");
 
@@ -135,7 +137,7 @@ class ParquetCheckpointWriterTest {
         f.put("active", strVal("f"));
 
         Path file = tempDir.resolve("bools.parquet");
-        Files.write(file, ParquetCheckpointWriter.toParquet("t", schema, List.of(t, f)));
+        Files.write(file, ParquetCheckpointWriter.toParquet("t", schema, List.of(t, f), ROW_GROUP_BYTES));
 
         try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
@@ -156,7 +158,7 @@ class ParquetCheckpointWriterTest {
         bad.put("active", strVal("maybe"));
 
         org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
-                () -> ParquetCheckpointWriter.toParquet("t", schema, List.of(bad)),
+                () -> ParquetCheckpointWriter.toParquet("t", schema, List.of(bad), ROW_GROUP_BYTES),
                 "an unrecognized boolean text must throw (per-table skip), not silently write false");
     }
 
@@ -173,7 +175,7 @@ class ParquetCheckpointWriterTest {
         row.put("price", decVal("1234567.89"));
 
         Path file = tempDir.resolve("widened.parquet");
-        Files.write(file, ParquetCheckpointWriter.toParquet("t", schema, List.of(row)));
+        Files.write(file, ParquetCheckpointWriter.toParquet("t", schema, List.of(row), ROW_GROUP_BYTES));
 
         try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
@@ -184,6 +186,50 @@ class ParquetCheckpointWriterTest {
             LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(r.getSchema(), "price").getLogicalType();
             assertEquals(9, decimal.getPrecision(), "declared precision widened to fit the data");
             assertEquals(2, decimal.getScale(), "declared scale is kept");
+        }
+    }
+
+    @Test
+    void flushesRowGroupsAtTheConfiguredByteBudget() throws Exception {
+        // The row-group buffer is what a writer holds in heap before it flushes, so the budget is
+        // the only multiplier bounding peak memory once the file itself is off-heap. Same data,
+        // two budgets: a small one must split the file, the parquet-mr-sized one must not.
+        TableSchema schema = new TableSchema(List.of(
+                col("id", "bigint", false), col("payload", "varchar(255)", false)),
+                List.of("id"), List.of());
+        List<Map<String, Value>> rows = highEntropyRows(4000);
+
+        Path split = tempDir.resolve("split.parquet");
+        Files.write(split, ParquetCheckpointWriter.toParquet("t", schema, rows, 64L * 1024));
+        Path single = tempDir.resolve("single.parquet");
+        Files.write(single, ParquetCheckpointWriter.toParquet("t", schema, rows, 128L * 1024 * 1024));
+
+        assertTrue(rowGroupCount(split) > 1,
+                "a 64 KiB budget must flush several row groups for ~1 MB of data");
+        assertEquals(1, rowGroupCount(single), "a 128 MiB budget must keep one row group");
+    }
+
+    /** Rows whose payload does not compress away, so the buffered size actually reaches a budget. */
+    private static List<Map<String, Value>> highEntropyRows(int count) {
+        java.util.Random random = new java.util.Random(112L);
+        List<Map<String, Value>> rows = new java.util.ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            byte[] noise = new byte[150];
+            random.nextBytes(noise);
+            Map<String, Value> row = new LinkedHashMap<>();
+            row.put("id", intVal(i));
+            row.put("payload", strVal(java.util.Base64.getEncoder().encodeToString(noise)));
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private static int rowGroupCount(Path file) throws Exception {
+        try (org.apache.parquet.hadoop.ParquetFileReader reader =
+                     org.apache.parquet.hadoop.ParquetFileReader.open(new LocalInputFile(file),
+                             org.apache.parquet.ParquetReadOptions.builder(new PlainParquetConfiguration())
+                                     .build())) {
+            return reader.getRowGroups().size();
         }
     }
 

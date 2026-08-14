@@ -39,17 +39,20 @@ public class DeltaEgressService {
     private final SiteSchemaService siteSchemaService;
     private final S3CheckpointStorage storage;
     private final DeltaMetrics metrics;
+    private final DeltaParquetProperties parquetProperties;
 
     public DeltaEgressService(ChangelogSegmentRepository segmentRepository,
                               ChangelogSegmentService changelogSegmentService,
                               SiteSchemaService siteSchemaService,
                               S3CheckpointStorage storage,
-                              DeltaMetrics metrics) {
+                              DeltaMetrics metrics,
+                              DeltaParquetProperties parquetProperties) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.siteSchemaService = siteSchemaService;
         this.storage = storage;
         this.metrics = metrics;
+        this.parquetProperties = parquetProperties;
     }
 
     /**
@@ -98,7 +101,8 @@ public class DeltaEgressService {
             byte[] parquet;
             try {
                 parquet = metrics.timeEgressPhase("write",
-                        () -> DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords));
+                        () -> DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords,
+                                parquetProperties.rowGroupBytes()));
             } catch (RuntimeException e) {
                 // One poison table (data the declared schema cannot render) must not wedge the
                 // queue: without this the whole segment rolls back and the sweep retries it forever,
