@@ -1,17 +1,30 @@
 package com.bitbi.dfm.delta.application;
 
 import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T5.3 — {@link DeltaMetrics} registers the delta ingestion meters on the registry and increments
- * them: session counters, reconciliation failures, the checkpoint-duration timer, and the seq-lag
- * distribution.
+ * T5.3 / #111 — {@link DeltaMetrics} registers the delta ingestion meters on the registry
+ * and increments them: session counters, reconciliation failures, the cycle-duration timers,
+ * phase-tagged inner timers, and the seq-lag distribution.
  */
 class DeltaMetricsTest {
+
+    private static final List<String> BATCH_PARQUET_PHASES =
+            List.of("download", "decode", "decimal_scan", "write", "upload", "total");
+    private static final List<String> EGRESS_PHASES = List.of("download", "write", "upload", "total");
+    private static final List<String> CHECKPOINT_PHASES =
+            List.of("download_frame", "fold", "parquet", "upload", "total");
 
     @Test
     void registersAndIncrementsMeters() {
@@ -36,7 +49,7 @@ class DeltaMetricsTest {
         // The reason tag tells an incident apart without going to logs: which cap tripped.
         assertEquals(1.0, registry.get("delta.sessions.overflow").tag("reason", "records").counter().count());
         assertEquals(2.0, registry.get("delta.sessions.overflow").tag("reason", "bytes").counter().count());
-        assertEquals(1L, registry.get("delta.checkpoint.duration").timer().count());
+        assertEquals(1L, phaseTimer(registry, "delta.checkpoint.duration", "total").count());
 
         DistributionSummary lag = registry.get("delta.seq.lag").summary();
         assertEquals(2L, lag.count());
@@ -51,5 +64,74 @@ class DeltaMetricsTest {
         metrics.recordSeqLag(-1L);
 
         assertEquals(0L, registry.get("delta.seq.lag").summary().count(), "negative lag is not recorded");
+    }
+
+    @Test
+    void preRegistersEveryAllowlistedPhaseTimerAtZero() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        new DeltaMetrics(registry);
+
+        for (String phase : BATCH_PARQUET_PHASES) {
+            assertEquals(0L, phaseTimer(registry, "delta.batch-parquet.duration", phase).count(), phase);
+        }
+        for (String phase : EGRESS_PHASES) {
+            assertEquals(0L, phaseTimer(registry, "delta.egress.duration", phase).count(), phase);
+        }
+        for (String phase : CHECKPOINT_PHASES) {
+            assertEquals(0L, phaseTimer(registry, "delta.checkpoint.duration", phase).count(), phase);
+        }
+        assertEquals(0L, phaseTimer(registry, "delta.egress.duration", "total").count());
+        assertEquals(0L, phaseTimer(registry, "delta.batch-parquet.duration", "total").count());
+    }
+
+    @Test
+    void recordsPhaseSamplesOnTheSameMeterName() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        metrics.recordBatchParquetPhase("download", TimeUnit.MILLISECONDS.toNanos(12));
+        metrics.recordBatchParquetPhase("write", TimeUnit.MILLISECONDS.toNanos(40));
+        metrics.recordEgressPhase("upload", TimeUnit.MILLISECONDS.toNanos(7));
+        String folded = metrics.timeCheckpointPhase("fold", () -> "folded");
+        String egressed = metrics.timeEgress(() -> "done");
+
+        assertEquals("folded", folded);
+        assertEquals("done", egressed);
+        assertEquals(1L, phaseTimer(registry, "delta.batch-parquet.duration", "download").count());
+        assertTrue(phaseTimer(registry, "delta.batch-parquet.duration", "download")
+                .totalTime(TimeUnit.MILLISECONDS) >= 12.0);
+        assertEquals(1L, phaseTimer(registry, "delta.batch-parquet.duration", "write").count());
+        assertEquals(0L, phaseTimer(registry, "delta.batch-parquet.duration", "decode").count());
+        assertEquals(1L, phaseTimer(registry, "delta.egress.duration", "upload").count());
+        assertEquals(1L, phaseTimer(registry, "delta.checkpoint.duration", "fold").count());
+        assertEquals(1L, phaseTimer(registry, "delta.egress.duration", "total").count());
+    }
+
+    @Test
+    void rejectsUnknownPhaseTags() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> metrics.recordBatchParquetPhase("encode", 1L));
+        assertThrows(IllegalArgumentException.class,
+                () -> metrics.recordEgressPhase("decode", 1L));
+        assertThrows(IllegalArgumentException.class,
+                () -> metrics.recordCheckpointPhase("write", 1L));
+    }
+
+    @Test
+    void ignoresNegativePhaseNanos() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        metrics.recordBatchParquetPhase("download", -1L);
+
+        assertEquals(0L, phaseTimer(registry, "delta.batch-parquet.duration", "download").count());
+    }
+
+    private static Timer phaseTimer(SimpleMeterRegistry registry, String name, String phase) {
+        Meter meter = registry.get(name).tag("phase", phase).meter();
+        return (Timer) meter;
     }
 }

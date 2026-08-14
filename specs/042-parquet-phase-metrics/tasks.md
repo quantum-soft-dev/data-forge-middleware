@@ -4,7 +4,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 
 - [x] **T01 — Design.** Record the phase allowlists, streaming attribution rule, egress
   pending gauge, compatibility boundary, documentation surfaces, and test strategy.
-- [ ] **T02 — Meters.** Add red tests, then register phase timers on
+- [x] **T02 — Meters.** Add red tests, then register phase timers on
   `DeltaMetrics` and the `delta.egress.pending` gauge (repository count + 5 s TTL).
 - [ ] **T03 — Batch Parquet phases.** Add red tests, then attribute
   `download` / `decode` / `decimal_scan` / `write` / `upload` on the completed-batch

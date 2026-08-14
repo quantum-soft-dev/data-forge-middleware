@@ -16,9 +16,9 @@ pipeline; per-segment egress has only a counter.
   | `delta.egress.duration` | `download`, `write`, `upload` |
   | `delta.checkpoint.duration` | `download_frame`, `fold`, `parquet`, `upload` |
 
-- Keep the existing untagged timer for the whole cycle (`timeBatchParquetBuild`,
-  `timeCheckpoint`, and a new untagged egress total) so `write / cycle` is one PromQL
-  ratio and existing dashboards keep working.
+- Record the whole cycle on the same meter as `{phase=total}`. Prometheus requires one
+  label set per name, so an untagged series cannot coexist with `{phase=...}`.
+  `write / cycle` is `phase="write"` over `phase="total"`.
 - Attribute streaming replay without changing writer heap behaviour: download is time
   in `GetObject` / stream `read`, decode is parse time excluding the record consumer,
   `decimal_scan` / `write` are only the scan consumer and the Parquet writer.

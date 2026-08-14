@@ -7,8 +7,8 @@ egress queue-depth gauge.
 
 1. `DeltaMetrics` pre-registers one `Timer` per allowlisted phase on the existing
    meter names (`delta.batch-parquet.duration`, `delta.checkpoint.duration`) and
-   the new `delta.egress.duration`. The untagged cycle timers stay registered so
-   a dashboard that does not filter on `phase` still sees the whole build.
+   the new `delta.egress.duration`. The cycle is `{phase=total}` on the same name:
+   Prometheus rejects mixed tagged/untagged series.
 2. Streaming replay attribution lives next to the I/O, not by buffering segments:
    - `ChangelogSegmentService.forEachRecord` uses a thread-bound `ReplayPhaseClock`
      that counts `GetObject`/stream-read nanos as `download` and parse-minus-consumer

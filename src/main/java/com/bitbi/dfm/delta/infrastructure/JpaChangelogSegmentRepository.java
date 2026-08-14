@@ -128,6 +128,10 @@ public interface JpaChangelogSegmentRepository
     java.util.List<ChangelogSegment> findNextPendingEgress(int limit);
 
     @Override
+    @Query("SELECT COUNT(s) FROM ChangelogSegment s WHERE s.egressAt IS NULL")
+    long countPendingEgress();
+
+    @Override
     @Query(value = """
             SELECT * FROM changelog_segments s
             WHERE s.plugin_sql_at IS NULL
