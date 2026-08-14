@@ -12,7 +12,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T04 — Catalog query and default listing.** Red unit/contract tests for `type=batch`,
   omitted `type`, abandoned rows without a download URL, and cursor walk; then
   `findBatchFiles`, `FileType.BATCH`, DTO fields, and link registration that skips abandoned.
-- [ ] **T05 — Integration coverage.** Red Testcontainers cases: default listing ignores
+- [x] **T05 — Integration coverage.** Red Testcontainers cases: default listing ignores
   segment/checkpoint seeds, `since` uses `ready_at`, NULL seq fallback, requeue-then-ready
   reappears, mixed READY/ABANDONED cursor.
 - [ ] **T06 — Documentation.** Plugin guide (new type, breaking default, client migration,
