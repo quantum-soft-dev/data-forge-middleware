@@ -56,8 +56,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 ### Delta Client v2 & Site Types
 
 - **[Delta Client v2 — Change Request](./cr-delta-client-v2.md)** - gRPC ingestion design (022)
-- **[Delta Client v2 — Client & Sync UI Guide](./delta-client-v2-guide.md)** - protocol, realtime segment egress, unified batch/table Parquet, queue operations, and Delta Sync UI (022/023/025/036/038/039/040)
-- **[Unified Batch/Table Parquet — Change Request](./cr-unified-batch-parquet.md)** - one completed-session download per table with batch-level fan-out, claim-isolated uploads, lifecycle cleanup, and operator recovery (036/038/039/040, issues #93/#97/#98/#100)
+- **[Delta Client v2 — Client & Sync UI Guide](./delta-client-v2-guide.md)** - protocol, realtime segment egress, unified batch/table Parquet, queue operations, phase timers, and Delta Sync UI (022/023/025/036/038/039/040/042)
+- **[Unified Batch/Table Parquet — Change Request](./cr-unified-batch-parquet.md)** - one completed-session download per table with batch-level fan-out, claim-isolated uploads, lifecycle cleanup, operator recovery, and phase timers (036/038/039/040/042, issues #93/#97/#98/#100/#111)
 - **[Site History Wipe — Client Contract](./site-history-wipe-client-guide.md)** - generation epoch, wipe recovery sequence (035, issue #89)
 - **[Delta v2 Wire Contract — Answers](./delta-v2-wire-contract-answers.md)** - presence, typed error codes, recovery matrix, delivery order (dbf-data-extractor#130)
 - **[Site Types & POSTGRES_CDC — Change Request](./cr-site-types-postgres-cdc.md)** - DBF vs POSTGRES_CDC, site_schemas (019)

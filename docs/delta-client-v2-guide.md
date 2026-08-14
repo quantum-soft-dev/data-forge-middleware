@@ -935,8 +935,9 @@ every one of them.
 
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
-`delta.checkpoint.duration`, `delta.egress.segments`) are exposed on `/actuator/prometheus` and
-`/actuator/metrics/**`.
+`delta.checkpoint.duration{phase=...}`, `delta.egress.segments`, `delta.egress.duration{phase=...}`,
+`delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
+`/actuator/prometheus` and `/actuator/metrics/**`.
 
 Both used to be denied outright, which is why the counters were unreadable during the incident that
 opened #83. They are now served to the source addresses listed in
@@ -970,9 +971,34 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.sessions.overflow{reason=records\|bytes}` | `delta_sessions_overflow_total{reason=...}` |
 | `delta.reconciliation.failures` | `delta_reconciliation_failures_total` |
 | `delta.egress.segments` | `delta_egress_segments_total` |
+| `delta.egress.pending` | `delta_egress_pending` |
+| `delta.egress.duration{phase=...}` (timer) | `delta_egress_duration_seconds_count` / `_sum` / `_max` |
 | `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
+| `delta.batch-parquet.duration{phase=...}` (timer) | `delta_batch_parquet_duration_seconds_count` / `_sum` / `_max` |
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
-| `delta.checkpoint.duration` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
+| `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
+
+Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
+of the same name). `{phase="total"}` is the whole cycle. Inner phases:
+
+| Meter | Inner phases |
+|---|---|
+| `delta.batch-parquet.duration` | `download`, `decode`, `decimal_scan`, `write`, `upload` |
+| `delta.egress.duration` | `download`, `write`, `upload` |
+| `delta.checkpoint.duration` | `download_frame`, `fold`, `parquet`, `upload` |
+
+`download` is GetObject / stream `read`; `decode` is protobuf parse excluding the record
+consumer; `decimal_scan` / `write` / `parquet` are encode work; `upload` is PutObject.
+`delta.egress.pending` is `COUNT(*)` of `changelog_segments` with `egress_at IS NULL`,
+refreshed at most every five seconds.
+
+**Reading the write share.** Compare `phase="write"` (or `parquet` on a checkpoint) to
+`phase="total"` over the same window:
+
+- write < 20% of the cycle → encode is not the bottleneck.
+- 20–50% → stay on Java first (file-backed checkpoint, smaller row-group).
+- > 50% while S3 phases (`download` / `upload` / `download_frame`) look normal → then a
+  native renderer is worth discussing.
 
 So the Cloud Monitoring type for the session counter is
 `prometheus.googleapis.com/delta_sessions_started_total/counter`. Read the raw values by hand with:

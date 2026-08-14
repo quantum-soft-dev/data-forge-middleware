@@ -13,5 +13,5 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   `download` / `write` / `upload` on per-segment egress.
 - [x] **T05 — Checkpoint phases.** Add red tests, then time
   `download_frame` / `fold` / `parquet` / `upload` inside the existing cycle timer.
-- [ ] **T06 — Documentation and delivery gates.** Update the Delta guide, unified
+- [x] **T06 — Documentation and delivery gates.** Update the Delta guide, unified
   Parquet CR and project journal; run the required gates and open the PR.
