@@ -87,8 +87,12 @@ final class FileOutputFile implements OutputFile {
                 output.close();
             }
 
-            private void checkCapacity(int length) {
+            private void checkCapacity(int length) throws IOException {
                 if (length > maxBytes - position) {
+                    // Parquet unwinds a write failure through close() paths that never close the
+                    // output themselves, so nothing else would release this descriptor — and on the
+                    // checkpoint path the build survives the ceiling and runs again every night.
+                    output.close();
                     throw new ArtifactSizeLimitExceededException(maxBytes);
                 }
             }

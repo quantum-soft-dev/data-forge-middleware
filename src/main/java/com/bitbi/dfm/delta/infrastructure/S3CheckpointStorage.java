@@ -20,6 +20,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
@@ -68,7 +69,11 @@ public class S3CheckpointStorage {
             s3Client.putObject(request, RequestBody.fromFile(file));
             log.info("Stored checkpoint Parquet: key={}, size={}", s3Key, size);
             return s3Key;
-        } catch (S3Exception | IOException e) {
+            // RequestBody.fromFile opens the file lazily, wrapping a read failure in an
+            // UncheckedIOException: convert it too, so every failure of this upload reaches the
+            // caller as one type. CheckpointService reads the type to tell a table-level failure
+            // from local-disk trouble, and an S3-side failure must not pass for the latter.
+        } catch (S3Exception | IOException | UncheckedIOException e) {
             throw new CheckpointStorageException("Failed to store checkpoint Parquet: " + s3Key, e);
         }
     }

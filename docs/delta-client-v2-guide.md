@@ -578,13 +578,21 @@ You don't write these — they're how downstream tools read your data:
   `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB) govern that file; a table that would cross the
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
-  the declared schema cannot render. A local-disk failure (the scratch directory gone, full or
-  read-only) is **not** treated as a table-level skip: it aborts the build with the checkpoint
-  pointer where it was, because detaching every table's snapshot key would leave the site with no
-  downloadable checkpoint until fresh segments arrive. What this bounds is materialization, not
-  reconstruction: **the fold is still in heap**, and so is the new frame the build serializes at the
-  end (one all-tables copy — issue #126). `delta.checkpoint.duration{phase=fold}` is the number to
-  watch on a very large site.
+  the declared schema cannot render. An **unusable scratch directory** (missing, read-only, out of
+  inodes) is the one failure that is not a table-level skip: it would hit every table alike, and
+  detaching every snapshot key while the pointer advanced would leave the site with no downloadable
+  checkpoint until fresh segments arrive, so the build aborts with the pointer where it was and the
+  next run redoes it (`CheckpointScheduler` catches per site, so the sweep continues). An aborted
+  build can leave tables split across two seqs — those already written carry the new seq, the rest
+  the previous one — until the next successful build re-materializes all of them; the per-table rows
+  were never written atomically, so a consumer that needs one consistent instant should compare the
+  `seq` of the tables it downloads. What all of this bounds is materialization, not reconstruction:
+  **the fold is still in heap**, and so is the new frame the build serializes at the end (one
+  all-tables copy — issue #126). `delta.checkpoint.duration{phase=fold}` is the number to watch on a
+  very large site. Sizing note: `DELTA_CHECKPOINT_MAX_TEMP_BYTES` and
+  `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` both default to 10 GiB and, unless `*_TEMP_DIR` is pointed
+  elsewhere, both spend it in the container's writable layer, which declares no `ephemeral-storage`
+  request — mount a volume or lower the ceilings before a site's snapshot approaches them.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
@@ -1035,7 +1043,10 @@ flushing it, so with file-backed writers this value, times the number of writers
 what bounds a build's memory: a batch claim opens one writer per claimed table, and parquet-mr's
 own default (~128 MB) multiplied that way does not fit a 2–3 Gi pod. It is a **memory ceiling, not
 a compression knob** — lowering it costs a little compression ratio and adds row-group metadata,
-raising it buys nothing but risk. Raise it only with the pod's heap raised alongside.
+raising it buys nothing but risk. Raise it only with the pod's heap raised alongside. The
+per-segment egress writer renders its (seal-bounded, ≤ 16 MiB of records) file in memory, so there
+the budget bounds only the encoder's own buffer; it takes the same key deliberately, because all
+three writers share one pod's heap and one tuning decision.
 
 Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream
 `read` and `decode` is protobuf parse excluding the record consumer. On **egress**,

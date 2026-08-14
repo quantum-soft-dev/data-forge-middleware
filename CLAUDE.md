@@ -466,10 +466,12 @@ pages/{feature}/            # Route pages
   goes through the same `FileOutputFile` the batch writer uses, and
   `S3CheckpointStorage.uploadParquet` takes that `Path` instead of a `byte[]`. `CheckpointService`
   runs write → upload → delete per table, so one row-group buffer and one scratch file exist at a
-  time and the peak of *materialization* stops scaling with the table count. A local-disk failure
-  (scratch directory gone, full, read-only) aborts the build instead of being counted as a
-  table-level skip: skipping would detach every snapshot key while the pointer advanced, and a
-  forced rebuild cannot restore them (a build with no new segments returns early). **The site fold
+  time and the peak of *materialization* stops scaling with the table count. An **unusable scratch
+  directory** (missing, read-only, out of inodes) aborts the build instead of being counted as a
+  table-level skip — it would hit every table alike, and skipping would detach every snapshot key
+  while the pointer advanced, which a forced rebuild cannot undo (a build with no new segments
+  returns early, tracked as #128). A failure *during* a write stays a per-table skip, so one
+  oversized or unrenderable table still cannot freeze the pointer and stop retention. **The site fold
   stays in heap, and so does the all-tables frame the build serializes at the end** — off-heap
   folding and streaming the frame (#126) are deliberately separate tickets, and
   `delta.checkpoint.duration{phase=fold}` is the meter that shows when it starts to matter. New keys: `delta.parquet.row-group-bytes`

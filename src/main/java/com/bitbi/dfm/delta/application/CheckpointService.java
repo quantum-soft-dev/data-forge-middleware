@@ -194,13 +194,6 @@ public class CheckpointService {
                     metrics.timeCheckpointPhase("upload", () ->
                             checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                     siteId, tableName, seq, snapshot)));
-                } catch (UncheckedIOException e) {
-                    // Local-disk trouble is not this table's data. Skipping per table would detach
-                    // every table's snapshot key while the pointer advanced, and nothing could put
-                    // them back: a build with no new segments returns early, so even a forced
-                    // rebuild is a no-op. Abort with the pointer where it is and redo it next run.
-                    deleteQuietly(snapshot, tableName, siteId);
-                    throw e;
                 } catch (RuntimeException e) {
                     // The row's seq and rowCount advance regardless (the fold succeeded), so the
                     // previous build's key would now sit beside a newer seq and be served as its
@@ -250,9 +243,16 @@ public class CheckpointService {
     }
 
     /**
-     * Create this table's scratch file. A failure here is systemic (the scratch directory is gone,
-     * full or read-only), never a fact about the table, so it fails the build instead of being
-     * counted as one table's skip.
+     * Create this table's scratch file. A failure here says the scratch directory itself is
+     * unusable (gone, read-only, out of inodes) — it is not a fact about this table and it would
+     * hit every table of every site alike. Skipping per table would detach every snapshot key while
+     * {@code recordCheckpoint} still advanced the pointer, and nothing could put them back: the
+     * next build sees no new segments and returns early, so even a forced rebuild is a no-op.
+     * Fail the build instead, leaving the pointer where it was so the next run redoes everything;
+     * {@code CheckpointScheduler} catches per site, so one site's failure does not stop the sweep.
+     *
+     * <p>A failure <em>during</em> the write stays a per-table skip (the general catch above), so a
+     * single oversized or unrenderable table cannot freeze the pointer and stop retention.</p>
      */
     private Path createScratchFile(UUID siteId) {
         try {

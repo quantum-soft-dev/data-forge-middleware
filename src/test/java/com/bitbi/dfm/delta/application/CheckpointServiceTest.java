@@ -323,10 +323,12 @@ class CheckpointServiceTest {
 
     @Test
     void abortsTheBuildWhenTheScratchDirectoryCannotHoldASnapshot() throws IOException {
-        // Local-disk trouble is not this table's data. Counting it as a per-table skip would detach
-        // every table's snapshot key while the pointer still advanced, and nothing could restore
-        // them: a build with no new segments returns early, so even a forced rebuild is a no-op.
-        // Abort instead — the pointer stays put and the next run redoes the whole build.
+        // An unusable scratch directory is not this table's data — it would hit every table of
+        // every site alike. Counting it as a per-table skip would detach every snapshot key while
+        // the pointer still advanced, and nothing could restore them: a build with no new segments
+        // returns early, so even a forced rebuild is a no-op. Abort instead — the pointer stays put
+        // and the next run redoes the whole build. (A failure during the write stays a skip: see
+        // skipsOnlyTheTableThatCrossesTheLocalFileCeiling.)
         Path readOnly = Files.createDirectory(tempDirectory.resolve("read-only"));
         org.junit.jupiter.api.Assumptions.assumeTrue(
                 readOnly.toFile().setWritable(false) && !Files.isWritable(readOnly),
