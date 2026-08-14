@@ -80,6 +80,17 @@ public interface BatchParquetArtifactRepository {
                                                       int maxAttempts);
 
     /**
+     * Cheap probe for the work {@link #abandonExpiredClaims} would do. A worker polls the queue
+     * far more often than a claim actually dies, and taking the catalog lock plus a watermark row
+     * update to discover "nothing to settle" serializes every idle poll on one cluster-wide lock
+     * and writes a dead tuple into a single-row table. Reading the same predicate first costs one
+     * index probe and lets the settle transaction start only when it has something to stamp.
+     *
+     * @return true when at least one row would be moved to {@code ABANDONED}
+     */
+    boolean hasSpentExpiredClaims(LocalDateTime now, int leaseSeconds, int maxAttempts);
+
+    /**
      * Settle expired claims whose owners never returned and whose attempt budget is spent.
      *
      * @return number of rows moved to {@code ABANDONED}

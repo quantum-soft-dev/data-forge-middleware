@@ -738,12 +738,53 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void idlePollTakesNeitherTheCatalogLockNorTheWatermark() {
+        when(artifactRepository.hasSpentExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7)))
+                .thenReturn(false);
+
+        assertFalse(newService(7).finalizeNext());
+
+        verify(artifactRepository).hasSpentExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7));
+        verify(artifactRepository, never()).lockCatalogPublish();
+        verify(artifactRepository, never()).nextCatalogWatermark();
+        verify(artifactRepository, never()).abandonExpiredClaims(
+                any(LocalDateTime.class), any(LocalDateTime.class), anyInt(), anyInt(), any());
+    }
+
+    @Test
+    void aPollThatFindsWorkStillLeavesTheWatermarkToThePublicationItself() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact retryable = claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(artifactRepository.hasSpentExpiredClaims(any(LocalDateTime.class), anyInt(), anyInt()))
+                .thenReturn(false);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(newService(7).finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, retryable.getStatus());
+        verify(artifactRepository, never()).abandonExpiredClaims(
+                any(LocalDateTime.class), any(LocalDateTime.class), anyInt(), anyInt(), any());
+        // publish() owns the one lock/watermark pair a productive poll is allowed to pay for.
+        verify(artifactRepository, times(1)).lockCatalogPublish();
+        verify(artifactRepository, times(1)).nextCatalogWatermark();
+    }
+
+    @Test
     void bulkSettlesSpentClaimsWithoutHidingRetryableWorkBehindThem() {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
         BatchParquetArtifact retryable = claimable(batchId, siteId, "orders");
         ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
                 Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(artifactRepository.hasSpentExpiredClaims(any(LocalDateTime.class), eq(1800), eq(7)))
+                .thenReturn(true);
         when(artifactRepository.abandonExpiredClaims(any(LocalDateTime.class), any(LocalDateTime.class),
                 eq(1800), eq(7), any()))
                 .thenReturn(17);
@@ -757,6 +798,9 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(BatchParquetArtifactStatus.READY, retryable.getStatus());
         InOrder settleOrder = inOrder(artifactRepository);
+        // The probe decides; the lock and the watermark are only paid for once it says yes.
+        settleOrder.verify(artifactRepository).hasSpentExpiredClaims(
+                any(LocalDateTime.class), eq(1800), eq(7));
         settleOrder.verify(artifactRepository).lockCatalogPublish();
         settleOrder.verify(artifactRepository).nextCatalogWatermark();
         settleOrder.verify(artifactRepository).abandonExpiredClaims(

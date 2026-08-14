@@ -89,6 +89,16 @@ without hiding live work behind a fixed scan window. Without that, an artifact w
 kills its process would be re-claimed every lease forever — `attempt_count` growing without bound,
 the ERROR never logged, and the download answering `409 "still finalizing"` for the life of the site.
 
+That settlement stamps `updated_at` from the catalog watermark under the catalog publish lock, so an
+`ABANDONED` row stays ordered against the `READY` rows a peer is publishing — the `since` guarantee
+the Parquet Export catalog rests on. Both are cluster-wide costs — one advisory lock every worker queues on
+and one write to a single-row table — while a claim actually dying is rare and the settle step runs
+on every drain iteration of every worker on every replica. The predicate is therefore **read first**,
+outside any lock, over the existing partial claim index; only a non-empty answer opens the settle
+transaction (115). An idle poll costs one index probe. Losing the race to a peer that settles the row
+in between costs one wasted watermark tick and never a missed settlement: the row stays claimable
+until some transaction actually stamps it.
+
 `delta.batch-parquet.max-temp-bytes` is enforced by the file output stream while Parquet is written,
 not after a complete oversized file has consumed the disk budget. Crossing it is deterministic for
 the same input and is therefore `ABANDONED` on the first attempt instead of rewritten up to seven

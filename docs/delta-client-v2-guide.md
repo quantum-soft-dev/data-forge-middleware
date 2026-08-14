@@ -598,7 +598,9 @@ backfilled — its artifact would be missing everything it seals afterwards.
 Pre-V32 segments whose per-table `stats` are null are also backfillable: the server discovers their
 tables from the raw records and omits only the unavailable expected-row-count check. Expired claims
 that have already spent their attempts are bulk-abandoned before the retry query, so they cannot
-delay live work until another sweep.
+delay live work until another sweep. That settlement is guarded by a cheap index probe, so the
+common case — nothing to abandon — costs one read instead of a cluster-wide advisory lock and a
+catalog-watermark write on every poll of every worker.
 
 ## Upload History (dashboard) shows per-table stats, not files
 
