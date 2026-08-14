@@ -32,6 +32,6 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T13 — Monotonic catalog watermark.** Stamp READY/ABANDONED with
   `GREATEST(previous + 1µs, clock_timestamp())` under the publish lock.
 - [x] **T14 — Seq range on abandon.** Pass the known table range into `markAbandoned`.
-- [ ] **T15 — Abandoned index expression.** Match `'abandoned/' || id::text` and drop
+- [x] **T15 — Abandoned index expression.** Match `'abandoned/' || id::text` and drop
   leading `site_id` so all-sites listing can use the index.
 - [ ] **T16 — FR-008.** Spec must not describe the removed LATERAL fallback.

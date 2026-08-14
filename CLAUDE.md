@@ -464,7 +464,7 @@ pages/{feature}/            # Route pages
   sibling. Abandoned rows have `status=abandoned`,
   `artifactId` for admin requeue, and no download URL. V51 adds nullable
   `first_seq`/`last_seq` (writer-filled; kept on abandon; catalog never live-queries segments)
-  and partial catalog indexes for READY `(ready_at, s3_key)` / ABANDONED `(updated_at, abandoned/id)`.
+  and partial catalog indexes for READY `(ready_at, s3_key)` / ABANDONED `(updated_at, 'abandoned/'||id)`.
   No owner/admin delta, gRPC, S3-key, or frontend
   change. See `docs/parquet-export-plugin-guide.md`, `docs/cr-unified-batch-parquet.md`,
   `specs/041-parquet-export-batch-files/`.

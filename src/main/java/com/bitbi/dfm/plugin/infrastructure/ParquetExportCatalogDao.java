@@ -101,8 +101,8 @@ public class ParquetExportCatalogDao {
     /**
      * Ready and abandoned completed-batch Parquet artifacts, ordered by
      * {@code (produced_at, s3_key)}. Each status is a limited UNION ALL branch so the
-     * {@code READY} index {@code (site_id, ready_at, s3_key)} and the {@code ABANDONED}
-     * index {@code (site_id, updated_at, abandoned/id)} can serve the page.
+     * {@code READY} index {@code (ready_at, s3_key)} and the {@code ABANDONED}
+     * index {@code (updated_at, 'abandoned/' || id)} can serve the page.
      */
     public List<CatalogRow> findBatchFiles(UUID accountId, LocalDateTime since, UUID siteId,
                                            String table, LocalDateTime cursorAt, String cursorKey,

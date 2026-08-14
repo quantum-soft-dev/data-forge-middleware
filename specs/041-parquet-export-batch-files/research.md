@@ -77,11 +77,13 @@
 
 ## Decision: V51 catalog indexes match UNION ALL branches
 
-- **Decision**: two partial indexes — `(site_id, ready_at, s3_key) WHERE status='READY'` and
-  `(site_id, updated_at, COALESCE(s3_key, 'abandoned/'||id)) WHERE status='ABANDONED'`.
+- **Decision**: two partial indexes — `(ready_at, s3_key) WHERE status='READY'` and
+  `(updated_at, ('abandoned/' || id::text)) WHERE status='ABANDONED'`.
   `findBatchFiles` is `UNION ALL` of those branches, each limited, then merged by
   `(produced_at, s3_key)`.
-- **Rationale**: a single btree on raw `(site_id, ready_at, s3_key)` cannot serve the mixed
-  CASE/COALESCE order. After splitting statuses, each branch uses its own columns.
+- **Rationale**: a leading `site_id` cannot serve the default all-sites listing, and
+  `COALESCE(s3_key, 'abandoned/'||id)` is not the same expression as the DAO
+  `'abandoned/' || id::text`. After splitting statuses, each branch uses its own columns.
 - **Alternatives considered**: one expression index on the CASE/COALESCE (matches a single
-  mixed query, unused after UNION ALL); keep the mixed scan (sorts the whole account).
+  mixed query, unused after UNION ALL); keep the mixed scan (sorts the whole account);
+  lead with `site_id` (only helps `?siteId=`).

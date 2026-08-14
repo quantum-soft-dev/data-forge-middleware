@@ -14,16 +14,16 @@ ALTER TABLE batch_parquet_artifacts
     );
 
 -- Catalog listing is UNION ALL of READY (ready_at, s3_key) and ABANDONED
--- (updated_at, synthetic abandoned/{id}). Partial indexes match each branch.
+-- (updated_at, 'abandoned/' || id). Indexes match those ORDER BY expressions
+-- without a leading site_id so the default all-sites account listing can use them.
 CREATE INDEX idx_batch_parquet_artifacts_catalog_ready
-    ON batch_parquet_artifacts (site_id, ready_at, s3_key)
+    ON batch_parquet_artifacts (ready_at, s3_key)
     WHERE status = 'READY';
 
 CREATE INDEX idx_batch_parquet_artifacts_catalog_abandoned
     ON batch_parquet_artifacts (
-        site_id,
         updated_at,
-        (COALESCE(s3_key, 'abandoned/' || id::text))
+        (('abandoned/' || id::text))
     )
     WHERE status = 'ABANDONED';
 
