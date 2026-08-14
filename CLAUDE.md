@@ -460,7 +460,8 @@ pages/{feature}/            # Route pages
   now batch-only — **existing clients that still read per-segment files must add `type=delta`**.
   Sort/`since` use `ready_at` (or `updated_at` for abandoned) so a late or requeued artifact
   reappears; those timestamps are stamped under a short advisory lock so a slow commit cannot
-  land earlier than a sibling already visible. Abandoned rows have `status=abandoned` and no download URL. V51 adds nullable
+  land earlier than a sibling already visible. Abandoned rows have `status=abandoned`,
+  `artifactId` for admin requeue, and no download URL. V51 adds nullable
   `first_seq`/`last_seq` (writer-filled; kept on abandon; catalog never live-queries segments)
   and index `(site_id, ready_at, s3_key)`. No owner/admin delta, gRPC, S3-key, or frontend
   change. See `docs/parquet-export-plugin-guide.md`, `docs/cr-unified-batch-parquet.md`,

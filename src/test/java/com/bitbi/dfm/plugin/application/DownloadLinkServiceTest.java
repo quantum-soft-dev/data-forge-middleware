@@ -70,14 +70,14 @@ class DownloadLinkServiceTest {
         return new ParquetFileItem(SITE_ID, "shop.example.com", table, FileType.DELTA,
                 1L, 2L, null, LocalDateTime.of(2026, 7, 20, 10, 0),
                 table + "_seq1-2.parquet", "egress/" + SITE_ID + "/" + table + "/delta/seq=1-2.parquet",
-                null, null);
+                null, null, null);
     }
 
     private ParquetFileItem abandonedBatchItem() {
         return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.BATCH,
                 1L, 2L, null, LocalDateTime.of(2026, 7, 20, 10, 0),
                 "orders_batch" + UUID.randomUUID() + ".parquet", null,
-                UUID.randomUUID(), "abandoned");
+                UUID.randomUUID(), "abandoned", UUID.randomUUID());
     }
 
     @Nested

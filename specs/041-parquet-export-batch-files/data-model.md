@@ -22,7 +22,8 @@ CatalogRow(
   firstSeq, lastSeq, seq,
   producedAt, s3Key,
   batchId,          -- set for BATCH, null otherwise
-  status            -- "ready" | "abandoned" for BATCH, null otherwise
+  status,           -- "ready" | "abandoned" for BATCH, null otherwise
+  artifactId        -- set for BATCH, null otherwise
 )
 ```
 
@@ -43,6 +44,7 @@ Existing `ParquetFileResponseDto` plus:
 |---|---|---|---|
 | `type` | `batch` | `batch` | `delta` / `checkpoint` |
 | `batchId` | uuid | uuid | null |
+| `artifactId` | uuid | uuid | null |
 | `status` | `ready` | `abandoned` | null |
 | `firstSeq` / `lastSeq` | range | range | delta: segment range; checkpoint: null |
 | `seq` | null | null | checkpoint only |

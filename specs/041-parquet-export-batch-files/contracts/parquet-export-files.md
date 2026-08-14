@@ -23,6 +23,7 @@ Breaking change: omitted `type` lists **batch artifacts only**.
   "table": "orders",
   "type": "batch",
   "batchId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "artifactId": "0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   "status": "ready",
   "firstSeq": 100,
   "lastSeq": 250,

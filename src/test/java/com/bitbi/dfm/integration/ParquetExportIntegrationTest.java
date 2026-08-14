@@ -302,7 +302,8 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
     @DisplayName("Should list a READY batch artifact by ready_at and hide intermediate statuses")
     void shouldListReadyBatchArtifactByReadyAt() throws Exception {
         UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
-        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "READY",
+        UUID artifactId = UUID.fromString("0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        insertArtifact(artifactId, batchId, SITE_STORE_01, "orders", "READY",
                 "egress/orders.parquet", 100L, 250L,
                 "2026-07-27 10:16:00", "2026-07-27 10:16:00");
         insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "pending_tbl", "PENDING",
@@ -315,6 +316,7 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.files[0].type").value("batch"))
                 .andExpect(jsonPath("$.files[0].status").value("ready"))
                 .andExpect(jsonPath("$.files[0].batchId").value(batchId.toString()))
+                .andExpect(jsonPath("$.files[0].artifactId").value(artifactId.toString()))
                 .andExpect(jsonPath("$.files[0].firstSeq").value(100))
                 .andExpect(jsonPath("$.files[0].lastSeq").value(250))
                 .andExpect(jsonPath("$.files[0].fileName").value("orders_batch" + batchId + ".parquet"))

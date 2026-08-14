@@ -110,7 +110,7 @@ becomes `READY`, must appear in the next sweep.
   is omitted, queries only batch artifacts.
 - **FR-002**: Batch rows come from `batch_parquet_artifacts` with status `READY` or `ABANDONED`.
 - **FR-003**: Sort and `since` use `ready_at` for `READY` and `updated_at` for `ABANDONED`.
-- **FR-004**: Response adds `batchId` and `status` (`ready` | `abandoned`). `seq` is null.
+- **FR-004**: Response adds `batchId`, `artifactId` and `status` (`ready` | `abandoned`). `seq` is null.
 - **FR-005**: `READY` rows get a one-time download link. `ABANDONED` rows do not.
 - **FR-006**: Filename is `{table}_batch{batchId}.parquet`.
 - **FR-007**: V51 adds nullable `first_seq`/`last_seq` and index `(site_id, ready_at, s3_key)`.

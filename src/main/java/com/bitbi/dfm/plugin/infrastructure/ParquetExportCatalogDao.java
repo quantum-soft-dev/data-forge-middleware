@@ -22,11 +22,11 @@ import java.util.UUID;
 @Repository
 public class ParquetExportCatalogDao {
 
-    /** One catalog row. Batch rows set {@code batchId}/{@code status}; others leave them null. */
+    /** One catalog row. Batch rows set {@code batchId}/{@code status}/{@code artifactId}. */
     public record CatalogRow(UUID siteId, String siteDomain, String table, FileType type,
                              Long firstSeq, Long lastSeq, Long seq,
                              LocalDateTime producedAt, String s3Key,
-                             UUID batchId, String status) {
+                             UUID batchId, String status, UUID artifactId) {
     }
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -66,7 +66,7 @@ public class ParquetExportCatalogDao {
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.DELTA, rs.getLong("first_seq"), rs.getLong("last_seq"), null,
                 rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
-                null, null));
+                null, null, null));
     }
 
     /**
@@ -95,7 +95,7 @@ public class ParquetExportCatalogDao {
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.CHECKPOINT, null, null, rs.getLong("seq"),
                 rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
-                null, null));
+                null, null, null));
     }
 
     /**
@@ -107,11 +107,11 @@ public class ParquetExportCatalogDao {
                                            String table, LocalDateTime cursorAt, String cursorKey,
                                            int limit) {
         StringBuilder sql = new StringBuilder("""
-                SELECT f.site_id, f.domain, f.table_name, f.batch_id, f.status,
+                SELECT f.site_id, f.domain, f.table_name, f.batch_id, f.status, f.artifact_id,
                        f.first_seq, f.last_seq, f.produced_at, f.s3_key
                 FROM (
                     SELECT a.site_id, st.domain, a.table_name, a.batch_id,
-                           LOWER(a.status) AS status,
+                           LOWER(a.status) AS status, a.id AS artifact_id,
                            a.first_seq, a.last_seq,
                            CASE WHEN a.status = 'READY' THEN a.ready_at ELSE a.updated_at END AS produced_at,
                            COALESCE(a.s3_key, 'abandoned/' || a.id::text) AS s3_key
@@ -132,7 +132,8 @@ public class ParquetExportCatalogDao {
                 rs.getObject("site_id", UUID.class), rs.getString("domain"), rs.getString("table_name"),
                 FileType.BATCH, rs.getObject("first_seq", Long.class), rs.getObject("last_seq", Long.class),
                 null, rs.getTimestamp("produced_at").toLocalDateTime(), rs.getString("s3_key"),
-                rs.getObject("batch_id", UUID.class), rs.getString("status")));
+                rs.getObject("batch_id", UUID.class), rs.getString("status"),
+                rs.getObject("artifact_id", UUID.class)));
     }
 
     private static MapSqlParameterSource baseParams(UUID accountId, LocalDateTime since, int limit) {

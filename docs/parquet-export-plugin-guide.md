@@ -100,6 +100,7 @@ Response (one entry per file; a fresh one-time link is registered per **download
       "siteId": "…", "siteDomain": "shop.example.com",
       "table": "orders", "type": "batch",
       "batchId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "artifactId": "0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       "status": "ready",
       "firstSeq": 100, "lastSeq": 250, "seq": null,
       "producedAt": "2026-07-27T10:16:00",
@@ -112,10 +113,11 @@ Response (one entry per file; a fresh one-time link is registered per **download
 }
 ```
 
-Batch rows also carry `batchId` and `status` (`ready` or `abandoned`). An `abandoned` table
-exhausted its build attempts: `downloadUrl` and `linkExpiresAt` are null and no
-`download_links` row is created. Alert and ask an operator to
-`POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue`.
+Batch rows also carry `batchId`, `artifactId` and `status` (`ready` or `abandoned`). An
+`abandoned` table exhausted its build attempts: `downloadUrl` and `linkExpiresAt` are null
+and no `download_links` row is created. Alert and ask an operator to
+`POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue`
+using the `artifactId` from this listing.
 `PENDING` / `BUILDING` / `FAILED` rows are omitted; they appear later as `ready` (or
 `abandoned`).
 

@@ -80,14 +80,16 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
         return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.DELTA,
                 100L, 250L, null, PRODUCED_AT, "orders_seq100-250.parquet",
                 "egress/" + SITE_ID + "/orders/delta/seq=100-250.parquet",
-                null, null);
+                null, null, null);
     }
+
+    private static final UUID ARTIFACT_ID = UUID.fromString("0195aaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 
     private ParquetFileItem batchItem(String status, String s3Key) {
         UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
         return new ParquetFileItem(SITE_ID, "shop.example.com", "orders", FileType.BATCH,
                 100L, 250L, null, PRODUCED_AT, "orders_batch" + batchId + ".parquet",
-                s3Key, batchId, status);
+                s3Key, batchId, status, ARTIFACT_ID);
     }
 
     @Test
@@ -141,6 +143,7 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.files[0].type").value("batch"))
                 .andExpect(jsonPath("$.files[0].batchId").value(item.batchId().toString()))
+                .andExpect(jsonPath("$.files[0].artifactId").value(ARTIFACT_ID.toString()))
                 .andExpect(jsonPath("$.files[0].status").value("ready"))
                 .andExpect(jsonPath("$.files[0].fileName").value(item.fileName()))
                 .andExpect(jsonPath("$.files[0].downloadUrl",
@@ -162,6 +165,7 @@ class ParquetExportFilesContractTest extends BaseIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.files[0].type").value("batch"))
                 .andExpect(jsonPath("$.files[0].status").value("abandoned"))
+                .andExpect(jsonPath("$.files[0].artifactId").value(ARTIFACT_ID.toString()))
                 .andExpect(jsonPath("$.files[0].downloadUrl").value(nullValue()))
                 .andExpect(jsonPath("$.files[0].linkExpiresAt").value(nullValue()));
     }
