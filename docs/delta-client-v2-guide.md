@@ -804,8 +804,9 @@ an interrupted publication or cleanup. This is correctness, not housekeeping: re
 derived from sequence numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe
 sends those numbers back to zero. A listing failure is logged and the wipe still reports success
 because the database rows are already gone; so is a delete phase that fails outright, which reports
-every key it was handed as `s3DeleteErrors`. Re-running a wipe is safe and is how those orphans get
-swept. Ordinary batch retention and explicit admin batch deletion likewise remove
+every key it was handed as `s3DeleteErrors`. Treat that count as a floor rather than a census — a
+whole failed 1000-key delete batch is recorded as one entry (#123). Any non-zero value means the
+same thing: orphans remain, and re-running a wipe is safe and is how they get swept. Ordinary batch retention and explicit admin batch deletion likewise remove
 the unified manifest rows, preserve recorded/legacy exact-key fallbacks, and paginate the complete
 batch prefix so a process-death attempt with no published metadata is still found. Explicit admin
 deletion defers prefix enumeration and object removal until its database transaction commits.

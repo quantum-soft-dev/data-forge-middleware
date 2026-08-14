@@ -469,11 +469,14 @@ pages/{feature}/            # Route pages
   recorded keys; the final key list is de-duplicated. The S3 phase also stops throwing: it now issues
   one round trip per thousand keys, and a client-side failure escaping `deleteObjects` would report a
   committed wipe as a 500, so it is caught and every key handed over is reported as
-  `s3DeleteErrors`. `S3CheckpointStorage.checkpointPrefix(siteId)` joins `egressPrefix`. No API
-  shape, DTO, migration, configuration or frontend change. Follow-up #122: the walk has no
-  `lastModified` cut-off, so a concurrent post-commit build's object can be swept (true for
-  `egress/` since 036). See `docs/delta-client-v2-guide.md` ("Site history wipe and the generation
-  epoch").
+  `s3DeleteErrors` — a floor, not a census, since a failed 1000-key batch counts as one.
+  `S3CheckpointStorage.checkpointPrefix(siteId)` joins `egressPrefix`. No API
+  shape, DTO, migration, configuration or frontend change. Follow-ups from review: #122 (the walk has
+  no `lastModified` cut-off, so a concurrent post-commit build's object — and, worse for checkpoints,
+  the frame its restored pointer names — can be swept; true for `egress/` since 036), #123 (a prefix
+  that could not be listed at all, and a failed delete batch, are both under-reported in the wipe
+  response), #124 (a mid-pagination listing failure discards the pages already read). See
+  `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
 - checkpoint-csv-removal: The V2 checkpoint build stopped writing `snapshot.csv.gz` (issue #113).
   Only the typed Parquet is materialized, so a build no longer copies the whole folded state into a
   second row representation (`ValueMapper`) and gzips it into an on-heap `byte[]`. A table with no

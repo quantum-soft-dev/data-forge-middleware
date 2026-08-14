@@ -191,9 +191,14 @@ public class DeltaSiteWipeService {
      * {@code S3Exception}, not a subclass — and escapes it. Rare per call, but this phase now issues
      * one round trip per thousand keys, and a wiped site's checkpoint prefix can be thousands.</p>
      *
+     * <p>The number returned is a floor, not a census: {@link S3FileStorageService#deleteObjects}
+     * records a whole failed 1000-key batch as one entry, so a bucket-level denial can leave far more
+     * behind than it reports. Any non-zero value means the same thing regardless — orphans remain,
+     * and re-running the wipe is safe and is what sweeps them (issue #123).</p>
+     *
      * @param siteId  the site being wiped, for the log line
      * @param objects the keys to delete, already de-duplicated
-     * @return how many objects were left behind
+     * @return how many objects are known to have been left behind
      */
     private int deleteObjects(UUID siteId, List<String> objects) {
         try {
@@ -205,7 +210,7 @@ public class DeltaSiteWipeService {
             return deleted.errors().size();
         } catch (RuntimeException e) {
             // Nothing is known about how far the phase got, so every key it was given counts as
-            // possibly left behind — the honest upper bound, and the caller's cue to run it again.
+            // possibly left behind — and the caller's cue to run it again.
             log.warn("Site history wipe could not complete the S3 phase for site {}; up to {} "
                     + "object(s) are left as orphans — the rows are already gone, so re-running the "
                     + "wipe is safe and is how they get swept", siteId, objects.size(), e);
