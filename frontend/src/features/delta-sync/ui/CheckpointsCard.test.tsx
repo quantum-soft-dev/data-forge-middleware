@@ -11,7 +11,6 @@ function checkpoint(partial: Partial<DeltaCheckpoint> & { table: string }): Delt
     seq: 4821,
     rowCount: 1_204_500,
     updatedAt: '2026-07-05T09:00:00Z',
-    hasCsv: true,
     hasParquet: true,
     ...partial,
   }
@@ -20,7 +19,7 @@ function checkpoint(partial: Partial<DeltaCheckpoint> & { table: string }): Delt
 const checkpoints: DeltaCheckpoint[] = [
   checkpoint({ table: 'orders' }),
   checkpoint({ table: 'customers', hasParquet: false }),
-  checkpoint({ table: 'inventory', hasCsv: false, hasParquet: false, rowCount: 12 }),
+  checkpoint({ table: 'inventory', hasParquet: false, rowCount: 12 }),
   checkpoint({ table: 'payments', updatedAt: '2026-07-03T09:00:00Z' }), // stale (>24h)
 ]
 
@@ -46,25 +45,24 @@ describe('CheckpointsCard (F7)', () => {
     expect(within(screen.getByTestId('checkpoint-row-orders')).queryByText('stale')).not.toBeInTheDocument()
   })
 
-  it('renders file pills per D1: Parquet primary, dashed pending, muted legacy CSV, em-dash', () => {
+  it('offers Parquet alone, with a dashed pending pill when it is not materialized', () => {
+    // Issue #113: the checkpoint build no longer writes a CSV snapshot, so there is one
+    // downloadable format and nothing to fall back on while Parquet is missing.
     render(
       <CheckpointsCard checkpoints={checkpoints} canManage={false} onDownload={vi.fn()} now={NOW} />,
     )
 
     const orders = screen.getByTestId('checkpoint-row-orders')
     expect(within(orders).getByRole('button', { name: 'Parquet' })).toBeInTheDocument()
-    expect(within(orders).getByRole('button', { name: 'CSV' })).toHaveAttribute('title', 'Legacy · used by Bit BI')
+    expect(within(orders).queryByRole('button', { name: 'CSV' })).not.toBeInTheDocument()
 
     const customers = screen.getByTestId('checkpoint-row-customers')
     const pending = within(customers).getByText('Parquet pending')
     expect(pending.tagName).not.toBe('BUTTON')
     expect(pending).toHaveAttribute('title', 'Full Parquet snapshot has not been materialized yet')
-
-    const inventory = screen.getByTestId('checkpoint-row-inventory')
-    expect(within(inventory).getByText('—')).toBeInTheDocument()
   })
 
-  it('requests a download with the clicked format', async () => {
+  it('requests a Parquet download for the clicked table', async () => {
     const onDownload = vi.fn()
     render(
       <CheckpointsCard checkpoints={checkpoints} canManage={false} onDownload={onDownload} now={NOW} />,
@@ -72,9 +70,6 @@ describe('CheckpointsCard (F7)', () => {
 
     await userEvent.click(within(screen.getByTestId('checkpoint-row-orders')).getByRole('button', { name: 'Parquet' }))
     expect(onDownload).toHaveBeenCalledWith('orders', 'parquet')
-
-    await userEvent.click(within(screen.getByTestId('checkpoint-row-customers')).getByRole('button', { name: 'CSV' }))
-    expect(onDownload).toHaveBeenCalledWith('customers', 'csv')
   })
 
   it('switches to the cards view with the relative-weight bar', async () => {
@@ -84,7 +79,8 @@ describe('CheckpointsCard (F7)', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: /cards/i }))
     const cards = screen.getByTestId('checkpoints-cards-view')
-    expect(within(cards).getByText('no files yet')).toBeInTheDocument()
+    // One per table without a materialized Parquet — customers and inventory here.
+    expect(within(cards).getAllByText('no files yet')).toHaveLength(2)
   })
 
   it('shows the rebuild button only for canManage and disables it while queued', () => {
