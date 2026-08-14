@@ -466,9 +466,13 @@ pages/{feature}/            # Route pages
   goes through the same `FileOutputFile` the batch writer uses, and
   `S3CheckpointStorage.uploadParquet` takes that `Path` instead of a `byte[]`. `CheckpointService`
   runs write → upload → delete per table, so one row-group buffer and one scratch file exist at a
-  time and the peak stops scaling with the table count. **The site fold stays in heap** — off-heap
-  folding is deliberately a separate future ticket, and `delta.checkpoint.duration{phase=fold}` is
-  the meter that shows when it starts to matter. New keys: `delta.parquet.row-group-bytes`
+  time and the peak of *materialization* stops scaling with the table count. A local-disk failure
+  (scratch directory gone, full, read-only) aborts the build instead of being counted as a
+  table-level skip: skipping would detach every snapshot key while the pointer advanced, and a
+  forced rebuild cannot restore them (a build with no new segments returns early). **The site fold
+  stays in heap, and so does the all-tables frame the build serializes at the end** — off-heap
+  folding and streaming the frame (#126) are deliberately separate tickets, and
+  `delta.checkpoint.duration{phase=fold}` is the meter that shows when it starts to matter. New keys: `delta.parquet.row-group-bytes`
   (`DELTA_PARQUET_ROW_GROUP_BYTES`, default **8 MiB**) applied at all four `AvroParquetWriter`
   builders — one budget for the checkpoint, egress and batch paths, since they share one pod's heap;
   `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes` (`DELTA_CHECKPOINT_TEMP_DIR`,

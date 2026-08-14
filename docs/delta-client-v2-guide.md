@@ -578,8 +578,12 @@ You don't write these — they're how downstream tools read your data:
   `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB) govern that file; a table that would cross the
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
-  the declared schema cannot render. The **fold itself is still in heap** — this bounds
-  materialization, not reconstruction, so `delta.checkpoint.duration{phase=fold}` is the number to
+  the declared schema cannot render. A local-disk failure (the scratch directory gone, full or
+  read-only) is **not** treated as a table-level skip: it aborts the build with the checkpoint
+  pointer where it was, because detaching every table's snapshot key would leave the site with no
+  downloadable checkpoint until fresh segments arrive. What this bounds is materialization, not
+  reconstruction: **the fold is still in heap**, and so is the new frame the build serializes at the
+  end (one all-tables copy — issue #126). `delta.checkpoint.duration{phase=fold}` is the number to
   watch on a very large site.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,

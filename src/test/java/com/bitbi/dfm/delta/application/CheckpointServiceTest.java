@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -318,6 +319,49 @@ class CheckpointServiceTest {
         assertEquals(2, uploaded.size(), "both tables uploaded");
         assertTrue(uploaded.stream().allMatch(snapshot -> snapshot.snapshotsOnDisk() == 1),
                 "at most one table snapshot may exist on disk at any moment");
+    }
+
+    @Test
+    void abortsTheBuildWhenTheScratchDirectoryCannotHoldASnapshot() throws IOException {
+        // Local-disk trouble is not this table's data. Counting it as a per-table skip would detach
+        // every table's snapshot key while the pointer still advanced, and nothing could restore
+        // them: a build with no new segments returns early, so even a forced rebuild is a no-op.
+        // Abort instead — the pointer stays put and the next run redoes the whole build.
+        Path readOnly = Files.createDirectory(tempDirectory.resolve("read-only"));
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                readOnly.toFile().setWritable(false) && !Files.isWritable(readOnly),
+                "the filesystem must honour a read-only directory");
+        service = new CheckpointService(
+                segmentRepository, changelogSegmentService, checkpointRepository,
+                syncStateService, checkpointStorage, siteSchemaService, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                readOnly.toString(), Long.MAX_VALUE);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+
+        assertThrows(UncheckedIOException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void skipsOnlyTheTableThatCrossesTheLocalFileCeiling() throws IOException {
+        // A table too big for the configured ceiling is a fact about that table, so it keeps the
+        // per-table skip — the build completes and the pointer advances, as with unrenderable data.
+        service = new CheckpointService(
+                segmentRepository, changelogSegmentService, checkpointRepository,
+                syncStateService, checkpointStorage, siteSchemaService, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                tempDirectory.toString(), 8L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(metrics).checkpointTableUnmaterialized("parquet_failed");
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+        assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
     }
 
     // --- helpers ---

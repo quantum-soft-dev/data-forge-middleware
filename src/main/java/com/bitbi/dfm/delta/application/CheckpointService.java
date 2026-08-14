@@ -177,24 +177,31 @@ public class CheckpointService {
                         + "without a downloadable artifact (the client must SubmitSchema)",
                         tableName, siteId);
             } else {
+                // One table at a time: write this table's rows to disk, hand the file to S3, drop
+                // it. Materialization therefore costs one row-group buffer and one scratch file at
+                // a time instead of one encoded Parquet per table. (The frame upload below still
+                // builds an all-tables copy — issue #126.)
+                //
                 // One table's coercion failure (schema drift, bad value) must not abort the whole
                 // build: the pointer would freeze, retention would stop, and segments would grow
                 // unbounded. Skip that table and keep going — the same skip-and-continue contract
                 // as DeltaEgressService.
-                Path snapshot = null;
+                Path snapshot = createScratchFile(siteId);
                 try {
-                    // One table at a time: write this table's rows to disk, hand the file to S3,
-                    // drop it. Nothing but one row-group buffer and one scratch file exists at a
-                    // time, so the peak no longer grows with the number of tables.
-                    snapshot = Files.createTempFile(tempDirectory, "checkpoint-" + siteId + "-", ".parquet");
-                    Path output = snapshot;
                     metrics.timeCheckpointPhase("parquet", () ->
-                            ParquetCheckpointWriter.writeParquet(output, tableName, tableSchema,
+                            ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
                                     dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes()));
                     metrics.timeCheckpointPhase("upload", () ->
                             checkpoint.attachParquet(checkpointStorage.uploadParquet(
-                                    siteId, tableName, seq, output)));
-                } catch (IOException | RuntimeException e) {
+                                    siteId, tableName, seq, snapshot)));
+                } catch (UncheckedIOException e) {
+                    // Local-disk trouble is not this table's data. Skipping per table would detach
+                    // every table's snapshot key while the pointer advanced, and nothing could put
+                    // them back: a build with no new segments returns early, so even a forced
+                    // rebuild is a no-op. Abort with the pointer where it is and redo it next run.
+                    deleteQuietly(snapshot, tableName, siteId);
+                    throw e;
+                } catch (RuntimeException e) {
                     // The row's seq and rowCount advance regardless (the fold succeeded), so the
                     // previous build's key would now sit beside a newer seq and be served as its
                     // snapshot. Detach it: an absent file is honest, stale rows under a fresh seq
@@ -202,7 +209,8 @@ public class CheckpointService {
                     checkpoint.detachParquet();
                     metrics.checkpointTableUnmaterialized("parquet_failed");
                     log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                            + "artifact this build (check the declared schema against the data)",
+                            + "artifact this build (check the declared schema against the data, or "
+                            + "delta.checkpoint.max-temp-bytes against the table's size)",
                             tableName, siteId, e);
                 } finally {
                     // The scratch file is this build's litter whichever way the table ended: kept,
@@ -239,6 +247,20 @@ public class CheckpointService {
      */
     private static Iterable<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
         return () -> rows.values().stream().map(FoldedRow::data).iterator();
+    }
+
+    /**
+     * Create this table's scratch file. A failure here is systemic (the scratch directory is gone,
+     * full or read-only), never a fact about the table, so it fails the build instead of being
+     * counted as one table's skip.
+     */
+    private Path createScratchFile(UUID siteId) {
+        try {
+            return Files.createTempFile(tempDirectory, "checkpoint-" + siteId + "-", ".parquet");
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "Cannot create a checkpoint scratch file in " + tempDirectory, e);
+        }
     }
 
     private static void deleteQuietly(Path snapshot, String tableName, UUID siteId) {
