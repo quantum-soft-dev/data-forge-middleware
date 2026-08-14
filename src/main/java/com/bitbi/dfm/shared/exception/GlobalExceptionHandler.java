@@ -8,6 +8,7 @@ import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
 import com.bitbi.dfm.delta.application.BatchParquetDownloadService.BatchParquetNotReadyException;
+import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
@@ -398,6 +399,23 @@ public class GlobalExceptionHandler {
                 Instant.now(), HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage(),
                 request.getRequestURI());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle a retired checkpoint download format (410 Gone) — {@code format=csv} since issue #113.
+     * <p>
+     * Deliberately not 404: the file is not merely absent for this table, the format is no longer
+     * produced for any of them, and a client asking for it needs to switch to Parquet.
+     * </p>
+     */
+    @ExceptionHandler(DeltaCheckpointQueryService.RetiredFormatException.class)
+    public ResponseEntity<ErrorResponseDto> handleRetiredCheckpointFormat(
+            DeltaCheckpointQueryService.RetiredFormatException ex,
+            HttpServletRequest request) {
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(), HttpStatus.GONE.value(), "Gone", ex.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.GONE).body(error);
     }
 
     /**

@@ -150,12 +150,12 @@ public class DeltaSyncUserController {
     /**
      * Issue a fresh presigned download URL for one checkpoint file of an owned site.
      * <p>
-     * GET /api/v1/account/sites/{siteId}/delta/checkpoints/{tableName}/download?format=csv|parquet
+     * GET /api/v1/account/sites/{siteId}/delta/checkpoints/{tableName}/download?format=parquet
      * </p>
      *
      * @param siteId    site identifier
      * @param tableName checkpoint table name
-     * @param format    file format: {@code csv} or {@code parquet}
+     * @param format    file format: {@code parquet} ({@code csv} is retired — #113)
      * @return presigned download URL (15-minute expiry)
      */
     @GetMapping("/checkpoints/{tableName}/download")
@@ -168,6 +168,8 @@ public class DeltaSyncUserController {
             @ApiResponse(responseCode = "200", description = "Presigned URL issued",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = DeltaCheckpointDownloadResponseDto.class))),
             @ApiResponse(responseCode = "400", description = "Unsupported format",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "410", description = "Retired format: the checkpoint CSV snapshot is no longer produced",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
             @ApiResponse(responseCode = "403", description = "Site does not belong to the authenticated account",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponseDto.class))),
