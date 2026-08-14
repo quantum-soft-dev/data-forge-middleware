@@ -360,7 +360,7 @@ public class BatchParquetFinalizationService {
         if (outcome.file() != null) {
             FinalizedFile finalized = outcome.file();
             artifact.markReady(finalized.s3Key(), finalized.rowCount(), finalized.fileSize(),
-                    finalized.checksum());
+                    finalized.checksum(), finalized.firstSeq(), finalized.lastSeq());
             metrics.batchParquetReady();
             log.info("Unified batch Parquet ready: batchId={}, table={}, rows={}, bytes={}",
                     claim.batchId(), claim.tableName(), finalized.rowCount(), finalized.fileSize());
@@ -430,8 +430,10 @@ public class BatchParquetFinalizationService {
                     }
                     String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
                             tableName, claim.token(), tempFiles.get(tableName));
+                    SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
-                            s3Key, result.rowCount(), result.fileSize(), result.checksum())));
+                            s3Key, result.rowCount(), result.fileSize(), result.checksum(),
+                            range.firstSeq(), range.lastSeq())));
                 } catch (RuntimeException e) {
                     outcomes.put(claim.artifactId(), BuildOutcome.failed(
                             Objects.toString(e.getMessage(), e.getClass().getSimpleName())));
@@ -483,7 +485,38 @@ public class BatchParquetFinalizationService {
     private record Claim(UUID artifactId, UUID token, UUID batchId, UUID siteId, String tableName) {
     }
 
-    private record FinalizedFile(String s3Key, long rowCount, long fileSize, String checksum) {
+    private record FinalizedFile(String s3Key, long rowCount, long fileSize, String checksum,
+                                 Long firstSeq, Long lastSeq) {
+    }
+
+    private record SeqRange(Long firstSeq, Long lastSeq) {
+    }
+
+    /**
+     * Inclusive seq range of published segments that mention {@code tableName} in stats.
+     * Falls back to the batch-wide published range when no segment names the table (legacy
+     * rows with null stats).
+     */
+    static SeqRange seqRange(List<ChangelogSegment> segments, String tableName) {
+        long tableFirst = Long.MAX_VALUE;
+        long tableLast = Long.MIN_VALUE;
+        long batchFirst = Long.MAX_VALUE;
+        long batchLast = Long.MIN_VALUE;
+        for (ChangelogSegment segment : segments) {
+            batchFirst = Math.min(batchFirst, segment.getFirstSeq());
+            batchLast = Math.max(batchLast, segment.getLastSeq());
+            if (segment.getStats() != null && segment.getStats().containsKey(tableName)) {
+                tableFirst = Math.min(tableFirst, segment.getFirstSeq());
+                tableLast = Math.max(tableLast, segment.getLastSeq());
+            }
+        }
+        if (tableFirst != Long.MAX_VALUE) {
+            return new SeqRange(tableFirst, tableLast);
+        }
+        if (batchFirst != Long.MAX_VALUE) {
+            return new SeqRange(batchFirst, batchLast);
+        }
+        return new SeqRange(null, null);
     }
 
     /** Either the finished file or the error that stopped this attempt. */

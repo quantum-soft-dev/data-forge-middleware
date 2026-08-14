@@ -189,6 +189,8 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
         assertEquals(4, artifact.getRowCount());
         assertEquals("egress/orders.parquet", artifact.getS3Key());
+        assertEquals(1L, artifact.getFirstSeq());
+        assertEquals(4L, artifact.getLastSeq());
         // One replay in segment order: the table declares no decimal column, so the precision
         // scan pass is skipped rather than re-downloading every segment.
         InOrder reads = inOrder(segmentService);
@@ -497,6 +499,32 @@ class BatchParquetFinalizationServiceTest {
 
         assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
         assertEquals(1, artifact.getRowCount());
+        assertEquals(1L, artifact.getFirstSeq(), "legacy rows fall back to the batch-wide published range");
+        assertEquals(1L, artifact.getLastSeq());
+    }
+
+    @Test
+    void recordsTheSeqRangeOfSegmentsThatMentionTheTable() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment itemsOnly = segment(siteId, batchId, "items", 1, 10,
+                Map.of("items", new TableChangeStats(10, 0, 0)));
+        ChangelogSegment ordersTail = segment(siteId, batchId, "orders", 11, 20,
+                Map.of("orders", new TableChangeStats(2, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId))
+                .thenReturn(List.of(itemsOnly, ordersTail));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("items");
+        stream("orders", record(11, Op.INSERT), record(12, Op.INSERT));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        assertEquals(11L, artifact.getFirstSeq());
+        assertEquals(20L, artifact.getLastSeq());
     }
 
     @Test
