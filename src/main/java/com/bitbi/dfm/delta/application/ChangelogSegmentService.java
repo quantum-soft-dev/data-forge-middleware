@@ -130,11 +130,39 @@ public class ChangelogSegmentService {
      * throw while reading the header, and the wrapper that would have closed it is never created.
      */
     public void forEachRecord(String s3Key, Consumer<ChangeRecord> consumer) {
+        ReplayPhaseClock clock = ReplayPhaseClock.current();
+        long openedAt = System.nanoTime();
         try (InputStream content = storage.open(s3Key)) {
-            ChangelogCodec.forEach(content, consumer);
+            if (clock != null) {
+                clock.addDownload(System.nanoTime() - openedAt);
+            }
+            replay(content, consumer, clock);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to close changelog segment " + s3Key, e);
         }
+    }
+
+    /**
+     * Stream records from an already-open segment. When {@code clock} is present, stream
+     * {@code read} time is download and parse-minus-consumer is decode.
+     */
+    static void replay(InputStream content, Consumer<ChangeRecord> consumer, ReplayPhaseClock clock) {
+        if (clock == null) {
+            ChangelogCodec.forEach(content, consumer);
+            return;
+        }
+        TimingInputStream timed = content instanceof TimingInputStream already
+                ? already
+                : new TimingInputStream(content);
+        long wallStarted = System.nanoTime();
+        long[] consumerNanos = {0L};
+        ChangelogCodec.forEach(timed, record -> {
+            long consumeStarted = System.nanoTime();
+            consumer.accept(record);
+            consumerNanos[0] += System.nanoTime() - consumeStarted;
+        });
+        clock.addDownload(timed.readNanos());
+        clock.addDecode(System.nanoTime() - wallStarted - timed.readNanos() - consumerNanos[0]);
     }
 
     /**

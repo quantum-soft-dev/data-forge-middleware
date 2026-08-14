@@ -422,9 +422,19 @@ public class BatchParquetFinalizationService {
                 tempFiles.put(claim.tableName(), output);
                 requests.put(claim.tableName(), new DeltaParquetWriter.TableWriteRequest(output, schema));
             }
-            DeltaParquetWriter.BatchWriteResult written = DeltaParquetWriter.writeBatchDeltaParquet(
-                    requests, consumer -> segments.forEach(segment ->
-                            segmentService.forEachRecord(segment.getS3Key(), consumer)), maxTempBytes);
+            DeltaParquetWriter.BatchWriteResult written;
+            try (ReplayPhaseClock.Scope scope = ReplayPhaseClock.bind()) {
+                written = DeltaParquetWriter.writeBatchDeltaParquet(
+                        requests,
+                        consumer -> segments.forEach(segment ->
+                                segmentService.forEachRecord(segment.getS3Key(), consumer)),
+                        maxTempBytes,
+                        metrics::recordBatchParquetPhase);
+                if (scope.clock().hasSamples()) {
+                    metrics.recordBatchParquetPhase("download", scope.clock().downloadNanos());
+                    metrics.recordBatchParquetPhase("decode", scope.clock().decodeNanos());
+                }
+            }
             for (Map.Entry<String, DeltaParquetWriter.FileWriteFailure> entry
                     : written.failures().entrySet()) {
                 Claim claim = claimsByTable.get(entry.getKey());
@@ -444,8 +454,9 @@ public class BatchParquetFinalizationService {
                         throw new IllegalStateException("Artifact row count " + result.rowCount()
                                 + " does not match segment stats " + expectedRows.getAsLong());
                     }
-                    String s3Key = storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
-                            tableName, claim.token(), tempFiles.get(tableName));
+                    String s3Key = metrics.timeBatchParquetPhase("upload", () ->
+                            storage.uploadBatchParquet(claim.siteId(), claim.batchId(),
+                                    tableName, claim.token(), tempFiles.get(tableName)));
                     SeqRange range = seqRange(segments, tableName);
                     outcomes.put(claim.artifactId(), BuildOutcome.succeeded(new FinalizedFile(
                             s3Key, result.rowCount(), result.fileSize(), result.checksum(),
