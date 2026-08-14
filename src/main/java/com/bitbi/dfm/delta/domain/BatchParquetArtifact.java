@@ -199,6 +199,8 @@ public class BatchParquetArtifact {
     /**
      * Abandon with the table seq range already known from the batch's segments, so the
      * catalog does not depend on those segments still being present after retention.
+     * A {@code null}/{@code null} pair means "unknown on this attempt" and leaves a
+     * previously stored range in place — the batch and table do not change across requeue.
      */
     public void markAbandoned(String error, Long firstSeq, Long lastSeq, LocalDateTime publishedAt) {
         requireBuilding();
@@ -210,8 +212,10 @@ public class BatchParquetArtifact {
         }
         status = BatchParquetArtifactStatus.ABANDONED;
         clearPublishedMetadata();
-        this.firstSeq = firstSeq;
-        this.lastSeq = lastSeq;
+        if (firstSeq != null) {
+            this.firstSeq = firstSeq;
+            this.lastSeq = lastSeq;
+        }
         lastError = Objects.requireNonNull(error, "error");
         claimToken = null;
         updatedAt = Objects.requireNonNull(publishedAt, "publishedAt");

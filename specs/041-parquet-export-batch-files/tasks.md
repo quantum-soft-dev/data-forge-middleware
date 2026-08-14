@@ -35,3 +35,5 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T15 — Abandoned index expression.** Match `'abandoned/' || id::text` and drop
   leading `site_id` so all-sites listing can use the index.
 - [x] **T16 — FR-008.** Spec must not describe the removed LATERAL fallback.
+- [x] **T17 — Keep stored range on a later abandon.** `markAbandoned(null, null)` must not
+  erase a range already kept through abandon/requeue (the finalize catch path has no bounds).

@@ -178,6 +178,23 @@ class BatchParquetArtifactTest {
     }
 
     @Test
+    void markAbandonedWithUnknownRangeKeepsTheStoredPair() {
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(
+                UUID.randomUUID(), UUID.randomUUID(), "orders");
+        artifact.markBuilding();
+        artifact.markAbandoned("gave up", 100L, 250L, artifact.getUpdatedAt());
+
+        artifact.requeue();
+        artifact.markBuilding();
+        artifact.markAbandoned("build exploded", null, null, artifact.getUpdatedAt());
+
+        assertEquals(BatchParquetArtifactStatus.ABANDONED, artifact.getStatus());
+        assertEquals(100L, artifact.getFirstSeq(),
+                "a later abandon with no new bounds must not erase the stored range");
+        assertEquals(250L, artifact.getLastSeq());
+    }
+
+    @Test
     void requeueResetsAnAbandonedArtifactToANewPendingLifecycle() {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(
                 UUID.randomUUID(), UUID.randomUUID(), "orders");
