@@ -99,32 +99,38 @@ public class CheckpointService {
                             + " is unreadable and earlier segments are pruned — refusing lossy refold", null);
         }
 
-        // Seed from the durable checkpoint frame when present; otherwise fold the full history.
-        Map<String, Map<String, FoldedRow>> seed = haveFrame
-                ? ChangelogFold.fold(Map.of(), ChangelogCodec.parse(checkpointStorage.downloadFrame(siteId, checkpointSeq)))
-                : Map.of();
-        long foldFrom = haveFrame ? checkpointSeq : 0L;
+        // Time the whole materialization, including frame download, so write/cycle has a
+        // consistent denominator (042). Empty incremental work still returns immediately.
+        return metrics.timeCheckpoint(() -> {
+            byte[] frameBytes = haveFrame
+                    ? metrics.timeCheckpointPhase("download_frame",
+                            () -> checkpointStorage.downloadFrame(siteId, checkpointSeq))
+                    : null;
+            Map<String, Map<String, FoldedRow>> seed = frameBytes == null
+                    ? Map.of()
+                    : ChangelogFold.fold(Map.of(), ChangelogCodec.parse(frameBytes));
+            long foldFrom = haveFrame ? checkpointSeq : 0L;
 
-        List<ChangelogSegment> newSegments = segments.stream()
-                .filter(segment -> segment.getFirstSeq() > foldFrom)
-                .toList();
-        if (newSegments.isEmpty()) {
-            return seed; // nothing recorded since the last checkpoint
-        }
-
-        // Time only real materialization work (T5.3).
-        return metrics.timeCheckpoint(() -> materialize(siteId, seed, newSegments));
+            List<ChangelogSegment> newSegments = segments.stream()
+                    .filter(segment -> segment.getFirstSeq() > foldFrom)
+                    .toList();
+            if (newSegments.isEmpty()) {
+                return seed;
+            }
+            return materialize(siteId, seed, newSegments);
+        });
     }
 
     private Map<String, Map<String, FoldedRow>> materialize(UUID siteId,
                                                             Map<String, Map<String, FoldedRow>> seed,
                                                             List<ChangelogSegment> newSegments) {
-        List<ChangeRecord> newRecords = new ArrayList<>();
-        for (ChangelogSegment segment : newSegments) {
-            newRecords.addAll(changelogSegmentService.readRecords(segment.getS3Key()));
-        }
-
-        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(seed, newRecords);
+        Map<String, Map<String, FoldedRow>> state = metrics.timeCheckpointPhase("fold", () -> {
+            List<ChangeRecord> newRecords = new ArrayList<>();
+            for (ChangelogSegment segment : newSegments) {
+                newRecords.addAll(changelogSegmentService.readRecords(segment.getS3Key()));
+            }
+            return ChangelogFold.fold(seed, newRecords);
+        });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
 
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
@@ -136,7 +142,10 @@ public class CheckpointService {
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
 
             byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
-            checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
+            metrics.timeCheckpointPhase("upload", () -> {
+                checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv));
+                return null;
+            });
 
             TableSchema tableSchema = schemas.get(tableName);
             if (tableSchema != null) {
@@ -145,8 +154,13 @@ public class CheckpointService {
                 // unbounded. Skip its Parquet (CSV above still ships) and keep going — the same
                 // skip-and-continue contract as DeltaEgressService.
                 try {
-                    byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
-                    checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
+                    byte[] parquet = metrics.timeCheckpointPhase("parquet",
+                            () -> ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows)));
+                    metrics.timeCheckpointPhase("upload", () -> {
+                        checkpoint.attachParquet(checkpointStorage.uploadParquet(
+                                siteId, tableName, seq, parquet));
+                        return null;
+                    });
                 } catch (RuntimeException e) {
                     log.warn("Checkpoint Parquet failed for table {} of site {} — skipping Parquet, "
                             + "CSV still written (check the declared schema against the data)",
@@ -158,7 +172,10 @@ public class CheckpointService {
         });
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
-        checkpointStorage.uploadFrame(siteId, seq, ChangelogCodec.serialize(CheckpointFrame.toRecords(state)));
+        metrics.timeCheckpointPhase("upload", () -> {
+            checkpointStorage.uploadFrame(siteId, seq, ChangelogCodec.serialize(CheckpointFrame.toRecords(state)));
+            return null;
+        });
         syncStateService.recordCheckpoint(siteId, seq);
         // The single choke point every checkpoint build passes through, scheduled or forced. The
         // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
