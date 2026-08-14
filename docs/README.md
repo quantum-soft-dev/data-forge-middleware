@@ -61,7 +61,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 - **[Site History Wipe — Client Contract](./site-history-wipe-client-guide.md)** - generation epoch, wipe recovery sequence (035, issue #89)
 - **[Delta v2 Wire Contract — Answers](./delta-v2-wire-contract-answers.md)** - presence, typed error codes, recovery matrix, delivery order (dbf-data-extractor#130)
 - **[Site Types & POSTGRES_CDC — Change Request](./cr-site-types-postgres-cdc.md)** - DBF vs POSTGRES_CDC, site_schemas (019)
-- **[POSTGRES_CDC Client Guide](./postgres-cdc-client-guide.md)** - CDC client integration
+- **[PostgreSQL Delta Client — Development Guide](./postgres-delta-client-development-guide.md)** - self-contained reference for building a new PostgreSQL client on Delta v2: auth, gRPC contract, value typing, session lifecycle, recovery, limits, error-code matrix
+- **[POSTGRES_CDC Client Guide](./postgres-cdc-client-guide.md)** - CDC client integration (archived — the REST/JSONL `/api/dfc/**` ingestion it describes is retired; see the Delta guides above)
 - **[Plugin Reinitialization](./reinit.md)** - re-baseline flow (015)
 
 ### Visual Language
@@ -74,6 +75,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
   - Source adapters, gRPC/Protobuf ingestion, changelog and checkpoints
   - CSV, SQL, and Parquet egress for BI/plugin consumers
   - Infographics for the end-to-end architecture and lifecycle
+  - Formatted exports for sharing outside the repo: [RU](./data-platform-concept-final.ru.docx),
+    [EN](./data-platform-concept-final.en.docx) (the English edition exists only as a `.docx`)
 
 ---
 
@@ -142,7 +145,8 @@ Welcome to the DataForge Middleware documentation. This directory contains compr
 | [site-history-wipe-client-guide.md](./site-history-wipe-client-guide.md) | Generation epoch + post-wipe recovery for the Delta v2 client (035) | Client integrators, Backend |
 | [delta-v2-wire-contract-answers.md](./delta-v2-wire-contract-answers.md) | Wire-contract answers: presence, typed codes, recovery matrix, delivery order (dbf-data-extractor#130) | Client integrators, Backend |
 | [cr-site-types-postgres-cdc.md](./cr-site-types-postgres-cdc.md) | Site types (DBF/POSTGRES_CDC) — change request (019) | Backend Developers |
-| [postgres-cdc-client-guide.md](./postgres-cdc-client-guide.md) | POSTGRES_CDC client integration | Client integrators |
+| [postgres-delta-client-development-guide.md](./postgres-delta-client-development-guide.md) | Building a new PostgreSQL client on Delta v2: auth, wire protocol, typing, recovery, limits, error codes | Client integrators, Backend |
+| [postgres-cdc-client-guide.md](./postgres-cdc-client-guide.md) | POSTGRES_CDC client integration (archived — CDC v1 ingestion is retired) | Client integrators |
 | [reinit.md](./reinit.md) | Plugin reinitialization / re-baseline (015) | Backend Developers |
 | [cr-visual-language-migration.md](./cr-visual-language-migration.md) | Monitoring visual language — change request (024) | Frontend Developers |
 | [auth0-config.md](./auth0-config.md) | Auth0 configuration | Administrators, DevOps |
@@ -194,5 +198,5 @@ When adding new documentation:
 
 ---
 
-**Last Updated:** 2026-08-01
-**Version:** 1.1.0
+**Last Updated:** 2026-08-14
+**Version:** 1.2.0

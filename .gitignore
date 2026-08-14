@@ -66,6 +66,9 @@ jacoco/
 # Gemini
 .gemini/settings.json
 
+# Grok (per-developer CLI permissions)
+.grok/
+
 # Deploy secrets
 deploy-script/parameters-*.json
 deploy-script/config/*.json
