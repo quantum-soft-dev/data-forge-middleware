@@ -287,7 +287,7 @@ class DeltaSiteWipeServiceTest {
     }
 
     @Test
-    @DisplayName("a failed egress listing leaves orphans but does not fail a committed wipe")
+    @DisplayName("a failed listing leaves orphans but does not fail a committed wipe")
     void shouldSurviveEgressListingFailure() {
         when(checkpointStorage.listAllKeys(any()))
                 .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
@@ -298,6 +298,37 @@ class DeltaSiteWipeServiceTest {
         // The rows are already committed as gone; reporting a completed wipe as a 500 would be worse.
         assertThat(summary.deletedBatches()).isEqualTo(7);
         verify(s3FileStorageService).deleteObjects(anyList());
+        // ...but the operator has to learn that both prefixes were left untouched, or the wipe
+        // claims a clean slate it did not achieve.
+        assertThat(summary.s3DeleteErrors()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("counts a prefix it could not enumerate, so a silent orphan is never reported clean")
+    void shouldReportAnUnenumerablePrefix() {
+        // The frames under checkpoints/ are named by no row at all: when this listing fails they all
+        // survive, and the next epoch folds a pre-wipe frame back in on reaching its sequence.
+        // s3DeleteErrors is the only channel that says so.
+        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/"))
+                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
+        when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/")).thenReturn(List.of());
+
+        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.s3DeleteErrors()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("adds the refused objects to the prefixes it could not enumerate")
+    void shouldAddRefusedObjectsToUnenumerablePrefixes() {
+        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/"))
+                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
+        when(s3FileStorageService.deleteObjects(anyList()))
+                .thenReturn(new DeleteObjectsResult(0, List.of("a: AccessDenied", "b: AccessDenied")));
+
+        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.s3DeleteErrors()).isEqualTo(3);
     }
 
     @Test

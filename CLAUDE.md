@@ -465,8 +465,11 @@ pages/{feature}/            # Route pages
   reaching the same sequence. Same belt-and-braces shape the unified batch artifacts already use —
   exact keys from the rows **plus** a post-commit prefix walk — and each prefix is listed
   independently, so one failing listing costs neither the other prefix nor the recorded keys; the
-  final key list is de-duplicated. `S3CheckpointStorage.checkpointPrefix(siteId)` joins
-  `egressPrefix`. No API, DTO, migration, configuration or frontend change. See
+  final key list is de-duplicated. A prefix that could not be enumerated adds one to
+  `s3DeleteErrors` (same field, wider meaning — the response's only channel for "the slate is not
+  clean"), because a swallowed checkpoint listing means *every* frame survived, not a few stray
+  objects. `S3CheckpointStorage.checkpointPrefix(siteId)` joins
+  `egressPrefix`. No API shape, migration, configuration or frontend change. See
   `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
 - checkpoint-csv-removal: The V2 checkpoint build stopped writing `snapshot.csv.gz` (issue #113).
   Only the typed Parquet is materialized, so a build no longer copies the whole folded state into a

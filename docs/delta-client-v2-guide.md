@@ -803,7 +803,8 @@ have no dedicated object manifest, so the wipe performs a paginated walk of
 an interrupted publication or cleanup. This is correctness, not housekeeping: realtime keys are
 derived from sequence numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe
 sends those numbers back to zero. A listing failure is logged and the wipe still reports success
-because the database rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
+because the database rows are already gone — but it also adds one to `s3DeleteErrors`, so a non-zero
+count in the response means the slate is not clean and the wipe is worth repeating. Ordinary batch retention and explicit admin batch deletion likewise remove
 the unified manifest rows, preserve recorded/legacy exact-key fallbacks, and paginate the complete
 batch prefix so a process-death attempt with no published metadata is still found. Explicit admin
 deletion defers prefix enumeration and object removal until its database transaction commits.

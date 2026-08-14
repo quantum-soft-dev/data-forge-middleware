@@ -160,20 +160,28 @@ public class DeltaSiteWipeService {
         WipedRows wiped = transactionTemplate.execute(
                 status -> wipeRows(site, initiator, ipAddress, userAgent));
 
+        PrefixWalk egress = unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId()));
+        PrefixWalk checkpoints =
+                unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId()));
+
         List<String> objects = new ArrayList<>(wiped.s3Keys());
-        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId())));
-        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId())));
+        objects.addAll(egress.keys());
+        objects.addAll(checkpoints.keys());
 
         DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(objects.stream().distinct().toList());
         if (!deleted.errors().isEmpty()) {
             log.warn("Site history wipe left {} orphaned S3 object(s) for site {}: {}",
                     deleted.errors().size(), site.getId(), deleted.errors());
         }
+        // A prefix that could not be listed is counted alongside the objects the bucket refused: both
+        // mean the slate is not clean, and the caller has nothing else to learn it from.
+        int notSwept = deleted.errors().size()
+                + (egress.enumerated() ? 0 : 1) + (checkpoints.enumerated() ? 0 : 1);
 
         SiteHistoryWipeSummary summary = new SiteHistoryWipeSummary(
                 wiped.generation(), wiped.deletedBatches(), wiped.deletedSegments(),
                 wiped.deletedCheckpoints(), wiped.deletedFiles(), wiped.deletedSqlGenerations(),
-                wiped.deletedErrorLogs(), wiped.deletedBytes(), deleted.errors().size(),
+                wiped.deletedErrorLogs(), wiped.deletedBytes(), notSwept,
                 wiped.baselineBatchDetached());
         log.info("Site history wiped by {}: siteId={}, generation={}, batches={}, segments={}, "
                         + "checkpoints={}, files={}, sqlGenerations={}, errorLogs={}, bytes={}, "
@@ -210,23 +218,35 @@ public class DeltaSiteWipeService {
      *
      * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
      * and the objects are only reachable through keys the rows never held. The keys recorded on the
-     * rows are collected too and stay the fallback, so one prefix failing to list — logged and
-     * swallowed, since the rows are already gone and failing here would report a completed wipe as a
-     * 500 — costs neither the other prefix nor the exact keys.</p>
+     * rows are collected too and stay the fallback, so one prefix failing to list — swallowed, since
+     * the rows are already gone and failing here would report a completed wipe as a 500 — costs
+     * neither the other prefix nor the exact keys. It is not silent, though: the caller counts the
+     * failure into {@code s3DeleteErrors}, because for the checkpoint prefix the difference between
+     * "a few orphaned objects" and "every reload frame survived" is not visible anywhere else.</p>
      *
      * @param siteId the site being wiped, for the log line
      * @param prefix the whole-site prefix to enumerate
-     * @return every key under the prefix, or an empty list when it could not be listed
+     * @return the keys under the prefix, and whether the listing succeeded at all
      */
-    private List<String> unreferencedObjects(UUID siteId, String prefix) {
+    private PrefixWalk unreferencedObjects(UUID siteId, String prefix) {
         try {
-            return checkpointStorage.listAllKeys(prefix);
+            return new PrefixWalk(checkpointStorage.listAllKeys(prefix), true);
         } catch (RuntimeException e) {
-            log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans "
-                    + "and a later build reusing their sequence numbers may resolve to one",
-                    prefix, siteId, e);
-            return List.of();
+            log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans, "
+                    + "a later build reusing their sequence numbers may resolve to one, and the wipe "
+                    + "is worth repeating once listing works again", prefix, siteId, e);
+            return new PrefixWalk(List.of(), false);
         }
+    }
+
+    /**
+     * One post-commit prefix walk: what it found, and whether it got to look at all.
+     *
+     * @param keys       the keys found under the prefix; empty both when the prefix is empty and when
+     *                   the listing failed
+     * @param enumerated whether the listing succeeded — a false here means unknown, not empty
+     */
+    private record PrefixWalk(List<String> keys, boolean enumerated) {
     }
 
     /**

@@ -14,8 +14,12 @@ package com.bitbi.dfm.delta.application;
  * @param deletedErrorLogs      error log rows removed
  * @param deletedBytes          bytes accounted for by the uploaded files and plugin SQL files
  *                              (segments and checkpoints carry no recorded size)
- * @param s3DeleteErrors        objects the bucket refused to delete — orphans, not data loss: the
- *                              rows naming them are already gone
+ * @param s3DeleteErrors        objects the bucket refused to delete, plus one per whole-site prefix
+ *                              that could not be enumerated at all — orphans, not data loss: the
+ *                              rows naming them are already gone. Non-zero means the slate is not
+ *                              actually clean, which for the {@code checkpoints/} prefix matters
+ *                              beyond disk: the reload frames under it are named by no row, and one
+ *                              left behind is folded back in when the new epoch reaches its sequence
  * @param baselineBatchDetached whether a plugin activation's {@code baseline_batch_id} pointed at a
  *                              destroyed batch and had to be nulled
  */
