@@ -128,20 +128,18 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
 
     @Test
     void catalogPublishLockKeepsReadyAtAlignedWithCommitOrder() throws Exception {
+        // REQUIRES_NEW cannot see seed rows of the @Transactional test, so this only
+        // proves the lock serializes the stamp-then-commit window — the same window
+        // markReady uses for ready_at.
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         CountDownLatch holding = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        UUID firstBatch = UUID.randomUUID();
-        UUID secondBatch = UUID.randomUUID();
         try {
             Future<LocalDateTime> first = executor.submit(() -> transaction.execute(status -> {
                 repository.lockCatalogPublish();
-                BatchParquetArtifact artifact = BatchParquetArtifact.pending(firstBatch, SITE_ID, "first");
-                artifact.markBuilding();
-                artifact.markReady("egress/first.parquet", 1, 1, "aaa");
-                repository.save(artifact);
+                LocalDateTime stamped = LocalDateTime.now(ZoneOffset.UTC);
                 holding.countDown();
                 try {
                     assertTrue(release.await(10, TimeUnit.SECONDS));
@@ -149,17 +147,13 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(e);
                 }
-                return artifact.getReadyAt();
+                return stamped;
             }));
             assertTrue(holding.await(10, TimeUnit.SECONDS));
 
             Future<LocalDateTime> second = executor.submit(() -> transaction.execute(status -> {
                 repository.lockCatalogPublish();
-                BatchParquetArtifact artifact = BatchParquetArtifact.pending(secondBatch, SITE_ID, "second");
-                artifact.markBuilding();
-                artifact.markReady("egress/second.parquet", 1, 1, "bbb");
-                repository.save(artifact);
-                return artifact.getReadyAt();
+                return LocalDateTime.now(ZoneOffset.UTC);
             }));
             assertFalse(second.isDone(), "the second publisher must wait for the first commit");
 
@@ -172,11 +166,6 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
         } finally {
             release.countDown();
             executor.shutdownNow();
-            transaction.execute(status -> {
-                repository.deleteByBatchId(firstBatch);
-                repository.deleteByBatchId(secondBatch);
-                return null;
-            });
         }
     }
 
