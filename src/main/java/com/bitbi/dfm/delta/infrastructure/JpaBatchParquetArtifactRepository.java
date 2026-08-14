@@ -129,6 +129,25 @@ public interface JpaBatchParquetArtifactRepository
                                                       int retryDelaySeconds, int leaseSeconds,
                                                       int maxAttempts);
 
+    /**
+     * Same predicate as {@link #abandonExpiredClaims}, read-only. {@code status = 'BUILDING'} with
+     * an ordered {@code updated_at} is served by idx_batch_parquet_artifacts_claim, so the idle
+     * answer is one index probe instead of an advisory lock plus a watermark write.
+     */
+    @Override
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1 FROM batch_parquet_artifacts
+                WHERE status = 'BUILDING' AND attempt_count >= :maxAttempts AND updated_at
+                    < CAST(:now AS timestamp) - make_interval(secs =>
+                        CAST(:leaseSeconds AS double precision))
+                LIMIT 1
+            )
+            """, nativeQuery = true)
+    boolean hasSpentExpiredClaims(@Param("now") LocalDateTime now,
+                                  @Param("leaseSeconds") int leaseSeconds,
+                                  @Param("maxAttempts") int maxAttempts);
+
     @Override
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Transactional

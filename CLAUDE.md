@@ -454,6 +454,20 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- batch-parquet-idle-poll: An idle completed-batch Parquet poll no longer pays cluster-wide costs
+  (issue #115). `settleExpiredClaims()` — the first thing `finalizeNext()` does, on every drain
+  iteration of every worker on every replica — used to open a transaction, take the
+  `parquet-export-catalog-publish` advisory lock and `UPDATE` the single-row
+  `batch_parquet_catalog_watermark` **before** discovering that `abandonExpiredClaims` had nothing
+  to settle, which is the normal case. It now reads the same predicate first through
+  `BatchParquetArtifactRepository.hasSpentExpiredClaims` (`SELECT EXISTS … LIMIT 1`, served by the
+  existing partial `idx_batch_parquet_artifacts_claim`) and opens the settle transaction only on a
+  non-empty answer. The monotonicity guarantee is untouched: when there *is* something to settle,
+  `updated_at` is still stamped from the watermark taken under that same lock, so an `ABANDONED`
+  row cannot land at or before an already-visible sibling. Losing the probe race to a peer costs
+  one wasted watermark tick, never a missed settlement. No REST, gRPC, DTO, configuration-key,
+  metric, S3-key, migration, or frontend change. See `docs/cr-unified-batch-parquet.md`
+  ("Durability and retries").
 - checkpoint-csv-removal: The V2 checkpoint build stopped writing `snapshot.csv.gz` (issue #113).
   Only the typed Parquet is materialized, so a build no longer copies the whole folded state into a
   second row representation (`ValueMapper`) and gzips it into an on-heap `byte[]`. A table with no

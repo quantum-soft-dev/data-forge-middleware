@@ -247,8 +247,19 @@ public class BatchParquetFinalizationService {
      * Settle spent expired claims in their own short transaction. Catalog visibility for
      * {@code ABANDONED} uses {@code updated_at}, so the timestamp must be the DB watermark
      * taken under the same lock {@link #publish} uses.
+     *
+     * <p>The lock and the watermark are the expensive half of that guarantee — one cluster-wide
+     * advisory lock and one write to a single-row table — and a dead claim is rare while this
+     * runs on every drain iteration of every worker on every replica. So the predicate is read
+     * first, outside any lock: only a non-empty answer is worth a settle transaction. Losing that
+     * race (a peer settles the row in between) costs one wasted watermark tick, never a missed
+     * settle — the row stays claimable until some transaction actually stamps it.</p>
      */
     private void settleExpiredClaims() {
+        if (!artifactRepository.hasSpentExpiredClaims(
+                LocalDateTime.now(ZoneOffset.UTC), leaseSeconds, maxAttempts)) {
+            return;
+        }
         Integer abandoned = transactions.execute(status -> {
             artifactRepository.lockCatalogPublish();
             LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);

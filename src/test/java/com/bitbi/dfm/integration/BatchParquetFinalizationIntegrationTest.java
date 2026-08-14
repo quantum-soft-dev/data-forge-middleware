@@ -147,6 +147,22 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("an idle poll leaves the shared catalog watermark exactly where it was")
+    void idlePollDoesNotMoveTheCatalogWatermark() {
+        String before = catalogWatermark();
+
+        assertThat(finalizationService.finalizeNext()).isFalse();
+
+        assertThat(catalogWatermark()).isEqualTo(before);
+    }
+
+    private String catalogWatermark() {
+        return jdbc.queryForObject(
+                "SELECT published_at::text FROM batch_parquet_catalog_watermark WHERE id = 1",
+                String.class);
+    }
+
+    @Test
     @DisplayName("a re-baseline's provisional segments are invisible to finalization")
     void ignoresProvisionalSegmentsOfAnUnfinishedSnapshot() throws Exception {
         segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
