@@ -15,6 +15,6 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T05 — Integration coverage.** Red Testcontainers cases: default listing ignores
   segment/checkpoint seeds, `since` uses `ready_at`, NULL seq fallback, requeue-then-ready
   reappears, mixed READY/ABANDONED cursor.
-- [ ] **T06 — Documentation.** Plugin guide (new type, breaking default, client migration,
+- [x] **T06 — Documentation.** Plugin guide (new type, breaking default, client migration,
   latency/retention trade-offs), unified-batch CR note, CLAUDE.md Recent Changes, 028 contract
   pointer. Mark this file's checkboxes.
