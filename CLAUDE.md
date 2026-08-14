@@ -454,6 +454,20 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- wipe-checkpoint-orphans: Site history wipe walks `checkpoints/{siteId}/` after the database work
+  instead of trusting the keys on the rows (issue #118). The `checkpoints` row is one per
+  `(site, table)` and reused across builds — each build writes `…/{table}/seq={seq}/snapshot.parquet`
+  under a new `seq` and replaces the key, and since #113 a build that cannot materialize Parquet
+  nulls it outright — so every earlier object was already unreferenced and nothing else sweeps that
+  prefix (retention prunes segments; no lifecycle rule here). The walk also removes the
+  `_frame/seq={seq}/frame.pb.gz` reload frames, which no row ever named: a survivor is a correctness
+  problem, since the post-wipe epoch restarts at seq 0 and would fold a pre-wipe frame back in on
+  reaching the same sequence. Same belt-and-braces shape the unified batch artifacts already use —
+  exact keys from the rows **plus** a post-commit prefix walk — and each prefix is listed
+  independently, so one failing listing costs neither the other prefix nor the recorded keys; the
+  final key list is de-duplicated. `S3CheckpointStorage.checkpointPrefix(siteId)` joins
+  `egressPrefix`. No API, DTO, migration, configuration or frontend change. See
+  `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
 - checkpoint-csv-removal: The V2 checkpoint build stopped writing `snapshot.csv.gz` (issue #113).
   Only the typed Parquet is materialized, so a build no longer copies the whole folded state into a
   second row representation (`ValueMapper`) and gzips it into an on-heap `byte[]`. A table with no

@@ -810,9 +810,22 @@ deletion defers prefix enumeration and object removal until its database transac
 Listing/deletion failures remain best effort. Realtime segment cleanup remains on its existing
 lifecycle path.
 
-**Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are
-after a re-baseline. They are addressed by key from the live `checkpoints` rows, so no stale read is
-possible through them.
+**The checkpoint prefix is walked the same way (issue #118).** The `checkpoints` row is one per
+`(site, table)` and reused across builds: each build writes
+`checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` under a new `seq` and replaces the key on
+the row, so the previous build's object is unreferenced from that moment on — and since issue #113 a
+build that cannot materialize Parquet nulls the key outright. Nothing else sweeps them: changelog
+retention prunes segments and no lifecycle rule covers this prefix, so before #118 a long-lived site
+left one orphan per table per build behind the operation whose whole contract is "clean slate". The
+wipe therefore paginates `checkpoints/{siteId}/…` after the database work, exactly as it does for
+egress, keeping the keys recorded on the rows as the fallback for a failed listing. The walk also
+takes the `_frame/seq={seq}/frame.pb.gz` reload frames, which no row has ever named; leaving those is
+a correctness problem rather than an untidy one, because the new epoch restarts at seq 0 and would
+fold a pre-wipe frame back in on reaching the same sequence.
+
+**Still a non-goal**: an ordinary **re-baseline** leaves superseded checkpoint objects behind. They
+are addressed by key from the live `checkpoints` rows, so no stale read is possible through them
+while the site keeps its epoch.
 
 **Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
 request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full

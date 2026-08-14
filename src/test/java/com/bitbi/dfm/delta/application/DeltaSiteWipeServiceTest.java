@@ -301,6 +301,86 @@ class DeltaSiteWipeServiceTest {
     }
 
     @Test
+    @DisplayName("deletes the checkpoint objects of earlier builds, which no row names any more")
+    void shouldDeleteSupersededCheckpointObjects() {
+        // The checkpoints row is one per (site, table) and reused across builds: every build writes
+        // a new seq= object and replaces the key, so only the newest is ever named by a row.
+        // The reload frames under _frame/ are named by no row at all.
+        List<Checkpoint> checkpoints = List.of(
+                checkpoint(null, "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet"));
+        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
+        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/")).thenReturn(List.of(
+                "checkpoints/" + SITE_ID + "/customers/seq=10/snapshot.csv.gz",
+                "checkpoints/" + SITE_ID + "/customers/seq=20/snapshot.parquet",
+                "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet",
+                "checkpoints/" + SITE_ID + "/_frame/seq=30/frame.pb.gz"));
+
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(s3FileStorageService).deleteObjects(keys.capture());
+        assertThat(keys.getValue()).containsExactlyInAnyOrder(
+                "checkpoints/" + SITE_ID + "/customers/seq=10/snapshot.csv.gz",
+                "checkpoints/" + SITE_ID + "/customers/seq=20/snapshot.parquet",
+                "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet",
+                "checkpoints/" + SITE_ID + "/_frame/seq=30/frame.pb.gz");
+    }
+
+    @Test
+    @DisplayName("keeps the keys recorded on the checkpoint rows when the prefix listing fails")
+    void shouldFallBackToRecordedCheckpointKeys() {
+        // Belt and braces: the walk is the thorough half, the recorded keys are the half that
+        // survives an S3 listing outage.
+        List<Checkpoint> checkpoints = List.of(checkpoint(
+                "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.csv.gz",
+                "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet"));
+        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
+        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/"))
+                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
+        when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/"))
+                .thenReturn(List.of("egress/" + SITE_ID + "/orders/delta/seq=1-2.parquet"));
+
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(s3FileStorageService).deleteObjects(keys.capture());
+        // One prefix failing must not cost the other one its keys.
+        assertThat(keys.getValue()).containsExactlyInAnyOrder(
+                "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.csv.gz",
+                "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet",
+                "egress/" + SITE_ID + "/orders/delta/seq=1-2.parquet");
+    }
+
+    @Test
+    @DisplayName("does not enumerate the checkpoint prefix for a wipe that rolled back")
+    void shouldNotTouchCheckpointPrefixWhenRolledBack() {
+        when(batchRepository.countBySiteId(SITE_ID)).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN))
+                .isInstanceOf(DeltaSiteWipeService.ConcurrentSessionException.class);
+
+        verify(checkpointStorage, never()).listAllKeys("checkpoints/" + SITE_ID + "/");
+    }
+
+    @Test
+    @DisplayName("names an object once even when both a row and the prefix walk found it")
+    void shouldNotDeleteTheSameKeyTwice() {
+        String current = "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet";
+        List<Checkpoint> checkpoints = List.of(checkpoint(null, current));
+        when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
+        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/")).thenReturn(List.of(current));
+
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(s3FileStorageService).deleteObjects(keys.capture());
+        assertThat(keys.getValue()).containsExactly(current);
+    }
+
+    @Test
     @DisplayName("bumps the generation and re-arms the rebaseline request")
     void shouldResetSyncStateForWipe() {
         SiteSyncState state = SiteSyncState.initial(SITE_ID);
