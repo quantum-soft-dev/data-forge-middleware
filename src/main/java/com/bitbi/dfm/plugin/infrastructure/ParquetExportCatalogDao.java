@@ -118,15 +118,18 @@ public class ParquetExportCatalogDao {
                            COALESCE(a.s3_key, 'abandoned/' || a.id::text) AS s3_key
                     FROM batch_parquet_artifacts a
                     JOIN sites st ON st.id = a.site_id
-                    LEFT JOIN (
-                        SELECT s.batch_id, MIN(s.first_seq) AS first_seq, MAX(s.last_seq) AS last_seq
+                    LEFT JOIN LATERAL (
+                        SELECT MIN(s.first_seq) AS first_seq, MAX(s.last_seq) AS last_seq
                         FROM changelog_segments s
-                        WHERE s.provisional = FALSE
-                        GROUP BY s.batch_id
-                    ) br ON br.batch_id = a.batch_id
+                        WHERE s.batch_id = a.batch_id
+                          AND s.provisional = FALSE
+                    ) br ON a.first_seq IS NULL
                     WHERE st.account_id = :accountId
                       AND a.status IN ('READY', 'ABANDONED')
-                      AND CASE WHEN a.status = 'READY' THEN a.ready_at ELSE a.updated_at END > :since
+                      AND (
+                            (a.status = 'READY' AND a.ready_at > :since)
+                            OR (a.status = 'ABANDONED' AND a.updated_at > :since)
+                          )
                 """);
         MapSqlParameterSource params = baseParams(accountId, since, limit);
         appendInnerFilters(sql, params, siteId, table, "a.site_id", "a.table_name");

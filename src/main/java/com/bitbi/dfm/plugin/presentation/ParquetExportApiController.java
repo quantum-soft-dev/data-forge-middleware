@@ -71,16 +71,17 @@ public class ParquetExportApiController {
     }
 
     /**
-     * List Parquet files produced after {@code since}, registering a one-time download link
-     * for every returned file.
+     * List Parquet files produced after {@code since}. Downloadable rows get a one-time
+     * link; abandoned batch rows are listed without one.
      */
     @GetMapping("/files")
     @Operation(summary = "List Parquet files with one-time download links",
             description = "Basic Auth. Filters: since (ISO 8601, strictly greater), siteId, table, "
                     + "type (batch|delta|checkpoint; default batch). Pagination is a keyset cursor: pass the previous "
                     + "response's nextCursor to continue; iterate until hasMore=false (a page may "
-                    + "hold fewer than size entries). Every listed file gets a freshly registered "
-                    + "single-use download URL (TTL 1 hour by default).")
+                    + "hold fewer than size entries). Downloadable files get a freshly registered "
+                    + "single-use download URL (TTL 1 hour by default); abandoned batch rows return "
+                    + "status=abandoned and a null downloadUrl.")
     public ResponseEntity<ParquetFileListResponseDto> listFiles(
             @RequestParam(required = false) String since,
             @RequestParam(required = false) UUID siteId,

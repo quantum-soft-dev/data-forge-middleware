@@ -18,3 +18,6 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T06 — Documentation.** Plugin guide (new type, breaking default, client migration,
   latency/retention trade-offs), unified-batch CR note, CLAUDE.md Recent Changes, 028 contract
   pointer. Mark this file's checkboxes.
+- [x] **T07 — Review fixes.** Scope the catalog seq fallback join, distrust mixed null-stats
+  when recording `seqRange`, split the `since` predicate so READY can use the V51 index, and
+  correct the OpenAPI download-URL sentence.

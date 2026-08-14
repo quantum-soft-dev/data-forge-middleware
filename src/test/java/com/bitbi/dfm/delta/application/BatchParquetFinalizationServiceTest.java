@@ -528,6 +528,30 @@ class BatchParquetFinalizationServiceTest {
     }
 
     @Test
+    void usesBatchWideSeqRangeWhenAnyPublishedSegmentHasNoStats() {
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        BatchParquetArtifact artifact = claimable(batchId, siteId, "orders");
+        ChangelogSegment named = segment(siteId, batchId, "named", 1, 10,
+                Map.of("orders", new TableChangeStats(2, 0, 0)));
+        ChangelogSegment legacyTail = segment(siteId, batchId, "legacy", 11, 20, null);
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId))
+                .thenReturn(List.of(named, legacyTail));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("named", record(1, Op.INSERT), record(2, Op.INSERT));
+        stream("legacy", record(11, Op.INSERT));
+        when(storage.uploadBatchParquet(eq(siteId), eq(batchId), eq("orders"), any(UUID.class), any(Path.class)))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(service.finalizeNext());
+
+        assertEquals(BatchParquetArtifactStatus.READY, artifact.getStatus());
+        assertEquals(1L, artifact.getFirstSeq(),
+                "a null-stats tail must not shrink lastSeq below the batch-wide published range");
+        assertEquals(20L, artifact.getLastSeq());
+    }
+
+    @Test
     void renewsItsLeaseWhileTheBuildIsStillRunning() throws Exception {
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();

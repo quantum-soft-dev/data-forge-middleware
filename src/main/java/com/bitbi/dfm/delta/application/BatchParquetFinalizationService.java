@@ -494,23 +494,28 @@ public class BatchParquetFinalizationService {
 
     /**
      * Inclusive seq range of published segments that mention {@code tableName} in stats.
-     * Falls back to the batch-wide published range when no segment names the table (legacy
-     * rows with null stats).
+     * Falls back to the batch-wide published range when any segment has null stats (the
+     * file still contains those records) or when no segment names the table.
      */
     static SeqRange seqRange(List<ChangelogSegment> segments, String tableName) {
         long tableFirst = Long.MAX_VALUE;
         long tableLast = Long.MIN_VALUE;
         long batchFirst = Long.MAX_VALUE;
         long batchLast = Long.MIN_VALUE;
+        boolean anyNullStats = false;
         for (ChangelogSegment segment : segments) {
             batchFirst = Math.min(batchFirst, segment.getFirstSeq());
             batchLast = Math.max(batchLast, segment.getLastSeq());
-            if (segment.getStats() != null && segment.getStats().containsKey(tableName)) {
+            if (segment.getStats() == null) {
+                anyNullStats = true;
+                continue;
+            }
+            if (segment.getStats().containsKey(tableName)) {
                 tableFirst = Math.min(tableFirst, segment.getFirstSeq());
                 tableLast = Math.max(tableLast, segment.getLastSeq());
             }
         }
-        if (tableFirst != Long.MAX_VALUE) {
+        if (!anyNullStats && tableFirst != Long.MAX_VALUE) {
             return new SeqRange(tableFirst, tableLast);
         }
         if (batchFirst != Long.MAX_VALUE) {
