@@ -249,23 +249,24 @@ public final class DeltaParquetWriter {
         Map<String, FileWriteResult> files = new LinkedHashMap<>();
         long closeStarted = System.nanoTime();
         for (Map.Entry<String, TableWriter> entry : writers.entrySet()) {
-            String tableName = entry.getKey();
-            TableWriter writer = entry.getValue();
             try {
-                writer.close();
+                entry.getValue().close();
             } catch (RuntimeException | IOException e) {
-                failures.putIfAbsent(tableName, failure(e));
+                failures.putIfAbsent(entry.getKey(), failure(e));
             }
+        }
+        writeNanos[0] += System.nanoTime() - closeStarted;
+        listener.record("write", writeNanos[0]);
+        for (Map.Entry<String, TableWriter> entry : writers.entrySet()) {
+            String tableName = entry.getKey();
             if (replayFailure == null && !failures.containsKey(tableName)) {
                 try {
-                    files.put(tableName, writer.result());
+                    files.put(tableName, entry.getValue().result());
                 } catch (RuntimeException e) {
                     failures.put(tableName, failure(e));
                 }
             }
         }
-        writeNanos[0] += System.nanoTime() - closeStarted;
-        listener.record("write", writeNanos[0]);
         if (replayFailure != null) {
             throw replayFailure;
         }

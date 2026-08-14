@@ -987,10 +987,16 @@ of the same name). `{phase="total"}` is the whole cycle. Inner phases:
 | `delta.egress.duration` | `download`, `write`, `upload` |
 | `delta.checkpoint.duration` | `download_frame`, `fold`, `parquet`, `upload` |
 
-`download` is GetObject / stream `read`; `decode` is protobuf parse excluding the record
-consumer; `decimal_scan` / `write` / `parquet` are encode work; `upload` is PutObject.
-`delta.egress.pending` is `COUNT(*)` of `changelog_segments` with `egress_at IS NULL`,
-refreshed at most every five seconds.
+Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream
+`read` and `decode` is protobuf parse excluding the record consumer. On **egress**,
+`download` is the whole `readRecords` (buffer + parse; there is no `decode` phase).
+On **checkpoint**, `download_frame` is only the seed frame; segment GetObject/parse
+is inside `fold`. `decimal_scan` / `write` / `parquet` are encode work; `upload` is
+PutObject. `delta.egress.pending` is `COUNT(*)` of `changelog_segments` with
+`egress_at IS NULL`, refreshed at most every five seconds.
+
+A PromQL `_sum` that does not filter `phase` double-counts (inner phases + `total`).
+Cycle rate and the write-share rule below must use `phase="total"`.
 
 **Reading the write share.** Compare `phase="write"` (or `parquet` on a checkpoint) to
 `phase="total"` over the same window:

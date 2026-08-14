@@ -99,8 +99,7 @@ public class CheckpointService {
                             + " is unreadable and earlier segments are pruned — refusing lossy refold", null);
         }
 
-        // Time the whole materialization, including frame download, so write/cycle has a
-        // consistent denominator (042). Empty incremental work still returns immediately.
+        // Empty incremental work still belongs in phase=total: the frame download already ran.
         return metrics.timeCheckpoint(() -> {
             byte[] frameBytes = haveFrame
                     ? metrics.timeCheckpointPhase("download_frame",

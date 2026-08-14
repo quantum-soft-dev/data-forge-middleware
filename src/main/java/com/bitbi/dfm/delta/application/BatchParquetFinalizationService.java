@@ -424,15 +424,18 @@ public class BatchParquetFinalizationService {
             }
             DeltaParquetWriter.BatchWriteResult written;
             try (ReplayPhaseClock.Scope scope = ReplayPhaseClock.bind()) {
-                written = DeltaParquetWriter.writeBatchDeltaParquet(
-                        requests,
-                        consumer -> segments.forEach(segment ->
-                                segmentService.forEachRecord(segment.getS3Key(), consumer)),
-                        maxTempBytes,
-                        metrics::recordBatchParquetPhase);
-                if (scope.clock().hasSamples()) {
-                    metrics.recordBatchParquetPhase("download", scope.clock().downloadNanos());
-                    metrics.recordBatchParquetPhase("decode", scope.clock().decodeNanos());
+                try {
+                    written = DeltaParquetWriter.writeBatchDeltaParquet(
+                            requests,
+                            consumer -> segments.forEach(segment ->
+                                    segmentService.forEachRecord(segment.getS3Key(), consumer)),
+                            maxTempBytes,
+                            metrics::recordBatchParquetPhase);
+                } finally {
+                    if (scope.clock().hasSamples()) {
+                        metrics.recordBatchParquetPhase("download", scope.clock().downloadNanos());
+                        metrics.recordBatchParquetPhase("decode", scope.clock().decodeNanos());
+                    }
                 }
             }
             for (Map.Entry<String, DeltaParquetWriter.FileWriteFailure> entry

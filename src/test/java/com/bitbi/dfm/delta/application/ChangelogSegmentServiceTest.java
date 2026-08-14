@@ -15,6 +15,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
@@ -127,6 +128,29 @@ class ChangelogSegmentServiceTest {
         List<UUID> keyIds = keyIdCaptor.getAllValues();
         assertEquals(2, keyIds.size());
         assertNotEquals(keyIds.get(0), keyIds.get(1));
+    }
+
+    @Test
+    void replayStillRecordsDownloadAndDecodeWhenTheConsumerThrows() throws Exception {
+        ChangeRecord record = rec("orders", Op.INSERT, 1);
+        byte[] payload = ChangelogCodec.serialize(List.of(record));
+        java.io.ByteArrayInputStream slow = new java.io.ByteArrayInputStream(payload) {
+            @Override
+            public int read(byte[] b, int off, int len) {
+                java.util.concurrent.locks.LockSupport.parkNanos(
+                        java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(8));
+                return super.read(b, off, len);
+            }
+        };
+
+        try (ReplayPhaseClock.Scope scope = ReplayPhaseClock.bind()) {
+            assertThrows(IllegalStateException.class, () ->
+                    ChangelogSegmentService.replay(slow, ignored -> {
+                        throw new IllegalStateException("poison record");
+                    }, scope.clock()));
+            assertTrue(scope.clock().hasSamples());
+            assertTrue(scope.clock().downloadNanos() >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(8));
+        }
     }
 
     @Test

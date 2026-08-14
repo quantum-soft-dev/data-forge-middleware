@@ -156,13 +156,19 @@ public class ChangelogSegmentService {
                 : new TimingInputStream(content);
         long wallStarted = System.nanoTime();
         long[] consumerNanos = {0L};
-        ChangelogCodec.forEach(timed, record -> {
-            long consumeStarted = System.nanoTime();
-            consumer.accept(record);
-            consumerNanos[0] += System.nanoTime() - consumeStarted;
-        });
-        clock.addDownload(timed.readNanos());
-        clock.addDecode(System.nanoTime() - wallStarted - timed.readNanos() - consumerNanos[0]);
+        try {
+            ChangelogCodec.forEach(timed, record -> {
+                long consumeStarted = System.nanoTime();
+                try {
+                    consumer.accept(record);
+                } finally {
+                    consumerNanos[0] += System.nanoTime() - consumeStarted;
+                }
+            });
+        } finally {
+            clock.addDownload(timed.readNanos());
+            clock.addDecode(System.nanoTime() - wallStarted - timed.readNanos() - consumerNanos[0]);
+        }
     }
 
     /**
