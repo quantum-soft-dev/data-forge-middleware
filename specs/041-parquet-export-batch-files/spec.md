@@ -115,8 +115,9 @@ becomes `READY`, must appear in the next sweep.
 - **FR-006**: Filename is `{table}_batch{batchId}.parquet`.
 - **FR-007**: V51 adds nullable `first_seq`/`last_seq` and partial catalog indexes for the
   READY `(ready_at, s3_key)` and ABANDONED `(updated_at, 'abandoned/' || id)` listing branches.
-- **FR-008**: The writer stores the table's seq range on `markReady`. Legacy NULL rows fall
-  back to `MIN(first_seq)`/`MAX(last_seq)` of the batch's published (non-provisional) segments.
+- **FR-008**: The writer stores the table's seq range on `markReady` and on `markAbandoned`
+  when the range is known. A NULL stored range is emitted as `lastSeq: null`; the catalog
+  does not query `changelog_segments`. Clients must never skip a file whose `lastSeq` is null.
 - **FR-009**: `type=delta` and `type=checkpoint` keep their current sources and pagination.
 - **FR-010**: Requeue that later reaches `READY` is listed again because `ready_at` is new.
 - **FR-011**: Materialization, S3 keys, workers, owner/admin delta routes, and one-time link
