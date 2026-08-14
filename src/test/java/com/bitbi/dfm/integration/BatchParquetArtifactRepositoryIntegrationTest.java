@@ -235,6 +235,47 @@ class BatchParquetArtifactRepositoryIntegrationTest extends BaseIntegrationTest 
     }
 
     @Test
+    void probesForSpentExpiredClaimsWithoutTouchingTheCatalogWatermark() {
+        BatchParquetArtifact spent = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "spent");
+        spent.markBuilding();
+        repository.save(spent);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+        String watermarkBefore = catalogWatermark();
+
+        assertTrue(repository.hasSpentExpiredClaims(now, 0, 1),
+                "a BUILDING row past its lease with its attempt budget spent is settleable");
+        assertFalse(repository.hasSpentExpiredClaims(now, 86_400, 1),
+                "a lease that has not elapsed yet leaves the row with its owner");
+        assertFalse(repository.hasSpentExpiredClaims(now, 0, 1_000),
+                "a row that still has attempts left is reclaimed by the claim query, not abandoned");
+        assertEquals(watermarkBefore, catalogWatermark(),
+                "the probe is a read: it must not move the catalog watermark");
+    }
+
+    @Test
+    void theSettleProbeAndTheSettleUpdateSelectTheSameRows() {
+        BatchParquetArtifact spent = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "spent");
+        spent.markBuilding();
+        repository.save(spent);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1);
+
+        // The probe is what decides whether the update ever runs, so a probe narrower than the
+        // update settles nothing at all — and each query's own test would still be green.
+        assertTrue(repository.hasSpentExpiredClaims(now, 0, 1));
+        assertTrue(repository.abandonExpiredClaims(now, now, 0, 1, "lease expired") > 0,
+                "the update must find what the probe promised");
+        assertFalse(repository.hasSpentExpiredClaims(now, 0, 1),
+                "and go quiet once the update has settled it");
+        assertEquals(0, repository.abandonExpiredClaims(now, now, 0, 1, "lease expired"));
+    }
+
+    private String catalogWatermark() {
+        return jdbc.queryForObject(
+                "SELECT published_at::text FROM batch_parquet_catalog_watermark WHERE id = 1",
+                String.class);
+    }
+
+    @Test
     void renewsALeaseOnlyForTheClaimThatStillHoldsTheRow() {
         BatchParquetArtifact artifact = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
         artifact.markBuilding();

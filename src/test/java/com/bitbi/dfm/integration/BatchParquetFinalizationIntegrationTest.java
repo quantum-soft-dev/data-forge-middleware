@@ -147,6 +147,48 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("an idle poll leaves the shared catalog watermark exactly where it was")
+    void idlePollDoesNotMoveTheCatalogWatermark() {
+        String before = catalogWatermark();
+
+        assertThat(finalizationService.finalizeNext()).isFalse();
+
+        assertThat(catalogWatermark()).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("a poll that does find a dead claim still settles it under the catalog watermark")
+    void productivePollAbandonsASpentExpiredClaimAtTheFreshWatermark() {
+        BatchParquetArtifact dead = BatchParquetArtifact.pending(BATCH_ID, SITE_ID, "orders");
+        dead.markBuilding();
+        artifactRepository.save(dead);
+        // A build that killed its process on every one of its five attempts: nothing but the
+        // settle step can move this row — the retry queries exclude a spent BUILDING claim.
+        jdbc.update("UPDATE batch_parquet_artifacts SET attempt_count = 5, "
+                + "updated_at = TIMESTAMP '2000-01-01 00:00:00' WHERE id = ?", dead.getId());
+        String watermarkBefore = catalogWatermark();
+
+        assertThat(service(storage, 5).finalizeNext()).isFalse();
+
+        BatchParquetArtifact settled = artifactRepository.findById(dead.getId()).orElseThrow();
+        assertThat(settled.getStatus()).isEqualTo(BatchParquetArtifactStatus.ABANDONED);
+        assertThat(settled.getLastError()).isNotNull();
+        String watermarkAfter = catalogWatermark();
+        assertThat(watermarkAfter).isNotEqualTo(watermarkBefore);
+        // The catalog orders ABANDONED on updated_at, so it has to be the stamp taken under the
+        // publish lock — not the worker's own clock.
+        assertThat(jdbc.queryForObject(
+                "SELECT updated_at::text FROM batch_parquet_artifacts WHERE id = ?",
+                String.class, dead.getId())).isEqualTo(watermarkAfter);
+    }
+
+    private String catalogWatermark() {
+        return jdbc.queryForObject(
+                "SELECT published_at::text FROM batch_parquet_catalog_watermark WHERE id = 1",
+                String.class);
+    }
+
+    @Test
     @DisplayName("a re-baseline's provisional segments are invisible to finalization")
     void ignoresProvisionalSegmentsOfAnUnfinishedSnapshot() throws Exception {
         segmentService.persist(SITE_ID, BATCH_ID, "DELTA", 1L, List.of(
