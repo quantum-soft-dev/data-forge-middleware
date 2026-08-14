@@ -9,7 +9,7 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
 - [x] **T03 — Batch Parquet phases.** Add red tests, then attribute
   `download` / `decode` / `decimal_scan` / `write` / `upload` on the completed-batch
   path without buffering the changelog.
-- [ ] **T04 — Egress phases.** Add red tests, then time
+- [x] **T04 — Egress phases.** Add red tests, then time
   `download` / `write` / `upload` on per-segment egress.
 - [ ] **T05 — Checkpoint phases.** Add red tests, then time
   `download_frame` / `fold` / `parquet` / `upload` inside the existing cycle timer.

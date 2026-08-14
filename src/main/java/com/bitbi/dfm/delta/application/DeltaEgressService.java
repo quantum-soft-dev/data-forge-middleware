@@ -75,7 +75,15 @@ public class DeltaEgressService {
      */
     @Transactional
     public void egressSegment(ChangelogSegment segment) {
-        List<ChangeRecord> records = changelogSegmentService.readRecords(segment.getS3Key());
+        metrics.timeEgress(() -> {
+            egressSegmentTimed(segment);
+            return null;
+        });
+    }
+
+    private void egressSegmentTimed(ChangelogSegment segment) {
+        List<ChangeRecord> records = metrics.timeEgressPhase("download",
+                () -> changelogSegmentService.readRecords(segment.getS3Key()));
 
         Map<String, List<ChangeRecord>> byTable = new LinkedHashMap<>();
         for (ChangeRecord record : records) {
@@ -92,7 +100,8 @@ public class DeltaEgressService {
             }
             byte[] parquet;
             try {
-                parquet = DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords);
+                parquet = metrics.timeEgressPhase("write",
+                        () -> DeltaParquetWriter.toDeltaParquet(table, schema, tableRecords));
             } catch (RuntimeException e) {
                 // One poison table (data the declared schema cannot render) must not wedge the
                 // queue: without this the whole segment rolls back and the sweep retries it forever,
@@ -104,7 +113,11 @@ public class DeltaEgressService {
                         table, segment.getSiteId(), segment.getFirstSeq(), segment.getLastSeq(), e);
                 return;
             }
-            storage.uploadDelta(segment.getSiteId(), table, segment.getFirstSeq(), segment.getLastSeq(), parquet);
+            metrics.timeEgressPhase("upload", () -> {
+                storage.uploadDelta(segment.getSiteId(), table, segment.getFirstSeq(),
+                        segment.getLastSeq(), parquet);
+                return null;
+            });
         });
 
         segment.markEgressed();
