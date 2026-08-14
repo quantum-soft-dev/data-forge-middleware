@@ -98,7 +98,10 @@ times.
 attempts is work in progress, and the download must say so rather than claim the file is missing.
 
 `delta.batch-parquet.duration` retains its metric name but now times one batch-level grouped build,
-including shared replay and per-table uploads, rather than one table replay.
+including shared replay and per-table uploads, rather than one table replay. The same meter also
+exports inner `{phase=download|decode|decimal_scan|write|upload}` samples plus `{phase=total}`
+for the whole claim (042, issue #111). Prometheus requires that single label set — there is no
+untagged series.
 
 ## Operations and recovery
 

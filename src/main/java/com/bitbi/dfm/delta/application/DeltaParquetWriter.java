@@ -160,6 +160,12 @@ public final class DeltaParquetWriter {
      */
     static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
                                                     RecordReplay replay, long maxBytes) {
+        return writeBatchDeltaParquet(requests, replay, maxBytes, null);
+    }
+
+    static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
+                                                    RecordReplay replay, long maxBytes,
+                                                    PhaseClock clock) {
         if (requests.isEmpty()) {
             return new BatchWriteResult(Map.of(), Map.of());
         }
@@ -181,17 +187,27 @@ public final class DeltaParquetWriter {
         }
 
         if (needsDecimalScan) {
-            replay.forEach(change -> {
-                Schema schema = baseSchemas.get(change.getTable());
-                if (schema == null || failures.containsKey(change.getTable())) {
-                    return;
+            long[] scanNanos = {0L};
+            try {
+                replay.forEach(change -> {
+                    Schema schema = baseSchemas.get(change.getTable());
+                    if (schema == null || failures.containsKey(change.getTable())) {
+                        return;
+                    }
+                    long started = System.nanoTime();
+                    try {
+                        updateDecimalPrecisions(schema, decimalPrecisions.get(change.getTable()), change);
+                    } catch (RuntimeException e) {
+                        failures.put(change.getTable(), failure(e));
+                    } finally {
+                        scanNanos[0] += System.nanoTime() - started;
+                    }
+                });
+            } finally {
+                if (clock != null) {
+                    clock.addDecimalScan(scanNanos[0]);
                 }
-                try {
-                    updateDecimalPrecisions(schema, decimalPrecisions.get(change.getTable()), change);
-                } catch (RuntimeException e) {
-                    failures.put(change.getTable(), failure(e));
-                }
-            });
+            }
         }
 
         Map<String, TableWriter> writers = new LinkedHashMap<>();
@@ -209,16 +225,20 @@ public final class DeltaParquetWriter {
         }
 
         RuntimeException replayFailure = null;
+        long[] writeNanos = {0L};
         try {
             replay.forEach(change -> {
                 TableWriter writer = writers.get(change.getTable());
                 if (writer == null || failures.containsKey(change.getTable())) {
                     return;
                 }
+                long started = System.nanoTime();
                 try {
                     writer.write(change);
                 } catch (RuntimeException e) {
                     failures.put(change.getTable(), failure(e));
+                } finally {
+                    writeNanos[0] += System.nanoTime() - started;
                 }
             });
         } catch (RuntimeException e) {
@@ -226,17 +246,23 @@ public final class DeltaParquetWriter {
         }
 
         Map<String, FileWriteResult> files = new LinkedHashMap<>();
+        long closeStarted = System.nanoTime();
+        for (Map.Entry<String, TableWriter> entry : writers.entrySet()) {
+            try {
+                entry.getValue().close();
+            } catch (RuntimeException | IOException e) {
+                failures.putIfAbsent(entry.getKey(), failure(e));
+            }
+        }
+        writeNanos[0] += System.nanoTime() - closeStarted;
+        if (clock != null) {
+            clock.addWrite(writeNanos[0]);
+        }
         for (Map.Entry<String, TableWriter> entry : writers.entrySet()) {
             String tableName = entry.getKey();
-            TableWriter writer = entry.getValue();
-            try {
-                writer.close();
-            } catch (RuntimeException | IOException e) {
-                failures.putIfAbsent(tableName, failure(e));
-            }
             if (replayFailure == null && !failures.containsKey(tableName)) {
                 try {
-                    files.put(tableName, writer.result());
+                    files.put(tableName, entry.getValue().result());
                 } catch (RuntimeException e) {
                     failures.put(tableName, failure(e));
                 }

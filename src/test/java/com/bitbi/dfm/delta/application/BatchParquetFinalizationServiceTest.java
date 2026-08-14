@@ -16,6 +16,7 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import com.bitbi.dfm.site.domain.TableSchema.ColumnDefinition;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -86,11 +87,19 @@ class BatchParquetFinalizationServiceTest {
     }
 
     private BatchParquetFinalizationService newService(int maxAttempts, int leaseSeconds, long maxTempBytes) {
+        return newService(maxAttempts, leaseSeconds, maxTempBytes, new SimpleMeterRegistry());
+    }
+
+    private BatchParquetFinalizationService newService(int maxAttempts, int leaseSeconds,
+                                                       long maxTempBytes, SimpleMeterRegistry registry) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, batchRepository, storage, new DeltaMetrics(
-                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()),
+                segmentService, schemaService, batchRepository, storage, new DeltaMetrics(registry),
                 mock(PlatformTransactionManager.class), tempDir.toString(), maxTempBytes, 60,
                 maxAttempts, leaseSeconds);
+    }
+
+    private static long phaseCount(SimpleMeterRegistry registry, String phase) {
+        return registry.get("delta.batch-parquet.duration").tag("phase", phase).timer().count();
     }
 
     @Test
@@ -206,13 +215,64 @@ class BatchParquetFinalizationServiceTest {
         // One replay in segment order: the table declares no decimal column, so the precision
         // scan pass is skipped rather than re-downloading every segment.
         InOrder reads = inOrder(segmentService);
-        reads.verify(segmentService).forEachRecord(eq("first"), any());
-        reads.verify(segmentService).forEachRecord(eq("second"), any());
-        verify(segmentService, times(1)).forEachRecord(eq("first"), any());
-        verify(segmentService, times(1)).forEachRecord(eq("second"), any());
+        reads.verify(segmentService).forEachRecord(eq("first"), any(), any());
+        reads.verify(segmentService).forEachRecord(eq("second"), any(), any());
+        verify(segmentService, times(1)).forEachRecord(eq("first"), any(), any());
+        verify(segmentService, times(1)).forEachRecord(eq("second"), any(), any());
         try (var files = Files.list(tempDir)) {
             assertTrue(files.findAny().isEmpty(), "temp file deleted after success");
         }
+    }
+
+    @Test
+    void recordsWriteAndUploadPhasesOnASuccessfulBuild() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        BatchParquetFinalizationService timed = newService(5, 1800, 10_000_000L, registry);
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        claimable(batchId, siteId, "orders");
+        ChangelogSegment segment = segment(siteId, batchId, "only", 1, 1,
+                Map.of("orders", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("orders", schema()));
+        stream("only", record(1, Op.INSERT));
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/orders.parquet");
+
+        assertTrue(timed.finalizeNext());
+
+        assertEquals(1L, phaseCount(registry, "write"));
+        assertEquals(1L, phaseCount(registry, "upload"));
+        assertEquals(0L, phaseCount(registry, "decimal_scan"));
+        assertEquals(1L, phaseCount(registry, "total"));
+    }
+
+    @Test
+    void recordsDecimalScanPhaseWhenAClaimedTableDeclaresDecimals() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        BatchParquetFinalizationService timed = newService(5, 1800, 10_000_000L, registry);
+        UUID siteId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        claimable(batchId, siteId, "payments");
+        ChangelogSegment segment = segment(siteId, batchId, "money", 1, 1,
+                Map.of("payments", new TableChangeStats(1, 0, 0)));
+        when(segmentRepository.findByBatchIdOrderByFirstSeq(batchId)).thenReturn(List.of(segment));
+        when(schemaService.getTableSchemas(siteId)).thenReturn(Map.of("payments", new TableSchema(
+                List.of(new ColumnDefinition("id", "bigint", false),
+                        new ColumnDefinition("amount", "numeric(7,2)", false)),
+                List.of("id"), List.of())));
+        Value id = Value.newBuilder().setIntValue(1).build();
+        Value amount = Value.newBuilder().setDecimalValue("1.00").build();
+        stream("money", ChangeRecord.newBuilder().setTable("payments").setSeq(1L).setOp(Op.INSERT)
+                .putKey("id", id).putData("id", id).putData("amount", amount).build());
+        when(storage.uploadBatchParquet(any(), any(), any(), any(), any()))
+                .thenReturn("egress/payments.parquet");
+
+        assertTrue(timed.finalizeNext());
+
+        assertEquals(1L, phaseCount(registry, "decimal_scan"));
+        assertEquals(1L, phaseCount(registry, "write"));
+        assertEquals(1L, phaseCount(registry, "upload"));
     }
 
     @Test
@@ -243,7 +303,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, orders.getStatus());
         assertEquals(2, customers.getRowCount());
         assertEquals(2, orders.getRowCount());
-        verify(segmentService, times(1)).forEachRecord(eq("mixed"), any());
+        verify(segmentService, times(1)).forEachRecord(eq("mixed"), any(), any());
         verify(artifactRepository).tryLockBatch(batchId);
         verify(artifactRepository).findRetryableByBatchId(
                 eq(batchId), any(LocalDateTime.class), eq(60), eq(1800), eq(5));
@@ -271,7 +331,7 @@ class BatchParquetFinalizationServiceTest {
         assertEquals(BatchParquetArtifactStatus.READY, customers.getStatus());
         assertEquals(BatchParquetArtifactStatus.FAILED, missingSchema.getStatus());
         assertTrue(missingSchema.getLastError().contains("No declared schema"));
-        verify(segmentService, times(1)).forEachRecord(eq("mixed"), any());
+        verify(segmentService, times(1)).forEachRecord(eq("mixed"), any(), any());
     }
 
     @Test
@@ -293,7 +353,7 @@ class BatchParquetFinalizationServiceTest {
         // dies mid-build leaves attemptCount already incremented instead of an endless retry.
         InOrder order = inOrder(artifactRepository, segmentService, storage);
         order.verify(artifactRepository).save(any(BatchParquetArtifact.class));
-        order.verify(segmentService).forEachRecord(any(), any());
+        order.verify(segmentService).forEachRecord(any(), any(), any());
         order.verify(storage).uploadBatchParquet(any(), any(), any(), any(), any());
         assertEquals(1, artifact.getAttemptCount());
     }
@@ -778,6 +838,13 @@ class BatchParquetFinalizationServiceTest {
             }
             return null;
         }).when(segmentService).forEachRecord(eq(key), any(Consumer.class));
+        doAnswer(invocation -> {
+            Consumer<ChangeRecord> consumer = invocation.getArgument(1);
+            for (ChangeRecord record : records) {
+                consumer.accept(record);
+            }
+            return null;
+        }).when(segmentService).forEachRecord(eq(key), any(Consumer.class), any());
     }
 
     private static TableSchema schema() {

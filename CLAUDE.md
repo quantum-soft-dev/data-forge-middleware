@@ -454,6 +454,15 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- 042-parquet-phase-metrics: Parquet and checkpoint duration meters are split by `phase` so a
+  cycle can be attributed (issue #111). `delta.batch-parquet.duration` and
+  `delta.checkpoint.duration` keep their names; `delta.egress.duration` is new. Every series
+  carries `{phase=...}` (`total` is the whole cycle; Prometheus cannot mix tagged and untagged
+  series). Inner phases are `download`/`decode`/`decimal_scan`/`write`/`upload` (batch),
+  `download`/`write`/`upload` (egress), and `download_frame`/`fold`/`parquet`/`upload`
+  (checkpoint). `delta.egress.pending` gauges `changelog_segments` with `egress_at IS NULL`.
+  Writers, queues, S3 keys, REST, gRPC, and frontend are unchanged. See
+  `docs/delta-client-v2-guide.md` (Metrics), `specs/042-parquet-phase-metrics/`.
 - 041-parquet-export-batch-files: Parquet Export lists one completed-batch Parquet per table and
   makes that the unversioned default (issue #109). `GET /api/v1/plugins/parquet-export/files`
   accepts `type=batch` from `batch_parquet_artifacts` (`READY`/`ABANDONED`); omitted `type` is

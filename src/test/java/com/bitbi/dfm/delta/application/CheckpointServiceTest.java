@@ -53,6 +53,12 @@ class CheckpointServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         when(metrics.timeCheckpoint(any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(0)).get());
+        when(metrics.timeCheckpointPhase(any(), any(Supplier.class)))
+                .thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(1)).get());
+        doAnswer(inv -> {
+            ((Runnable) inv.getArgument(1)).run();
+            return null;
+        }).when(metrics).timeCheckpointPhase(any(), any(Runnable.class));
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 0L));
 
         ChangelogSegment segment = ChangelogSegment.create(
@@ -160,6 +166,42 @@ class CheckpointServiceTest {
         verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
         verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
+    @Test
+    void recordsFoldParquetAndUploadPhasesOnAFullBuild() {
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenReturn("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(metrics).timeCheckpointPhase(eq("parquet"), any(Supplier.class));
+        verify(metrics, atLeastOnce()).timeCheckpointPhase(eq("upload"), any(Runnable.class));
+        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
+    }
+
+    @Test
+    void recordsDownloadFramePhaseWhenASeedFrameExists() {
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 2L, 1, false, false, 0L));
+        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(true);
+        when(checkpointStorage.downloadFrame(SITE, 2L)).thenReturn(ChangelogCodec.serialize(List.of()));
+        ChangelogSegment newer = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 3L, 4L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(newer));
+        when(changelogSegmentService.readRecords("s3/tail")).thenReturn(List.of(
+                record("customers", 3L, 3, "Cara"),
+                record("customers", 4L, 4, "Dan")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenReturn("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(metrics).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
+        verify(checkpointStorage).downloadFrame(SITE, 2L);
+        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
     }
 
     @Test
