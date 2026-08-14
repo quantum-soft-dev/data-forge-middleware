@@ -1,5 +1,6 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.delta.application.ChangelogFold;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.application.CheckpointService;
 import com.bitbi.dfm.delta.domain.Checkpoint;
@@ -7,22 +8,16 @@ import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
-import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.zip.GZIPInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * T3.5a — {@code buildCheckpoint} is incremental: it seeds from the latest all-INSERT checkpoint
@@ -46,13 +41,10 @@ class CheckpointIncrementalIntegrationTest extends BaseIntegrationTest {
     private CheckpointRepository checkpointRepository;
 
     @Autowired
-    private S3CheckpointStorage checkpointStorage;
-
-    @Autowired
     private JdbcTemplate jdbc;
 
     @Test
-    void seedsFromCheckpointFrameWhenPreCheckpointSegmentsArePruned() throws Exception {
+    void seedsFromCheckpointFrameWhenPreCheckpointSegmentsArePruned() {
         // Segment 1 (FULL_SNAPSHOT, seq 1..2): Ann + Bob.
         changelogSegmentService.persist(SITE, BATCH1, "FULL_SNAPSHOT", 1L, List.of(
                 rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann")),
@@ -72,16 +64,21 @@ class CheckpointIncrementalIntegrationTest extends BaseIntegrationTest {
                 rec("customers", Op.DELETE, 3L, key("id", 2L), Map.of()),
                 rec("customers", Op.INSERT, 4L, key("id", 3L), data("id", 3L, "name", "Cleo"))));
 
-        checkpointService.buildCheckpoint(SITE);
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = checkpointService.buildCheckpoint(SITE);
 
         Checkpoint cp2 = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertEquals(4L, cp2.getSeq(), "advanced to the latest segment seq");
         assertEquals(2L, cp2.getRowCount(), "Ann (from frame) + Cleo (from delta); Bob deleted");
 
-        String csv = ungzip(checkpointStorage.download(cp2.getS3KeyCsv()));
-        assertTrue(csv.contains("Ann"), "Ann survives from the checkpoint frame: " + csv);
-        assertTrue(csv.contains("Cleo"), "Cleo added by the post-checkpoint delta: " + csv);
-        assertFalse(csv.contains("Bob"), "Bob deleted by the post-checkpoint delta: " + csv);
+        // Assert on the folded state itself rather than on a materialized file: since issue #113 the
+        // only artifact is Parquet, which this site has no declared schema for — and the claim under
+        // test is about the fold seeding from the frame, not about the file format.
+        List<String> names = state.get("customers").values().stream()
+                .map(row -> row.data().get("name").getStringValue())
+                .sorted()
+                .toList();
+        assertEquals(List.of("Ann", "Cleo"), names,
+                "Ann survives from the checkpoint frame, Cleo added and Bob deleted by the delta");
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
@@ -105,9 +102,4 @@ class CheckpointIncrementalIntegrationTest extends BaseIntegrationTest {
         return m;
     }
 
-    private static String ungzip(byte[] gz) throws Exception {
-        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(gz))) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
-    }
 }

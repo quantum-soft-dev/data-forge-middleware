@@ -26,24 +26,28 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Service for querying and retrieving CSV files for the Bit BI Plugin API.
+ * Service for querying and retrieving baseline files for the Bit BI Plugin API.
  *
  * <p>Provides functionality to:
  * <ul>
- *   <li>List CSV files for a site (latest version of each file)</li>
- *   <li>Download a specific CSV file by name</li>
+ *   <li>List the reconstructed checkpoint snapshots for a site (one per table)</li>
+ *   <li>Download a specific snapshot by name</li>
  *   <li>Validate site ownership before operations</li>
  * </ul>
  *
- * <p>Used for plugin initialization - clients download CSV files directly
+ * <p>Used for plugin initialization - clients download the baseline files directly
  * instead of receiving SQL statements for the baseline batch.</p>
+ *
+ * <p>Since issue #113 the served format is Parquet ({@code <table>.parquet}): the V2 checkpoint
+ * build stopped materializing the gzipped CSV this API used to expose. Sites that never ingested
+ * through Delta keep falling back to their historical uploaded files.</p>
  *
  * @see com.bitbi.dfm.plugin.presentation.BitBiPluginApiController
  */
 @Service
-public class CsvFileQueryService {
+public class CheckpointFileQueryService {
 
-    private static final Logger log = LoggerFactory.getLogger(CsvFileQueryService.class);
+    private static final Logger log = LoggerFactory.getLogger(CheckpointFileQueryService.class);
 
     private final UploadedFileRepository uploadedFileRepository;
     private final SiteRepository siteRepository;
@@ -53,7 +57,7 @@ public class CsvFileQueryService {
     private final String bucketName;
     private final MeterRegistry meterRegistry;
 
-    public CsvFileQueryService(
+    public CheckpointFileQueryService(
             UploadedFileRepository uploadedFileRepository,
             SiteRepository siteRepository,
             CheckpointRepository checkpointRepository,
@@ -71,13 +75,14 @@ public class CsvFileQueryService {
     }
 
     /** Suffix used to expose a reconstructed-table checkpoint as a downloadable file. */
-    private static final String CHECKPOINT_FILE_SUFFIX = ".csv.gz";
+    private static final String CHECKPOINT_FILE_SUFFIX = ".parquet";
 
     /**
-     * Lists all CSV files for a site.
+     * Lists all baseline files for a site.
      *
-     * <p>Returns the latest version of each unique file name.
-     * Validates that the site belongs to the specified account.</p>
+     * <p>A site that has ingested through Delta answers with its reconstructed checkpoint
+     * snapshots; one that never did falls back to its historical uploaded files. Validates that
+     * the site belongs to the specified account.</p>
      *
      * @param accountId the account ID from the API key authentication
      * @param siteId the site ID to list files for
@@ -89,10 +94,13 @@ public class CsvFileQueryService {
         log.debug("Listing files for siteId={}, accountId={}", siteId, accountId);
 
         validateSiteOwnership(accountId, siteId);
-        List<FileDto> files = listCheckpointFiles(siteId);
-        if (files.isEmpty()) {
-            files = listHistoricalUploadedFiles(siteId);
-        }
+        List<Checkpoint> checkpoints = checkpointRepository.findBySiteId(siteId);
+        // The fallback is keyed on "this site has no checkpoints at all", not on "no checkpoint
+        // carries the requested format": a V2 site whose Parquet is still pending must answer
+        // "nothing yet" rather than hand back pre-Delta uploads as if they were its baseline.
+        List<FileDto> files = checkpoints.isEmpty()
+                ? listHistoricalUploadedFiles(siteId)
+                : listCheckpointFiles(siteId, checkpoints);
 
         meterRegistry.counter("plugin.api.files.listed",
                 "siteId", siteId.toString(),
@@ -101,20 +109,21 @@ public class CsvFileQueryService {
     }
 
     /**
-     * Lists the reconstructed checkpoint snapshots for a V2 (Delta) site, one per table, exposed
-     * under the legacy {@code <table>.csv.gz} naming so the Bit BI client contract is unchanged.
+     * Lists the reconstructed checkpoint snapshots for a V2 (Delta) site, one per table, as
+     * {@code <table>.parquet} — the only format the checkpoint build materializes since #113.
      */
-    private List<FileDto> listCheckpointFiles(UUID siteId) {
-        List<Checkpoint> checkpoints = checkpointRepository.findBySiteId(siteId).stream()
-                .filter(cp -> cp.getS3KeyCsv() != null)
+    private List<FileDto> listCheckpointFiles(UUID siteId, List<Checkpoint> checkpoints) {
+        List<Checkpoint> materialized = checkpoints.stream()
+                .filter(cp -> cp.getS3KeyParquet() != null)
                 .toList();
 
-        log.info("Found {} checkpoint files for V2 siteId={}", checkpoints.size(), siteId);
+        log.info("Found {} checkpoint files for V2 siteId={} ({} table(s) not materialized)",
+                materialized.size(), siteId, checkpoints.size() - materialized.size());
 
-        return checkpoints.stream()
+        return materialized.stream()
                 .map(cp -> FileDto.of(
                         cp.getTableName() + CHECKPOINT_FILE_SUFFIX,
-                        checkpointStorage.contentLength(cp.getS3KeyCsv()),
+                        checkpointStorage.contentLength(cp.getS3KeyParquet()),
                         cp.getUpdatedAt().toInstant(ZoneOffset.UTC)))
                 .toList();
     }
@@ -122,7 +131,7 @@ public class CsvFileQueryService {
     private List<FileDto> listHistoricalUploadedFiles(UUID siteId) {
         List<LatestFileInfoWithS3Key> files =
                 uploadedFileRepository.findLatestByOriginalFileNameForSite(siteId);
-        log.info("No checkpoint CSVs for siteId={}; found {} historical uploaded files",
+        log.info("No checkpoints for siteId={}; found {} historical uploaded files",
                 siteId, files.size());
         return files.stream()
                 .map(file -> FileDto.of(
@@ -133,7 +142,7 @@ public class CsvFileQueryService {
     }
 
     /**
-     * Downloads a CSV file from S3.
+     * Downloads a baseline file from S3.
      *
      * <p>Returns an InputStream that streams the file content directly from S3.
      * The caller is responsible for closing the stream.</p>
@@ -156,12 +165,12 @@ public class CsvFileQueryService {
     }
 
     /**
-     * Downloads the reconstructed checkpoint CSV for a single table of a V2 (Delta) site.
+     * Resolves the reconstructed checkpoint snapshot for a single table of a V2 (Delta) site.
      *
-     * <p>The {@code fileName} is the {@code <table>.csv.gz} name exposed by {@link #listFiles}; the
-     * table is resolved by stripping that suffix and matched against the site's checkpoints.</p>
-     *
-     * @throws FileNotFoundException if no checkpoint snapshot exists for the requested table
+     * <p>The {@code fileName} is the {@code <table>.parquet} name exposed by {@link #listFiles};
+     * the table is resolved by stripping that suffix and matched against the site's checkpoints.
+     * The retired {@code <table>.csv.gz} name deliberately does not resolve here — answering it
+     * with Parquet bytes would hand a pre-#113 client a file it would try to gunzip.</p>
      */
     private java.util.Optional<Checkpoint> findCheckpoint(UUID siteId, String fileName) {
         String tableName = fileName.endsWith(CHECKPOINT_FILE_SUFFIX)
@@ -169,14 +178,14 @@ public class CsvFileQueryService {
                 : fileName;
 
         return checkpointRepository.findBySiteIdAndTableName(siteId, tableName)
-                .filter(cp -> cp.getS3KeyCsv() != null);
+                .filter(cp -> cp.getS3KeyParquet() != null);
     }
 
     private FileDownloadResult downloadCheckpointFile(UUID siteId, Checkpoint checkpoint) {
-        S3CheckpointStorage.CheckpointObject object = checkpointStorage.open(checkpoint.getS3KeyCsv());
+        S3CheckpointStorage.CheckpointObject object = checkpointStorage.open(checkpoint.getS3KeyParquet());
 
-        log.info("Downloaded checkpoint CSV: siteId={}, table={}, s3Key={}",
-                siteId, checkpoint.getTableName(), checkpoint.getS3KeyCsv());
+        log.info("Downloaded checkpoint Parquet: siteId={}, table={}, s3Key={}",
+                siteId, checkpoint.getTableName(), checkpoint.getS3KeyParquet());
 
         meterRegistry.counter("plugin.api.files.downloaded",
                 "siteId", siteId.toString()).increment();
@@ -185,7 +194,7 @@ public class CsvFileQueryService {
                 object.inputStream(),
                 checkpoint.getTableName() + CHECKPOINT_FILE_SUFFIX,
                 object.size(),
-                "application/gzip"
+                "application/vnd.apache.parquet"
         );
     }
 
@@ -221,6 +230,9 @@ public class CsvFileQueryService {
 
     private String determineContentType(String fileName) {
         String lowerName = fileName.toLowerCase();
+        if (lowerName.endsWith(CHECKPOINT_FILE_SUFFIX)) {
+            return "application/vnd.apache.parquet";
+        }
         if (lowerName.endsWith(".csv.gz") || lowerName.endsWith(".gz")) {
             return "application/gzip";
         }

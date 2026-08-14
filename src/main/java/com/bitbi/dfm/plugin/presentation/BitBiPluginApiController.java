@@ -1,6 +1,6 @@
 package com.bitbi.dfm.plugin.presentation;
 
-import com.bitbi.dfm.plugin.application.CsvFileQueryService;
+import com.bitbi.dfm.plugin.application.CheckpointFileQueryService;
 import com.bitbi.dfm.plugin.application.PluginRateLimiterService;
 import com.bitbi.dfm.plugin.application.SqlChangesQueryService;
 import com.bitbi.dfm.plugin.presentation.dto.FileDto;
@@ -62,15 +62,15 @@ public class BitBiPluginApiController {
     private static final Logger log = LoggerFactory.getLogger(BitBiPluginApiController.class);
 
     private final SqlChangesQueryService sqlChangesQueryService;
-    private final CsvFileQueryService csvFileQueryService;
+    private final CheckpointFileQueryService checkpointFileQueryService;
     private final PluginRateLimiterService rateLimiterService;
 
     public BitBiPluginApiController(
             SqlChangesQueryService sqlChangesQueryService,
-            CsvFileQueryService csvFileQueryService,
+            CheckpointFileQueryService checkpointFileQueryService,
             PluginRateLimiterService rateLimiterService) {
         this.sqlChangesQueryService = sqlChangesQueryService;
-        this.csvFileQueryService = csvFileQueryService;
+        this.checkpointFileQueryService = checkpointFileQueryService;
         this.rateLimiterService = rateLimiterService;
     }
 
@@ -246,11 +246,11 @@ public class BitBiPluginApiController {
     }
 
     /**
-     * Lists all CSV files for a site.
+     * Lists all baseline files for a site.
      *
-     * <p>Returns the latest version of each CSV file available for download.
-     * Use this endpoint for plugin initialization to download baseline CSV files
-     * instead of SQL statements.</p>
+     * <p>Returns one reconstructed checkpoint snapshot per table ({@code <table>.parquet}), or the
+     * historical uploaded files for a site that never ingested through Delta. Use this endpoint for
+     * plugin initialization to download baseline data instead of SQL statements.</p>
      *
      * @param siteId the UUID of the site to list files for
      * @param authentication the Plugin API Key authentication context
@@ -258,9 +258,11 @@ public class BitBiPluginApiController {
      */
     @GetMapping(value = "/sites/{siteId}/files", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-        summary = "List CSV files for a site",
-        description = "Returns a list of all CSV files available for the site. " +
-                "Use this for plugin initialization to download baseline data."
+        summary = "List baseline files for a site",
+        description = "Returns one checkpoint snapshot per table as <table>.parquet (or the "
+                + "historical uploaded files for a site that never ingested through Delta). "
+                + "Use this for plugin initialization to download baseline data. "
+                + "Before issue #113 the checkpoint was exposed as <table>.csv.gz."
     )
     @ApiResponses({
         @ApiResponse(
@@ -294,7 +296,7 @@ public class BitBiPluginApiController {
         try {
             log.debug("Listing files for siteId={}, accountId={}", siteId, accountId);
 
-            List<FileDto> files = csvFileQueryService.listFiles(accountId, siteId);
+            List<FileDto> files = checkpointFileQueryService.listFiles(accountId, siteId);
             return ResponseEntity.ok(FileListResponseDto.of(files));
 
         } catch (SecurityException e) {
@@ -306,21 +308,22 @@ public class BitBiPluginApiController {
     }
 
     /**
-     * Downloads a CSV file.
+     * Downloads a baseline file.
      *
-     * <p>Returns the file content directly from S3, streaming through the server.
-     * Files are returned in their original compressed format (.csv.gz).</p>
+     * <p>Returns the file content directly from S3, streaming through the server. A checkpoint
+     * snapshot is returned as Parquet; a historical uploaded file in its original format.</p>
      *
      * @param siteId the UUID of the site the file belongs to
-     * @param fileName the name of the file to download (e.g., "customers.csv.gz")
+     * @param fileName the name of the file to download (e.g., "customers.parquet")
      * @param authentication the Plugin API Key authentication context
      * @return the file content as a stream
      */
     @GetMapping(value = "/sites/{siteId}/files/{fileName}")
     @Operation(
-        summary = "Download a CSV file",
-        description = "Downloads the specified CSV file from S3. " +
-                "Files are returned in their original format (compressed .csv.gz)."
+        summary = "Download a baseline file",
+        description = "Downloads the specified file from S3, as listed by the files endpoint. "
+                + "Checkpoint snapshots are Parquet; historical uploaded files keep their "
+                + "original format."
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "File downloaded successfully"),
@@ -355,7 +358,7 @@ public class BitBiPluginApiController {
         try {
             log.debug("Downloading file: siteId={}, fileName={}, accountId={}", siteId, fileName, accountId);
 
-            CsvFileQueryService.FileDownloadResult result = csvFileQueryService.downloadFile(accountId, siteId, fileName);
+            CheckpointFileQueryService.FileDownloadResult result = checkpointFileQueryService.downloadFile(accountId, siteId, fileName);
 
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + result.fileName() + "\"")
@@ -366,7 +369,7 @@ public class BitBiPluginApiController {
         } catch (SecurityException e) {
             log.warn("Site access denied: siteId={}, accountId={}, message={}", siteId, accountId, e.getMessage());
             throw e;
-        } catch (CsvFileQueryService.FileNotFoundException e) {
+        } catch (CheckpointFileQueryService.FileNotFoundException e) {
             log.warn("File not found: siteId={}, fileName={}", siteId, fileName);
             throw e;
         } finally {

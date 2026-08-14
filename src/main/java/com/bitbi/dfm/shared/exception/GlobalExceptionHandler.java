@@ -1,7 +1,7 @@
 package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
-import com.bitbi.dfm.plugin.application.CsvFileQueryService;
+import com.bitbi.dfm.plugin.application.CheckpointFileQueryService;
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
@@ -1195,17 +1195,17 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handle CsvFileQueryService.FileNotFoundException (404 Not Found).
+     * Handle CheckpointFileQueryService.FileNotFoundException (404 Not Found).
      * <p>
-     * Thrown when a CSV file is not found for a site.
+     * Thrown when a baseline file is not found for a site.
      * </p>
      */
-    @ExceptionHandler(CsvFileQueryService.FileNotFoundException.class)
-    public ResponseEntity<ErrorResponseDto> handleCsvFileNotFound(
-            CsvFileQueryService.FileNotFoundException ex,
+    @ExceptionHandler(CheckpointFileQueryService.FileNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleBaselineFileNotFound(
+            CheckpointFileQueryService.FileNotFoundException ex,
             HttpServletRequest request) {
 
-        logger.warn("CSV file not found: {}", ex.getMessage());
+        logger.warn("Baseline file not found: {}", ex.getMessage());
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),

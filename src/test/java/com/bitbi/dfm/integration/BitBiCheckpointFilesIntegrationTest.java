@@ -13,22 +13,23 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
-import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.zip.GZIPInputStream;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -39,10 +40,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * T3.4 — the Bit BI {@code /sites/{siteId}/files} endpoint serves reconstructed
- * checkpoint CSV snapshots for the sole supported Delta ingestion path.
+ * T3.4 / issue #113 — the Bit BI {@code /sites/{siteId}/files} endpoint serves reconstructed
+ * checkpoint snapshots for the sole supported Delta ingestion path, as Parquet: the checkpoint
+ * build stopped materializing the gzipped CSV this endpoint used to expose.
  */
-@DisplayName("Bit BI Plugin API — checkpoint CSV files (T3.4)")
+@DisplayName("Bit BI Plugin API — checkpoint Parquet files (T3.4)")
 class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
 
     private static final String API_KEY_HEADER = "X-Plugin-Api-Key";
@@ -67,6 +69,9 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private S3Client s3Client;
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
     @org.springframework.beans.factory.annotation.Value("${s3.bucket.name}")
     private String bucketName;
 
@@ -82,6 +87,7 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
     }
 
     private void buildCustomersCheckpoint() {
+        seedCustomersSchema();
         List<ChangeRecord> records = List.of(
                 rec("customers", Op.INSERT, 1L, key("id", 1L), data("id", 1L, "name", "Ann")),
                 rec("customers", Op.INSERT, 2L, key("id", 2L), data("id", 2L, "name", "Bob")));
@@ -89,31 +95,64 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
         checkpointService.buildCheckpoint(SITE_ID);
     }
 
+    /** Parquet is typed from the declared schema, so the site needs one to materialize at all. */
+    private void seedCustomersSchema() {
+        String schemaJson = """
+                {
+                  "tables": {
+                    "customers": {
+                      "columns": [
+                        {"name": "id", "type": "bigint", "nullable": false},
+                        {"name": "name", "type": "varchar(255)", "nullable": true}
+                      ],
+                      "primaryKey": ["id"],
+                      "uniqueKeys": []
+                    }
+                  }
+                }
+                """;
+        jdbc.update("DELETE FROM site_schemas WHERE site_id = ?", SITE_ID);
+        jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
+                        + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
+                UUID.randomUUID(), SITE_ID, schemaJson);
+    }
+
     @Test
-    @DisplayName("V2 site lists the reconstructed table as <table>.csv.gz")
-    void v2SiteListsReconstructedCheckpointCsv() throws Exception {
+    @DisplayName("V2 site lists the reconstructed table as <table>.parquet")
+    void v2SiteListsReconstructedCheckpointParquet() throws Exception {
         buildCustomersCheckpoint();
 
         mockMvc.perform(get(filesPath).header(API_KEY_HEADER, VALID_API_KEY))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.files[*].fileName", hasItem("customers.csv.gz")));
+                .andExpect(jsonPath("$.files[*].fileName", hasItem("customers.parquet")));
     }
 
     @Test
-    @DisplayName("V2 site download streams the gzipped reconstructed CSV")
-    void v2SiteDownloadsReconstructedCheckpointCsv() throws Exception {
+    @DisplayName("V2 site download streams the reconstructed Parquet")
+    void v2SiteDownloadsReconstructedCheckpointParquet() throws Exception {
         buildCustomersCheckpoint();
 
-        byte[] body = mockMvc.perform(get(filesPath + "/customers.csv.gz").header(API_KEY_HEADER, VALID_API_KEY))
+        byte[] body = mockMvc.perform(get(filesPath + "/customers.parquet").header(API_KEY_HEADER, VALID_API_KEY))
                 .andExpect(status().isOk())
-                .andExpect(content().contentTypeCompatibleWith("application/gzip"))
-                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("customers.csv.gz")))
+                .andExpect(content().contentTypeCompatibleWith("application/vnd.apache.parquet"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, containsString("customers.parquet")))
                 .andReturn().getResponse().getContentAsByteArray();
 
-        String csv = ungzip(body);
-        assertTrue(csv.contains("name"), "header present: " + csv);
-        assertTrue(csv.contains("Ann"), "row Ann present: " + csv);
-        assertTrue(csv.contains("Bob"), "row Bob present: " + csv);
+        assertTrue(body.length > 4, "a Parquet file was streamed");
+        assertEquals("PAR1", new String(body, 0, 4, StandardCharsets.US_ASCII), "Parquet magic header");
+    }
+
+    @Test
+    @DisplayName("The retired <table>.csv.gz name is no longer served")
+    void v2SiteNoLongerServesTheCheckpointAsCsv() throws Exception {
+        buildCustomersCheckpoint();
+
+        mockMvc.perform(get(filesPath).header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[*].fileName", not(hasItem("customers.csv.gz"))));
+
+        mockMvc.perform(get(filesPath + "/customers.csv.gz").header(API_KEY_HEADER, VALID_API_KEY))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -138,7 +177,7 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
                 .andExpect(content().bytes(body));
     }
 
-    // --- helpers (mirror CheckpointCsvIntegrationTest) ---
+    // --- helpers (mirror CheckpointParquetIntegrationTest) ---
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
         return ChangeRecord.newBuilder().setTable(table).setOp(op).setSeq(seq)
@@ -159,11 +198,5 @@ class BitBiCheckpointFilesIntegrationTest extends BaseIntegrationTest {
             m.put((String) kv[i], v);
         }
         return m;
-    }
-
-    private static String ungzip(byte[] gz) throws Exception {
-        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(gz))) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
     }
 }
