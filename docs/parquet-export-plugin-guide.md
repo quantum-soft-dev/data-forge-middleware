@@ -120,7 +120,9 @@ exhausted its build attempts: `downloadUrl` and `linkExpiresAt` are null and no
 `abandoned`).
 
 The client skip rule is unchanged: `lastSeq <= applied_seq → skip`. Only the file granularity
-changed. Legacy artifacts with a null seq range report the batch-wide published range.
+changed. `lastSeq == null` means the range is unknown — **never skip** that file (in JavaScript
+`null <= n` is `true`). Abandoned rows keep a stored range when one was published; they do not
+fall back to live changelog segments.
 
 `nextCursor` is non-null exactly when `hasMore` is `true`.
 

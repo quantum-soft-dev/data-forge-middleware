@@ -42,18 +42,19 @@
   boundaries); use `batch_id || table_name` (collides if the same pair is requeued and the
   previous listing is still being walked — id is stabler).
 
-## Decision: seq range stored at publish, batch-wide fallback
+## Decision: seq range stored at publish, no live fallback
 
 - **Decision**: writer writes min/max seq of published, non-provisional segments whose `stats`
-  contain the table; if none, the batch-wide published min/max. Legacy NULL columns use the
-  same fallback in SQL.
-- **Rationale**: the file contains every record of that table for the batch. A site-global
-  watermark `lastSeq <= applied_seq → skip` stays correct. `DeltaParquetWriter.FileWriteResult`
-  does not currently expose seq bounds; reading the segments the writer already loaded avoids a
-  writer contract change.
+  contain the table; if none, the batch-wide published min/max. `clearPublishedMetadata` keeps
+  that pair. The catalog reads only the stored columns. `lastSeq == null` is unknown — never skip.
+- **Rationale**: the file contains every record of that table for the batch. A live
+  `MIN`/`MAX` over `changelog_segments` becomes NULL once retention prunes the batch, and
+  JavaScript `null <= n` is `true`, so clients would skip a still-listed READY/ABANDONED file.
+  There is no production READY history to backfill in V51.
 - **Alternatives considered**: add seq tracking to the Parquet writer (more precise per-record
   bounds, larger diff, not required for the watermark); always store batch-wide (simpler, less
-  informative when a table only appears in the tail).
+  informative when a table only appears in the tail); V51 backfill from remaining segments
+  (no such rows in prod); LATERAL fallback (wrong after retention, and paid on every row).
 
 ## Decision: filename uses the batch UUID
 

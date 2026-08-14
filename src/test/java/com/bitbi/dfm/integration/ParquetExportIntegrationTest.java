@@ -327,12 +327,27 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should fall back to the batch-wide seq range when the artifact range is null")
-    void shouldFallBackToBatchWideSeqRange() throws Exception {
+    @DisplayName("Should emit a null seq range when the artifact never stored one")
+    void shouldEmitNullSeqWhenArtifactRangeIsUnknown() throws Exception {
         UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
         insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "READY",
                 "egress/orders.parquet", null, null,
                 "2026-07-27 10:16:00", "2026-07-27 10:16:00");
+
+        mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.files[0].firstSeq").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.files[0].lastSeq").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    @DisplayName("Should keep the stored seq range after changelog segments are pruned")
+    void shouldKeepStoredSeqRangeAfterSegmentsArePruned() throws Exception {
+        UUID batchId = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        insertArtifact(UUID.randomUUID(), batchId, SITE_STORE_01, "orders", "READY",
+                "egress/orders.parquet", 100L, 250L,
+                "2026-07-27 10:16:00", "2026-07-27 10:16:00");
+        jdbc.update("DELETE FROM changelog_segments WHERE batch_id = ?", batchId);
 
         mockMvc.perform(get(FILES_PATH).header("Authorization", basicAuth()))
                 .andExpect(status().isOk())

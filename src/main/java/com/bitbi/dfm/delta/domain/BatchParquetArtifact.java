@@ -73,11 +73,17 @@ public class BatchParquetArtifact {
     @Column(name = "ready_at")
     private LocalDateTime readyAt;
 
-    /** Inclusive first sequence of this table in the batch; set only on {@link #markReady}. */
+    /**
+     * Inclusive first sequence of this table in the batch. Set on {@link #markReady} and kept
+     * through abandon/requeue so the catalog does not depend on live changelog segments.
+     */
     @Column(name = "first_seq")
     private Long firstSeq;
 
-    /** Inclusive last sequence of this table in the batch; set only on {@link #markReady}. */
+    /**
+     * Inclusive last sequence of this table in the batch. Set on {@link #markReady} and kept
+     * through abandon/requeue so the catalog does not depend on live changelog segments.
+     */
     @Column(name = "last_seq")
     private Long lastSeq;
 
@@ -223,8 +229,6 @@ public class BatchParquetArtifact {
         fileSize = null;
         checksum = null;
         readyAt = null;
-        firstSeq = null;
-        lastSeq = null;
     }
 
     private void touch() {

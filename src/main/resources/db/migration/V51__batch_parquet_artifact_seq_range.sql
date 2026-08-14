@@ -1,6 +1,7 @@
 -- Migration: V51__batch_parquet_artifact_seq_range.sql
 -- Description: Persist the per-table seq range on completed-batch Parquet artifacts (041, #109).
--- Old READY rows stay NULL; the plugin catalog falls back to the batch-wide published range.
+-- Old READY rows stay NULL. The catalog emits that as lastSeq=null (never skippable);
+-- it does not live-query changelog_segments after retention.
 
 ALTER TABLE batch_parquet_artifacts
     ADD COLUMN first_seq BIGINT,

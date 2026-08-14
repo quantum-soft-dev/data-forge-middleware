@@ -112,18 +112,11 @@ public class ParquetExportCatalogDao {
                 FROM (
                     SELECT a.site_id, st.domain, a.table_name, a.batch_id,
                            LOWER(a.status) AS status,
-                           COALESCE(a.first_seq, br.first_seq) AS first_seq,
-                           COALESCE(a.last_seq, br.last_seq) AS last_seq,
+                           a.first_seq, a.last_seq,
                            CASE WHEN a.status = 'READY' THEN a.ready_at ELSE a.updated_at END AS produced_at,
                            COALESCE(a.s3_key, 'abandoned/' || a.id::text) AS s3_key
                     FROM batch_parquet_artifacts a
                     JOIN sites st ON st.id = a.site_id
-                    LEFT JOIN LATERAL (
-                        SELECT MIN(s.first_seq) AS first_seq, MAX(s.last_seq) AS last_seq
-                        FROM changelog_segments s
-                        WHERE s.batch_id = a.batch_id
-                          AND s.provisional = FALSE
-                    ) br ON a.first_seq IS NULL
                     WHERE st.account_id = :accountId
                       AND a.status IN ('READY', 'ABANDONED')
                       AND (

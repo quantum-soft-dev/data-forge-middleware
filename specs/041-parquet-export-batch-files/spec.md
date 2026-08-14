@@ -38,7 +38,7 @@ thousands of segment slices.
 
 1. **Given** a `READY` artifact for table `orders`, **When** the client lists `/files` without
    `type` or with `type=batch`, **Then** the row has `type=batch`, `status=ready`,
-   `batchId`, `seq=null`, `firstSeq`/`lastSeq` from the artifact (or the batch-wide fallback),
+   `batchId`, `seq=null`, `firstSeq`/`lastSeq` from the artifact (null when never stored),
    `producedAt=ready_at`, and a registered download URL.
 2. **Given** `PENDING`/`BUILDING`/`FAILED` rows for the same batch, **When** the client lists,
    **Then** those rows are absent.
@@ -89,8 +89,9 @@ becomes `READY`, must appear in the next sweep.
 
 1. **Given** a `READY` artifact whose `ready_at` is after the client's `since`, **When** listed,
    **Then** it is included even if the batch closed earlier.
-2. **Given** a legacy row with `first_seq`/`last_seq` NULL, **When** listed, **Then** the
-   catalog fills the range from the batch's published changelog segments.
+2. **Given** a row with `first_seq`/`last_seq` NULL, **When** listed, **Then** the catalog
+   emits `lastSeq: null` and does not query `changelog_segments`. Clients must never skip
+   a file whose `lastSeq` is null.
 
 ## Edge Cases
 
