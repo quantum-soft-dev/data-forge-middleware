@@ -531,8 +531,13 @@ You don't write these — they're how downstream tools read your data:
 - **Durable raw journal**: every batch is stored as one or more compressed protobuf changelog
   segments. Ingestion seals bound memory and failure recovery; they are authoritative inputs for
   checkpoints and Parquet materialization, but are not exposed as individual backup downloads.
-- **Bit BI** keeps using `GET /api/v1/plugins/bit-bi/sites/{siteId}/files`; the CSV it downloads is the
-  **reconstructed checkpoint** (latest `snapshot.csv.gz` per table), unchanged for Bit BI.
+- **Bit BI** keeps using `GET /api/v1/plugins/bit-bi/sites/{siteId}/files`; what it downloads is the
+  **reconstructed checkpoint** (latest `snapshot.parquet` per table), listed as `<table>.parquet`.
+  **Breaking change (issue #113):** this used to be `<table>.csv.gz` served from a gzipped CSV
+  snapshot the checkpoint build wrote alongside the Parquet. That build step is gone, so the old
+  name is no longer listed and no longer downloadable — a Bit BI client must read Parquet. The
+  baseline contract is otherwise unchanged: `plugin_delta_baselines` still captures checkpoint
+  seqs, and SQL is still emitted only for records with `seq > baseline_seq(table)`.
 - **Realtime analytics consumers** keep reading a **sequential segment Parquet stream** per table:
   `egress/{siteId}/{table}/delta/seq={first}-{last}.parquet` (zero-padded sequences — listing order is
   apply order). Each file is one committed session segment: typed columns from your submitted schema
@@ -563,8 +568,9 @@ You don't write these — they're how downstream tools read your data:
 - **Full per-table Parquet load**: each checkpoint build also writes the complete typed snapshot
   `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` (tables with a submitted schema only).
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
-  UI (presigned URL, 15 min). Parquet is the target format; the checkpoint CSV is the legacy Bit BI
-  path and will go away once Bit BI migrates.
+  UI (presigned URL, 15 min). It is the **only** format a checkpoint build materializes since issue
+  #113 — a table with no submitted schema therefore produces no snapshot at all, which is counted as
+  `delta.checkpoint.tables.unmaterialized{reason=no_schema}`.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
@@ -578,8 +584,7 @@ spans about an hour) — past that the table is abandoned (and logged at ERROR) 
 forever, since the common causes (no declared schema, data the schema cannot render) never recover
 on their own. A worker claim is durable, so a build killed by a restart still spends its attempt;
 the row is picked up again once `DELTA_BATCH_PARQUET_LEASE_SECONDS` (default 30 min) pass with no
-sign of life, which a live build refreshes as it goes. The Bit BI checkpoint CSV is
-still built by the async scheduler. Operators can tune the completed-batch pool and disk policy with
+sign of life, which a live build refreshes as it goes. Operators can tune the completed-batch pool and disk policy with
 `DELTA_BATCH_PARQUET_MAX_CONCURRENT`, `DELTA_BATCH_PARQUET_SWEEP_MS`,
 `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,
 `DELTA_BATCH_PARQUET_LEASE_SECONDS`, `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`, and
@@ -615,8 +620,8 @@ ownership, admin routes require ROLE_ADMIN):
 | Endpoint | Method | Access | Purpose |
 |---|---|---|---|
 | `/api/v1/account/sites/{siteId}/delta/sync-state` · `/api/v1/sites/{siteId}/delta/sync-state` | GET | owner · admin | Watermark, checkpoint pointer, schema version, `rebaselineRequested`/`rebuildRequested` flags; 404 until the client first connects |
-| `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with `hasCsv`/`hasParquet` presence flags |
-| `.../delta/checkpoints/{table}/download?format=csv\|parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click |
+| `.../delta/checkpoints` | GET | owner · admin | Per-table checkpoint rows with the `hasParquet` presence flag (`hasCsv` removed — #113) |
+| `.../delta/checkpoints/{table}/download?format=parquet` | GET | owner · admin | Fresh presigned URL (15 min) per click. `format=csv` answers `410 Gone`: the snapshot is no longer produced |
 | `.../delta/batches/{batchId}/tables/{table}/parquet` | GET | owner | Fresh presigned URL (15 min) for the exact unified completed-batch/table artifact. `409` while an attempt is queued, running or pending retry (`PENDING`/`BUILDING`/`FAILED`); `404` when absent or abandoned after `max-attempts` (for example, no renderable schema). Admin twin descoped 2026-07-08 — no admin batch-detail surface |
 | `/api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts` | GET | admin | Queue diagnostics for unified completed-batch artifacts: table, status, attempts, last error, and timestamps; storage and claim internals are omitted |
 | `/api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue` | POST | admin | Audited recovery: reset `ABANDONED`, or `BUILDING` after its lease expires, to a fresh `PENDING` lifecycle; `409` for a live/unrecoverable state and `404` for a route mismatch |
@@ -782,8 +787,8 @@ zero" semantics needs the updated client.
 automatically — no manual `POST /reinit` on this path. The trigger is the **first checkpoint built
 after the wipe**, not the FULL_SNAPSHOT commit: at commit time every checkpoint of the site has just
 been deleted in the same transaction, so a recapture there would freeze baseline 0 and the DELTA
-segments that follow would generate SQL overlapping the checkpoint CSVs the plugin client downloads
-(duplicate rows in Bit BI). Baselines must be checkpoint seqs, exactly as in a manual reinit. The
+segments that follow would generate SQL overlapping the checkpoint snapshots the plugin client
+downloads (duplicate rows in Bit BI). Baselines must be checkpoint seqs, exactly as in a manual reinit. The
 window between snapshot and checkpoint behaves as before: snapshot segments suspend the site's
 baselines, so no SQL is produced while there is nothing consistent to base it on. One
 `DELTA_AUTO_REINIT` entry lands in `plugin_audit_logs`. **An ordinary re-baseline is unchanged** and

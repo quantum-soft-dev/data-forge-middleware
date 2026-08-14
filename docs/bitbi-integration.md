@@ -312,6 +312,49 @@ curl -X GET https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/sites \
 }
 ```
 
+### Download Baseline Files
+
+Before applying SQL deltas a client bootstraps from the site's baseline: one file per table.
+
+> **Breaking change (issue #113).** These files used to be gzipped CSV named `<table>.csv.gz`.
+> They are now **Parquet**, named `<table>.parquet` and served as
+> `application/vnd.apache.parquet`. The old names are neither listed nor downloadable — a request
+> for `<table>.csv.gz` answers `404`, deliberately rather than returning Parquet bytes under a
+> `.gz` name. The middleware stopped writing the CSV snapshot altogether, so there is no
+> compatibility window: a client must read Parquet to initialize a Delta (V2) site.
+>
+> Only the bytes change. Baseline bookkeeping is the same — the plugin captures checkpoint seqs
+> and emits SQL only for records with `seq > baseline_seq(table)`, so the download still pairs
+> with the SQL stream exactly as before.
+
+```bash
+curl -X GET https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/sites/{siteId}/files \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6" \
+  -H "Accept: application/json"
+```
+
+**Response (200 OK)**:
+```json
+{
+  "files": [
+    { "fileName": "customers.parquet", "fileSize": 20480, "lastModified": "2026-08-14T02:00:00Z" },
+    { "fileName": "orders.parquet",    "fileSize": 91234, "lastModified": "2026-08-14T02:00:00Z" }
+  ]
+}
+```
+
+Download one by name:
+
+```bash
+curl -X GET https://dev.dfm.bitbi.io/api/v1/plugins/bit-bi/sites/{siteId}/files/customers.parquet \
+  -H "X-Plugin-Api-Key: plk_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6" \
+  --output customers.parquet
+```
+
+A table appears here only once its checkpoint snapshot is materialized, which requires the source
+client to have submitted a schema for it. A site that never ingested through Delta answers with its
+historical uploaded files instead, in their original formats.
+
 ### Get SQL Changes
 
 Retrieve SQL changes for a specific site after a given date.
@@ -523,6 +566,31 @@ List available sites for the account.
   ]
 }
 ```
+
+#### GET /api/v1/plugins/bit-bi/sites/{siteId}/files
+
+List the site's baseline files — one checkpoint snapshot per table, as `<table>.parquet`
+(`<table>.csv.gz` before issue #113).
+
+**Response (200)**:
+```json
+{
+  "files": [
+    {
+      "fileName": "string",
+      "fileSize": 0,
+      "lastModified": "2026-08-14T02:00:00Z"
+    }
+  ]
+}
+```
+
+#### GET /api/v1/plugins/bit-bi/sites/{siteId}/files/{fileName}
+
+Download one baseline file. Checkpoint snapshots are returned as
+`application/vnd.apache.parquet`; historical uploaded files keep their original content type.
+
+**Response (200)**: file content · **404**: no such file for the site
 
 #### GET /api/v1/plugins/bit-bi/sql-changes
 
