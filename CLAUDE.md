@@ -454,6 +454,31 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-parquet-on-disk: The V2 checkpoint build materializes its snapshots on disk, one table
+  at a time, and every V2 Parquet writer takes an explicit row-group budget (issue #112, which
+  absorbed #114). `ParquetCheckpointWriter.toParquet` used to copy a table's folded rows into a
+  `List<GenericRecord>` and encode them into a `ByteArrayOutputStream`, so a build held a whole
+  table's Parquet file in heap on top of the fold — the last unbounded consumer on this path after
+  036 put completed-batch artifacts on disk and #113 removed the CSV twin.
+  `ParquetCheckpointWriter.writeParquet(Path, …)` streams instead: the rows arrive as an `Iterable`
+  and are traversed (a second time only when a decimal envelope must be measured — `widenDecimalsToFit`
+  is now a single pass and is skipped outright when no column declares a decimal), the encoded file
+  goes through the same `FileOutputFile` the batch writer uses, and
+  `S3CheckpointStorage.uploadParquet` takes that `Path` instead of a `byte[]`. `CheckpointService`
+  runs write → upload → delete per table, so one row-group buffer and one scratch file exist at a
+  time and the peak stops scaling with the table count. **The site fold stays in heap** — off-heap
+  folding is deliberately a separate future ticket, and `delta.checkpoint.duration{phase=fold}` is
+  the meter that shows when it starts to matter. New keys: `delta.parquet.row-group-bytes`
+  (`DELTA_PARQUET_ROW_GROUP_BYTES`, default **8 MiB**) applied at all four `AvroParquetWriter`
+  builders — one budget for the checkpoint, egress and batch paths, since they share one pod's heap;
+  `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes` (`DELTA_CHECKPOINT_TEMP_DIR`,
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, default 10 GiB) mirror the batch-parquet pair. Crossing the
+  ceiling raises `ArtifactSizeLimitExceededException` during the write and the existing per-table
+  catch records it as `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`. `FileOutputFile`
+  and `ArtifactSizeLimitExceededException` moved out of `DeltaParquetWriter` into the package now
+  that both writers use them. S3 keys, the checkpoint contract, meter names, codec (Snappy), the
+  `_op`/`_seq`/`_changed` schema, REST, gRPC and the frontend are unchanged; no migration. See
+  `docs/delta-client-v2-guide.md`.
 - wipe-checkpoint-orphans: Site history wipe walks `checkpoints/{siteId}/` after the database work
   instead of trusting the keys on the rows (issue #118). The `checkpoints` row is one per
   `(site, table)` and reused across builds — each build writes `…/{table}/seq={seq}/snapshot.parquet`

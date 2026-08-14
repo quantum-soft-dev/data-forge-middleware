@@ -570,7 +570,17 @@ You don't write these — they're how downstream tools read your data:
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
   UI (presigned URL, 15 min). It is the **only** format a checkpoint build materializes since issue
   #113 — a table with no submitted schema therefore produces no snapshot at all, which is counted as
-  `delta.checkpoint.tables.unmaterialized{reason=no_schema}`.
+  `delta.checkpoint.tables.unmaterialized{reason=no_schema}`. Since issue #112 the snapshot is built
+  **on disk, one table at a time**: the table's folded rows are streamed into a scratch file and the
+  file is streamed to S3, then deleted, so a build holds one Parquet row-group buffer and one
+  scratch file at a time instead of a whole table's encoded bytes per table. `DELTA_CHECKPOINT_TEMP_DIR`
+  (default `java.io.tmpdir` — point it at a scratch volume if the node's default is small) and
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB) govern that file; a table that would cross the
+  ceiling is stopped during the write and skipped as
+  `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
+  the declared schema cannot render. The **fold itself is still in heap** — this bounds
+  materialization, not reconstruction, so `delta.checkpoint.duration{phase=fold}` is the number to
+  watch on a very large site.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
@@ -1013,6 +1023,15 @@ of the same name). `{phase="total"}` is the whole cycle. Inner phases:
 | `delta.batch-parquet.duration` | `download`, `decode`, `decimal_scan`, `write`, `upload` |
 | `delta.egress.duration` | `download`, `write`, `upload` |
 | `delta.checkpoint.duration` | `download_frame`, `fold`, `parquet`, `upload` |
+
+**Row-group budget.** Every V2 Parquet writer — checkpoint snapshot, per-segment egress and
+completed-batch artifact — takes its row-group size from `DELTA_PARQUET_ROW_GROUP_BYTES`
+(`delta.parquet.row-group-bytes`, default 8 MiB). A writer buffers one row group in heap before
+flushing it, so with file-backed writers this value, times the number of writers open at once, is
+what bounds a build's memory: a batch claim opens one writer per claimed table, and parquet-mr's
+own default (~128 MB) multiplied that way does not fit a 2–3 Gi pod. It is a **memory ceiling, not
+a compression knob** — lowering it costs a little compression ratio and adds row-group metadata,
+raising it buys nothing but risk. Raise it only with the pod's heap raised alongside.
 
 Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream
 `read` and `decode` is protobuf parse excluding the record consumer. On **egress**,
