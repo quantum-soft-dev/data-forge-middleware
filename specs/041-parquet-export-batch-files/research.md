@@ -71,11 +71,13 @@
 - **Rationale**: READY implies a completed PutObject; ABANDONED has no object. Extra HEADs
   would add latency and could drop a READY row if S3 is briefly unreachable.
 
-## Decision: V51 index as specified
+## Decision: V51 catalog indexes match UNION ALL branches
 
-- **Decision**: btree `(site_id, ready_at, s3_key)`.
-- **Rationale**: issue #109. Helps READY listings filtered by site. Abandoned rows have null
-  `ready_at` and will not use it; they are rare.
-- **Alternatives considered**: functional index on
-  `(site_id, COALESCE(ready_at, updated_at), COALESCE(s3_key, id::text))` — better for mixed
-  pages, more than the issue asked for.
+- **Decision**: two partial indexes — `(site_id, ready_at, s3_key) WHERE status='READY'` and
+  `(site_id, updated_at, COALESCE(s3_key, 'abandoned/'||id)) WHERE status='ABANDONED'`.
+  `findBatchFiles` is `UNION ALL` of those branches, each limited, then merged by
+  `(produced_at, s3_key)`.
+- **Rationale**: a single btree on raw `(site_id, ready_at, s3_key)` cannot serve the mixed
+  CASE/COALESCE order. After splitting statuses, each branch uses its own columns.
+- **Alternatives considered**: one expression index on the CASE/COALESCE (matches a single
+  mixed query, unused after UNION ALL); keep the mixed scan (sorts the whole account).

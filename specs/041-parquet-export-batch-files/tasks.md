@@ -27,5 +27,5 @@ WIP = 1. Each task is test-first and lands as one atomic Conventional Commit ref
   drop the live LATERAL fallback; document that `lastSeq == null` never skips.
 - [x] **T10 — Skip rule.** Skip only `ready` / `delta` / `checkpoint`; always surface abandoned.
 - [x] **T11 — artifactId in the catalog.** Add `artifactId` to batch listing rows and the guide.
-- [ ] **T12 — Catalog index and cursor.** Align V51 with UNION ALL branches on
+- [x] **T12 — Catalog index and cursor.** Align V51 with UNION ALL branches on
   `(ready_at, s3_key)` and `(updated_at, id)`.

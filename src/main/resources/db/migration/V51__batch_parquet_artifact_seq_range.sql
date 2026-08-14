@@ -13,10 +13,19 @@ ALTER TABLE batch_parquet_artifacts
         OR (first_seq IS NOT NULL AND last_seq IS NOT NULL AND last_seq >= first_seq)
     );
 
--- Keyset support for the Parquet Export batch catalog (site + ready_at + s3_key).
--- ABANDONED rows have NULL ready_at/s3_key and do not use this index.
-CREATE INDEX idx_batch_parquet_artifacts_catalog
-    ON batch_parquet_artifacts (site_id, ready_at, s3_key);
+-- Catalog listing is UNION ALL of READY (ready_at, s3_key) and ABANDONED
+-- (updated_at, synthetic abandoned/{id}). Partial indexes match each branch.
+CREATE INDEX idx_batch_parquet_artifacts_catalog_ready
+    ON batch_parquet_artifacts (site_id, ready_at, s3_key)
+    WHERE status = 'READY';
+
+CREATE INDEX idx_batch_parquet_artifacts_catalog_abandoned
+    ON batch_parquet_artifacts (
+        site_id,
+        updated_at,
+        (COALESCE(s3_key, 'abandoned/' || id::text))
+    )
+    WHERE status = 'ABANDONED';
 
 COMMENT ON COLUMN batch_parquet_artifacts.first_seq IS
     'Inclusive first sequence of this table in the batch; set when the artifact becomes READY.';

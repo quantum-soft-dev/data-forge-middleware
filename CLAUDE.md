@@ -463,7 +463,8 @@ pages/{feature}/            # Route pages
   land earlier than a sibling already visible. Abandoned rows have `status=abandoned`,
   `artifactId` for admin requeue, and no download URL. V51 adds nullable
   `first_seq`/`last_seq` (writer-filled; kept on abandon; catalog never live-queries segments)
-  and index `(site_id, ready_at, s3_key)`. No owner/admin delta, gRPC, S3-key, or frontend
+  and partial catalog indexes for READY `(ready_at, s3_key)` / ABANDONED `(updated_at, abandoned/id)`.
+  No owner/admin delta, gRPC, S3-key, or frontend
   change. See `docs/parquet-export-plugin-guide.md`, `docs/cr-unified-batch-parquet.md`,
   `specs/041-parquet-export-batch-files/`.
 - plugin-secret-reveal: Activating a plugin from the UI no longer discards the secret it was issued (issue #107). The backend already returned it in `PluginActivationResponseDto.apiKey` for a new activation or a reactivation — bit-bi sends the raw `plk_` key, parquet-export sends `login:password` — but the frontend type omitted the field, so the only copy the account ever gets died in the response. `parsePluginSecret` (`features/my-plugins/model/pluginSecret.ts`) turns it into an `api-key`/`basic-auth` shape, the activation and rotation mutations hand it to their caller, and `PluginSecretDialog` reveals it once with per-field copy buttons; the value lives in widget state only while that dialog is open and never reaches the query cache, a toast or a log. The existing rotation endpoints (`POST /api/v1/account/plugins/bit-bi/rotate-api-key`, `.../parquet-export/rotate-password`) gain their first UI: a **Rotate API key** / **Rotate password** action on an active plugin card, answering through the same dialog. Frontend only — no API, DTO, migration or configuration change. See `docs/parquet-export-plugin-guide.md`, `docs/bitbi-integration.md`.

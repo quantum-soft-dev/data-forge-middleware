@@ -8,7 +8,8 @@ V51 additions:
 |---|---|---|---|
 | `first_seq` | BIGINT | yes | table (or writer fallback) range; set on `markReady`; kept on abandon/requeue |
 | `last_seq` | BIGINT | yes | same lifecycle as `first_seq` |
-| index `idx_batch_parquet_artifacts_catalog` | `(site_id, ready_at, s3_key)` | | catalog keyset support |
+| index `idx_batch_parquet_artifacts_catalog_ready` | `(site_id, ready_at, s3_key) WHERE READY` | | READY branch |
+| index `idx_batch_parquet_artifacts_catalog_abandoned` | `(site_id, updated_at, abandoned/id) WHERE ABANDONED` | | ABANDONED branch |
 
 Existing status machine is unchanged: `PENDING → BUILDING → READY | FAILED | ABANDONED`,
 `requeue` back to `PENDING`. `clearPublishedMetadata` clears object metadata (`s3_key`,

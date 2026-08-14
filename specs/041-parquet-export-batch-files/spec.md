@@ -113,7 +113,8 @@ becomes `READY`, must appear in the next sweep.
 - **FR-004**: Response adds `batchId`, `artifactId` and `status` (`ready` | `abandoned`). `seq` is null.
 - **FR-005**: `READY` rows get a one-time download link. `ABANDONED` rows do not.
 - **FR-006**: Filename is `{table}_batch{batchId}.parquet`.
-- **FR-007**: V51 adds nullable `first_seq`/`last_seq` and index `(site_id, ready_at, s3_key)`.
+- **FR-007**: V51 adds nullable `first_seq`/`last_seq` and partial catalog indexes for the
+  READY `(ready_at, s3_key)` and ABANDONED `(updated_at, abandoned/id)` listing branches.
 - **FR-008**: The writer stores the table's seq range on `markReady`. Legacy NULL rows fall
   back to `MIN(first_seq)`/`MAX(last_seq)` of the batch's published (non-provisional) segments.
 - **FR-009**: `type=delta` and `type=checkpoint` keep their current sources and pagination.
