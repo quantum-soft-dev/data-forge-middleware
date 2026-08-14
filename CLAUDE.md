@@ -466,7 +466,8 @@ pages/{feature}/            # Route pages
   `CheckpointFileQueryService`. Owner/admin `.../delta/checkpoints/{table}/download?format=csv`
   answers **410 Gone** (checked before the lookup, so it is the same answer for every table);
   `hasCsv` is gone from the checkpoint DTO and the UI's CSV pill with it. `checkpoints.s3_key_csv`
-  is **kept** (no migration): wipe and retention still delete the objects earlier builds wrote.
+  is **kept** (no migration): site wipe still deletes the objects earlier builds wrote — it is the
+  only sweeper that reads them, changelog retention prunes segments and never touched checkpoints.
   See `docs/delta-client-v2-guide.md`, `docs/bitbi-integration.md`, `docs/cr-bitbi-delta-sql.md`.
 - 041-parquet-export-batch-files: Parquet Export lists one completed-batch Parquet per table and
   makes that the unversioned default (issue #109). `GET /api/v1/plugins/parquet-export/files`

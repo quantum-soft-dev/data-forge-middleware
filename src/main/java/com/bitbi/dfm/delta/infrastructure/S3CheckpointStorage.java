@@ -29,7 +29,7 @@ import java.util.UUID;
  *
  * <p>Layout: {@code checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet}. Builds before issue
  * #113 also wrote a {@code snapshot.csv.gz} sibling; those objects are still read (and deleted) by
- * wipe/retention through the keys recorded on the checkpoint rows, but none are written any more.</p>
+ * site wipe through the keys recorded on the checkpoint rows, but none are written any more.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0

@@ -156,7 +156,7 @@ class DeltaCheckpointsRestContractTest extends BaseIntegrationTest {
         @Test
         @DisplayName("returns 410 for the retired csv format even when the table is unknown")
         void shouldReturn410ForRetiredCsvFormatOnUnknownTable() throws Exception {
-            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE) + "/nope/download?format=parquet")
+            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE) + "/nope/download?format=csv")
                             .header("Authorization", "Bearer " + MOCK_USER_JWT))
                     .andExpect(status().isGone());
         }

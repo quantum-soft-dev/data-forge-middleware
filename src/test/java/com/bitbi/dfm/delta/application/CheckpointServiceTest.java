@@ -153,6 +153,29 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void detachesThePreviousSnapshotWhenThisBuildMaterializesNothing() {
+        // The row is reused across builds: seq and rowCount advance every time. If a build fails to
+        // write Parquet, keeping the previous build's key would publish stale rows under the new
+        // seq — the checkpoint would list as fresh, Bit BI would serve the old bytes, and the rows
+        // between the two seqs would reach no consumer at all. The CSV used to mask this.
+        Checkpoint existing = Checkpoint.create(SITE, "customers", 1L, 1L);
+        existing.attachParquet("checkpoints/previous-parquet-key");
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "customers")).thenReturn(Optional.of(existing));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+        assertEquals(2L, saved.getValue().getSeq(), "the row still advances with the fold");
+        assertNull(saved.getValue().getS3KeyParquet(),
+                "a superseded snapshot must not stay attached to a newer seq");
+        verify(metrics).checkpointTableUnmaterialized("parquet_failed");
+    }
+
+    @Test
     void refusesLossyRefoldWhenFrameUnreadableAndHistoryPruned() {
         // Pointer advanced to 10, but the frame reads as absent (deleted, or an S3 HEAD denial
         // masquerading as absence) and segments below the checkpoint were pruned: a refold from

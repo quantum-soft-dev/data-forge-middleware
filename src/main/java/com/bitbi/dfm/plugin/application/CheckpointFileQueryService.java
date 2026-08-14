@@ -161,7 +161,25 @@ public class CheckpointFileQueryService {
         validateSiteOwnership(accountId, siteId);
         return findCheckpoint(siteId, fileName)
                 .map(checkpoint -> downloadCheckpointFile(siteId, checkpoint))
-                .orElseGet(() -> downloadHistoricalUploadedFile(siteId, fileName));
+                .orElseGet(() -> downloadFallbackOrReject(siteId, fileName));
+    }
+
+    /**
+     * Answer a name that matched no checkpoint snapshot.
+     *
+     * <p>The historical-uploads fallback is scoped exactly as {@link #listFiles} scopes it: a site
+     * that has checkpoints is a Delta site, and its baseline is whatever the checkpoint build
+     * materialized. Falling back per file name would let a V1-migrated site answer the retired
+     * {@code <table>.csv.gz} with a years-old uploaded object and a 200 — a pre-#113 client would
+     * take that as its baseline and never notice the format changed underneath it.</p>
+     */
+    private FileDownloadResult downloadFallbackOrReject(UUID siteId, String fileName) {
+        if (!checkpointRepository.findBySiteId(siteId).isEmpty()) {
+            log.warn("No checkpoint snapshot named {} for Delta siteId={} — refusing the historical "
+                    + "uploads fallback for a checkpointed site", fileName, siteId);
+            throw new FileNotFoundException("File not found: " + fileName);
+        }
+        return downloadHistoricalUploadedFile(siteId, fileName);
     }
 
     /**

@@ -148,11 +148,26 @@ class CheckpointFileQueryServiceTest {
         // The pre-#113 name must not silently resolve to the Parquet object: a client that still
         // asks for <table>.csv.gz would parse Parquet bytes as gzipped CSV.
         allowOwnedSite();
-        when(uploadedFileRepository.findLatestByOriginalFileNameForSiteAndFileName(siteId, "customers.csv.gz"))
-                .thenReturn(Optional.empty());
+        when(checkpointRepository.findBySiteId(siteId))
+                .thenReturn(List.of(checkpoint("customers", "checkpoints/customers.parquet")));
 
         assertThatThrownBy(() -> service.downloadFile(accountId, siteId, "customers.csv.gz"))
                 .isInstanceOf(CheckpointFileQueryService.FileNotFoundException.class);
+        verifyNoInteractions(uploadedFileRepository);
+    }
+
+    @Test
+    void shouldNotServeAHistoricalUploadForACheckpointedSite() {
+        // A site migrated from V1 still has its old uploaded rows. Falling back to them per file
+        // name would answer the retired customers.csv.gz with pre-Delta bytes and a 200, so a
+        // client that never noticed #113 would bootstrap from data years out of date.
+        allowOwnedSite();
+        when(checkpointRepository.findBySiteId(siteId))
+                .thenReturn(List.of(checkpoint("customers", "checkpoints/customers.parquet")));
+
+        assertThatThrownBy(() -> service.downloadFile(accountId, siteId, "legacy-upload.csv"))
+                .isInstanceOf(CheckpointFileQueryService.FileNotFoundException.class);
+        verifyNoInteractions(uploadedFileRepository);
     }
 
     @Test

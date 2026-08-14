@@ -140,6 +140,7 @@ public class CheckpointService {
                 // table simply has nothing to download until a schema arrives. The client is
                 // required to SubmitSchema before its first session, so this means the site is
                 // misconfigured — count it so the hole is visible rather than silent.
+                checkpoint.detachParquet();
                 metrics.checkpointTableUnmaterialized("no_schema");
                 log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
                         + "without a downloadable artifact (the client must SubmitSchema)",
@@ -153,6 +154,11 @@ public class CheckpointService {
                     byte[] parquet = ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows));
                     checkpoint.attachParquet(checkpointStorage.uploadParquet(siteId, tableName, seq, parquet));
                 } catch (RuntimeException e) {
+                    // The row's seq and rowCount advance regardless (the fold succeeded), so the
+                    // previous build's key would now sit beside a newer seq and be served as its
+                    // snapshot. Detach it: an absent file is honest, stale rows under a fresh seq
+                    // are not — and with the CSV gone nothing else masks the gap.
+                    checkpoint.detachParquet();
                     metrics.checkpointTableUnmaterialized("parquet_failed");
                     log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
                             + "artifact this build (check the declared schema against the data)",
