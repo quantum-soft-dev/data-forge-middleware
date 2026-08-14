@@ -28,8 +28,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * B3 — checkpoint materialization writes the full typed Parquet snapshot per table (alongside the
- * legacy CSV) for tables with a declared schema, and attaches its S3 key to the checkpoint row.
+ * B3 — checkpoint materialization writes the full typed Parquet snapshot per table for tables with
+ * a declared schema, and attaches its S3 key to the checkpoint row.
+ *
+ * <p>Since issue #113 Parquet is the <b>only</b> format the build produces: the gzipped CSV
+ * snapshot that used to ship alongside it is gone, and with it the second full pass over the folded
+ * state. A table with no declared schema therefore yields no artifact at all — that hole is
+ * asserted here (and counted, so it is visible in production) rather than left silent.</p>
  */
 class CheckpointServiceTest {
 
@@ -68,8 +73,6 @@ class CheckpointServiceTest {
                 record("customers", 1L, 1, "Ann"),
                 record("customers", 2L, 2, "Bob")));
         when(checkpointRepository.findBySiteIdAndTableName(eq(SITE), any())).thenReturn(Optional.empty());
-        when(checkpointStorage.uploadCsv(eq(SITE), eq("customers"), anyLong(), any()))
-                .thenReturn("checkpoints/csv-key");
     }
 
     @Test
@@ -87,36 +90,55 @@ class CheckpointServiceTest {
         ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(saved.capture());
         assertEquals("checkpoints/parquet-key", saved.getValue().getS3KeyParquet());
-        assertEquals("checkpoints/csv-key", saved.getValue().getS3KeyCsv());
+        assertNull(saved.getValue().getS3KeyCsv(), "the V2 build must not materialize CSV any more");
     }
 
     @Test
-    void skipsParquetWhenNoSchemaDeclaredButStillWritesCsv() {
+    void materializesNoCsvSnapshotAlongsideTheParquet() {
+        // The point of #113: one pass, one buffer. Parquet is the only object the build uploads
+        // per table, so the folded state is never copied into a second row representation.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenReturn("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verifyNoMoreInteractions(checkpointStorage);
+    }
+
+    @Test
+    void leavesTableUnmaterializedAndCountsItWhenNoSchemaDeclared() {
+        // Without a declared schema there is no Parquet — and since #113 no CSV to fall back on
+        // either, so the table has no downloadable artifact this build. The build still completes
+        // and the counter makes the hole visible instead of silent.
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
 
         service.buildCheckpoint(SITE);
 
         verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(metrics).checkpointTableUnmaterialized("no_schema");
 
         ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(saved.capture());
         assertNull(saved.getValue().getS3KeyParquet());
-        assertEquals("checkpoints/csv-key", saved.getValue().getS3KeyCsv());
+        assertNull(saved.getValue().getS3KeyCsv());
+
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
     @Test
     void parquetFailureForOneTableSkipsItButCompletesTheBuild() {
         // "orders" declares a date column whose folded value cannot be coerced: the Parquet write
         // throws. That must not roll back the whole build (checkpoint pointer frozen, retention
-        // skipped, segments accumulating) — the table keeps its CSV, the rest proceeds.
+        // skipped, segments accumulating) — that one table goes unmaterialized, the rest proceeds.
         when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
                 record("customers", 1L, 1, "Ann"),
                 orderRecord(2L, "not-a-date")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
                 "customers", customersSchema(),
                 "orders", ordersSchema()));
-        when(checkpointStorage.uploadCsv(eq(SITE), eq("orders"), anyLong(), any()))
-                .thenReturn("checkpoints/orders-csv");
         when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
                 .thenReturn("checkpoints/parquet-key");
 
@@ -130,10 +152,33 @@ class CheckpointServiceTest {
         Checkpoint orders = saved.getAllValues().stream()
                 .filter(c -> c.getTableName().equals("orders")).findFirst().orElseThrow();
         assertNull(orders.getS3KeyParquet(), "failed parquet must not be attached");
-        assertEquals("checkpoints/orders-csv", orders.getS3KeyCsv(), "CSV must survive the parquet failure");
+        verify(metrics).checkpointTableUnmaterialized("parquet_failed");
 
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
         verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
+    @Test
+    void detachesThePreviousSnapshotWhenThisBuildMaterializesNothing() {
+        // The row is reused across builds: seq and rowCount advance every time. If a build fails to
+        // write Parquet, keeping the previous build's key would publish stale rows under the new
+        // seq — the checkpoint would list as fresh, Bit BI would serve the old bytes, and the rows
+        // between the two seqs would reach no consumer at all. The CSV used to mask this.
+        Checkpoint existing = Checkpoint.create(SITE, "customers", 1L, 1L);
+        existing.attachParquet("checkpoints/previous-parquet-key");
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "customers")).thenReturn(Optional.of(existing));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+        assertEquals(2L, saved.getValue().getSeq(), "the row still advances with the fold");
+        assertNull(saved.getValue().getS3KeyParquet(),
+                "a superseded snapshot must not stay attached to a newer seq");
+        verify(metrics).checkpointTableUnmaterialized("parquet_failed");
     }
 
     @Test
@@ -207,7 +252,7 @@ class CheckpointServiceTest {
     @Test
     void buildCheckpointDoesNotHoldATransactionAcrossS3RoundTrips() throws NoSuchMethodException {
         // Same contract as BatchParquetDownloadService (025-T3): the build downloads the frame,
-        // every segment, and uploads CSV/Parquet/frame to S3 — holding a HikariCP connection across
+        // every segment, and uploads Parquet/frame to S3 — holding a HikariCP connection across
         // those network calls pins it for the whole multi-minute build. Repository calls run in
         // their own short transactions; recordCheckpoint is transactional on its own.
         assertNull(CheckpointService.class

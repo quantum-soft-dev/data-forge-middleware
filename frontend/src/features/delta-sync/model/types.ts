@@ -28,7 +28,6 @@ export const deltaCheckpointSchema = z.object({
   seq: z.number(),
   rowCount: z.number(),
   updatedAt: z.string(),
-  hasCsv: z.boolean(),
   hasParquet: z.boolean(),
 });
 export type DeltaCheckpoint = z.infer<typeof deltaCheckpointSchema>;
@@ -41,7 +40,8 @@ export const deltaCheckpointDownloadSchema = z.object({
 });
 export type DeltaCheckpointDownload = z.infer<typeof deltaCheckpointDownloadSchema>;
 
-export type DeltaCheckpointFormat = 'csv' | 'parquet';
+/** The only materialized checkpoint format: the CSV snapshot was retired with issue #113. */
+export type DeltaCheckpointFormat = 'parquet';
 
 /** Session mode of a changelog segment / delta batch. */
 export const deltaSessionModeSchema = z.enum(['DELTA', 'CONTINUOUS', 'FULL_SNAPSHOT']);

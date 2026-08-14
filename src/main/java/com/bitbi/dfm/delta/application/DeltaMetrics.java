@@ -60,6 +60,8 @@ public class DeltaMetrics {
     private final Counter sessionOverflowsBytes;
     private final DistributionSummary seqLag;
     private final Counter egressSegments;
+    private final Counter checkpointNoSchema;
+    private final Counter checkpointParquetFailed;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -90,6 +92,8 @@ public class DeltaMetrics {
         this.egressSegments = Counter.builder("delta.egress.segments")
                 .description("Changelog segments materialized as delta Parquet egress")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
+        this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
+        this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -117,10 +121,33 @@ public class DeltaMetrics {
         return Map.copyOf(timers);
     }
 
+    private static Counter checkpointUnmaterialized(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.checkpoint.tables.unmaterialized")
+                .description("Checkpoint tables that produced no downloadable artifact, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
     private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
         return Counter.builder("delta.batch-parquet.artifacts")
                 .description("Completed-batch Parquet artifacts settled, by outcome")
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("outcome", outcome).register(registry);
+    }
+
+    /**
+     * One table came out of a checkpoint build with no downloadable artifact.
+     *
+     * <p>Since issue #113 Parquet is the only format the build writes, so a table without a
+     * declared schema ({@code no_schema}) or one whose Parquet write threw ({@code parquet_failed})
+     * has nothing to download until the next build. Both used to be masked by the CSV snapshot.</p>
+     *
+     * @param reason {@code no_schema} or {@code parquet_failed}
+     */
+    public void checkpointTableUnmaterialized(String reason) {
+        switch (reason) {
+            case "no_schema" -> checkpointNoSchema.increment();
+            case "parquet_failed" -> checkpointParquetFailed.increment();
+            default -> throw new IllegalArgumentException("Unknown reason: " + reason);
+        }
     }
 
     /** One table's completed-batch artifact is published and downloadable. */

@@ -11,9 +11,10 @@ import java.util.UUID;
 /**
  * A materialized checkpoint of one table's current state (Delta Client v2 — 022).
  *
- * <p>One row per (site, table); records the sequence it represents and row count, plus the keys of
- * the materialized snapshot files (CSV for legacy, Parquet for the Power BI floor — attached by
- * later stages).</p>
+ * <p>One row per (site, table); records the sequence it represents and row count, plus the key of
+ * the materialized Parquet snapshot (attached by a later stage). {@code s3_key_csv} is read-only
+ * history since issue #113: builds no longer write a CSV snapshot, but site wipe still deletes the
+ * objects earlier builds left behind.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -72,13 +73,19 @@ public class Checkpoint {
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
-    public void attachCsv(String s3KeyCsv) {
-        this.s3KeyCsv = s3KeyCsv;
+    public void attachParquet(String s3KeyParquet) {
+        this.s3KeyParquet = s3KeyParquet;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
-    public void attachParquet(String s3KeyParquet) {
-        this.s3KeyParquet = s3KeyParquet;
+    /**
+     * Detach the snapshot key when a build advanced this row without materializing a new file.
+     *
+     * <p>The row is reused across builds, so the key of a superseded snapshot would otherwise
+     * describe rows older than the {@code seq} beside it — served as if it were current.</p>
+     */
+    public void detachParquet() {
+        this.s3KeyParquet = null;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 

@@ -454,6 +454,21 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-csv-removal: The V2 checkpoint build stopped writing `snapshot.csv.gz` (issue #113).
+  Only the typed Parquet is materialized, so a build no longer copies the whole folded state into a
+  second row representation (`ValueMapper`) and gzips it into an on-heap `byte[]`. A table with no
+  declared schema now yields **no** artifact — logged and counted as
+  `delta.checkpoint.tables.unmaterialized{reason=no_schema|parquet_failed}` instead of being masked
+  by the CSV. **Breaking change for the Bit BI client:** `GET /api/v1/plugins/bit-bi/sites/{siteId}/files`
+  serves `<table>.parquet` (`application/vnd.apache.parquet`); the retired `<table>.csv.gz` name
+  404s rather than resolving to Parquet bytes, and the historical-uploads fallback is now keyed on
+  the site having no checkpoints at all, not on the format being absent. `CsvFileQueryService` →
+  `CheckpointFileQueryService`. Owner/admin `.../delta/checkpoints/{table}/download?format=csv`
+  answers **410 Gone** (checked before the lookup, so it is the same answer for every table);
+  `hasCsv` is gone from the checkpoint DTO and the UI's CSV pill with it. `checkpoints.s3_key_csv`
+  is **kept** (no migration): site wipe still deletes the objects earlier builds wrote — it is the
+  only sweeper that reads them, changelog retention prunes segments and never touched checkpoints.
+  See `docs/delta-client-v2-guide.md`, `docs/bitbi-integration.md`, `docs/cr-bitbi-delta-sql.md`.
 - 042-parquet-phase-metrics: Parquet and checkpoint duration meters are split by `phase` so a
   cycle can be attributed (issue #111). `delta.batch-parquet.duration` and
   `delta.checkpoint.duration` keep their names; `delta.egress.duration` is new. Every series

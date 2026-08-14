@@ -20,7 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * B5 (023) — contract tests for the Delta checkpoints REST endpoints:
  * GET /api/v1/account/sites/{siteId}/delta/checkpoints (owner; admin variant under /api/v1/sites)
  * and the per-click presigned download
- * GET .../delta/checkpoints/{tableName}/download?format=csv|parquet.
+ * GET .../delta/checkpoints/{tableName}/download?format=parquet ({@code csv} is retired — #113).
  */
 @DisplayName("Delta Checkpoints REST Contract Tests")
 class DeltaCheckpointsRestContractTest extends BaseIntegrationTest {
@@ -70,10 +70,9 @@ class DeltaCheckpointsRestContractTest extends BaseIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$", hasSize(3)))
                     .andExpect(jsonPath("$[0].table").value("customers"))
-                    .andExpect(jsonPath("$[0].hasCsv").value(true))
+                    .andExpect(jsonPath("$[0].hasCsv").doesNotExist())
                     .andExpect(jsonPath("$[0].hasParquet").value(false))
                     .andExpect(jsonPath("$[1].table").value("inventory"))
-                    .andExpect(jsonPath("$[1].hasCsv").value(false))
                     .andExpect(jsonPath("$[1].hasParquet").value(false))
                     .andExpect(jsonPath("$[2].table").value("orders"))
                     .andExpect(jsonPath("$[2].seq").value(4821))
@@ -133,11 +132,33 @@ class DeltaCheckpointsRestContractTest extends BaseIntegrationTest {
                     .andExpect(jsonPath("$.fileName").value(containsString("orders")))
                     .andExpect(jsonPath("$.fileName").value(containsString(".parquet")))
                     .andExpect(jsonPath("$.expiresAt").isNotEmpty());
+        }
+
+        @Test
+        @DisplayName("returns 410 for the retired csv format, on owner and admin alike")
+        void shouldReturn410ForRetiredCsvFormat() throws Exception {
+            // The row still carries its historical CSV key — the format is gone regardless (#113).
+            seedCheckpoint(OWNED_SITE, "orders", 4821, 100,
+                    "checkpoints/x/orders/seq=4821/snapshot.csv.gz",
+                    "checkpoints/x/orders/seq=4821/snapshot.parquet");
+            seedCheckpoint(FOREIGN_SITE, "orders", 4821, 100,
+                    "checkpoints/y/orders/seq=4821/snapshot.csv.gz", null);
 
             mockMvc.perform(get(USER_URL.formatted(OWNED_SITE) + "/orders/download?format=csv")
                             .header("Authorization", "Bearer " + MOCK_USER_JWT))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.fileName").value(containsString(".csv.gz")));
+                    .andExpect(status().isGone());
+
+            mockMvc.perform(get(ADMIN_URL.formatted(FOREIGN_SITE) + "/orders/download?format=csv")
+                            .header("Authorization", "Bearer " + MOCK_ADMIN_JWT))
+                    .andExpect(status().isGone());
+        }
+
+        @Test
+        @DisplayName("returns 410 for the retired csv format even when the table is unknown")
+        void shouldReturn410ForRetiredCsvFormatOnUnknownTable() throws Exception {
+            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE) + "/nope/download?format=csv")
+                            .header("Authorization", "Bearer " + MOCK_USER_JWT))
+                    .andExpect(status().isGone());
         }
 
         @Test
@@ -153,7 +174,7 @@ class DeltaCheckpointsRestContractTest extends BaseIntegrationTest {
         @Test
         @DisplayName("returns 404 for an unknown table")
         void shouldReturn404ForUnknownTable() throws Exception {
-            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE) + "/nope/download?format=csv")
+            mockMvc.perform(get(USER_URL.formatted(OWNED_SITE) + "/nope/download?format=parquet")
                             .header("Authorization", "Bearer " + MOCK_USER_JWT))
                     .andExpect(status().isNotFound());
         }
@@ -173,7 +194,7 @@ class DeltaCheckpointsRestContractTest extends BaseIntegrationTest {
         void shouldReturn403ForForeignSite() throws Exception {
             seedCheckpoint(FOREIGN_SITE, "orders", 10, 5, "k.csv.gz", null);
 
-            mockMvc.perform(get(USER_URL.formatted(FOREIGN_SITE) + "/orders/download?format=csv")
+            mockMvc.perform(get(USER_URL.formatted(FOREIGN_SITE) + "/orders/download?format=parquet")
                             .header("Authorization", "Bearer " + MOCK_USER_JWT))
                     .andExpect(status().isForbidden());
         }

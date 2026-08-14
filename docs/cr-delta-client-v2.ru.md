@@ -194,6 +194,11 @@ checkpoints/{siteId}/{table}/seq={seq}/snapshot.csv.gz      # legacy CSV (Bit BI
 checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet     # Parquet-пол (Power BI)
 ```
 
+> **Отменено issue #113.** Половина чекпоинта `snapshot.csv.gz` больше не пишется: Parquet —
+> единственный материализуемый формат, а Bit BI читает `<table>.parquet` через тот же эндпоинт
+> `/files`. Объекты, записанные прежними сборками, остаются читаемыми и по-прежнему удаляются
+> wipe/ретеншном. Остальное в этом документе — как отгружено.
+
 **На проводе — сырьё, Parquet — на serving.** Приём пишет сырые сегменты (bronze); шедулер материализует Parquet (gold). Это избегает small-files-издержек per-session Parquet и держит ценность Parquet там, где она окупается (Power BI).
 
 ---

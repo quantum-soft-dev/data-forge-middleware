@@ -53,12 +53,20 @@ public class DeltaCheckpointQueryService {
      *
      * @param siteId    site identifier
      * @param tableName checkpoint table name
-     * @param format    requested file format: {@code csv} (legacy gzipped CSV) or {@code parquet}
+     * @param format    requested file format: {@code parquet}
      * @return presigned download, or empty when the checkpoint or the requested file does not exist
+     * @throws RetiredFormatException  for {@code csv}, retired by issue #113 (→ 410)
      * @throws IllegalArgumentException for an unsupported format (→ 400)
      */
     @Transactional(readOnly = true)
     public Optional<PresignedDownload> presignDownload(UUID siteId, String tableName, String format) {
+        // Answered before the lookup so a client still asking for CSV gets the same "this format is
+        // gone" answer for every table, rather than a 404 that reads like "wrong table name".
+        if ("csv".equals(format)) {
+            throw new RetiredFormatException(
+                    "The checkpoint CSV snapshot was retired: request format=parquet instead");
+        }
+
         Optional<Checkpoint> found = checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
         if (found.isEmpty()) {
             return Optional.empty();
@@ -68,10 +76,6 @@ public class DeltaCheckpointQueryService {
         String s3Key;
         String fileName;
         switch (format) {
-            case "csv" -> {
-                s3Key = checkpoint.getS3KeyCsv();
-                fileName = "%s_seq%d.csv.gz".formatted(checkpoint.getTableName(), checkpoint.getSeq());
-            }
             case "parquet" -> {
                 s3Key = checkpoint.getS3KeyParquet();
                 fileName = "%s_seq%d.parquet".formatted(checkpoint.getTableName(), checkpoint.getSeq());
@@ -84,6 +88,18 @@ public class DeltaCheckpointQueryService {
 
         PresignedUrlResult result = presignedUrlService.generatePresignedUrl(s3Key, fileName);
         return Optional.of(new PresignedDownload(result.url(), fileName, result.expiresAt()));
+    }
+
+    /**
+     * A format this endpoint used to serve and deliberately no longer does (→ 410 Gone).
+     *
+     * <p>Distinct from an unknown format (400) and from a missing file (404): the caller's request
+     * was valid until issue #113 stopped the V2 checkpoint build from materializing CSV.</p>
+     */
+    public static class RetiredFormatException extends RuntimeException {
+        public RetiredFormatException(String message) {
+            super(message);
+        }
     }
 
     /**

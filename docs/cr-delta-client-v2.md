@@ -195,6 +195,11 @@ checkpoints/{siteId}/{table}/seq={seq}/snapshot.csv.gz      # legacy CSV (Bit BI
 checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet     # Parquet floor (Power BI)
 ```
 
+> **Superseded by issue #113.** The `snapshot.csv.gz` half of the checkpoint is no longer written:
+> Parquet is the only materialized format, and Bit BI reads `<table>.parquet` through the same
+> `/files` endpoint. Objects written by earlier builds stay readable and are still deleted by
+> wipe/retention. Everything else in this document is as-shipped.
+
 **Wire stays raw, Parquet lives at serving.** Ingest writes raw segments (bronze); the scheduler materializes Parquet (gold). This avoids the small-files cost of per-session Parquet and keeps Parquet's value where it pays off (Power BI).
 
 ---

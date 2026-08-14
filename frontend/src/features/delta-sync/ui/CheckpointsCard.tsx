@@ -2,9 +2,10 @@
  * CheckpointsCard — per-table checkpoint list with download pills (023, F7).
  *
  * Design handoff v2 §1c: Table|Cards toggle; table grid `1.4fr .8fr 1fr 1fr 1fr`;
- * amber stale pill (>24h); Files pills — Parquet primary (blue-50), dashed
- * non-clickable "Parquet pending" when only CSV exists, muted legacy CSV with
- * tooltip, em-dash when neither. Every click requests a FRESH presigned URL.
+ * amber stale pill (>24h); Files pill — Parquet (blue-50), dashed non-clickable
+ * "Parquet pending" when the snapshot is not materialized. Since issue #113
+ * Parquet is the only format the build writes, so there is no CSV fallback
+ * pill any more. Every click requests a FRESH presigned URL.
  * Client-side name filter appears beyond 15 tables. Rebuild button: canManage.
  */
 
@@ -206,7 +207,7 @@ export function CheckpointsCard({
                 seq {formatNumber(checkpoint.seq)} · {formatRelativeTime(checkpoint.updatedAt)}
               </div>
               <div className="mt-2">
-                {checkpoint.hasCsv || checkpoint.hasParquet ? (
+                {checkpoint.hasParquet ? (
                   <FilePills checkpoint={checkpoint} onDownload={onDownload} />
                 ) : (
                   <span className="text-xs" style={{ color: t.textMuted }}>
@@ -234,8 +235,8 @@ function StalePill() {
 }
 
 /**
- * Files cell — Parquet is the primary/target format, CSV the legacy one (D1).
- * The pill row is a flex with gap, so the layout survives CSV's future removal.
+ * Files cell — Parquet is the only materialized format since issue #113. The pill row stays a
+ * flex with gap so a future second format slots in beside it.
  */
 function FilePills({
   checkpoint,
@@ -244,9 +245,6 @@ function FilePills({
   checkpoint: DeltaCheckpoint;
   onDownload: (tableName: string, format: DeltaCheckpointFormat) => void;
 }) {
-  if (!checkpoint.hasCsv && !checkpoint.hasParquet) {
-    return <span style={{ color: t.textMuted }}>—</span>;
-  }
   return (
     <span className="flex flex-wrap items-center gap-1.5 py-1.5">
       {checkpoint.hasParquet ? (
@@ -266,17 +264,6 @@ function FilePills({
         >
           Parquet pending
         </span>
-      )}
-      {checkpoint.hasCsv && (
-        <button
-          type="button"
-          onClick={() => onDownload(checkpoint.table, 'csv')}
-          className="rounded-full px-2 py-0.5 text-xs font-medium transition-colors hover:bg-[#EFEFEF]"
-          style={{ background: t.subtleBg, color: t.textSecondary }}
-          title="Legacy · used by Bit BI"
-        >
-          CSV
-        </button>
       )}
     </span>
   );

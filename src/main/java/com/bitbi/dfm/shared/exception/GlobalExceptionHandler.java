@@ -1,13 +1,14 @@
 package com.bitbi.dfm.shared.exception;
 
 import com.bitbi.dfm.account.application.AccountService;
-import com.bitbi.dfm.plugin.application.CsvFileQueryService;
+import com.bitbi.dfm.plugin.application.CheckpointFileQueryService;
 import com.bitbi.dfm.plugin.domain.exception.PluginDataValidationException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotActivatedException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotEnabledException;
 import com.bitbi.dfm.plugin.domain.exception.PluginNotFoundException;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.CheckpointStorageException;
 import com.bitbi.dfm.delta.application.BatchParquetDownloadService.BatchParquetNotReadyException;
+import com.bitbi.dfm.delta.application.DeltaCheckpointQueryService;
 import com.bitbi.dfm.shared.auth.AuthorizationHelper;
 import com.bitbi.dfm.shared.presentation.dto.ErrorResponseDto;
 import com.bitbi.dfm.site.application.SiteService;
@@ -398,6 +399,23 @@ public class GlobalExceptionHandler {
                 Instant.now(), HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage(),
                 request.getRequestURI());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    /**
+     * Handle a retired checkpoint download format (410 Gone) — {@code format=csv} since issue #113.
+     * <p>
+     * Deliberately not 404: the file is not merely absent for this table, the format is no longer
+     * produced for any of them, and a client asking for it needs to switch to Parquet.
+     * </p>
+     */
+    @ExceptionHandler(DeltaCheckpointQueryService.RetiredFormatException.class)
+    public ResponseEntity<ErrorResponseDto> handleRetiredCheckpointFormat(
+            DeltaCheckpointQueryService.RetiredFormatException ex,
+            HttpServletRequest request) {
+        ErrorResponseDto error = new ErrorResponseDto(
+                Instant.now(), HttpStatus.GONE.value(), "Gone", ex.getMessage(),
+                request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.GONE).body(error);
     }
 
     /**
@@ -1195,17 +1213,17 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handle CsvFileQueryService.FileNotFoundException (404 Not Found).
+     * Handle CheckpointFileQueryService.FileNotFoundException (404 Not Found).
      * <p>
-     * Thrown when a CSV file is not found for a site.
+     * Thrown when a baseline file is not found for a site.
      * </p>
      */
-    @ExceptionHandler(CsvFileQueryService.FileNotFoundException.class)
-    public ResponseEntity<ErrorResponseDto> handleCsvFileNotFound(
-            CsvFileQueryService.FileNotFoundException ex,
+    @ExceptionHandler(CheckpointFileQueryService.FileNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleBaselineFileNotFound(
+            CheckpointFileQueryService.FileNotFoundException ex,
             HttpServletRequest request) {
 
-        logger.warn("CSV file not found: {}", ex.getMessage());
+        logger.warn("Baseline file not found: {}", ex.getMessage());
 
         ErrorResponseDto error = new ErrorResponseDto(
                 Instant.now(),

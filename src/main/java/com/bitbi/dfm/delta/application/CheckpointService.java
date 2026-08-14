@@ -17,7 +17,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,8 +25,8 @@ import java.util.UUID;
  * Builds materialized checkpoints from the changelog (Delta Client v2 — 022, CR §8.D).
  *
  * <p>Reconstruction is <b>incremental</b>: it seeds from the latest all-INSERT checkpoint frame@M and
- * folds only the segments with {@code first_seq > M}, then materializes a CSV snapshot per table,
- * records one {@link Checkpoint} row per table, persists a new frame@now, and advances the site's
+ * folds only the segments with {@code first_seq > M}, then materializes a Parquet snapshot per
+ * table, records one {@link Checkpoint} row per table, persists a new frame@now, and advances the site's
  * checkpoint pointer. Because the frame is a self-contained seed, segments at or below the checkpoint
  * can be pruned (T3.5b) without breaking the next build.</p>
  *
@@ -135,21 +134,27 @@ public class CheckpointService {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
         // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
-        // additionally materializes the full per-table load: typed Parquet (target format, B3)
-        // for tables with a declared schema, plus the legacy CSV (Bit BI, §11) and the frame seed.
+        // additionally materializes the full per-table load as typed Parquet (the only format V2
+        // produces since issue #113) plus the frame seed.
         state.forEach((tableName, rows) -> {
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
 
-            byte[] csv = CsvSnapshotWriter.toGzippedCsv(toDataRows(rows));
-            metrics.timeCheckpointPhase("upload", () ->
-                    checkpoint.attachCsv(checkpointStorage.uploadCsv(siteId, tableName, seq, csv)));
-
             TableSchema tableSchema = schemas.get(tableName);
-            if (tableSchema != null) {
+            if (tableSchema == null) {
+                // Parquet needs the declared schema, and there is no CSV left to fall back on: this
+                // table simply has nothing to download until a schema arrives. The client is
+                // required to SubmitSchema before its first session, so this means the site is
+                // misconfigured — count it so the hole is visible rather than silent.
+                checkpoint.detachParquet();
+                metrics.checkpointTableUnmaterialized("no_schema");
+                log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
+                        + "without a downloadable artifact (the client must SubmitSchema)",
+                        tableName, siteId);
+            } else {
                 // One table's coercion failure (schema drift, bad value) must not abort the whole
                 // build: the pointer would freeze, retention would stop, and segments would grow
-                // unbounded. Skip its Parquet (CSV above still ships) and keep going — the same
-                // skip-and-continue contract as DeltaEgressService.
+                // unbounded. Skip that table and keep going — the same skip-and-continue contract
+                // as DeltaEgressService.
                 try {
                     byte[] parquet = metrics.timeCheckpointPhase("parquet",
                             () -> ParquetCheckpointWriter.toParquet(tableName, tableSchema, dataRows(rows)));
@@ -157,8 +162,14 @@ public class CheckpointService {
                             checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                     siteId, tableName, seq, parquet)));
                 } catch (RuntimeException e) {
-                    log.warn("Checkpoint Parquet failed for table {} of site {} — skipping Parquet, "
-                            + "CSV still written (check the declared schema against the data)",
+                    // The row's seq and rowCount advance regardless (the fold succeeded), so the
+                    // previous build's key would now sit beside a newer seq and be served as its
+                    // snapshot. Detach it: an absent file is honest, stale rows under a fresh seq
+                    // are not — and with the CSV gone nothing else masks the gap.
+                    checkpoint.detachParquet();
+                    metrics.checkpointTableUnmaterialized("parquet_failed");
+                    log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
+                            + "artifact this build (check the declared schema against the data)",
                             tableName, siteId, e);
                 }
             }
@@ -187,12 +198,6 @@ public class CheckpointService {
 
     private static List<Map<String, Value>> dataRows(Map<String, FoldedRow> rows) {
         return rows.values().stream().map(FoldedRow::data).toList();
-    }
-
-    private static Map<String, Map<String, Object>> toDataRows(Map<String, FoldedRow> rows) {
-        Map<String, Map<String, Object>> dataRows = new LinkedHashMap<>();
-        rows.forEach((identity, row) -> dataRows.put(identity, ValueMapper.toMap(row.data())));
-        return dataRows;
     }
 
     private Checkpoint findOrCreate(UUID siteId, String tableName, long seq, long rowCount) {

@@ -41,10 +41,11 @@ DeltaSessionCommitService.commit (segment + COMPLETED batch, one tx)
 Per-table `plugin_delta_baselines(account_plugin_id, site_id, table_name, baseline_seq)`:
 
 - Captured at **activation** and **reinit** from the site's current `checkpoints.seq` — the
-  client downloads exactly those checkpoint CSVs via `/files`, so SQL is emitted only for
-  records with `seq > baseline_seq(table)`.
+  client downloads exactly those checkpoint snapshots via `/files`, so SQL is emitted only for
+  records with `seq > baseline_seq(table)`. Since issue #113 those snapshots are Parquet
+  (`<table>.parquet`); the bookkeeping above is unchanged, only the downloaded format is.
 - **No row → baseline 0**: a table that appears later streams its full retained history as
-  INSERT SQL (bootstrap without a CSV).
+  INSERT SQL (bootstrap without a baseline file).
 - **Reinit** deletes prior generations (existing behavior), recaptures baselines, re-enqueues
   the site's segments (`plugin_sql_at = NULL`) and wakes the worker — the checkpoint-lag gap
   regenerates under the new baselines.
