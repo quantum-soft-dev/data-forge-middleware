@@ -161,18 +161,14 @@ public class DeltaSiteWipeService {
                 status -> wipeRows(site, initiator, ipAddress, userAgent));
 
         List<String> objects = new ArrayList<>(wiped.s3Keys());
-        objects.addAll(egressKeys(site.getId()));
-
-        DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(objects);
-        if (!deleted.errors().isEmpty()) {
-            log.warn("Site history wipe left {} orphaned S3 object(s) for site {}: {}",
-                    deleted.errors().size(), site.getId(), deleted.errors());
-        }
+        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId())));
+        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId())));
 
         SiteHistoryWipeSummary summary = new SiteHistoryWipeSummary(
                 wiped.generation(), wiped.deletedBatches(), wiped.deletedSegments(),
                 wiped.deletedCheckpoints(), wiped.deletedFiles(), wiped.deletedSqlGenerations(),
-                wiped.deletedErrorLogs(), wiped.deletedBytes(), deleted.errors().size(),
+                wiped.deletedErrorLogs(), wiped.deletedBytes(),
+                deleteObjects(site.getId(), objects.stream().distinct().toList()),
                 wiped.baselineBatchDetached());
         log.info("Site history wiped by {}: siteId={}, generation={}, batches={}, segments={}, "
                         + "checkpoints={}, files={}, sqlGenerations={}, errorLogs={}, bytes={}, "
@@ -185,28 +181,84 @@ public class DeltaSiteWipeService {
     }
 
     /**
-     * The site's delta Parquet objects, which no row names.
+     * Delete the collected objects, reporting rather than throwing.
      *
-     * <p>Egress writes to {@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}, a key
-     * derived from sequence numbers alone — and a wipe is the one operation that sends those
-     * numbers back to zero. Left in place, a pre-wipe file whose {@code (firstSeq, lastSeq)} pair
-     * happens to recur in the new epoch is listed by {@code ParquetExportCatalogDao} as the new
-     * epoch's delta unless egress overwrites it, which it does not for a table missing from the new
-     * segment or skipped by the per-table coercion guard. So this is a correctness step, not
-     * housekeeping. (The batch download endpoint is no longer exposed to this: since 036 it resolves
-     * an exact {@code batch_parquet_artifacts} row instead of deriving a seq-based key.)</p>
+     * <p>The rows are already committed as gone, so every outcome here is "orphans left behind, no
+     * data lost" and none of them may surface as a 500 on a wipe that actually happened. The AWS SDK
+     * makes that easy to get wrong: {@code DeleteObjects} answers per-object errors inside a 200,
+     * which {@link S3FileStorageService#deleteObjects} already collects, but a client-side failure
+     * (connect/read timeout, connection reset) arrives as {@code SdkClientException} — a sibling of
+     * {@code S3Exception}, not a subclass — and escapes it. Rare per call, but this phase now issues
+     * one round trip per thousand keys, and a wiped site's checkpoint prefix can be thousands.</p>
+     *
+     * <p>The number returned is a floor, not a census: {@link S3FileStorageService#deleteObjects}
+     * records a whole failed 1000-key batch as one entry, so a bucket-level denial can leave far more
+     * behind than it reports. Any non-zero value means the same thing regardless — orphans remain,
+     * and re-running the wipe is safe and is what sweeps them (issue #123).</p>
+     *
+     * @param siteId  the site being wiped, for the log line
+     * @param objects the keys to delete, already de-duplicated
+     * @return how many objects are known to have been left behind
+     */
+    private int deleteObjects(UUID siteId, List<String> objects) {
+        try {
+            DeleteObjectsResult deleted = s3FileStorageService.deleteObjects(objects);
+            if (!deleted.errors().isEmpty()) {
+                log.warn("Site history wipe left {} orphaned S3 object(s) for site {}: {}",
+                        deleted.errors().size(), siteId, deleted.errors());
+            }
+            return deleted.errors().size();
+        } catch (RuntimeException e) {
+            // Nothing is known about how far the phase got, so every key it was given counts as
+            // possibly left behind — and the caller's cue to run it again.
+            log.warn("Site history wipe could not complete the S3 phase for site {}; up to {} "
+                    + "object(s) are left as orphans — the rows are already gone, so re-running the "
+                    + "wipe is safe and is how they get swept", siteId, objects.size(), e);
+            return objects.size();
+        }
+    }
+
+    /**
+     * Everything under one of the site's whole-site prefixes, named or not by a surviving row.
+     *
+     * <p><b>Egress</b> ({@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}) derives
+     * its key from sequence numbers alone — and a wipe is the one operation that sends those numbers
+     * back to zero. Left in place, a pre-wipe file whose {@code (firstSeq, lastSeq)} pair happens to
+     * recur in the new epoch is listed by {@code ParquetExportCatalogDao} as the new epoch's delta
+     * unless egress overwrites it, which it does not for a table missing from the new segment or
+     * skipped by the per-table coercion guard. (The batch download endpoint is no longer exposed to
+     * this: since 036 it resolves an exact {@code batch_parquet_artifacts} row instead of deriving a
+     * seq-based key.)</p>
+     *
+     * <p><b>Checkpoints</b> ({@code checkpoints/{siteId}/…}) have the same problem for a different
+     * reason (issue #118). The {@code checkpoints} row is one per {@code (site, table)} and reused
+     * across builds: each build writes {@code …/{table}/seq={seq}/snapshot.parquet} under a new
+     * {@code seq} and replaces the key on the row, so the previous build's object is unreferenced
+     * the moment it is superseded — and {@link Checkpoint#detachParquet()} drops the last reference
+     * outright when a build advances the row without materializing a file. Nothing else sweeps them:
+     * changelog retention prunes segments, and no lifecycle rule covers this prefix. The
+     * {@code _frame/seq={seq}/frame.pb.gz} reload frames go the same way: no row has ever named one,
+     * so the wipe is the only thing that can remove them. They are dead bytes rather than a stale
+     * read — a build writes its frame at the seq it ends on and only then advances the pointer, so
+     * the frame the next build reads is always the one this epoch just wrote, overwriting any
+     * pre-wipe namesake at that key.</p>
      *
      * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
-     * and the objects are only reachable through keys the rows never held. A listing failure is
-     * logged and swallowed — the rows are already gone, and failing here would report a completed
-     * wipe as a 500.</p>
+     * and the objects are only reachable through keys the rows never held. The keys recorded on the
+     * rows are collected too and stay the fallback, so one prefix failing to list — logged and
+     * swallowed, since the rows are already gone and failing here would report a completed wipe as a
+     * 500 — costs neither the other prefix nor the exact keys.</p>
+     *
+     * @param siteId the site being wiped, for the log line
+     * @param prefix the whole-site prefix to enumerate
+     * @return every key under the prefix, or an empty list when it could not be listed
      */
-    private List<String> egressKeys(UUID siteId) {
+    private List<String> unreferencedObjects(UUID siteId, String prefix) {
         try {
-            return checkpointStorage.listAllKeys(S3CheckpointStorage.egressPrefix(siteId));
+            return checkpointStorage.listAllKeys(prefix);
         } catch (RuntimeException e) {
-            log.warn("Could not enumerate the egress objects of site {}; they are left as orphans "
-                    + "and a later segment reusing their sequence range may resolve to one", siteId, e);
+            log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans "
+                    + "and the wipe is worth repeating once listing works again", prefix, siteId, e);
             return List.of();
         }
     }

@@ -90,6 +90,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         // The LocalStack bucket is shared across the suite and the egress prefix is keyed on seq
         // alone, so leftovers from another class would decide these assertions.
         purgeEgressPrefix(SITE_ID);
+        purgeCheckpointPrefix(SITE_ID);
         declareCustomersSchema();
         site = siteService.getSite(SITE_ID);
     }
@@ -166,6 +167,35 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
 
         assertThat(summary.s3DeleteErrors()).isZero();
         assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("takes the checkpoint objects of every earlier build with it")
+    void wipeDeletesSupersededCheckpointObjects() {
+        // The checkpoints row is one per (site, table) and reused: the second build replaces the key
+        // on it, so the first build's snapshot is unreferenced from that moment on. The _frame/
+        // reload frames are named by no row at any point.
+        changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L,
+                List.of(insert(1L, "Ann"), insert(2L, "Bob")));
+        checkpointService.buildCheckpoint(SITE_ID);
+        changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 3L, List.of(insert(3L, "Cy")));
+        checkpointService.buildCheckpoint(SITE_ID);
+
+        List<String> beforeWipe = checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        assertThat(beforeWipe.stream().filter(key -> key.endsWith("snapshot.parquet")).toList())
+                .as("one table, two builds, two snapshot objects")
+                .hasSize(2);
+        String recordedKey = jdbc.queryForObject(
+                "SELECT s3_key_parquet FROM checkpoints WHERE site_id = ? AND table_name = 'customers'",
+                String.class, SITE_ID);
+        assertThat(beforeWipe).contains(recordedKey);
+
+        SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.s3DeleteErrors()).isZero();
+        assertThat(checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)))
+                .as("a clean slate means the whole prefix, not just the newest key on the row")
+                .isEmpty();
     }
 
     @Test

@@ -158,6 +158,15 @@ public class S3CheckpointStorage {
         return String.format("egress/%s/", siteId);
     }
 
+    /**
+     * @param siteId the site
+     * @return the prefix holding every checkpoint object of a site — the per-table snapshots of
+     *         every build plus the {@code _frame/} reload frames (issue #118)
+     */
+    public static String checkpointPrefix(UUID siteId) {
+        return String.format("checkpoints/%s/", siteId);
+    }
+
     /** @return the keys of all objects under a prefix (single page is sufficient for test/egress sizes). */
     public List<String> listKeys(String prefix) {
         try {

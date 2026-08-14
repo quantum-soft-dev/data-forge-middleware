@@ -805,16 +805,34 @@ have no dedicated object manifest, so the wipe performs a paginated walk of
 an interrupted publication or cleanup. This is correctness, not housekeeping: realtime keys are
 derived from sequence numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}.parquet`) and a wipe
 sends those numbers back to zero. A listing failure is logged and the wipe still reports success
-because the database rows are already gone. Ordinary batch retention and explicit admin batch deletion likewise remove
+because the database rows are already gone; so is a delete phase that fails outright, which reports
+every key it was handed as `s3DeleteErrors`. Treat that count as a floor rather than a census — a
+whole failed 1000-key delete batch is recorded as one entry (#123). Any non-zero value means the
+same thing: orphans remain, and re-running a wipe is safe and is how they get swept. Ordinary batch retention and explicit admin batch deletion likewise remove
 the unified manifest rows, preserve recorded/legacy exact-key fallbacks, and paginate the complete
 batch prefix so a process-death attempt with no published metadata is still found. Explicit admin
 deletion defers prefix enumeration and object removal until its database transaction commits.
 Listing/deletion failures remain best effort. Realtime segment cleanup remains on its existing
 lifecycle path.
 
-**Non-goal**: superseded checkpoint objects at older seqs are still left behind, as they already are
-after a re-baseline. They are addressed by key from the live `checkpoints` rows, so no stale read is
-possible through them.
+**The checkpoint prefix is walked the same way (issue #118).** The `checkpoints` row is one per
+`(site, table)` and reused across builds: each build writes
+`checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet` under a new `seq` and replaces the key on
+the row, so the previous build's object is unreferenced from that moment on — and since issue #113 a
+build that cannot materialize Parquet nulls the key outright. Nothing else sweeps them: changelog
+retention prunes segments and no lifecycle rule covers this prefix, so before #118 a long-lived site
+left one orphan per table per build behind the operation whose whole contract is "clean slate". The
+wipe therefore paginates `checkpoints/{siteId}/…` after the database work, exactly as it does for
+egress, keeping the keys recorded on the rows as the fallback for a failed listing. The walk also
+takes the `_frame/seq={seq}/frame.pb.gz` reload frames, which no row has ever named — the wipe is the
+only thing that can remove them at all. They are dead bytes rather than a stale read: a build writes
+its frame at the seq it ends on and advances the checkpoint pointer only afterwards, so the frame the
+next build reads is by construction the one this epoch just wrote, overwriting any pre-wipe namesake
+at that key.
+
+**Still a non-goal**: an ordinary **re-baseline** leaves superseded checkpoint objects behind. They
+are addressed by key from the live `checkpoints` rows, so no stale read is possible through them
+while the site keeps its epoch.
 
 **Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
 request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full

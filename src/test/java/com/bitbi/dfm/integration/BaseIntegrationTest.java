@@ -86,7 +86,23 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
      * @param siteId site whose egress prefix to purge
      */
     protected void purgeEgressPrefix(UUID siteId) {
-        for (String key : egressCleanupStorage.listKeys("egress/" + siteId + "/")) {
+        purgePrefix(S3CheckpointStorage.egressPrefix(siteId));
+    }
+
+    /**
+     * Delete every checkpoint object of a site — the per-table snapshots of every build and the
+     * {@code _frame/} reload frames. Same reason as {@link #purgeEgressPrefix(UUID)}: the bucket is
+     * shared by the whole suite and checkpoint keys carry a sequence number, not a run identity, so
+     * a leftover from another class would decide any assertion made on the prefix (issue #118).
+     *
+     * @param siteId site whose checkpoint prefix to purge
+     */
+    protected void purgeCheckpointPrefix(UUID siteId) {
+        purgePrefix(S3CheckpointStorage.checkpointPrefix(siteId));
+    }
+
+    private void purgePrefix(String prefix) {
+        for (String key : egressCleanupStorage.listAllKeys(prefix)) {
             egressCleanupS3Client.deleteObject(
                     DeleteObjectRequest.builder().bucket(egressCleanupBucket).key(key).build());
         }

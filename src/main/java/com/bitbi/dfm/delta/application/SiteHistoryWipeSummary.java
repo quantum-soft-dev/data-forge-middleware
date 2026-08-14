@@ -14,8 +14,11 @@ package com.bitbi.dfm.delta.application;
  * @param deletedErrorLogs      error log rows removed
  * @param deletedBytes          bytes accounted for by the uploaded files and plugin SQL files
  *                              (segments and checkpoints carry no recorded size)
- * @param s3DeleteErrors        objects the bucket refused to delete — orphans, not data loss: the
- *                              rows naming them are already gone
+ * @param s3DeleteErrors        objects known to have been left behind: the ones the bucket refused,
+ *                              or every object handed to a delete phase that failed outright. A
+ *                              floor rather than a census — a whole failed 1000-key batch counts as
+ *                              one (issue #123). Orphans, not data loss: the rows naming them are
+ *                              already gone, and re-running the wipe is safe and sweeps them
  * @param baselineBatchDetached whether a plugin activation's {@code baseline_batch_id} pointed at a
  *                              destroyed batch and had to be nulled
  */

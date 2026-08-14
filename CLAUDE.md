@@ -454,6 +454,29 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- wipe-checkpoint-orphans: Site history wipe walks `checkpoints/{siteId}/` after the database work
+  instead of trusting the keys on the rows (issue #118). The `checkpoints` row is one per
+  `(site, table)` and reused across builds — each build writes `…/{table}/seq={seq}/snapshot.parquet`
+  under a new `seq` and replaces the key, and since #113 a build that cannot materialize Parquet
+  nulls it outright — so every earlier object was already unreferenced and nothing else sweeps that
+  prefix (retention prunes segments; no lifecycle rule here). The walk also removes the
+  `_frame/seq={seq}/frame.pb.gz` reload frames, which no row ever named, so nothing else could ever
+  remove them — dead bytes, **not** a stale-read path: a build writes its frame at the seq it ends on
+  and advances the pointer only afterwards, so the frame the next build reads is always the one that
+  epoch just wrote, overwriting any pre-wipe namesake. Same belt-and-braces shape the unified batch
+  artifacts already use — exact keys from the rows **plus** a post-commit prefix walk — and each
+  prefix is listed independently, so one failing listing costs neither the other prefix nor the
+  recorded keys; the final key list is de-duplicated. The S3 phase also stops throwing: it now issues
+  one round trip per thousand keys, and a client-side failure escaping `deleteObjects` would report a
+  committed wipe as a 500, so it is caught and every key handed over is reported as
+  `s3DeleteErrors` — a floor, not a census, since a failed 1000-key batch counts as one.
+  `S3CheckpointStorage.checkpointPrefix(siteId)` joins `egressPrefix`. No API
+  shape, DTO, migration, configuration or frontend change. Follow-ups from review: #122 (the walk has
+  no `lastModified` cut-off, so a concurrent post-commit build's object — and, worse for checkpoints,
+  the frame its restored pointer names — can be swept; true for `egress/` since 036), #123 (a prefix
+  that could not be listed at all, and a failed delete batch, are both under-reported in the wipe
+  response), #124 (a mid-pagination listing failure discards the pages already read). See
+  `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
 - batch-parquet-idle-poll: An idle completed-batch Parquet poll no longer pays cluster-wide costs
   (issue #115). `settleExpiredClaims()` — the first thing `finalizeNext()` does, on every drain
   iteration of every worker on every replica — used to open a transaction, take the
