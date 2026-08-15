@@ -110,9 +110,10 @@ public class CheckpointService {
      * build overwrites, and the pointer only advances at the very end ({@code recordCheckpoint}).</p>
      *
      * <p>Each of those short transactions goes through {@link CheckpointEpochGuard}, which takes the
-     * {@code site_sync_state} row lock a history wipe holds and refuses the write if the site's
-     * epoch moved. A build overtaken by a wipe is discarded — it returns an empty fold rather than
-     * restoring the pre-wipe rows and checkpoint pointer (issue #136).</p>
+     * {@code site_sync_state} row lock a history wipe and a re-baseline both hold, and refuses the
+     * write if the site's baseline epoch moved. A build overtaken by either is discarded — it
+     * returns an empty fold rather than restoring the rows and checkpoint pointer of a baseline that
+     * no longer exists (issues #136, #142).</p>
      *
      * @param siteId site identifier
      * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
@@ -136,10 +137,11 @@ public class CheckpointService {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
         DeltaSyncStateService.SyncStateView syncState = syncStateService.getSyncState(siteId);
         long checkpointSeq = syncState.lastCheckpointSeq();
-        // The epoch this build belongs to. Every row it writes is checked against it under the
-        // site_sync_state row lock, so a history wipe that commits mid-build discards the build
-        // instead of having its deletes undone by it (issue #136).
-        long generation = syncState.generation();
+        // The baseline epoch this build belongs to. Every row it writes is checked against it under
+        // the site_sync_state row lock, so a history wipe (issue #136) or a re-baseline (issue #142)
+        // that commits mid-build discards the build instead of having its deletes undone by it. The
+        // wire `generation` is deliberately not the signal here: a re-baseline must not move it.
+        long baselineEpoch = syncState.baselineEpoch();
         boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
         boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
@@ -154,10 +156,11 @@ public class CheckpointService {
             // and raising the loudest alarm in this subsystem for a routine operator action would
             // be wrong. Re-read the epoch and discard instead. (The re-read can itself lose the
             // race, in which case the alarm is raised as before; a wipe repeated on that site
-            // clears it, since the pointer is 0 by then.)
-            if (syncStateService.getSyncState(siteId).generation() != generation) {
-                log.warn("Discarding the checkpoint build for site {}: it was wiped while the build "
-                        + "was reading, taking frame@{} with it", siteId, checkpointSeq);
+            // clears it, since the pointer is 0 by then.) A re-baseline moves the same epoch and is
+            // just as routine, so it is covered by the same re-read.
+            if (syncStateService.getSyncState(siteId).baselineEpoch() != baselineEpoch) {
+                log.warn("Discarding the checkpoint build for site {}: its history was replaced "
+                        + "while the build was reading, taking frame@{} with it", siteId, checkpointSeq);
                 return Map.of();
             }
             throw new S3CheckpointStorage.CheckpointStorageException(
@@ -170,12 +173,12 @@ public class CheckpointService {
         }
 
         try {
-            return build(siteId, idlePass, segments, checkpointSeq, generation, haveFrame);
+            return build(siteId, idlePass, segments, checkpointSeq, baselineEpoch, haveFrame);
         } catch (CheckpointEpochGuard.EpochChangedException e) {
-            // Not a failure of this build: the site's history was destroyed under it, so there is
-            // nothing left to publish. Whatever rows it did commit were taken by the wipe's own
-            // deletes (they can only have committed before the wipe took the row lock), and the
-            // objects it uploaded are orphans the next wipe sweeps.
+            // Not a failure of this build: the site's baseline was replaced under it, so there is
+            // nothing left to publish. Whatever rows it did commit were taken by the wipe's (or the
+            // re-baseline's) own deletes — they can only have committed before the row lock was
+            // taken — and the objects it uploaded are orphans the next wipe sweeps.
             log.warn("Discarding the checkpoint build for site {}: {}", siteId, e.getMessage());
             return Map.of();
         }
@@ -185,7 +188,7 @@ public class CheckpointService {
                                                       SnapshotPass idlePass,
                                                       List<ChangelogSegment> segments,
                                                       long checkpointSeq,
-                                                      long generation,
+                                                      long baselineEpoch,
                                                       boolean haveFrame) {
         // Empty incremental work still belongs in phase=total: the frame download already ran.
         return metrics.timeCheckpoint(() -> {
@@ -206,17 +209,17 @@ public class CheckpointService {
                         && !hasUnmaterializedTables(siteId))) {
                     return seed;
                 }
-                writeSnapshots(siteId, seed, checkpointSeq, idlePass, generation);
+                writeSnapshots(siteId, seed, checkpointSeq, idlePass, baselineEpoch);
                 return seed;
             }
-            return materialize(siteId, seed, newSegments, generation);
+            return materialize(siteId, seed, newSegments, baselineEpoch);
         });
     }
 
     private Map<String, Map<String, FoldedRow>> materialize(UUID siteId,
                                                             Map<String, Map<String, FoldedRow>> seed,
                                                             List<ChangelogSegment> newSegments,
-                                                            long generation) {
+                                                            long baselineEpoch) {
         Map<String, Map<String, FoldedRow>> state = metrics.timeCheckpointPhase("fold", () -> {
             List<ChangeRecord> newRecords = new ArrayList<>();
             for (ChangelogSegment segment : newSegments) {
@@ -225,7 +228,7 @@ public class CheckpointService {
             return ChangelogFold.fold(seed, newRecords);
         });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
-        writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, generation);
+        writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, baselineEpoch);
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments
         // can be pruned. Same file-backed path as the snapshot (issue #126): one record at a
@@ -245,14 +248,20 @@ public class CheckpointService {
         } finally {
             deleteQuietly(frame, "_frame", siteId);
         }
-        epochGuard.inEpoch(siteId, generation, () -> syncStateService.recordCheckpoint(siteId, seq));
+        epochGuard.inEpoch(siteId, baselineEpoch, () -> syncStateService.recordCheckpoint(siteId, seq));
         // The single choke point every checkpoint build passes through, scheduled or forced. The
         // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
         // first moment post-wipe at which there are checkpoint seqs to freeze as SQL baselines.
         // The checkpoint is already durable by now, so a listener's failure must not be allowed to
         // fail the build behind it — that would freeze the pointer and stop retention.
+        //
+        // The publish is deliberately outside the guard's transaction: DeltaWipeReinitListener is a
+        // synchronous listener in its own REQUIRES_NEW transaction and its clearWipePending would
+        // block on the site_sync_state row lock the suspended guard transaction still holds. That
+        // leaves a gap in which a wipe can commit, so the event carries the epoch this build folded
+        // and the listener re-checks it (issue #142).
         try {
-            eventPublisher.publishEvent(new CheckpointRecordedEvent(siteId, seq));
+            eventPublisher.publishEvent(new CheckpointRecordedEvent(siteId, seq, baselineEpoch));
         } catch (RuntimeException e) {
             log.error("A checkpoint listener failed for site {} at seq {}; the checkpoint itself "
                     + "is committed", siteId, seq, e);
@@ -268,13 +277,13 @@ public class CheckpointService {
      * pointer and keep a last-good key if the rewrite fails.</p>
      *
      * <p>Every row write goes through {@link CheckpointEpochGuard}, so a build whose site was wiped
-     * mid-flight stops here instead of re-inserting the rows the wipe just deleted.</p>
+     * or re-baselined mid-flight stops here instead of re-inserting the rows that just went.</p>
      */
     private void writeSnapshots(UUID siteId,
                                 Map<String, Map<String, FoldedRow>> state,
                                 long seq,
                                 SnapshotPass pass,
-                                long generation) {
+                                long baselineEpoch) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
         // Every table's snapshot goes through the same scratch directory, one at a time. Creating
@@ -310,7 +319,7 @@ public class CheckpointService {
                 // there is no cause to preserve here, and an epoch refusal must leave the meter
                 // alone. A discarded build has no tables to report a hole for.
                 if (abandonStaleSnapshot(checkpoint, pass)) {
-                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+                    epochGuard.inEpoch(siteId, baselineEpoch, () -> checkpointRepository.save(checkpoint));
                 }
                 metrics.checkpointTableUnmaterialized("no_schema");
                 log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
@@ -336,10 +345,10 @@ public class CheckpointService {
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
-                epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+                epochGuard.inEpoch(siteId, baselineEpoch, () -> checkpointRepository.save(checkpoint));
             } catch (CheckpointEpochGuard.EpochChangedException e) {
-                // A wiped site is not a fact about this table: nothing this build produced may be
-                // published, so it must escape the per-table skip below and end the whole build.
+                // A replaced baseline is not a fact about this table: nothing this build produced
+                // may be published, so it must escape the per-table skip below and end the build.
                 throw e;
             } catch (RuntimeException e) {
                 // Report the cause first: the detach below goes through the epoch guard, which
@@ -354,7 +363,7 @@ public class CheckpointService {
                 // as its snapshot — detach it. On a same-seq rematerialize the last-good object
                 // is still at that key; keep the row pointing at it.
                 if (abandonStaleSnapshot(checkpoint, pass)) {
-                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+                    epochGuard.inEpoch(siteId, baselineEpoch, () -> checkpointRepository.save(checkpoint));
                 }
             } finally {
                 // The scratch file is this build's litter whichever way the table ended: kept,

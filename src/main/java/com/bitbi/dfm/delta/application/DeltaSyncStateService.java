@@ -42,8 +42,9 @@ public class DeltaSyncStateService {
                         state.getSchemaVersion(),
                         state.isRebaselineRequested(),
                         state.getRebaselineNotifiedAt() != null,
-                        state.getGeneration()))
-                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false, 0L));
+                        state.getGeneration(),
+                        state.getBaselineEpoch()))
+                .orElseGet(() -> new SyncStateView(0L, 0L, 0, false, false, 0L, 0L));
     }
 
     /**
@@ -139,15 +140,23 @@ public class DeltaSyncStateService {
     }
 
     /**
-     * Take the site's pending-wipe flag (issue #89). The caller that gets {@code true} owns the
-     * post-wipe follow-up work — currently the Bit BI baseline recapture — and no other will.
+     * Take the site's pending-wipe flag (issue #89), but only if the site is still on
+     * {@code baselineEpoch}. The caller that gets {@code true} owns the post-wipe follow-up work —
+     * currently the Bit BI baseline recapture — and no other will.
      *
-     * @param siteId site identifier
-     * @return {@code true} when this call consumed a pending wipe
+     * <p>The epoch is what keeps a <em>stale</em> caller from spending the flag (issue #142).
+     * {@code CheckpointRecordedEvent} is published after the build's guarded pointer write has
+     * committed, so a wipe can commit in the gap; without the predicate that event would consume the
+     * new wipe's flag and recapture baselines from a {@code checkpoints} table the wipe has just
+     * emptied, losing the automatic re-initialization for good.</p>
+     *
+     * @param siteId        site identifier
+     * @param baselineEpoch the epoch the caller's checkpoint belongs to
+     * @return {@code true} when this call consumed a pending wipe of that epoch
      */
     @Transactional
-    public boolean consumeWipePending(UUID siteId) {
-        return repository.clearWipePending(siteId) > 0;
+    public boolean consumeWipePending(UUID siteId, long baselineEpoch) {
+        return repository.clearWipePending(siteId, baselineEpoch) > 0;
     }
 
     /**
@@ -255,9 +264,12 @@ public class DeltaSyncStateService {
      *                           (issue #84) — lets the caller skip a redundant stamping round-trip
      * @param generation        epoch of the site's server-side history (issue #89); a change tells
      *                          the client to drop its local journal and reset its seq counter
+     * @param baselineEpoch     epoch of the site's server-side baseline (issue #142), moved by a wipe
+     *                          <em>and</em> by a re-baseline; server-internal, never sent to the
+     *                          client — {@code CheckpointEpochGuard} keys on it
      */
     public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion,
                                 boolean needRebaseline, boolean rebaselineNotified,
-                                long generation) {
+                                long generation, long baselineEpoch) {
     }
 }

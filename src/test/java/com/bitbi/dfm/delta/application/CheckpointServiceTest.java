@@ -7,6 +7,7 @@ import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
+import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
@@ -92,7 +93,7 @@ class CheckpointServiceTest {
             ((Runnable) inv.getArgument(1)).run();
             return null;
         }).when(metrics).timeCheckpointPhase(any(), any(Runnable.class));
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 0L));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 0L, 0L));
 
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "FULL_SNAPSHOT", Map.of());
@@ -217,7 +218,7 @@ class CheckpointServiceTest {
         // Pointer advanced to 10, but the frame reads as absent (deleted, or an S3 HEAD denial
         // masquerading as absence) and segments below the checkpoint were pruned: a refold from
         // the surviving tail would silently publish a truncated checkpoint.
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L));
         when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
@@ -233,7 +234,7 @@ class CheckpointServiceTest {
     @Test
     void refoldsFromZeroWhenFrameAbsentButFullHistorySurvives() {
         // Frame gone but nothing was pruned (history still starts at seq 1): refold is lossless.
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
 
@@ -261,7 +262,7 @@ class CheckpointServiceTest {
 
     @Test
     void recordsDownloadFramePhaseWhenASeedFrameExists() {
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 2L, 1, false, false, 0L));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(true);
         when(checkpointStorage.downloadFrame(SITE, 2L)).thenReturn(ChangelogCodec.serialize(List.of()));
         ChangelogSegment newer = ChangelogSegment.create(
@@ -616,7 +617,7 @@ class CheckpointServiceTest {
 
     @Test
     void refusesWhenFrameUnreadableAndNoSegmentsRemain() {
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
 
@@ -712,8 +713,8 @@ class CheckpointServiceTest {
         // operator action as this subsystem's data-loss alarm would send someone hunting a
         // corruption that never happened.
         when(syncStateService.getSyncState(SITE))
-                .thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L))
-                .thenReturn(new SyncStateView(0L, 0L, 0, true, false, 1L));
+                .thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L))
+                .thenReturn(new SyncStateView(0L, 0L, 0, true, false, 1L, 1L));
         when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
@@ -739,6 +740,46 @@ class CheckpointServiceTest {
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
+    @Test
+    void discardsTheBuildWhenARebaselineBumpedTheBaselineEpochMidBuild() {
+        // Issue #142. A FULL_SNAPSHOT SessionEnd deletes every checkpoint row and zeroes the pointer
+        // exactly as a wipe does, but must leave the generation alone (035). Keyed on the generation
+        // the guard saw nothing, this build's pointer came back at the pre-re-baseline seq — and the
+        // next build then seeded from the discarded baseline's frame, resurrecting deleted rows into
+        // every checkpoint Parquet, with no alarm anywhere.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        SiteSyncState rebaselined = SiteSyncState.initial(SITE);
+        rebaselined.resetForRebaseline(0L);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(rebaselined));
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE), "a discarded build folds to nothing");
+
+        assertEquals(0L, rebaselined.getGeneration(), "the re-baseline must not move the wire epoch");
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void publishesTheCheckpointEventWithTheEpochTheBuildFolded() {
+        // Issue #142, part 2. The event is published after the guarded pointer write has committed,
+        // so a wipe can commit in the gap. Carrying the build's own epoch is what lets the listener
+        // tell "my checkpoint" from "a checkpoint of a history that no longer exists".
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 3L, 5L));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        SiteSyncState atEpochFive = SiteSyncState.initial(SITE);
+        for (int i = 0; i < 5; i++) {
+            atEpochFive.resetForRebaseline(0L);
+        }
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(atEpochFive));
+
+        service.buildCheckpoint(SITE);
+
+        verify(eventPublisher).publishEvent(new CheckpointRecordedEvent(SITE, 2L, 5L));
+    }
+
     // --- helpers ---
 
     /** The site has been wiped {@code generation} times since this build read its sync state. */
@@ -756,7 +797,7 @@ class CheckpointServiceTest {
      * in this state used to be a no-op because {@code newSegments} is empty.
      */
     private void parkAtPointer(long seq, byte[] frameBytes, Checkpoint... rows) {
-        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L));
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L, 0L));
         when(checkpointStorage.frameExists(SITE, seq)).thenReturn(true);
         when(checkpointStorage.downloadFrame(SITE, seq)).thenReturn(frameBytes);
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(rows));

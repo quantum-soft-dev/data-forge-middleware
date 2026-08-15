@@ -22,8 +22,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The row-side half of the wipe race (issue #136): a database write belonging to a checkpoint build
- * may only land while the site is still on the epoch that build started from.
+ * The row-side half of the wipe race (issue #136), widened to the re-baseline (issue #142): a
+ * database write belonging to a checkpoint build may only land while the site is still on the
+ * baseline epoch that build started from.
  */
 class CheckpointEpochGuardTest {
 
@@ -34,7 +35,7 @@ class CheckpointEpochGuardTest {
 
     @Test
     void runsTheWriteWhileTheSiteIsStillOnTheSameEpoch() {
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(state(3L)));
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(3L)));
         AtomicBoolean written = new AtomicBoolean();
 
         guard.inEpoch(SITE, 3L, () -> written.set(true));
@@ -43,10 +44,28 @@ class CheckpointEpochGuardTest {
     }
 
     @Test
+    void refusesTheWriteAfterARebaselineThatLeftTheGenerationAlone() {
+        // Issue #142. A re-baseline discards every checkpoint and zeroes the pointer just like a
+        // wipe, but must not move the generation — that is the wire signal telling the client to
+        // reset its counters (035). Keying the guard on the generation therefore let this write
+        // through, and it restored the pointer of the baseline that had just been discarded.
+        SiteSyncState rebaselined = SiteSyncState.initial(SITE);
+        rebaselined.resetForRebaseline(0L);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(rebaselined));
+        AtomicBoolean written = new AtomicBoolean();
+
+        assertThrows(CheckpointEpochGuard.EpochChangedException.class,
+                () -> guard.inEpoch(SITE, 0L, () -> written.set(true)));
+
+        assertEquals(0L, rebaselined.getGeneration(), "the wire epoch must be untouched by a re-baseline");
+        assertFalse(written.get(), "a write from the discarded baseline must not reach the database");
+    }
+
+    @Test
     void refusesTheWriteAfterAWipeBumpedTheEpoch() {
-        // The damaging interleaving: the build read generation 0, the wipe committed generation 1,
-        // and this write would otherwise re-insert pre-wipe rows and a pre-wipe pointer.
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(state(1L)));
+        // The damaging interleaving: the build read epoch 0, the wipe committed epoch 1, and this
+        // write would otherwise re-insert pre-wipe rows and a pre-wipe pointer.
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(1L)));
         AtomicBoolean written = new AtomicBoolean();
 
         CheckpointEpochGuard.EpochChangedException failure =
@@ -61,7 +80,7 @@ class CheckpointEpochGuardTest {
     void takesTheRowLockTheWipeAlreadyHolds() {
         // A plain read would let the check pass while the wipe's transaction is still open, and the
         // write would then land right after its commit. The lock is what serializes the two.
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(state(0L)));
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(0L)));
 
         guard.inEpoch(SITE, 0L, () -> {
         });
@@ -102,20 +121,20 @@ class CheckpointEpochGuardTest {
 
     @Test
     void reportsBothEpochsSoTheDiscardIsTraceable() {
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(state(4L)));
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(4L)));
 
         CheckpointEpochGuard.EpochChangedException failure =
                 assertThrows(CheckpointEpochGuard.EpochChangedException.class,
                         () -> guard.inEpoch(SITE, 2L, () -> {
                         }));
 
-        assertEquals(2L, failure.getExpectedGeneration());
-        assertEquals(4L, failure.getActualGeneration());
+        assertEquals(2L, failure.getExpectedEpoch());
+        assertEquals(4L, failure.getActualEpoch());
     }
 
-    private static SiteSyncState state(long generation) {
+    private static SiteSyncState wiped(long epochs) {
         SiteSyncState state = SiteSyncState.initial(SITE);
-        for (long i = 0; i < generation; i++) {
+        for (long i = 0; i < epochs; i++) {
             state.resetForWipe();
         }
         return state;

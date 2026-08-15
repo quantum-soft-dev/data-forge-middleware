@@ -64,11 +64,18 @@ public interface SiteSyncStateRepository {
      * {@code @DynamicUpdate} with no {@code @Version}, so a read-then-write clear could be lost
      * against a concurrent write, and two builds could both believe they consumed the flag.
      * </p>
+     * <p>
+     * The {@code baselineEpoch} predicate scopes the take to the epoch the caller's checkpoint
+     * belongs to (issue #142): a checkpoint event published just before a wipe committed refers to a
+     * history that no longer exists, and letting it consume the new wipe's flag would recapture zero
+     * baselines and lose the automatic re-initialization.
+     * </p>
      *
-     * @param siteId site identifier
-     * @return 1 when this call consumed a pending wipe, 0 when none was pending
+     * @param siteId        site identifier
+     * @param baselineEpoch the epoch the caller's checkpoint belongs to
+     * @return 1 when this call consumed a pending wipe of that epoch, 0 otherwise
      */
-    int clearWipePending(UUID siteId);
+    int clearWipePending(UUID siteId, long baselineEpoch);
 
     /**
      * Save (insert or update) the sync state.

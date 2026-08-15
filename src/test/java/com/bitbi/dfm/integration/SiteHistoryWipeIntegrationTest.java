@@ -9,6 +9,7 @@ import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.SiteHistoryWipeSummary;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
+import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -96,6 +98,9 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private ChangelogRetentionService retentionService;
+
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
 
     private Site site;
 
@@ -441,6 +446,49 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 .findByAccountPluginIdAndSiteId(activation.getId(), SITE_ID);
         assertThat(baselines.get(0).getBaselineSeq()).isEqualTo(1L);
 
+        awaitAutoReinitEntries(1);
+    }
+
+    @Test
+    @DisplayName("a checkpoint event from before the wipe cannot consume the wipe's pending flag")
+    void preWipeCheckpointEventCannotConsumeTheWipesPendingFlag() {
+        // Issue #142, part 2. CheckpointService publishes CheckpointRecordedEvent one statement
+        // after its guarded pointer write commits — it cannot publish inside the guard's transaction,
+        // because this listener is synchronous and REQUIRES_NEW and would block on the row lock the
+        // suspended guard transaction holds. A wipe committing in that gap used to have its
+        // wipe_pending spent by the stale event: recaptureForSite then read a checkpoints table the
+        // wipe had just emptied — zero baselines — and the automatic re-init of #89 was lost until
+        // someone ran a manual reinit. Replayed here without threads: the epoch is the whole point.
+        AccountPlugin activation = accountPluginRepository.save(
+                AccountPlugin.activate(ACCOUNT_ID, "bit-bi", Map.of("tenantId", "t1")));
+        changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L,
+                List.of(insert(1L, "Ann"), insert(2L, "Bob")));
+        checkpointService.buildCheckpoint(SITE_ID);
+        long epochTheBuildFolded = syncStateService.getSyncState(SITE_ID).baselineEpoch();
+
+        wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
+
+        // The pre-wipe build's event, arriving after the wipe committed.
+        eventPublisher.publishEvent(new CheckpointRecordedEvent(SITE_ID, 2L, epochTheBuildFolded));
+
+        assertThat(jdbc.queryForObject(
+                "SELECT wipe_pending FROM site_sync_state WHERE site_id = ?", Boolean.class, SITE_ID))
+                .as("the wipe's pending re-init still belongs to the first genuine post-wipe checkpoint")
+                .isTrue();
+        assertThat(baselineRepository.findByAccountPluginIdAndSiteId(activation.getId(), SITE_ID))
+                .as("a recapture against the emptied checkpoints table would freeze nothing at all")
+                .isEmpty();
+
+        // And the genuine post-wipe checkpoint still recaptures, exactly once.
+        declareCustomersSchema();
+        changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L,
+                List.of(insert(1L, "Ann"), insert(2L, "Bob")));
+        checkpointService.buildCheckpoint(SITE_ID);
+
+        List<PluginDeltaBaseline> baselines = baselineRepository
+                .findByAccountPluginIdAndSiteId(activation.getId(), SITE_ID);
+        assertThat(baselines).hasSize(1);
+        assertThat(baselines.get(0).getBaselineSeq()).isEqualTo(2L);
         awaitAutoReinitEntries(1);
     }
 

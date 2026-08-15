@@ -145,7 +145,7 @@ _This file is the single source of dev rules (the spec-kit constitution is inten
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V51**, next is **V52**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V52**, next is **V53**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ## Key Implementation Patterns
@@ -255,7 +255,7 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
+- Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
 - checkpoint-wipe-serialization: A checkpoint build that overlaps a site history wipe is discarded instead of restoring the epoch it was built for (issue #136, the row-side half of #122). `CheckpointService.buildCheckpoint` is non-transactional and runs from both the cron scheduler and the forced rebuild, so its writes could land after the wipe committed and restore a pre-wipe `last_checkpoint_seq`; retention then pruned the new epoch's segments as "below checkpoint" and the next build refused the lossy refold. `CheckpointEpochGuard.inEpoch(siteId, generation, write)` runs each build write (the `checkpointRepository.save` paths and `recordCheckpoint`) in a short transaction that takes the `site_sync_state` row lock the wipe holds and re-checks `generation`; a refusal escapes the per-table catch and ends the whole build with an empty fold. No S3 traffic inside the lock. No REST, gRPC, DTO, migration, configuration-key, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`.

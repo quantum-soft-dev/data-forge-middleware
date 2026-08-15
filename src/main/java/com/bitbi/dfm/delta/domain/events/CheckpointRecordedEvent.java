@@ -14,8 +14,18 @@ import java.util.UUID;
  * <p>Fired on <em>every</em> checkpoint build, scheduled or forced. Listeners must decide for
  * themselves whether this particular one concerns them.</p>
  *
- * @param siteId site whose checkpoint was recorded
- * @param seq    sequence the checkpoint represents
+ * <p>The event is published one statement after the build's guarded pointer write commits, so a
+ * wipe or a re-baseline can commit in that gap and the event then describes a history that no longer
+ * exists. {@code baselineEpoch} is what makes that detectable: a listener re-checks it against the
+ * site's current epoch before acting on the event (issue #142). Publishing inside the guard's
+ * transaction instead is not an option — {@code DeltaWipeReinitListener} is a synchronous listener
+ * in its own {@code REQUIRES_NEW} transaction and would block on the {@code site_sync_state} row
+ * lock the suspended guard transaction still holds.</p>
+ *
+ * @param siteId        site whose checkpoint was recorded
+ * @param seq           sequence the checkpoint represents
+ * @param baselineEpoch {@code site_sync_state.baseline_epoch} the build folded at; server-internal,
+ *                      unrelated to the wire {@code generation}
  */
-public record CheckpointRecordedEvent(UUID siteId, long seq) {
+public record CheckpointRecordedEvent(UUID siteId, long seq, long baselineEpoch) {
 }
