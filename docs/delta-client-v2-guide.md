@@ -884,6 +884,30 @@ its frame at the seq it ends on and advances the checkpoint pointer only afterwa
 next build reads is by construction the one this epoch just wrote, overwriting any pre-wipe namesake
 at that key.
 
+**A checkpoint build that overlaps the wipe is discarded (issue #136).** The `LastModified` cut-off
+protects a concurrent build's *objects*; its *rows* need the epoch. `CheckpointService.buildCheckpoint`
+is non-transactional by design — it spans the frame download, one download per segment and one
+upload per table — and it runs from the nightly `CheckpointScheduler` as well as from a forced
+rebuild, so it can still be mid-flight when a wipe commits. Left alone it would re-insert the
+`checkpoints` rows the wipe deleted and, worse, restore a pre-wipe `last_checkpoint_seq` on a site
+whose epoch has just restarted at zero. `ChangelogRetentionService.prune` keys off that pointer:
+the new epoch's segments all sit far below it, so they would be pruned as "below checkpoint" down to
+`delta.retention.audit-window-segments` — and the next build would then find a pointer it cannot
+honour (no frame, history pruned) and refuse the lossy refold, leaving the site's checkpoint pipeline
+stuck until someone intervened.
+
+Each database write of a build therefore runs in its own short transaction that first takes the
+`site_sync_state` row lock the wipe holds for the whole of its transaction, then compares the site's
+`generation` with the one the build read when it started (`CheckpointEpochGuard`). Only two orderings
+remain: the write commits before the wipe takes the lock, so the wipe's own deletes remove it, or it
+waits for the wipe and is then refused. A refused write ends the whole build — it is not a per-table
+skip — and the build logs `Discarding the checkpoint build for site …` and returns an empty fold; the
+pointer, the rows and the frame are all left to the new epoch. No S3 traffic happens inside the lock,
+so the build still holds a database connection only for the length of a single statement. Snapshot
+objects the discarded build had already uploaded stay behind as orphans (the cut-off deliberately
+spares them from the walk); re-running the wipe sweeps them, as it does for every other orphan on
+this path.
+
 **Still a non-goal**: an ordinary **re-baseline** leaves superseded checkpoint objects behind. They
 are addressed by key from the live `checkpoints` rows, so no stale read is possible through them
 while the site keeps its epoch.

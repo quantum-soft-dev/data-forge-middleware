@@ -453,6 +453,28 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-wipe-serialization: A checkpoint build that overlaps a site history wipe is discarded
+  instead of resurrecting the epoch it was built for (issue #136, the row-side half of #122).
+  `CheckpointService.buildCheckpoint` is non-transactional by design — frame download, one download
+  per segment, one upload per table — and runs from `CheckpointScheduler` as well as
+  `DeltaCheckpointRebuildService`, so its writes could land after the wipe committed: the deleted
+  `checkpoints` rows came back and, worse, a **pre-wipe `last_checkpoint_seq`** was restored on a site
+  whose epoch had just restarted at 0. `ChangelogRetentionService.prune` keys off that pointer, so
+  the new epoch's segments read as "below checkpoint" and were pruned to `audit-window-segments`,
+  after which the next build hit the deliberate "refusing lossy refold" throw and the site's
+  checkpoint pipeline was stuck. New `CheckpointEpochGuard.inEpoch(siteId, generation, write)` runs
+  **each** build write (the three `checkpointRepository.save` paths and `recordCheckpoint`) in its own
+  short transaction that takes the `site_sync_state` row lock the wipe already holds for its whole
+  transaction and re-reads `generation`. Two orderings survive: the write commits before the wipe
+  takes the lock (the wipe's own deletes remove it) or it waits and is refused. A refusal is **not** a
+  per-table skip — it escapes the per-table catch, ends the build, logs
+  `Discarding the checkpoint build for site …` and returns an empty fold, so the pointer, the rows and
+  the frame all stay with the new epoch. No S3 traffic inside the lock: the build still holds a
+  connection for one statement at a time. Objects the discarded build had already uploaded stay as
+  orphans — the #122 cut-off deliberately spares them from the walk and re-running the wipe sweeps
+  them. Retention needed no change: it re-reads the pointer, and post-wipe that is 0. No REST, gRPC,
+  DTO, migration, configuration-key, metric, S3-key or frontend change.
+  See `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
 - wipe-prefix-sweep: The site-history wipe's post-commit prefix walk is bounded, resumable and
   honest (issue #122, consolidating #123 and #124). `S3PrefixLister` walks `ListObjectsV2` page by
   page and returns the pages already read plus `lastModified` per object and a truncation flag —
@@ -469,7 +491,8 @@ pages/{feature}/            # Route pages
   listing. No migration, configuration-key, gRPC, or S3-key change. The row-side race in which
   `CheckpointService.buildCheckpoint` re-inserts a pre-wipe pointer after the wipe commits is
   **not** closed here — the cut-off protects the objects; serializing the build behind the
-  `site_sync_state` lock is a separate decision.
+  `site_sync_state` lock is a separate decision, since taken in #136 (see
+  checkpoint-wipe-serialization above).
 - checkpoint-rematerialize: A checkpoint table left without a snapshot is rematerialized from the
   existing frame, without waiting for new segments (issue #128). `CheckpointService.materialize`
   used to detach Parquet on a per-table failure, save the row at the new `seq` and still advance
