@@ -258,6 +258,20 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- parquet-scratch-orphan-sweep: File-backed Parquet scratch left behind when a process dies between
+  `createTempFile` and `finally` is swept by prefix and age (issue #127).
+  `ParquetScratchOrphanSweeper` lists `delta.checkpoint.temp-dir` and
+  `delta.batch-parquet.temp-dir` (deduplicated; they default to the same `java.io.tmpdir`),
+  deletes regular files named `checkpoint-*` / `batch-parquet-*` whose last-modified time is
+  strictly older than `delta.parquet.scratch-orphan-age-seconds`
+  (`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`, default **4 hours**), and runs at startup then
+  every `delta.parquet.scratch-orphan-sweep-ms` (`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, default
+  1 hour). Frame scratch from #126 uses the same `checkpoint-` prefix, so it is swept too.
+  Age is the only safe filter: a sibling replica may be writing into the same volume,
+  and the batch-parquet lease is renewed for the life of a live build, so it is not a bound on
+  file age. The writers still delete their own files on the happy path; this is the recovery
+  for a persistent scratch volume. No REST, gRPC, DTO, metric, migration, or frontend change.
+  See `docs/delta-client-v2-guide.md`, `docs/cr-unified-batch-parquet.md`.
 - stream-checkpoint-frame: The checkpoint build streams the all-INSERT reload frame to a scratch file and uploads it with `RequestBody.fromFile` (issue #126). `CheckpointFrame.records` emits one `ChangeRecord` at a time, `ChangelogCodec.write` gzips to an `OutputStream`, `CappedOutputStream` applies `delta.checkpoint.max-temp-bytes` at the file, and `S3CheckpointStorage.uploadFrame` takes a `Path`. Crossing the ceiling aborts the build (the frame is the next seed); a single oversized table is still skipped. On-disk bytes are unchanged — `parse` still reads them. The site fold stays in heap. No API, DTO, proto, migration, configuration-key, meter, S3-key or frontend change. See `docs/delta-client-v2-guide.md`.
 - order-dependent-test-flakes: Two `backend-test` flakes no longer depend on suite order or a one-second clock (issue #119). `BatchRetentionScheduleAdminControllerIntegrationTest` asserts the CONFIG fallback after `BaseIntegrationTest.clearAppSettings()` wipes the shared `app_settings` row (the table is not in `test-data.sql`). `SqlGenerationConcurrencyTest` holds the semaphore at the first statement after acquire and asserts `regenerateForBatch` via the queue gauge instead of `tryAcquire(1s)`. No API, DTO, migration, configuration or frontend change.
 - checkpoint-parquet-on-disk: The V2 checkpoint build writes each table's snapshot to a scratch file and streams it to S3 (issue #112, absorbing #114), instead of encoding a whole table into a `byte[]`: `ParquetCheckpointWriter.writeParquet(Path, …)` takes an `Iterable` of rows, `S3CheckpointStorage.uploadParquet` takes a `Path`, and `CheckpointService` does write → upload → delete per table, so the peak of materialization is one row-group buffer plus one scratch file rather than one Parquet per table. An unusable scratch directory aborts the build rather than detaching every table's snapshot key (a write-time failure stays a per-table skip). The site fold stays in heap on purpose; the all-tables frame that used to sit beside it is file-backed as of #126. New config: `delta.parquet.row-group-bytes` (`DELTA_PARQUET_ROW_GROUP_BYTES`, default 16 MiB) for every V2 Parquet writer, and `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes` mirroring the batch-parquet keys; crossing the ceiling is counted as `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`. `FileOutputFile` and `ArtifactSizeLimitExceededException` are now package-level classes shared by both writers. No S3-key, meter-name, API, migration or frontend change.

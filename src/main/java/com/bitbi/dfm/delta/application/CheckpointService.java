@@ -274,7 +274,8 @@ public class CheckpointService {
 
     private Path createScratchFile(UUID siteId, String suffix) {
         try {
-            return Files.createTempFile(tempDirectory, "checkpoint-" + siteId + "-", suffix);
+            return Files.createTempFile(tempDirectory,
+                    ParquetScratch.CHECKPOINT_PREFIX + siteId + "-", suffix);
         } catch (IOException e) {
             throw new UncheckedIOException(
                     "Cannot create a checkpoint scratch file in " + tempDirectory, e);

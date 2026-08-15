@@ -435,7 +435,7 @@ public class BatchParquetFinalizationService {
                     continue;
                 }
                 Path output = Files.createTempFile(tempDirectory,
-                        "batch-parquet-" + claim.artifactId() + "-", ".parquet");
+                        ParquetScratch.BATCH_PARQUET_PREFIX + claim.artifactId() + "-", ".parquet");
                 claimsByTable.put(claim.tableName(), claim);
                 tempFiles.put(claim.tableName(), output);
                 requests.put(claim.tableName(), new DeltaParquetWriter.TableWriteRequest(output, schema));
