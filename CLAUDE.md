@@ -469,10 +469,12 @@ pages/{feature}/            # Route pages
   egress and SQL sweeps rather than through the checkpoint build. It also rested on a flag nobody
   would connect to scheduling: turning virtual threads off silently drops the whole application to a
   single scheduling thread, which is the reported failure exactly. Six is derived and asserted, not
-  chosen: **above** the three tasks that can hold a thread for minutes (checkpoint build, retention
-  cleanup, and the orphaned-provisional sweep in its 500-segment worst case) so a short tick always
-  finds a thread, and **below** `spring.datasource.hikari.maximum-pool-size` (10) so a burst of ticks
-  cannot take the connections request threads need. Two tests carry it:
+  chosen: **above** the four tasks that can hold a thread for minutes (checkpoint build, retention
+  cleanup, the orphaned-provisional sweep in its 500-segment worst case, and the batch timeout sweep
+  once a backlog makes its unbounded query long) so a short tick always finds a thread, and **below**
+  `spring.datasource.hikari.maximum-pool-size` (10) — which says the scheduler alone cannot empty the
+  connection pool, not that total background demand fits, since the three queue workers hold
+  connections too (**#161**). Two tests carry it:
   `ScheduledTaskIsolationTest` runs the shipped property set and proves a blocking fixed-delay tick
   and a blocking cron tick each leave a neighbour running (it also pins the auto-configured
   scheduler's serialization, so a framework change is visible), and `ScheduledTaskInventoryTest`
@@ -502,9 +504,13 @@ pages/{feature}/            # Route pages
   (`spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants to
   wait). Virtual threads stay
   on for the web layer; they never reached `@Async`, whose sites all name an `Executor` bean that
-  made Boot's virtual-thread `applicationTaskExecutor` back off. Only scheduling is pinned. No REST, gRPC, DTO, migration,
-  metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("One sweep interval means
-  the tick runs when it is due").
+  made Boot's virtual-thread `applicationTaskExecutor` back off. Only scheduling is pinned. **One metrics note**: Boot's
+  `TaskExecutorMetricsAutoConfiguration` binds a `ThreadPoolTaskScheduler` and did not bind the
+  `SimpleAsyncTaskScheduler` before it, so `/actuator/prometheus` gains an
+  `executor_*{name="taskScheduler"}` family — nothing renamed or removed, and read
+  `executor_queued_tasks` there as "not yet due" (a `DelayedWorkQueue` holds every future tick, ~15
+  at rest), not as a backlog. No REST, gRPC, DTO, migration, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("One sweep interval means the tick runs when it is due").
 - split-scratch-ceilings: The checkpoint scratch ceiling is two keys, and the deployed values sit
   below the volume so the application refuses before kubelet evicts (issue #138). Since #126 one key
   governed two files with opposite failure semantics — an oversized per-table snapshot is skipped

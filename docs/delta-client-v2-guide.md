@@ -801,6 +801,12 @@ already closed.
 `spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants
 shutdown to wait for what is running.
 
+One side effect worth knowing before the next dashboard change: Boot binds executor metrics to a
+`ThreadPoolTaskScheduler` and did not bind the scheduler this replaces, so `/actuator/prometheus`
+grows an `executor_*{name="taskScheduler"}` family. Nothing was renamed or removed. Read
+`executor_queued_tasks` on it as "ticks not yet due" — the delayed queue holds every future
+execution, about fifteen at rest — rather than as a backlog.
+
 `ScheduledTaskInventoryTest` guards both numbers **as they are declared in the YAML** — every
 profile, so one that resizes the connection pool has to resize this one too — and fails when a new
 `@Scheduled` method lands without the audit behind the size being redone. An environment override is

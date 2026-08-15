@@ -73,6 +73,8 @@ class BatchRetentionSchedulerTest {
                 "the event listener runs inside the admin's transaction: a rejection while the context "
                         + "is closing must not roll the saved schedule back and answer 500");
 
-        verify(taskScheduler, times(2)).schedule(any(Runnable.class), any(Trigger.class));
+        // No retry with the fallback: it would be rejected for the same reason and would blame a
+        // second, perfectly good cron expression in the log.
+        verify(taskScheduler, times(1)).schedule(any(Runnable.class), any(Trigger.class));
     }
 }
