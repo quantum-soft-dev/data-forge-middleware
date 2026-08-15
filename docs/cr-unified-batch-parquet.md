@@ -112,7 +112,11 @@ deletes regular files named `checkpoint-*` / `batch-parquet-*` whose last-modifi
 than `delta.parquet.scratch-orphan-age-seconds` (default 4 hours). The age is not derived from
 `lease-seconds`: a live build renews its lease, and completed-batch files are created before
 replay starts, so a live file can legitimately outlive the lease. Foreign names and younger files
-are left alone so a sibling replica writing into the same volume is not disturbed.
+are left alone so a sibling replica writing into the same volume is not disturbed. Where no such
+sibling can exist — a pod-private `emptyDir`, declared with
+`delta.parquet.scratch-private-to-pod` (issue #141) — the sweep also drops anything older than the
+running JVM, so a container restart mid-build does not leave one file per claimed table on the
+volume for the whole age window.
 
 `max-temp-bytes` bounds one file, and a batch build opens one per claimed table at once with
 `max-concurrent` builds in flight, so the *directory* is bounded by the deployment rather than by
