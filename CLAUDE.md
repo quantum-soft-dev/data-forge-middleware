@@ -475,11 +475,21 @@ pages/{feature}/            # Route pages
   making the app refuse first needs separate snapshot/frame ceilings (#126 put two files with
   opposite failure semantics under one key) and is issue #138. **6 GiB is an assumption, not a
   measurement** — no observed maximum for a checkpoint frame or batch artifact exists; the
-  worst-case formula (`1 x max(table snapshot, whole-site frame)` for the sequential checkpoint
-  build, plus `max-concurrent (2) x tables x artifact` for the batch build, which opens one scratch
-  file per claimed table) is in `docs/delta-client-v2-guide.md` ("Sizing note") together with how to
-  replace the guess. No API, DTO, migration, metric, S3-key or frontend change. See
-  `docs/delta-client-v2-guide.md`, `docs/cr-unified-batch-parquet.md`.
+  worst-case formula is in `docs/delta-client-v2-guide.md` ("Sizing note") together with how to
+  replace the guess. Two multipliers there are easy to get wrong: the checkpoint term is
+  **`2 x max(table snapshot, whole-site frame)`**, not `1 x` — `CheckpointScheduler`'s
+  `ReentrantLock` guards only the cron thread, while a forced rebuild runs `rebuildFromFrame` on the
+  separate single-thread `deltaRebuildExecutor`, so a rebuild during the 02:00 sweep (or
+  `resumePendingRebuilds()` at startup) puts two checkpoint scratch files in one JVM — and the batch
+  term is `max-concurrent (2) x tables x artifact`, because a build opens one scratch file per
+  claimed table before the shared replay. Also new: **orphans now outlive a container restart**. The
+  writable layer was discarded when a container restarted; an `emptyDir` is cleared only when the
+  pod goes away, so a liveness/OOM kill mid-build leaves that attempt's files on the volume until
+  `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` (4 h) ages them out, while the batch claim is retried
+  after `DELTA_BATCH_PARQUET_LEASE_SECONDS` (30 min) and allocates a second set — budgeted as a
+  residue term, with #141 tracking the unconditional-startup-sweep fix. No API, DTO, migration,
+  metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`,
+  `docs/cr-unified-batch-parquet.md`.
 - wipe-prefix-sweep: The site-history wipe's post-commit prefix walk is bounded, resumable and
   honest (issue #122, consolidating #123 and #124). `S3PrefixLister` walks `ListObjectsV2` page by
   page and returns the pages already read plus `lastModified` per object and a truncation flag —

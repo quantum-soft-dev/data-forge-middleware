@@ -642,20 +642,41 @@ disk guard into a stuck checkpoint pipeline.
 once:
 
 ```
-peak = checkpoint_peak + batch_peak
-checkpoint_peak = 1 x max(largest per-table snapshot, whole-site reload frame)
-                    # builds are sequential (nightly cron, one site and one table at a time),
-                    # and since #126 the frame is written the same way, so one file at a time
+peak = checkpoint_peak + batch_peak + orphan_residue
+checkpoint_peak = 2 x max(largest per-table snapshot, whole-site reload frame)
+                    # one file at a time PER BUILD (the cron sweep walks one site and one table
+                    # at a time, and since #126 the frame is written the same way) — but there
+                    # are two build paths per pod: CheckpointScheduler's ReentrantLock guards
+                    # only the cron thread, while a forced rebuild runs rebuildFromFrame on the
+                    # separate single-thread `deltaRebuildExecutor`. An admin pressing "Rebuild"
+                    # during the 02:00 sweep, or resumePendingRebuilds() firing at startup,
+                    # gives two concurrent checkpoint scratch files in one JVM.
 batch_peak      = delta.batch-parquet.max-concurrent (2)
                     x tables claimed per batch          # one scratch file per claimed table,
                                                         # all opened before the shared replay
                     x largest per-table artifact
+orphan_residue  = whatever a container restart left behind, until the orphan sweep ages it out
+                    # see "Orphans outlive a container restart now" below
 ```
 
-`delta.batch-parquet.max-concurrent` and the table count per site are the two multipliers to check
-before assuming the budget still holds; #128 also raised how often large files are written, since a
-scheduled build now rematerializes every table whose snapshot is missing and a forced rebuild
-rewrites all of them. **6 GiB is an assumption, not a measurement**: we have no observed maximum for
+There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
+its own. `delta.batch-parquet.max-concurrent` and the table count per site are the two multipliers
+to check before assuming the budget still holds; #128 also raised how often large files are written,
+since a scheduled build now rematerializes every table whose snapshot is missing and a forced
+rebuild rewrites all of them.
+
+**Orphans outlive a container restart now.** When scratch lived in the container's writable layer,
+a restarted container got an empty `/tmp`. An `emptyDir` is cleared only when the *pod* goes away,
+so after a liveness kill or an OOM kill mid-build the dead attempt's files stay on the volume, and
+`ParquetScratchOrphanSweeper` leaves anything younger than
+`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` (4 h) alone — while a lease-expired batch claim is
+retried within `DELTA_BATCH_PARQUET_LEASE_SECONDS` (30 min) and allocates a second full set. Budget
+for that residue, or shorten the age for this deployment — but not below the longest legitimate
+create-to-delete interval, because a live build's files are exactly as old as the build. Sweeping
+a pod-private volume unconditionally at startup (every file present then belongs to a previous
+container, so nothing live can be lost) is issue **#141**.
+
+**6 GiB is an assumption, not a measurement**: we have no observed maximum for
 a checkpoint frame or a batch artifact on test/prod. The only sized artifact on record is the 439k-row
 snapshot that OOMed a 1536Mi pod (see the comment in `k8s/overlays/dev/deployment-backend-patch.yaml`),
 whose Parquet and gzipped-protobuf forms land in the tens to low hundreds of MiB — so 6 GiB is
@@ -669,6 +690,18 @@ only, and because those are strategic merge patches over maps, the base `ephemer
 merge in and survive — verified with `kubectl kustomize k8s/overlays/{dev,stage,prod}`. Converting
 either patch to a JSON-6902 `replace` on the whole `resources` object would silently drop the disk
 budget.
+
+**Verify the mount, not just the path.** The two `*_TEMP_DIR` keys live in the shared `forge-config`
+ConfigMap while the volume is declared on the backend Deployment, and both writers call
+`Files.createDirectories` on the configured path. If the two ever drift — a debug pod, a future Job,
+an overlay that loses the mount — nothing fails loudly: `/scratch/parquet` is silently created on
+the unbounded writable layer instead, which is the exact state this budget exists to prevent. So
+check that it is a mount:
+
+```bash
+kubectl exec deploy/forge-backend -n forge -- df -h /scratch/parquet   # its own filesystem line
+kubectl exec deploy/forge-backend -n forge -- ls -la /scratch/parquet  # checkpoint-* / batch-parquet-*
+```
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
