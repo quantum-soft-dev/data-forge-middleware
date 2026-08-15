@@ -453,6 +453,17 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- stream-checkpoint-frame: The checkpoint build no longer collects the all-INSERT reload frame into
+  a `List<ChangeRecord>` and a gzip `byte[]` (issue #126, the leftover copy after #112 put each
+  table's Parquet on disk). `CheckpointFrame.records` walks the fold one record at a time,
+  `ChangelogCodec.write` gzips that sequence to an `OutputStream`; the build wraps it in
+  `CappedOutputStream` under the same `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes`
+  as the snapshot, and `S3CheckpointStorage.uploadFrame` takes the `Path` (`RequestBody.fromFile`). The file is deleted
+  in `finally`. Crossing the ceiling aborts the build — the frame is the next seed, unlike a single
+  oversized table which is still skipped. On-disk bytes are the same gzipped length-delimited
+  protobuf `parse` already reads. **The site fold stays in heap** (a later ticket). No API, DTO,
+  proto, migration, configuration-key, meter, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md`.
 - order-dependent-test-flakes: Two `backend-test` flakes no longer depend on suite order or a
   one-second clock (issue #119). `BatchRetentionScheduleAdminControllerIntegrationTest` was
   asserting the CONFIG fallback against a shared `app_settings` row that the sibling PUT (and any
@@ -481,8 +492,8 @@ pages/{feature}/            # Route pages
   while the pointer advanced, which a forced rebuild cannot undo (a build with no new segments
   returns early, tracked as #128). A failure *during* a write stays a per-table skip, so one
   oversized or unrenderable table still cannot freeze the pointer and stop retention. **The site fold
-  stays in heap, and so does the all-tables frame the build serializes at the end** — off-heap
-  folding and streaming the frame (#126) are deliberately separate tickets, and
+  stays in heap**; the all-tables frame that used to sit beside it is now file-backed (issue #126).
+  Off-heap folding remains a separate ticket, and
   `delta.checkpoint.duration{phase=fold}` is the meter that shows when it starts to matter. New keys: `delta.parquet.row-group-bytes`
   (`DELTA_PARQUET_ROW_GROUP_BYTES`, default **16 MiB** — an eighth of parquet-mr's implicit
   default, kept high enough that a multi-GB batch artifact's footer stays in the hundreds of row

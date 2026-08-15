@@ -6,6 +6,8 @@ import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,33 @@ class CheckpointFrameTest {
 
         Map<String, Map<String, FoldedRow>> reseeded = ChangelogFold.fold(Map.of(), frame);
         assertEquals(state, reseeded, "re-folding the frame reproduces the exact state");
+    }
+
+    @Test
+    void recordsStreamsTheSameAllInsertFrameWithoutCollectingFirst() {
+        Map<String, Map<String, FoldedRow>> state = ChangelogFold.fold(Map.of(), List.of(
+                rec("customers", Op.INSERT, key("id", 1L), data("id", 1L, "name", "Ann")),
+                rec("orders", Op.INSERT, key("oid", 9L), data("oid", 9L, "total", "12.50")),
+                rec("customers", Op.UPDATE, key("id", 1L), data("name", "Annie"))));
+
+        assertEquals(CheckpointFrame.toRecords(state), copy(CheckpointFrame.records(state)),
+                "the lazy view must emit the same records, in the same order, as toRecords");
+
+        Map<String, Map<String, FoldedRow>> reseeded = ChangelogFold.fold(
+                Map.of(), ChangelogCodec.parse(write(CheckpointFrame.records(state))));
+        assertEquals(state, reseeded, "a streamed frame must re-fold to the exact state");
+    }
+
+    private static List<ChangeRecord> copy(Iterable<ChangeRecord> records) {
+        List<ChangeRecord> copied = new ArrayList<>();
+        records.forEach(copied::add);
+        return copied;
+    }
+
+    private static byte[] write(Iterable<ChangeRecord> records) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ChangelogCodec.write(records, out);
+        return out.toByteArray();
     }
 
     private static ChangeRecord rec(String table, Op op, Map<String, Value> key, Map<String, Value> data) {
