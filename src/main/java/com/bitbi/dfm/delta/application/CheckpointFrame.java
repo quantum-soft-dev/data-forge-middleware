@@ -5,8 +5,11 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 /**
  * Re-expresses a folded checkpoint state as an all-INSERT changelog frame (Delta Client v2 — 022,
@@ -32,18 +35,47 @@ public final class CheckpointFrame {
      */
     public static List<ChangeRecord> toRecords(Map<String, Map<String, FoldedRow>> state) {
         List<ChangeRecord> frame = new ArrayList<>();
-        long seq = 0;
-        for (Map.Entry<String, Map<String, FoldedRow>> tableEntry : state.entrySet()) {
-            for (FoldedRow row : tableEntry.getValue().values()) {
-                frame.add(ChangeRecord.newBuilder()
-                        .setTable(tableEntry.getKey())
+        records(state).forEach(frame::add);
+        return frame;
+    }
+
+    /**
+     * Lazy all-INSERT view of the folded state — one {@link ChangeRecord} at a time, never a
+     * collected {@code List} (issue #126). Table/row order and frame-local seq match
+     * {@link #toRecords}.
+     */
+    public static Iterable<ChangeRecord> records(Map<String, Map<String, FoldedRow>> state) {
+        return () -> new Iterator<>() {
+            private final Iterator<Map.Entry<String, Map<String, FoldedRow>>> tables =
+                    state.entrySet().iterator();
+            private String table;
+            private Iterator<FoldedRow> rows = Collections.emptyIterator();
+            private long seq;
+
+            @Override
+            public boolean hasNext() {
+                while (!rows.hasNext() && tables.hasNext()) {
+                    Map.Entry<String, Map<String, FoldedRow>> next = tables.next();
+                    table = next.getKey();
+                    rows = next.getValue().values().iterator();
+                }
+                return rows.hasNext();
+            }
+
+            @Override
+            public ChangeRecord next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                FoldedRow row = rows.next();
+                return ChangeRecord.newBuilder()
+                        .setTable(table)
                         .setOp(Op.INSERT)
                         .setSeq(++seq)
                         .putAllKey(row.key())
                         .putAllData(row.data())
-                        .build());
+                        .build();
             }
-        }
-        return frame;
+        };
     }
 }

@@ -6,6 +6,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,17 +28,31 @@ public final class ChangelogCodec {
 
     /**
      * Serialize records to gzipped length-delimited protobuf bytes.
+     *
+     * <p>Segments still use this (they already hold the records). Checkpoint frames stream
+     * through {@link #write(Iterable, OutputStream)} onto a caller-owned file.</p>
      */
     public static byte[] serialize(List<ChangeRecord> records) {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (GZIPOutputStream gz = new GZIPOutputStream(baos)) {
+        write(records, baos);
+        return baos.toByteArray();
+    }
+
+    /**
+     * Write gzipped length-delimited protobuf records to {@code out}. Closes {@code out}.
+     *
+     * <p>The on-disk form is the same as {@link #serialize}: {@link #parse} and {@link #forEach}
+     * read either producer. Disk policy (path, ceiling) is the caller's — wrap {@code out}
+     * in {@link CappedOutputStream} when the write must not fill the node.</p>
+     */
+    public static void write(Iterable<ChangeRecord> records, OutputStream out) {
+        try (GZIPOutputStream gz = new GZIPOutputStream(out)) {
             for (ChangeRecord record : records) {
                 record.writeDelimitedTo(gz);
             }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to serialize change records", e);
         }
-        return baos.toByteArray();
     }
 
     /**
