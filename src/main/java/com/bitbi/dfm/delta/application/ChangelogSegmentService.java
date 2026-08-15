@@ -113,10 +113,11 @@ public class ChangelogSegmentService {
     }
 
     /**
-     * Upload and record a segment in one call, for callers that are <em>not</em> inside a
-     * transaction (test fixtures and maintenance code). The ingestion commit path uses
-     * {@link #prepare} and {@link #persistPrepared} separately so that only the second half runs
-     * with the transaction open.
+     * Upload and record a segment in one call — a <strong>test-fixture convenience</strong>, and
+     * deliberately nothing more: no production path calls it, and new production code belongs on
+     * the split pair instead. The ingestion commit uses {@link #prepare} and
+     * {@link #persistPrepared} separately so that only the second half runs with the transaction
+     * open.
      *
      * <p>Two things to know before reaching for this pair. It <strong>throws</strong> when called
      * with a transaction open — {@link #prepare} refuses — where the single {@code persist} it
