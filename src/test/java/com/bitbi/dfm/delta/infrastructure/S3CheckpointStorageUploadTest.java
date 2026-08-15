@@ -24,8 +24,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link S3CheckpointStorage#uploadParquet} — the checkpoint snapshot is streamed from a local file
- * (issue #112), and every failure of that upload must leave as one {@link CheckpointStorageException}.
+ * File-backed checkpoint uploads — {@link S3CheckpointStorage#uploadParquet} (issue #112) and
+ * {@link S3CheckpointStorage#uploadFrame} (issue #126) — stream from a local file, and every
+ * failure of that upload must leave as one {@link CheckpointStorageException}.
  *
  * <p>The file is opened lazily by the SDK's {@code RequestBody.fromFile}, which wraps a read failure
  * in an {@link UncheckedIOException}. Converting it keeps the storage layer's contract one type
@@ -33,7 +34,7 @@ import static org.mockito.Mockito.when;
  * {@link S3Exception}-shaped failures.</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("S3CheckpointStorage.uploadParquet()")
+@DisplayName("S3CheckpointStorage file-backed uploads")
 class S3CheckpointStorageUploadTest {
 
     private static final UUID SITE = UUID.randomUUID();
@@ -62,5 +63,25 @@ class S3CheckpointStorageUploadTest {
 
         assertThrows(CheckpointStorageException.class, () -> new S3CheckpointStorage(s3Client, "test-bucket")
                 .uploadParquet(SITE, "customers", 7L, snapshot));
+    }
+
+    @Test
+    void streamsTheFrameFileToTheFrameKey() throws IOException {
+        Path frame = Files.writeString(tempDir.resolve("frame.pb.gz"), "frame-bytes");
+
+        String key = new S3CheckpointStorage(s3Client, "test-bucket")
+                .uploadFrame(SITE, 7L, frame);
+
+        assertEquals("checkpoints/" + SITE + "/_frame/seq=7/frame.pb.gz", key);
+    }
+
+    @Test
+    void wrapsAnUncheckedIoFailureOfTheFrameUploadLikeAnyOtherStorageFailure() throws IOException {
+        Path frame = Files.writeString(tempDir.resolve("frame.pb.gz"), "frame-bytes");
+        when(s3Client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
+                .thenThrow(new UncheckedIOException(new IOException("cannot read the frame")));
+
+        assertThrows(CheckpointStorageException.class, () -> new S3CheckpointStorage(s3Client, "test-bucket")
+                .uploadFrame(SITE, 7L, frame));
     }
 }
