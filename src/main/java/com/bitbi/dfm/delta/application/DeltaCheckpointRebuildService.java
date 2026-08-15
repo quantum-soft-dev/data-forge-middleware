@@ -17,10 +17,10 @@ import java.util.concurrent.RejectedExecutionException;
  *
  * <p>Admin-triggered alternative to the nightly {@link CheckpointScheduler}: sets the persistent
  * {@code rebuild_requested} flag (surfaced in the UI as "Rebuild queued"), runs
- * {@link CheckpointService#buildCheckpoint}({@code siteId}, {@code true}) on a dedicated
- * single-thread executor so forced rebuilds serialize, and always clears the flag when the
- * attempt finishes. The {@code force} flag rematerializes from the existing frame even when
- * there are no new segments (issue #128). The checkpoint pointer is monotonic
+ * {@link CheckpointService#rebuildFromFrame} on a dedicated single-thread executor so
+ * forced rebuilds serialize, and always clears the flag when the attempt finishes. An idle
+ * site is rematerialized from the existing frame even when there are no new segments
+ * (issue #128). The checkpoint pointer is monotonic
  * ({@link DeltaSyncStateService#recordCheckpoint}), so a collision with a concurrent scheduled
  * build cannot regress state.</p>
  *
@@ -93,7 +93,7 @@ public class DeltaCheckpointRebuildService {
 
     private void runRebuild(UUID siteId) {
         try {
-            checkpointService.buildCheckpoint(siteId, true);
+            checkpointService.rebuildFromFrame(siteId);
             log.info("Forced checkpoint rebuild completed: siteId={}", siteId);
         } catch (Exception e) {
             log.error("Forced checkpoint rebuild failed: siteId={}", siteId, e);

@@ -40,20 +40,20 @@ class DeltaCheckpointRebuildServiceTest {
     @Test
     void requestRebuildSetsFlagBuildsCheckpointAndClearsFlag() {
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
-        when(checkpointService.buildCheckpoint(SITE, true)).thenReturn(Map.of());
+        when(checkpointService.rebuildFromFrame(SITE)).thenReturn(Map.of());
 
         assertTrue(service.requestRebuild(SITE));
 
         InOrder inOrder = inOrder(syncStateService, checkpointService);
         inOrder.verify(syncStateService).requestRebuild(SITE);
-        inOrder.verify(checkpointService).buildCheckpoint(SITE, true);
+        inOrder.verify(checkpointService).rebuildFromFrame(SITE);
         inOrder.verify(syncStateService).clearRebuildRequested(SITE);
     }
 
     @Test
     void clearsFlagEvenWhenBuildFails() {
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
-        when(checkpointService.buildCheckpoint(SITE, true)).thenThrow(new RuntimeException("s3 down"));
+        when(checkpointService.rebuildFromFrame(SITE)).thenThrow(new RuntimeException("s3 down"));
 
         assertDoesNotThrow(() -> service.requestRebuild(SITE));
 
@@ -68,7 +68,7 @@ class DeltaCheckpointRebuildServiceTest {
 
         assertFalse(service.requestRebuild(SITE));
 
-        verify(checkpointService, never()).buildCheckpoint(any(), anyBoolean());
+        verify(checkpointService, never()).rebuildFromFrame(any());
         verify(syncStateService, never()).clearRebuildRequested(any());
     }
 
@@ -92,12 +92,12 @@ class DeltaCheckpointRebuildServiceTest {
         // flagged sites are re-driven (and their flags cleared by the run's finally).
         UUID other = UUID.randomUUID();
         when(syncStateService.findSitesWithPendingRebuild()).thenReturn(List.of(SITE, other));
-        when(checkpointService.buildCheckpoint(any(), anyBoolean())).thenReturn(Map.of());
+        when(checkpointService.rebuildFromFrame(any())).thenReturn(Map.of());
 
         service.resumePendingRebuilds();
 
-        verify(checkpointService).buildCheckpoint(SITE, true);
-        verify(checkpointService).buildCheckpoint(other, true);
+        verify(checkpointService).rebuildFromFrame(SITE);
+        verify(checkpointService).rebuildFromFrame(other);
         verify(syncStateService).clearRebuildRequested(SITE);
         verify(syncStateService).clearRebuildRequested(other);
     }

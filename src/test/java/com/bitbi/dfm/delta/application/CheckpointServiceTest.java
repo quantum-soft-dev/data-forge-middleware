@@ -484,7 +484,7 @@ class CheckpointServiceTest {
         recordUploads("checkpoints/forced-rebuild-key");
         clearInvocations(checkpointStorage, checkpointRepository, syncStateService);
 
-        service.buildCheckpoint(SITE, true);
+        service.rebuildFromFrame(SITE);
 
         verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
         ArgumentCaptor<Checkpoint> rebuilt = ArgumentCaptor.forClass(Checkpoint.class);
@@ -516,7 +516,7 @@ class CheckpointServiceTest {
                 .thenThrow(new IllegalStateException("S3 refused the snapshot"));
         clearInvocations(checkpointRepository, syncStateService, eventPublisher);
 
-        service.buildCheckpoint(SITE, true);
+        service.rebuildFromFrame(SITE);
 
         verify(checkpointRepository, never()).save(any());
         assertEquals("checkpoints/parquet-key", saved.getValue().getS3KeyParquet());

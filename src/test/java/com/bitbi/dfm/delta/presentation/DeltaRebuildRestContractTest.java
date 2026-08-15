@@ -42,7 +42,7 @@ class DeltaRebuildRestContractTest extends BaseIntegrationTest {
     @Test
     @DisplayName("returns 202, sets the rebuild flag and runs the build asynchronously")
     void shouldScheduleRebuild() throws Exception {
-        when(checkpointService.buildCheckpoint(SITE, true)).thenReturn(Map.of());
+        when(checkpointService.rebuildFromFrame(SITE)).thenReturn(Map.of());
         jdbc.update("DELETE FROM site_sync_state WHERE site_id = ?", SITE);
 
         mockMvc.perform(post(ADMIN_URL.formatted(SITE))
@@ -51,14 +51,14 @@ class DeltaRebuildRestContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.status").value("scheduled"));
 
         // The async build runs (and afterwards clears rebuild_requested).
-        verify(checkpointService, timeout(5000)).buildCheckpoint(SITE, true);
+        verify(checkpointService, timeout(5000)).rebuildFromFrame(SITE);
     }
 
     @Test
     @DisplayName("returns 202 already-queued and skips the duplicate build while one is pending")
     void shouldShortCircuitDuplicateRebuild() throws Exception {
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-        when(checkpointService.buildCheckpoint(SITE, true)).thenAnswer(inv -> {
+        when(checkpointService.rebuildFromFrame(SITE)).thenAnswer(inv -> {
             release.await(5, java.util.concurrent.TimeUnit.SECONDS);
             return Map.of();
         });
@@ -76,7 +76,7 @@ class DeltaRebuildRestContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.status").value("already-queued"));
 
         release.countDown();
-        verify(checkpointService, timeout(5000)).buildCheckpoint(SITE, true);
+        verify(checkpointService, timeout(5000)).rebuildFromFrame(SITE);
     }
 
     @Test

@@ -85,8 +85,19 @@ public class CheckpointService {
     }
 
     /**
+     * How this pass writes Parquet. Incremental work always advances {@code seq}. An idle
+     * pass (no new segments) never does: it either retries missing keys or rewrites every table.
+     */
+    private enum SnapshotPass {
+        INCREMENTAL,
+        RETRY_MISSING,
+        FORCE
+    }
+
+    /**
      * Build (or refresh) the checkpoint for a site by folding the latest checkpoint frame plus the
-     * segments recorded since the checkpoint pointer.
+     * segments recorded since the checkpoint pointer. An idle site (no new segments) retries only
+     * tables whose snapshot is missing.
      *
      * <p>No {@code @Transactional}: the build spans frame + per-segment S3 downloads and per-table
      * S3 uploads — holding a HikariCP connection across those network calls would pin it for the
@@ -95,49 +106,42 @@ public class CheckpointService {
      * build overwrites, and the pointer only advances at the very end ({@code recordCheckpoint}).</p>
      *
      * @param siteId site identifier
-     * @return folded state: table → row-identity → folded row (empty if no segments)
+     * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
     public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId) {
-        return buildCheckpoint(siteId, false);
+        return run(siteId, SnapshotPass.RETRY_MISSING);
     }
 
     /**
-     * Build (or refresh) the checkpoint for a site.
+     * Same fold as {@link #buildCheckpoint(UUID)}, but an idle site rewrites every table from the
+     * frame. New segments still take the incremental path and advance the pointer.
      *
      * @param siteId site identifier
-     * @param force  when {@code true}, rematerialize from the existing frame even if there are no
-     *               new segments and every table already has a snapshot (forced rebuild)
-     * @return folded state: table → row-identity → folded row (empty if there is nothing to
-     *         fold or rematerialize)
+     * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
-    public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId, boolean force) {
+    public Map<String, Map<String, FoldedRow>> rebuildFromFrame(UUID siteId) {
+        return run(siteId, SnapshotPass.FORCE);
+    }
+
+    private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass) {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
         long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
         boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
-
-        if (segments.isEmpty()) {
-            // Retention may have pruned every leftover row. The frame is still a complete seed
-            // (issue #128); refuse only when the pointer is set and that frame is unreadable.
-            if (checkpointSeq > 0 && !haveFrame) {
-                throw new S3CheckpointStorage.CheckpointStorageException(
-                        "Checkpoint frame@" + checkpointSeq + " for site " + siteId
-                                + " is unreadable and no segments remain — refusing lossy refold", null);
-            }
-            if (!haveFrame || (!force && !hasUnmaterializedTables(siteId))) {
-                return Map.of();
-            }
-            return rematerializeFromFrame(siteId, checkpointSeq, force);
-        }
+        boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
         // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
         // recordCheckpoint). If it reads as absent — deleted, or an S3 HEAD denial masquerading
         // as absence — a refold is lossless only while the full history survives; after retention
         // pruning it would silently publish a truncated checkpoint and advance the pointer, making
         // the loss durable. Refuse and let the build fail loudly instead.
-        if (checkpointSeq > 0 && !haveFrame && segments.get(0).getFirstSeq() > 1) {
+        if (checkpointSeq > 0 && !haveFrame && historyPruned) {
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
-                            + " is unreadable and earlier segments are pruned — refusing lossy refold", null);
+                            + " is unreadable and earlier segments are pruned — refusing lossy refold",
+                    null);
+        }
+        if (segments.isEmpty() && !haveFrame) {
+            return Map.of();
         }
 
         // Empty incremental work still belongs in phase=total: the frame download already ran.
@@ -155,29 +159,14 @@ public class CheckpointService {
                     .filter(segment -> segment.getFirstSeq() > foldFrom)
                     .toList();
             if (newSegments.isEmpty()) {
-                // The pointer already covers every surviving segment. A scheduled idle tick
-                // stays a no-op unless a previous build left a table without an artifact
-                // (issue #128); a forced rebuild always rematerializes from the frame.
-                if (!haveFrame || (!force && !hasUnmaterializedTables(siteId))) {
+                if (!haveFrame || (idlePass == SnapshotPass.RETRY_MISSING
+                        && !hasUnmaterializedTables(siteId))) {
                     return seed;
                 }
-                writeSnapshots(siteId, seed, checkpointSeq, !force, false);
+                writeSnapshots(siteId, seed, checkpointSeq, idlePass);
                 return seed;
             }
             return materialize(siteId, seed, newSegments);
-        });
-    }
-
-    private Map<String, Map<String, FoldedRow>> rematerializeFromFrame(UUID siteId,
-                                                                      long checkpointSeq,
-                                                                      boolean force) {
-        return metrics.timeCheckpoint(() -> {
-            byte[] frameBytes = metrics.timeCheckpointPhase("download_frame",
-                    () -> checkpointStorage.downloadFrame(siteId, checkpointSeq));
-            Map<String, Map<String, FoldedRow>> seed =
-                    ChangelogFold.fold(Map.of(), ChangelogCodec.parse(frameBytes));
-            writeSnapshots(siteId, seed, checkpointSeq, !force, false);
-            return seed;
         });
     }
 
@@ -192,7 +181,7 @@ public class CheckpointService {
             return ChangelogFold.fold(seed, newRecords);
         });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
-        writeSnapshots(siteId, state, seq, false, true);
+        writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL);
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
         metrics.timeCheckpointPhase("upload", () ->
@@ -216,16 +205,14 @@ public class CheckpointService {
     /**
      * Write (or retry) each table's Parquet snapshot at {@code seq}.
      *
-     * <p>A rematerialize of an already-recorded pointer ({@code advancingSeq == false})
-     * does not move the pointer, re-upload the frame, or publish {@link CheckpointRecordedEvent}
-     * — the fold has not changed. {@code onlyUnmaterialized} skips tables that already have a
-     * snapshot (scheduled retry); a forced rebuild rewrites every table.</p>
+     * <p>{@link SnapshotPass#INCREMENTAL} advances seq and detaches a failed key.
+     * {@link SnapshotPass#RETRY_MISSING} and {@link SnapshotPass#FORCE} stay on the recorded
+     * pointer and keep a last-good key if the rewrite fails.</p>
      */
     private void writeSnapshots(UUID siteId,
                                 Map<String, Map<String, FoldedRow>> state,
                                 long seq,
-                                boolean onlyUnmaterialized,
-                                boolean advancingSeq) {
+                                SnapshotPass pass) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
         // Every table's snapshot goes through the same scratch directory, one at a time. Creating
@@ -242,7 +229,7 @@ public class CheckpointService {
         // additionally materializes the full per-table load as typed Parquet (the only format V2
         // produces since issue #113) plus the frame seed.
         state.forEach((tableName, rows) -> {
-            if (onlyUnmaterialized) {
+            if (pass == SnapshotPass.RETRY_MISSING) {
                 Optional<Checkpoint> existing =
                         checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
                 if (existing.isPresent() && existing.get().getS3KeyParquet() != null) {
@@ -257,7 +244,7 @@ public class CheckpointService {
                 // table simply has nothing to download until a schema arrives. The client is
                 // required to SubmitSchema before its first session, so this means the site is
                 // misconfigured — count it so the hole is visible rather than silent.
-                if (abandonStaleSnapshot(checkpoint, advancingSeq)) {
+                if (abandonStaleSnapshot(checkpoint, pass)) {
                     checkpointRepository.save(checkpoint);
                 }
                 metrics.checkpointTableUnmaterialized("no_schema");
@@ -289,7 +276,7 @@ public class CheckpointService {
                 // When seq advanced, the previous key would sit beside a newer seq and be served
                 // as its snapshot — detach it. On a same-seq rematerialize the last-good object
                 // is still at that key; keep the row pointing at it.
-                if (abandonStaleSnapshot(checkpoint, advancingSeq)) {
+                if (abandonStaleSnapshot(checkpoint, pass)) {
                     checkpointRepository.save(checkpoint);
                 }
                 metrics.checkpointTableUnmaterialized("parquet_failed");
@@ -311,8 +298,8 @@ public class CheckpointService {
      *
      * @return {@code true} when the row changed and must be saved
      */
-    private static boolean abandonStaleSnapshot(Checkpoint checkpoint, boolean advancingSeq) {
-        if (advancingSeq || checkpoint.getS3KeyParquet() == null) {
+    private static boolean abandonStaleSnapshot(Checkpoint checkpoint, SnapshotPass pass) {
+        if (pass == SnapshotPass.INCREMENTAL || checkpoint.getS3KeyParquet() == null) {
             checkpoint.detachParquet();
             return true;
         }

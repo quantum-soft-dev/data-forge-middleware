@@ -866,7 +866,7 @@ while the site keeps its epoch.
 — a second request while one is pending answers `202 {"status": "already-queued"}` and queues
 nothing. A full rebuild queue answers 503 (flag cleared); rebuild flags orphaned by a restart are
 re-driven on startup, so the "Rebuild queued" chip can no longer stick forever. The queued build
-calls `buildCheckpoint(siteId, true)`: it rematerializes every table from the existing frame even
+calls `rebuildFromFrame`: it rematerializes every table from the existing frame even
 when there are no new segments, and it does not move the checkpoint pointer.
 
 ---

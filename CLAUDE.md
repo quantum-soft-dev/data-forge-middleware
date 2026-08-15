@@ -459,7 +459,7 @@ pages/{feature}/            # Route pages
   the pointer — after which `buildCheckpoint` saw an empty `newSegments` and returned the seed,
   so even `POST .../delta/checkpoints/rebuild` was a no-op on a quiet site. A scheduled build now
   retries any row whose `s3_key_parquet` is null; a forced rebuild rematerializes every table from
-  the frame (`buildCheckpoint(siteId, true)`). Neither path moves the pointer, re-uploads the
+  the frame (`rebuildFromFrame`). Neither path moves the pointer, re-uploads the
   frame, or publishes `CheckpointRecordedEvent` — the fold has not changed, retention stays
   monotonic. A same-seq rematerialize that fails keeps a still-valid last-good key; detach is
   only for an advancing seq. After a full prune the frame is still enough — leftover changelog
