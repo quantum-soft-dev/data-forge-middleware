@@ -465,6 +465,20 @@ pages/{feature}/            # Route pages
   only for an advancing seq. After a full prune the frame is still enough — leftover changelog
   rows are not required. No API shape, DTO, migration, configuration, metric name or frontend
   change. See `docs/delta-client-v2-guide.md`.
+- parquet-scratch-orphan-sweep: File-backed Parquet scratch left behind when a process dies between
+  `createTempFile` and `finally` is swept by prefix and age (issue #127).
+  `ParquetScratchOrphanSweeper` lists `delta.checkpoint.temp-dir` and
+  `delta.batch-parquet.temp-dir` (deduplicated; they default to the same `java.io.tmpdir`),
+  deletes regular files named `checkpoint-*` / `batch-parquet-*` whose last-modified time is
+  strictly older than `delta.parquet.scratch-orphan-age-seconds`
+  (`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`, default **4 hours**), and runs at startup then
+  every `delta.parquet.scratch-orphan-sweep-ms` (`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, default
+  1 hour). Frame scratch from #126 uses the same `checkpoint-` prefix, so it is swept too.
+  Age is the only safe filter: a sibling replica may be writing into the same volume,
+  and the batch-parquet lease is renewed for the life of a live build, so it is not a bound on
+  file age. The writers still delete their own files on the happy path; this is the recovery
+  for a persistent scratch volume. No REST, gRPC, DTO, metric, migration, or frontend change.
+  See `docs/delta-client-v2-guide.md`, `docs/cr-unified-batch-parquet.md`.
 - stream-checkpoint-frame: The checkpoint build no longer collects the all-INSERT reload frame into
   a `List<ChangeRecord>` and a gzip `byte[]` (issue #126, the leftover copy after #112 put each
   table's Parquet on disk). `CheckpointFrame.records` walks the fold one record at a time,
