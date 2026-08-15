@@ -23,6 +23,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -163,6 +164,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
             throw new java.io.UncheckedIOException(e);
         }
         assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).hasSize(3);
+        letS3LastModifiedFallBehindTheWipe();
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
@@ -191,6 +193,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 "SELECT s3_key_parquet FROM checkpoints WHERE site_id = ? AND table_name = 'customers'",
                 String.class, SITE_ID);
         assertThat(beforeWipe).contains(recordedKey);
+        letS3LastModifiedFallBehindTheWipe();
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
@@ -335,6 +338,21 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
     }
 
     // --- fixtures ---
+
+    /**
+     * S3 {@code LastModified} is second-resolution; the wipe skips anything in its own second so a
+     * concurrent PutObject is not deleted. Wait until the next second so objects written in this
+     * test are unambiguously older than the wipe.
+     */
+    private static void letS3LastModifiedFallBehindTheWipe() {
+        long remainderMs = 1000L - (Instant.now().toEpochMilli() % 1000L);
+        try {
+            Thread.sleep(remainderMs + 50L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
 
     /**
      * The audit write is {@code @Async} and {@code plugin_audit_logs} is partitioned with no test

@@ -10,7 +10,7 @@ import java.util.Objects;
  * swept (issue #122).
  *
  * @param key           object key
- * @param lastModified  S3 last-modified timestamp; {@code null} is treated as not newer than any cut-off
+ * @param lastModified  S3 last-modified timestamp; {@code null} is treated as newer than any cut-off
  */
 public record S3ListedObject(String key, Instant lastModified) {
 
