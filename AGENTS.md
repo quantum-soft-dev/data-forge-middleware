@@ -258,6 +258,7 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-rematerialize: A checkpoint table left without a snapshot is rematerialized from the existing frame, without waiting for new segments (issue #128). A scheduled build retries any row whose `s3_key_parquet` is null; a forced rebuild rematerializes every table from the frame (`rebuildFromFrame`). Neither path moves the pointer, re-uploads the frame, or publishes `CheckpointRecordedEvent`. A same-seq rematerialize that fails keeps a still-valid last-good key; after a full prune the frame is still enough. No API shape, DTO, migration, configuration, metric name or frontend change. See `docs/delta-client-v2-guide.md`.
 - parquet-scratch-orphan-sweep: File-backed Parquet scratch left behind when a process dies between
   `createTempFile` and `finally` is swept by prefix and age (issue #127).
   `ParquetScratchOrphanSweeper` lists `delta.checkpoint.temp-dir` and

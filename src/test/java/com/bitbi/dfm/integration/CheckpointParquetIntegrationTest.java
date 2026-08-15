@@ -5,6 +5,7 @@ import com.bitbi.dfm.delta.application.CheckpointService;
 import com.bitbi.dfm.delta.application.ParquetCheckpointWriter;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
@@ -32,6 +33,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -55,6 +57,9 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private CheckpointRepository checkpointRepository;
+
+    @Autowired
+    private SiteSyncStateRepository syncStateRepository;
 
     @Autowired
     private S3CheckpointStorage checkpointStorage;
@@ -154,6 +159,43 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
         }
         assertEquals(rowCount, read, "every folded row reached the uploaded snapshot");
         assertEquals(scratchBefore, scratchSnapshots(), "the build must not leave scratch files behind");
+    }
+
+    @Test
+    void rematerializesAMissingSnapshotOnceASchemaArrivesWithoutNewSegments() {
+        // Issue #128: a first build without a schema records the table and advances the pointer
+        // with no artifact. The next build used to see no new segments and return; now it
+        // rematerializes from the frame, and the pointer stays put.
+        List<ChangeRecord> records = List.of(
+                rec("customers", Op.INSERT, 1L,
+                        key("id", intVal(1)),
+                        data("id", intVal(1), "name", strVal("Ann"), "amount", decVal("19.99"),
+                                "joined_on", strVal("2024-03-10"))),
+                rec("customers", Op.INSERT, 2L,
+                        key("id", intVal(2)),
+                        data("id", intVal(2), "name", strVal("Bob"), "amount", decVal("5.00"),
+                                "joined_on", strVal("2024-03-11"))));
+        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, records);
+
+        checkpointService.buildCheckpoint(SITE);
+
+        Checkpoint detached = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
+        assertNull(detached.getS3KeyParquet(), "no schema → no artifact");
+        long pointerAfterFirst =
+                syncStateRepository.findBySiteId(SITE).orElseThrow().getLastCheckpointSeq();
+        assertEquals(2L, pointerAfterFirst);
+
+        seedCustomersSchema();
+        checkpointService.buildCheckpoint(SITE);
+
+        Checkpoint recovered = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
+        assertNotNull(recovered.getS3KeyParquet(), "the second build must attach Parquet from the frame");
+        assertTrue(checkpointStorage.exists(recovered.getS3KeyParquet()), "Parquet object must exist");
+        assertEquals(2L, recovered.getSeq());
+        assertEquals(2L, recovered.getRowCount());
+        assertEquals(pointerAfterFirst,
+                syncStateRepository.findBySiteId(SITE).orElseThrow().getLastCheckpointSeq(),
+                "rematerialize must not move the checkpoint pointer");
     }
 
     /** The checkpoint scratch files of this site in the directory the service actually writes to. */

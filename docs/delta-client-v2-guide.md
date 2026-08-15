@@ -578,11 +578,17 @@ You don't write these — they're how downstream tools read your data:
   `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB) govern that file; a table that would cross the
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
-  the declared schema cannot render. An **unusable scratch directory** (missing, read-only, out of
-  inodes) is the one failure that is not a table-level skip: it would hit every table alike, and
-  detaching every snapshot key while the pointer advanced would leave the site with no downloadable
-  checkpoint until fresh segments arrive, so the build aborts with the pointer where it was and the
-  next run redoes it (`CheckpointScheduler` catches per site, so the sweep continues). An aborted
+  the declared schema cannot render. A later scheduled build (or a forced rebuild) **rematerializes
+  a missing snapshot from the frame** without waiting for new segments (issue #128): the pointer,
+  the frame and retention stay where they were, and only tables whose `s3_key_parquet` is still
+  null are rewritten (a forced rebuild rewrites every table). After a full prune the frame is
+  still enough — leftover changelog rows are not required. A same-seq rematerialize that fails
+  leaves a still-valid last-good key in place; detach is only for an advancing seq. An **unusable scratch directory**
+  (missing, read-only, out of inodes) is the one failure that is not a table-level skip: it would
+  hit every table alike, and detaching every last-good snapshot while the pointer advanced would
+  throw away the keys rematerialize is supposed to restore, so the build aborts with the pointer
+  and keys where they were and the next run redoes it (`CheckpointScheduler` catches per site, so
+  the sweep continues). An aborted
   build can leave tables split across two seqs — those already written carry the new seq, the rest
   the previous one — until the next successful build re-materializes all of them; the per-table rows
   were never written atomically, so a consumer that needs one consistent instant should compare the
@@ -871,10 +877,12 @@ at that key.
 are addressed by key from the live `checkpoints` rows, so no stale read is possible through them
 while the site keeps its epoch.
 
-**Forced rebuild semantics (review r3)**: `POST .../checkpoints/rebuild` is idempotent — a second
-request while one is pending answers `202 {"status": "already-queued"}` and queues nothing. A full
-rebuild queue answers 503 (flag cleared); rebuild flags orphaned by a restart are re-driven on
-startup, so the "Rebuild queued" chip can no longer stick forever.
+**Forced rebuild semantics (review r3, issue #128)**: `POST .../checkpoints/rebuild` is idempotent
+— a second request while one is pending answers `202 {"status": "already-queued"}` and queues
+nothing. A full rebuild queue answers 503 (flag cleared); rebuild flags orphaned by a restart are
+re-driven on startup, so the "Rebuild queued" chip can no longer stick forever. The queued build
+calls `rebuildFromFrame`: it rematerializes every table from the existing frame even
+when there are no new segments, and it does not move the checkpoint pointer.
 
 ---
 
