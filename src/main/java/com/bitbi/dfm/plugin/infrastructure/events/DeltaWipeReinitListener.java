@@ -72,7 +72,12 @@ public class DeltaWipeReinitListener {
     @EventListener
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onCheckpointRecorded(CheckpointRecordedEvent event) {
-        if (!syncStateService.consumeWipePending(event.siteId())) {
+        // Scoped to the epoch the event's build folded (issue #142). A build that finished just
+        // before a wipe committed publishes its event after it, and taking the flag unscoped would
+        // spend this wipe's pending re-init on a recapture that reads the checkpoints table the wipe
+        // has just emptied — zero baselines frozen, and the first genuine post-wipe checkpoint left
+        // with nothing to consume.
+        if (!syncStateService.consumeWipePending(event.siteId(), event.epoch())) {
             return; // an ordinary checkpoint — the overwhelmingly common case
         }
 
