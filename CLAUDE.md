@@ -467,15 +467,23 @@ pages/{feature}/            # Route pages
   the **later** of `now - age` and this JVM's start, so it is never softer than the age filter and
   converges back to it once the process outlives the window. The bound is the **JVM's start**, not
   "the first tick": the sweeper's `initialDelay` is 0 and `resumePendingRebuilds()` fires at
-  startup too, so an unconditional startup sweep would race a live writer. The instant is truncated
+  startup too, so an unconditional startup sweep would race a live writer. It is
+  `ProcessHandle.current().info().startInstant()` rather than the bean's own construction, so a
+  future eager writer running during context refresh stays out of scope, and it is truncated
   to whole seconds because file mtime can be second-resolution — a file written in the startup
-  second must round to "not older". Default false leaves #127's reasoning untouched for a shared
+  second must round to "not older". Startup logs the mode and the directories, the only signal an
+  operator has left if a deployment is patched out of band. Default false leaves #127's reasoning
+  untouched for a shared
   volume, where a file older than this JVM can belong to a live sibling; the lease half is
   independent of the mount, so **lowering the age globally is still not the fix**. Chosen over an
   unconditional startup sweep (the ticket's option 2) because "older than my start" proves the file
   is not *mine*, not that it is not *live* — that step needs the volume claim, which the deployment
-  makes in the same directory as the mount, and a test asserts the configmap declares the flag
-  exactly while the temp-dirs point at `/scratch/parquet`. No REST, gRPC, DTO, metric, S3-key,
+  makes in the same directory as the mount, and a test parses both base manifests to enforce the
+  one direction that is a safety property: **flag set ⇒** both temp-dir keys name
+  `/scratch/parquet` **and** the volume behind it is an `emptyDir` (turning the flag off stays
+  available as a rollback, and an overlay may only ever set it to false). Left open and ticketed as
+  **#146**: the sweep tick shares one `TaskScheduler` thread with the all-sites checkpoint build, so
+  "at most one sweep interval" assumes that thread is free. No REST, gRPC, DTO, metric, S3-key,
   migration, or frontend change. See `docs/delta-client-v2-guide.md` ("Sizing note", "Orphans
   outlive a container restart"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-wipe-serialization: A checkpoint build that overlaps a site history wipe is discarded

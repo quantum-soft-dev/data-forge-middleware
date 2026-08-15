@@ -9,14 +9,20 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+
+import org.yaml.snakeyaml.Yaml;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Issue #127 — scratch files left behind when a pod dies between {@code createTempFile} and
@@ -184,6 +190,20 @@ class ParquetScratchOrphanSweeperTest {
     }
 
     @Test
+    void theProductionConstructorKeysOffTheProcessStartNotItsOwnConstruction() {
+        Instant processStart = ProcessHandle.current().info().startInstant().orElse(null);
+        assumeTrue(processStart != null, "this platform does not report the process start instant");
+        // A day, so the age rule cannot be the later one for a test JVM.
+        ParquetScratchOrphanSweeper production = new ParquetScratchOrphanSweeper(
+                checkpointDir.toString(), batchDir.toString(), 86_400L, true);
+
+        // The worker JVM has been up a while, so a reference taken at construction would sit at
+        // "now" and put scratch written during context refresh in scope.
+        assertEquals(processStart.truncatedTo(ChronoUnit.SECONDS), production.cutoff(Instant.now()),
+                "the pod-private rule must key off the process start, not this bean's construction");
+    }
+
+    @Test
     void keepsAPreviousContainersScratchWhenTheDirectoryIsNotDeclaredPodPrivate() throws IOException {
         // The #127 reasoning: on a shared volume a file older than this JVM may belong to a live
         // sibling replica, so only the age filter may delete it.
@@ -249,30 +269,45 @@ class ParquetScratchOrphanSweeperTest {
     }
 
     @Test
-    void theDeployedScratchIsDeclaredPodPrivateExactlyWhenItIsOne() throws IOException {
-        // The flag is a claim about the mount, and the mount is two files away. It is only true
-        // while all three agree: both temp dirs name the mount path, and the volume behind that
-        // path is an emptyDir. Swap the volume for an RWX PersistentVolumeClaim at the same
-        // mountPath and the claim becomes false without a single env value changing.
-        String configMap = Files.readString(Path.of("k8s/base/configmap.yaml"));
-        String deployment = Files.readString(Path.of("k8s/base/deployment-backend.yaml"));
+    void theDeployedScratchIsDeclaredPodPrivateOnlyWhenItIsOne() throws IOException {
+        // One direction only. `flag => the mount really is pod-private` is the safety property;
+        // the converse would merely enforce an optimisation, and turning the flag off must always
+        // stay available as a rollback. Read as YAML rather than grepped: the claim is about the
+        // volume behind the mount path, and key order in a manifest is not part of the contract.
+        Map<String, Object> configMap = loadManifest("k8s/base/configmap.yaml");
+        Map<String, Object> data = child(configMap, "data");
+        if (!"true".equals(data.get("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD"))) {
+            return;
+        }
 
         // BOTH directories, because the flag is per process and the sweeper walks both: one key
         // left on a shared volume is enough to start deleting a sibling replica's live scratch.
-        boolean everyTempDirIsTheMount =
-                configMap.contains("DELTA_CHECKPOINT_TEMP_DIR: \"" + SCRATCH_MOUNT_PATH + "\"")
-                        && configMap.contains("DELTA_BATCH_PARQUET_TEMP_DIR: \"" + SCRATCH_MOUNT_PATH + "\"");
-        boolean mountedFromAPodPrivateVolume =
-                Pattern.compile("-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*\\n\\s+mountPath:\\s+"
-                        + SCRATCH_MOUNT_PATH).matcher(deployment).find()
-                        && Pattern.compile("-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*\\n\\s+emptyDir:")
-                        .matcher(deployment).find();
+        assertEquals(SCRATCH_MOUNT_PATH, data.get("DELTA_CHECKPOINT_TEMP_DIR"),
+                "the scratch is declared pod-private, so the checkpoint temp dir must be the mount");
+        assertEquals(SCRATCH_MOUNT_PATH, data.get("DELTA_BATCH_PARQUET_TEMP_DIR"),
+                "the scratch is declared pod-private, so the batch temp dir must be the mount");
 
-        assertEquals(everyTempDirIsTheMount && mountedFromAPodPrivateVolume,
-                configMap.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: \"true\""),
-                "the scratch may be declared pod-private exactly while both temp-dir keys name "
-                        + SCRATCH_MOUNT_PATH + " and the " + SCRATCH_VOLUME + " volume behind it is "
-                        + "an emptyDir");
+        Map<String, Object> deployment = loadManifest("k8s/base/deployment-backend.yaml");
+        Map<String, Object> podSpec = child(child(child(deployment, "spec"), "template"), "spec");
+        Map<String, Object> volumesByName = new java.util.HashMap<>();
+        for (Map<String, Object> volume : children(podSpec, "volumes")) {
+            volumesByName.put(String.valueOf(volume.get("name")), volume);
+        }
+        int mounts = 0;
+        for (Map<String, Object> container : children(podSpec, "containers")) {
+            for (Map<String, Object> mount : children(container, "volumeMounts")) {
+                if (!SCRATCH_MOUNT_PATH.equals(mount.get("mountPath"))) {
+                    continue;
+                }
+                mounts++;
+                Object volume = volumesByName.get(String.valueOf(mount.get("name")));
+                assertTrue(volume instanceof Map<?, ?> v && v.containsKey("emptyDir"),
+                        "the scratch is declared pod-private, so the volume behind "
+                                + SCRATCH_MOUNT_PATH + " must be an emptyDir, was " + volume);
+            }
+        }
+        assertEquals(1, mounts,
+                "expected exactly one container to mount " + SCRATCH_MOUNT_PATH);
     }
 
     @Test
@@ -281,9 +316,10 @@ class ParquetScratchOrphanSweeperTest {
         // redefines them. An overlay that needs to must widen the guard, not slip past it. Only
         // YAML, and only an actual key assignment or volume entry — a prose mention in a comment
         // is not an override, and a binary blob under an overlay is not this test's business.
+        // Setting the flag to "false" in an overlay is allowed: that is the conservative direction.
         Pattern envOverride = Pattern.compile(
-                "^\\s*(DELTA_CHECKPOINT_TEMP_DIR|DELTA_BATCH_PARQUET_TEMP_DIR"
-                        + "|DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD)\\s*:",
+                "^\\s*(DELTA_CHECKPOINT_TEMP_DIR\\s*:|DELTA_BATCH_PARQUET_TEMP_DIR\\s*:"
+                        + "|DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD\\s*:\\s*\"?true\"?)",
                 Pattern.MULTILINE);
         Pattern volumeOverride = Pattern.compile(
                 "^\\s*-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*$", Pattern.MULTILINE);
@@ -296,6 +332,25 @@ class ParquetScratchOrphanSweeperTest {
                                 + "covers the rendered configuration and must be widened to this overlay");
             }
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> loadManifest(String path) throws IOException {
+        return new Yaml().loadAs(Files.readString(Path.of(path)), Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> child(Map<String, Object> parent, String key) {
+        Object value = parent.get(key);
+        assertTrue(value instanceof Map<?, ?>, key + " must be a mapping, was " + value);
+        return (Map<String, Object>) value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> children(Map<String, Object> parent, String key) {
+        Object value = parent.getOrDefault(key, List.of());
+        assertTrue(value instanceof List<?>, key + " must be a sequence, was " + value);
+        return (List<Map<String, Object>>) value;
     }
 
     private static boolean isYaml(Path path) {
@@ -319,12 +374,13 @@ class ParquetScratchOrphanSweeperTest {
 
     private static ParquetScratchOrphanSweeper sharedVolumeSweeper(Path checkpointDir, Path batchDir) {
         return new ParquetScratchOrphanSweeper(
-                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, false);
+                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, false, Instant.now());
     }
 
+    /** Pod-private, with the process start pinned to now so "older than this JVM" is testable. */
     private static ParquetScratchOrphanSweeper podPrivateSweeper(Path checkpointDir, Path batchDir) {
         return new ParquetScratchOrphanSweeper(
-                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, true);
+                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, true, Instant.now());
     }
 
     private static Path scratch(Path directory, String prefix, String suffix) throws IOException {

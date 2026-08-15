@@ -631,8 +631,10 @@ point at it through `k8s/base/configmap.yaml`, and the container declares
 writable layer and logs. The request is the half that matters for placement: without it the
 scheduler does not account for local disk at all, and two builds on one node can drive it into disk
 pressure and evict unrelated pods. `emptyDir` is deliberate over a PersistentVolume — the scratch
-dies with the pod, which keeps `ParquetScratchOrphanSweeper` belt-and-braces rather than
-load-bearing — and the default (node-disk) medium is deliberate too, since `medium: Memory` would
+dies with the pod, so nothing accumulates across pod generations, and being pod-private it is what
+licenses the sweeper's second rule (`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`, see "Orphans outlive a
+container restart"; within *one* pod's lifetime that sweep is load-bearing, not belt-and-braces) —
+and the default (node-disk) medium is deliberate too, since `medium: Memory` would
 be a tmpfs charged against the container's *memory* limit. Request equals limit so the reserved
 amount is the enforced amount; GKE Autopilot caps a pod's ephemeral storage at 10 GiB, so the total
 has to stay under that.

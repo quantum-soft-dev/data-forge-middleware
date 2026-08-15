@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -41,7 +42,8 @@ import java.util.Set;
  *
  * <p>The start of this JVM, not "the first run", is the bound: the scheduler's first tick can
  * overlap a rebuild resumed at startup, so an unconditional startup sweep would race a live
- * writer.</p>
+ * writer. The reference is the process start rather than this bean's construction, so a future
+ * eager writer running during context refresh would still be out of scope.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -74,6 +76,7 @@ public class ParquetScratchOrphanSweeper {
     private final boolean privateToPod;
     private final Instant startedAt;
 
+    @Autowired
     public ParquetScratchOrphanSweeper(
             @Value("${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String checkpointTempDir,
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String batchParquetTempDir,
@@ -81,6 +84,18 @@ public class ParquetScratchOrphanSweeper {
             long ageSeconds,
             @Value("${delta.parquet.scratch-private-to-pod:" + DEFAULT_PRIVATE_TO_POD + "}")
             boolean privateToPod) {
+        this(checkpointTempDir, batchParquetTempDir, ageSeconds, privateToPod, jvmStart());
+    }
+
+    /**
+     * @param startedAt the instant this process started; nothing it creates can predate it
+     */
+    ParquetScratchOrphanSweeper(
+            String checkpointTempDir,
+            String batchParquetTempDir,
+            long ageSeconds,
+            boolean privateToPod,
+            Instant startedAt) {
         if (ageSeconds <= 0) {
             throw new IllegalArgumentException(
                     "delta.parquet.scratch-orphan-age-seconds must be positive, got " + ageSeconds);
@@ -89,10 +104,27 @@ public class ParquetScratchOrphanSweeper {
         this.ageSeconds = ageSeconds;
         this.privateToPod = privateToPod;
         // Truncated to whole seconds because file mtime can be second-resolution: a file written
-        // in the same second this bean was built must round to "not older than this JVM" and
-        // survive. Bean construction is before any writer can run, so nothing this JVM creates
-        // is ever older than this instant.
-        this.startedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        // in the same second the process started must round to "not older than this JVM" and
+        // survive.
+        this.startedAt = startedAt.truncatedTo(ChronoUnit.SECONDS);
+        // The claim is invisible in the manifests once a deployment is patched out of band
+        // (`kubectl set env`, a non-kustomize path), so state it where an operator can see it.
+        log.info("Parquet scratch orphan sweep over {}: deleting {} older than {}s{}",
+                directories, ParquetScratch.CHECKPOINT_PREFIX + " / " + ParquetScratch.BATCH_PARQUET_PREFIX,
+                ageSeconds,
+                privateToPod
+                        ? ", and — the directories being declared pod-private — anything older than "
+                                + "this process, which started at " + this.startedAt
+                        : " (no pod-private claim: age is the only rule)");
+    }
+
+    /**
+     * Process start, which precedes the construction of any writer bean. Falls back to now when
+     * the platform does not report it — that is this bean's construction, still early enough that
+     * no scratch writer has run, only less conservative than the real thing.
+     */
+    private static Instant jvmStart() {
+        return ProcessHandle.current().info().startInstant().orElseGet(Instant::now);
     }
 
     /**
