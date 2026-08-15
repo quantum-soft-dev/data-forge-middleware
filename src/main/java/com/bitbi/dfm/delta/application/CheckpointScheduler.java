@@ -76,10 +76,21 @@ public class CheckpointScheduler {
      *
      * <p>Segment sites come first and the set de-duplicates, so a site on both lists is built once,
      * in the position it had when segments were the only source.</p>
+     *
+     * <p>The rematerialize-only count is logged because a row that no build can materialize — a
+     * table with no declared schema, or one whose last row was deleted at the source — is retried
+     * by every tick with nothing to bound it (issue #149). This line is how that population is
+     * seen without querying the database.</p>
      */
     private Set<UUID> sitesToVisit() {
         Set<UUID> siteIds = new LinkedHashSet<>(segmentRepository.findDistinctSiteIds());
+        int withSegments = siteIds.size();
         siteIds.addAll(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints());
+        int rematerializeOnly = siteIds.size() - withSegments;
+        if (rematerializeOnly > 0) {
+            log.info("Checkpoint tick: {} site(s) with changelog segments, {} more visited only to "
+                    + "rematerialize a missing snapshot", withSegments, rematerializeOnly);
+        }
         return siteIds;
     }
 }
