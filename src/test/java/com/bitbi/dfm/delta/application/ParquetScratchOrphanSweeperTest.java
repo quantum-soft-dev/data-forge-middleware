@@ -204,6 +204,20 @@ class ParquetScratchOrphanSweeperTest {
     }
 
     @Test
+    void fallsBackToTheAgeFilterWhenTheProcessStartIsUnknown() throws IOException {
+        ParquetScratchOrphanSweeper unknownStart = new ParquetScratchOrphanSweeper(
+                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, true, null);
+        Path recent = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX, ".parquet");
+        age(recent, 60);
+
+        unknownStart.sweep();
+
+        assertTrue(Files.exists(recent),
+                "with no process start there is no second rule; substituting a later instant would "
+                        + "put scratch written before this bean existed in scope");
+    }
+
+    @Test
     void keepsAPreviousContainersScratchWhenTheDirectoryIsNotDeclaredPodPrivate() throws IOException {
         // The #127 reasoning: on a shared volume a file older than this JVM may belong to a live
         // sibling replica, so only the age filter may delete it.
@@ -276,7 +290,12 @@ class ParquetScratchOrphanSweeperTest {
         // volume behind the mount path, and key order in a manifest is not part of the contract.
         Map<String, Object> configMap = loadManifest("k8s/base/configmap.yaml");
         Map<String, Object> data = child(configMap, "data");
-        if (!"true".equals(data.get("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD"))) {
+        Object declared = data.get("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD");
+        // A value this guard cannot read is a failure, not a skip: unquoted `true` binds to a
+        // Boolean here and to `true` in Spring, and skipping would retire the guard in silence.
+        assertTrue(declared == null || isBoolean(declared),
+                "DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD must be a boolean, was " + declared);
+        if (!isTrue(declared)) {
             return;
         }
 
@@ -294,7 +313,10 @@ class ParquetScratchOrphanSweeperTest {
             volumesByName.put(String.valueOf(volume.get("name")), volume);
         }
         int mounts = 0;
-        for (Map<String, Object> container : children(podSpec, "containers")) {
+        List<Map<String, Object>> allContainers = new java.util.ArrayList<>(children(podSpec, "containers"));
+        // initContainers share the pod's volumes and can mount the same path.
+        allContainers.addAll(children(podSpec, "initContainers"));
+        for (Map<String, Object> container : allContainers) {
             for (Map<String, Object> mount : children(container, "volumeMounts")) {
                 if (!SCRATCH_MOUNT_PATH.equals(mount.get("mountPath"))) {
                     continue;
@@ -306,8 +328,9 @@ class ParquetScratchOrphanSweeperTest {
                                 + SCRATCH_MOUNT_PATH + " must be an emptyDir, was " + volume);
             }
         }
-        assertEquals(1, mounts,
-                "expected exactly one container to mount " + SCRATCH_MOUNT_PATH);
+        assertTrue(mounts >= 1,
+                "the scratch is declared pod-private, but nothing mounts " + SCRATCH_MOUNT_PATH
+                        + " — the temp dirs would land on the container's writable layer");
     }
 
     @Test
@@ -319,16 +342,20 @@ class ParquetScratchOrphanSweeperTest {
         // Setting the flag to "false" in an overlay is allowed: that is the conservative direction.
         Pattern envOverride = Pattern.compile(
                 "^\\s*(DELTA_CHECKPOINT_TEMP_DIR\\s*:|DELTA_BATCH_PARQUET_TEMP_DIR\\s*:"
-                        + "|DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD\\s*:\\s*\"?true\"?)",
-                Pattern.MULTILINE);
+                        // any spelling Spring binds as true, quoted however YAML allows
+                        + "|DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD\\s*:\\s*[\"\']?true[\"\']?\\s*$)",
+                Pattern.MULTILINE | Pattern.CASE_INSENSITIVE);
+        // The volume by name, and the mount path whatever volume is behind it — a differently
+        // named hostPath at the same path is the same hole.
         Pattern volumeOverride = Pattern.compile(
-                "^\\s*-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*$", Pattern.MULTILINE);
+                "^\\s*(-\\s+name:\\s+" + SCRATCH_VOLUME + "|.*mountPath:\\s+" + SCRATCH_MOUNT_PATH + ")\\s*$",
+                Pattern.MULTILINE);
         try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {
             for (Path file : overlays.filter(ParquetScratchOrphanSweeperTest::isYaml).toList()) {
                 String body = Files.readString(file);
                 assertFalse(envOverride.matcher(body).find() || volumeOverride.matcher(body).find(),
                         file + " overrides the scratch mount or its pod-private claim; "
-                                + "theDeployedScratchIsDeclaredPodPrivateExactlyWhenItIsOne no longer "
+                                + "theDeployedScratchIsDeclaredPodPrivateOnlyWhenItIsOne no longer "
                                 + "covers the rendered configuration and must be widened to this overlay");
             }
         }
@@ -351,6 +378,16 @@ class ParquetScratchOrphanSweeperTest {
         Object value = parent.getOrDefault(key, List.of());
         assertTrue(value instanceof List<?>, key + " must be a sequence, was " + value);
         return (List<Map<String, Object>>) value;
+    }
+
+    private static boolean isBoolean(Object value) {
+        return value instanceof Boolean
+                || "true".equalsIgnoreCase(String.valueOf(value))
+                || "false".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    private static boolean isTrue(Object value) {
+        return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
     }
 
     private static boolean isYaml(Path path) {

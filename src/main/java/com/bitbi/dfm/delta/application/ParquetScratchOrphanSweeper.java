@@ -43,7 +43,9 @@ import java.util.Set;
  * <p>The start of this JVM, not "the first run", is the bound: the scheduler's first tick can
  * overlap a rebuild resumed at startup, so an unconditional startup sweep would race a live
  * writer. The reference is the process start rather than this bean's construction, so a future
- * eager writer running during context refresh would still be out of scope.</p>
+ * eager writer running during context refresh would still be out of scope; where the platform does
+ * not report a process start the rule switches itself off rather than fall back to a later
+ * instant.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -88,7 +90,10 @@ public class ParquetScratchOrphanSweeper {
     }
 
     /**
-     * @param startedAt the instant this process started; nothing it creates can predate it
+     * @param startedAt the instant this process started; nothing it creates can predate it.
+     *                  {@code null} when the platform does not report it, which disables the
+     *                  pod-private rule — substituting a later instant would quietly put scratch
+     *                  written before this bean existed back in scope.
      */
     ParquetScratchOrphanSweeper(
             String checkpointTempDir,
@@ -100,31 +105,34 @@ public class ParquetScratchOrphanSweeper {
             throw new IllegalArgumentException(
                     "delta.parquet.scratch-orphan-age-seconds must be positive, got " + ageSeconds);
         }
+        if (privateToPod && startedAt == null) {
+            log.warn("delta.parquet.scratch-private-to-pod is set but this platform does not report "
+                    + "the process start instant; falling back to the age filter alone");
+        }
         this.directories = uniqueDirectories(checkpointTempDir, batchParquetTempDir);
         this.ageSeconds = ageSeconds;
-        this.privateToPod = privateToPod;
+        this.privateToPod = privateToPod && startedAt != null;
         // Truncated to whole seconds because file mtime can be second-resolution: a file written
         // in the same second the process started must round to "not older than this JVM" and
         // survive.
-        this.startedAt = startedAt.truncatedTo(ChronoUnit.SECONDS);
+        this.startedAt = startedAt == null ? null : startedAt.truncatedTo(ChronoUnit.SECONDS);
         // The claim is invisible in the manifests once a deployment is patched out of band
         // (`kubectl set env`, a non-kustomize path), so state it where an operator can see it.
         log.info("Parquet scratch orphan sweep over {}: deleting {} older than {}s{}",
                 directories, ParquetScratch.CHECKPOINT_PREFIX + " / " + ParquetScratch.BATCH_PARQUET_PREFIX,
                 ageSeconds,
-                privateToPod
+                this.privateToPod
                         ? ", and — the directories being declared pod-private — anything older than "
                                 + "this process, which started at " + this.startedAt
-                        : " (no pod-private claim: age is the only rule)");
+                        : " (no pod-private rule: age is the only one)");
     }
 
     /**
-     * Process start, which precedes the construction of any writer bean. Falls back to now when
-     * the platform does not report it — that is this bean's construction, still early enough that
-     * no scratch writer has run, only less conservative than the real thing.
+     * Process start, which precedes the construction of any writer bean, or {@code null} where the
+     * platform does not report it.
      */
     private static Instant jvmStart() {
-        return ProcessHandle.current().info().startInstant().orElseGet(Instant::now);
+        return ProcessHandle.current().info().startInstant().orElse(null);
     }
 
     /**
