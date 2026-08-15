@@ -207,7 +207,37 @@ public class S3CheckpointStorage {
     /**
      * Upload the all-INSERT checkpoint frame (reloadable seed) for a site at a given sequence.
      *
-     * <p>Layout: {@code checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz}.</p>
+     * <p>Layout: {@code checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz}. The frame is streamed
+     * from a local file (issue #126) — it is never held in heap as a {@code byte[]}.</p>
+     *
+     * @return the S3 key written
+     */
+    public String uploadFrame(UUID siteId, long seq, Path file) {
+        String s3Key = frameKey(siteId, seq);
+        try {
+            long size = java.nio.file.Files.size(file);
+            PutObjectRequest request = PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .contentType("application/octet-stream")
+                    .contentLength(size)
+                    .build();
+            s3Client.putObject(request, RequestBody.fromFile(file));
+            log.info("Stored checkpoint frame: key={}, size={}", s3Key, size);
+            return s3Key;
+            // RequestBody.fromFile opens the file lazily, wrapping a read failure in an
+            // UncheckedIOException: convert it too, so every failure of this upload reaches the
+            // caller as one type instead of leaking the SDK's internals into the caller's catch.
+        } catch (S3Exception | IOException | UncheckedIOException e) {
+            throw new CheckpointStorageException("Failed to store checkpoint frame: " + s3Key, e);
+        }
+    }
+
+    /**
+     * Upload the all-INSERT checkpoint frame from already-gzipped bytes.
+     *
+     * <p>Kept for the current {@code CheckpointService} call site; the next change streams the
+     * frame through {@link #uploadFrame(UUID, long, Path)} and this overload goes away.</p>
      *
      * @return the S3 key written
      */

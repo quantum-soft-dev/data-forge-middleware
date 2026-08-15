@@ -120,7 +120,7 @@ class CheckpointServiceTest {
         service.buildCheckpoint(SITE);
 
         verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any());
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(byte[].class));
         verifyNoMoreInteractions(checkpointStorage);
     }
 
@@ -169,7 +169,7 @@ class CheckpointServiceTest {
         assertNull(orders.getS3KeyParquet(), "failed parquet must not be attached");
         verify(metrics).checkpointTableUnmaterialized("parquet_failed");
 
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(byte[].class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
@@ -210,7 +210,7 @@ class CheckpointServiceTest {
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
                 () -> service.buildCheckpoint(SITE));
 
-        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(byte[].class));
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
     }
 
@@ -224,7 +224,7 @@ class CheckpointServiceTest {
         service.buildCheckpoint(SITE);
 
         verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(byte[].class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
