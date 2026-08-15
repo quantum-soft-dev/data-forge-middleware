@@ -32,9 +32,11 @@ import java.util.UUID;
  * Builds materialized checkpoints from the changelog (Delta Client v2 — 022, CR §8.D).
  *
  * <p>Reconstruction is <b>incremental</b>: it seeds from the latest all-INSERT checkpoint frame@M and
- * folds only the segments with {@code first_seq > M}, then materializes a Parquet snapshot per
- * table, records one {@link Checkpoint} row per table, persists a new frame@now, and advances the site's
- * checkpoint pointer. Because the frame is a self-contained seed, segments at or below the checkpoint
+ * folds only the segments with {@code first_seq > M}, persists a new frame@now, then materializes a
+ * Parquet snapshot per table, records one {@link Checkpoint} row per table, and advances the site's
+ * checkpoint pointer. The frame comes first because it is the only artifact that cannot be skipped:
+ * a build that cannot write it must end, and ending it before the snapshots keeps that failure free
+ * of durable cost (issue #153). Because the frame is a self-contained seed, segments at or below the checkpoint
  * can be pruned (T3.5b) without breaking the next build. A later build with no new segments still
  * rematerializes any table whose snapshot is missing (issue #128); a forced rebuild rematerializes
  * every table from the frame without moving the pointer.</p>
@@ -249,46 +251,18 @@ public class CheckpointService {
             return ChangelogFold.fold(seed, newRecords);
         });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
+
+        // The frame goes first, before a single snapshot object exists at the new seq (issue
+        // #153). It is the one artifact of a build that cannot be skipped, so it is also the one
+        // that decides whether the build can finish at all — writing it last meant every abort was
+        // paid for with a full set of per-table uploads that the pointer then never adopted. Those
+        // objects are unreferenced the moment the next build writes its own (a `checkpoints` row is
+        // one per table and carries a single key), and nothing but a site wipe sweeps
+        // `checkpoints/{siteId}/` (#118). Since crossing the ceiling is deterministic for the same
+        // fold, that was one orphaned generation per nightly tick, indefinitely.
+        uploadFrame(siteId, seq, state);
         writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, epoch);
 
-        // Persist the new all-INSERT frame so the next build seeds from it and earlier segments
-        // can be pruned. Same file-backed path as the snapshot (issue #126): one record at a
-        // time into a scratch file, then RequestBody.fromFile — never a collected List and
-        // never a gzip byte[]. The site fold itself stays in heap.
-        //
-        // Its own ceiling, not the snapshot's (issue #138). The two files share a directory but
-        // not a failure mode: an oversized table is skipped and repaired by the next build, while
-        // an oversized frame ends the build, because the frame is the next incremental seed. One
-        // key for both meant the value had to be set for the harsher of the two, which left it
-        // above the deployed scratch volume and made a kubelet eviction the first thing to happen.
-        Path frame = createScratchFile(siteId, ".pb.gz");
-        try {
-            metrics.timeCheckpointPhase("upload", () -> {
-                try (OutputStream out = new CappedOutputStream(
-                        Files.newOutputStream(frame), maxFrameTempBytes)) {
-                    ChangelogCodec.write(CheckpointFrame.records(state), out);
-                } catch (IOException e) {
-                    throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
-                }
-                checkpointStorage.uploadFrame(siteId, seq, frame);
-            });
-        } catch (ArtifactSizeLimitExceededException e) {
-            // Both ceilings raise the same exception with the same "temp-file limit of N bytes"
-            // text, and the per-table one is reported by its own counter — say which guard this
-            // was and name the key, or the operator has only a byte count to go on. Rethrown
-            // unchanged: an oversized frame still ends the build.
-            log.error("The checkpoint reload frame for site {} at seq {} crossed "
-                    + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned. "
-                    + "last_checkpoint_seq stays where it was, so retention is frozen and the next "
-                    + "build repeats this, but the per-table snapshots of this build were already "
-                    + "written at seq {} and their predecessors are now unreferenced objects. "
-                    + "Raise that key (and the scratch volume behind it) rather than the per-table "
-                    + "ceiling",
-                    siteId, seq, maxFrameTempBytes, seq);
-            throw e;
-        } finally {
-            deleteQuietly(frame, "_frame", siteId);
-        }
         epochGuard.inEpoch(siteId, epoch, () -> syncStateService.recordCheckpoint(siteId, seq));
         // The single choke point every checkpoint build passes through, scheduled or forced. The
         // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
@@ -311,6 +285,68 @@ public class CheckpointService {
     }
 
     /**
+     * Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be
+     * pruned. Same file-backed path as the snapshot (issue #126): one record at a time into a
+     * scratch file, then {@code RequestBody.fromFile} — never a collected List and never a gzip
+     * {@code byte[]}. The site fold itself stays in heap.
+     *
+     * <p>Its own ceiling, not the snapshot's (issue #138). The two files share a directory but not
+     * a failure mode: an oversized table is skipped and repaired by the next build, while an
+     * oversized frame ends the build, because the frame is the next incremental seed. One key for
+     * both meant the value had to be set for the harsher of the two, which left it above the
+     * deployed scratch volume and made a kubelet eviction the first thing to happen.</p>
+     *
+     * <p>The file is uploaded and deleted here rather than kept open across the snapshot loop. The
+     * deployed scratch budget is {@code 2 x max(table, frame)} — one file per build path, not one
+     * per artifact — so holding both at once would silently double the checkpoint term.</p>
+     */
+    private void uploadFrame(UUID siteId, long seq, Map<String, Map<String, FoldedRow>> state) {
+        prepareScratchDirectory();
+        Path frame = createScratchFile(siteId, ".pb.gz");
+        try {
+            metrics.timeCheckpointPhase("upload", () -> {
+                try (OutputStream out = new CappedOutputStream(
+                        Files.newOutputStream(frame), maxFrameTempBytes)) {
+                    ChangelogCodec.write(CheckpointFrame.records(state), out);
+                } catch (IOException e) {
+                    throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
+                }
+                checkpointStorage.uploadFrame(siteId, seq, frame);
+            });
+        } catch (ArtifactSizeLimitExceededException e) {
+            // Both ceilings raise the same exception with the same "temp-file limit of N bytes"
+            // text, and the per-table one is reported by its own counter — say which guard this
+            // was and name the key, or the operator has only a byte count to go on. Rethrown
+            // unchanged: an oversized frame still ends the build.
+            log.error("The checkpoint reload frame for site {} at seq {} crossed "
+                    + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned "
+                    + "before any snapshot was written, so nothing durable changed: the per-table "
+                    + "keys and last_checkpoint_seq stay where they were. Retention is frozen at "
+                    + "that pointer and the next tick will fail identically, because the fold has "
+                    + "not changed. Raise that key (and the scratch volume behind it) rather than "
+                    + "the per-table ceiling",
+                    siteId, seq, maxFrameTempBytes);
+            throw e;
+        } finally {
+            deleteQuietly(frame, "_frame", siteId);
+        }
+    }
+
+    /**
+     * Every scratch file of this build goes through the same directory, one at a time. Creating it
+     * is systemic, not per-artifact: if it fails, nothing can be materialized this build, so let it
+     * fail the build loudly instead of counting every table as its own skip.
+     */
+    private void prepareScratchDirectory() {
+        try {
+            Files.createDirectories(tempDirectory);
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "Cannot prepare the checkpoint scratch directory " + tempDirectory, e);
+        }
+    }
+
+    /**
      * Write (or retry) each table's Parquet snapshot at {@code seq}.
      *
      * <p>{@link SnapshotPass#INCREMENTAL} advances seq and detaches a failed key.
@@ -326,16 +362,7 @@ public class CheckpointService {
                                 SnapshotPass pass,
                                 SiteEpoch epoch) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
-
-        // Every table's snapshot goes through the same scratch directory, one at a time. Creating
-        // it is systemic, not per-table: if it fails, no table can be materialized this build, so
-        // let it fail the build loudly instead of counting every table as its own skip.
-        try {
-            Files.createDirectories(tempDirectory);
-        } catch (IOException e) {
-            throw new UncheckedIOException(
-                    "Cannot prepare the checkpoint scratch directory " + tempDirectory, e);
-        }
+        prepareScratchDirectory();
 
         // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
         // additionally materializes the full per-table load as typed Parquet (the only format V2
@@ -371,8 +398,9 @@ public class CheckpointService {
 
             // One table at a time: write this table's rows to disk, hand the file to S3, drop
             // it. Materialization therefore costs one row-group buffer and one scratch file at
-            // a time instead of one encoded Parquet per table. The new frame (issue #126) is
-            // serialized later, in materialize, and only when seq advanced.
+            // a time instead of one encoded Parquet per table. The new frame (issue #126) went
+            // through the same directory just before this loop and its file is already gone, so
+            // "one at a time" covers the whole build and not only its snapshot half.
             //
             // One table's coercion failure (schema drift, bad value) must not abort the whole
             // build: the pointer would freeze, retention would stop, and segments would grow
@@ -442,7 +470,7 @@ public class CheckpointService {
     }
 
     /**
-     * Create this table's scratch file. A failure here says the scratch directory itself is
+     * Create this artifact's scratch file. A failure here says the scratch directory itself is
      * unusable (gone, read-only, out of inodes) — it is not a fact about this table and it would
      * hit every table of every site alike. Skipping per table would detach every last-good
      * snapshot while the pointer still advanced. A later rematerialize (issue #128) can restore

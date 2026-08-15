@@ -18,6 +18,7 @@ import com.bitbi.dfm.site.domain.TableSchema;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -347,6 +348,67 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void anOverCeilingFrameCostsNoSnapshotUploadAtAll() throws IOException {
+        // Issue #153. Crossing the frame ceiling is deterministic for the same fold, so the abort
+        // repeats on every tick. Written after the snapshots it charged each of those repeats a
+        // full set of per-table uploads at the *new* seq, leaving the previous seq's objects
+        // unreferenced — and nothing but a site wipe sweeps `checkpoints/{siteId}/` (#118), so the
+        // orphaned generations accumulated for as long as the site was left alone. Serializing the
+        // frame first makes a failed build cost nothing durable.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, 8L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        assertThrows(ArtifactSizeLimitExceededException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+        assertEquals(List.of(), snapshotsOnDisk(), "the half-written frame must not be left behind");
+    }
+
+    @Test
+    void writesTheFrameBeforeAnySnapshotOfTheSameBuild() {
+        // The ordering is the fix, so it is asserted directly rather than only through its
+        // consequence above: whatever ends the frame — the ceiling, an S3 refusal, an
+        // unrenderable fold — must end it before a snapshot object exists at the new seq.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        InOrder order = inOrder(checkpointStorage);
+        order.verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+        order.verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+    }
+
+    @Test
+    void stillKeepsOneCheckpointScratchFileOnDiskAtATime() {
+        // Moving the frame first must not mean holding it open across the snapshot loop: the
+        // deployed scratch budget (#131/#138) is `2 x max(table, frame)`, one file per build path,
+        // not `frame + table`. So the frame is written, uploaded and deleted before the first
+        // table's file is created.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        recordFrameUploads();
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1, uploadedFrames.size());
+        assertEquals(1, uploadedFrames.get(0).snapshotsOnDisk(),
+                "the frame must be the only checkpoint scratch file while it is being uploaded");
+        assertEquals(2, uploaded.size());
+        assertTrue(uploaded.stream().allMatch(snapshot -> snapshot.snapshotsOnDisk() == 1),
+                "the frame's scratch file must be gone before the first table's is created");
+    }
+
+    @Test
     void writesTheSnapshotToDiskAndRemovesItAfterUploading() throws IOException {
         // The snapshot is a file handed to S3, not a byte[] held in heap — and the file is this
         // build's litter: leaving it behind fills the node one checkpoint cycle at a time.
@@ -664,8 +726,15 @@ class CheckpointServiceTest {
 
         verify(checkpointRepository, never()).save(any());
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
-        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(eventPublisher, never()).publishEvent(any());
+        // The frame object *is* written, because since issue #153 it precedes the snapshots and
+        // the guard only speaks at the first row write. That is the same litter the discard has
+        // always left — the snapshots this build had already uploaded (see
+        // doesNotMistakeAWipeForAPerTableParquetFailure) — and the wipe's own cut-off (#122)
+        // deliberately spares objects newer than its start, so re-running the wipe sweeps it. What
+        // must not survive is anything that makes the *new* epoch read it: the pointer is 0 after a
+        // wipe, so no later build looks for frame@2.
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
     }
 
     @Test
