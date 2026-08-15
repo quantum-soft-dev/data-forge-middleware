@@ -581,7 +581,9 @@ You don't write these — they're how downstream tools read your data:
   the declared schema cannot render. A later scheduled build (or a forced rebuild) **rematerializes
   a missing snapshot from the frame** without waiting for new segments (issue #128): the pointer,
   the frame and retention stay where they were, and only tables whose `s3_key_parquet` is still
-  null are rewritten (a forced rebuild rewrites every table). An **unusable scratch directory**
+  null are rewritten (a forced rebuild rewrites every table). After a full prune the frame is
+  still enough — leftover changelog rows are not required. A same-seq rematerialize that fails
+  leaves a still-valid last-good key in place; detach is only for an advancing seq. An **unusable scratch directory**
   (missing, read-only, out of inodes) is the one failure that is not a table-level skip: it would
   hit every table alike, and detaching every last-good snapshot while the pointer advanced would
   throw away the keys rematerialize is supposed to restore, so the build aborts with the pointer

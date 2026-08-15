@@ -400,6 +400,7 @@ class CheckpointServiceTest {
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
         verify(changelogSegmentService, never()).readRecords(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -492,6 +493,78 @@ class CheckpointServiceTest {
         assertEquals(2L, rebuilt.getValue().getSeq());
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void forcedRebuildKeepsThePreviousKeyWhenRematerializeFails() {
+        // Same-seq detach is wrong: a failed PutObject leaves the last-good object at
+        // checkpoints/{site}/{table}/seq={seq}/snapshot.parquet. Nulling the row would make
+        // a healthy table undownloadable. Detach is only valid when seq moved.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+
+        parkAtPointer(2L, frame.getValue(), saved.getValue());
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+        clearInvocations(checkpointRepository, syncStateService, eventPublisher);
+
+        service.buildCheckpoint(SITE, true);
+
+        verify(checkpointRepository, never()).save(any());
+        assertEquals("checkpoints/parquet-key", saved.getValue().getS3KeyParquet());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void rematerializesDetachedParquetWhenAllSegmentsHaveBeenPruned() {
+        // The frame is the seed. After a full prune (audit-window 0) there are no leftover
+        // changelog rows, but rematerialize must still recover from the frame.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(firstSave.capture());
+        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+
+        parkAtPointer(2L, frame.getValue(), firstSave.getValue());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        recordUploads("checkpoints/recovered-after-prune");
+        clearInvocations(syncStateService, checkpointStorage, checkpointRepository, eventPublisher);
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        ArgumentCaptor<Checkpoint> recovered = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(recovered.capture());
+        assertEquals("checkpoints/recovered-after-prune", recovered.getValue().getS3KeyParquet());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void refusesWhenFrameUnreadableAndNoSegmentsRemain() {
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L));
+        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
     }
 
     @Test

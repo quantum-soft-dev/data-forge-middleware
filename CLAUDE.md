@@ -462,8 +462,10 @@ pages/{feature}/            # Route pages
   retries any row whose `s3_key_parquet` is null; a forced rebuild rematerializes every table from
   the frame (`buildCheckpoint(siteId, true)`). Neither path moves the pointer, re-uploads the
   frame, or publishes `CheckpointRecordedEvent` — the fold has not changed, retention stays
-  monotonic. No API shape, DTO, migration, configuration, metric name or frontend change. See
-  `docs/delta-client-v2-guide.md`.
+  monotonic. A same-seq rematerialize that fails keeps a still-valid last-good key; detach is
+  only for an advancing seq. After a full prune the frame is still enough — leftover changelog
+  rows are not required. No API shape, DTO, migration, configuration, metric name or frontend
+  change. See `docs/delta-client-v2-guide.md`.
 - checkpoint-parquet-on-disk: The V2 checkpoint build materializes its snapshots on disk, one table
   at a time, and every V2 Parquet writer takes an explicit row-group budget (issue #112, which
   absorbed #114). `ParquetCheckpointWriter.toParquet` used to copy a table's folded rows into a

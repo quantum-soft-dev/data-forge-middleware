@@ -107,16 +107,27 @@ public class CheckpointService {
      * @param siteId site identifier
      * @param force  when {@code true}, rematerialize from the existing frame even if there are no
      *               new segments and every table already has a snapshot (forced rebuild)
-     * @return folded state: table → row-identity → folded row (empty if no segments)
+     * @return folded state: table → row-identity → folded row (empty if there is nothing to
+     *         fold or rematerialize)
      */
     public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId, boolean force) {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
-        if (segments.isEmpty()) {
-            return Map.of();
-        }
-
         long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
         boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
+
+        if (segments.isEmpty()) {
+            // Retention may have pruned every leftover row. The frame is still a complete seed
+            // (issue #128); refuse only when the pointer is set and that frame is unreadable.
+            if (checkpointSeq > 0 && !haveFrame) {
+                throw new S3CheckpointStorage.CheckpointStorageException(
+                        "Checkpoint frame@" + checkpointSeq + " for site " + siteId
+                                + " is unreadable and no segments remain — refusing lossy refold", null);
+            }
+            if (!haveFrame || (!force && !hasUnmaterializedTables(siteId))) {
+                return Map.of();
+            }
+            return rematerializeFromFrame(siteId, checkpointSeq, force);
+        }
 
         // A frame@checkpointSeq must exist once the pointer advanced (uploadFrame precedes
         // recordCheckpoint). If it reads as absent — deleted, or an S3 HEAD denial masquerading
@@ -150,10 +161,23 @@ public class CheckpointService {
                 if (!haveFrame || (!force && !hasUnmaterializedTables(siteId))) {
                     return seed;
                 }
-                writeSnapshots(siteId, seed, checkpointSeq, !force);
+                writeSnapshots(siteId, seed, checkpointSeq, !force, false);
                 return seed;
             }
             return materialize(siteId, seed, newSegments);
+        });
+    }
+
+    private Map<String, Map<String, FoldedRow>> rematerializeFromFrame(UUID siteId,
+                                                                      long checkpointSeq,
+                                                                      boolean force) {
+        return metrics.timeCheckpoint(() -> {
+            byte[] frameBytes = metrics.timeCheckpointPhase("download_frame",
+                    () -> checkpointStorage.downloadFrame(siteId, checkpointSeq));
+            Map<String, Map<String, FoldedRow>> seed =
+                    ChangelogFold.fold(Map.of(), ChangelogCodec.parse(frameBytes));
+            writeSnapshots(siteId, seed, checkpointSeq, !force, false);
+            return seed;
         });
     }
 
@@ -168,7 +192,7 @@ public class CheckpointService {
             return ChangelogFold.fold(seed, newRecords);
         });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
-        writeSnapshots(siteId, state, seq, false);
+        writeSnapshots(siteId, state, seq, false, true);
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
         metrics.timeCheckpointPhase("upload", () ->
@@ -192,14 +216,16 @@ public class CheckpointService {
     /**
      * Write (or retry) each table's Parquet snapshot at {@code seq}.
      *
-     * <p>A rematerialize of an already-recorded pointer ({@code onlyUnmaterialized == true})
-     * rewrites only the rows that still have no artifact and does not move the pointer, re-upload
-     * the frame, or publish {@link CheckpointRecordedEvent} — the fold has not changed.</p>
+     * <p>A rematerialize of an already-recorded pointer ({@code advancingSeq == false})
+     * does not move the pointer, re-upload the frame, or publish {@link CheckpointRecordedEvent}
+     * — the fold has not changed. {@code onlyUnmaterialized} skips tables that already have a
+     * snapshot (scheduled retry); a forced rebuild rewrites every table.</p>
      */
     private void writeSnapshots(UUID siteId,
                                 Map<String, Map<String, FoldedRow>> state,
                                 long seq,
-                                boolean onlyUnmaterialized) {
+                                boolean onlyUnmaterialized,
+                                boolean advancingSeq) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
         // Every table's snapshot goes through the same scratch directory, one at a time. Creating
@@ -231,49 +257,66 @@ public class CheckpointService {
                 // table simply has nothing to download until a schema arrives. The client is
                 // required to SubmitSchema before its first session, so this means the site is
                 // misconfigured — count it so the hole is visible rather than silent.
-                checkpoint.detachParquet();
+                if (abandonStaleSnapshot(checkpoint, advancingSeq)) {
+                    checkpointRepository.save(checkpoint);
+                }
                 metrics.checkpointTableUnmaterialized("no_schema");
                 log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
                         + "without a downloadable artifact (the client must SubmitSchema)",
                         tableName, siteId);
-            } else {
-                // One table at a time: write this table's rows to disk, hand the file to S3, drop
-                // it. Materialization therefore costs one row-group buffer and one scratch file at
-                // a time instead of one encoded Parquet per table. (The frame upload below still
-                // builds an all-tables copy — issue #126.)
-                //
-                // One table's coercion failure (schema drift, bad value) must not abort the whole
-                // build: the pointer would freeze, retention would stop, and segments would grow
-                // unbounded. Skip that table and keep going — the same skip-and-continue contract
-                // as DeltaEgressService.
-                Path snapshot = createScratchFile(siteId);
-                try {
-                    metrics.timeCheckpointPhase("parquet", () ->
-                            ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
-                                    dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes()));
-                    metrics.timeCheckpointPhase("upload", () ->
-                            checkpoint.attachParquet(checkpointStorage.uploadParquet(
-                                    siteId, tableName, seq, snapshot)));
-                } catch (RuntimeException e) {
-                    // The row's seq and rowCount advance regardless (the fold succeeded), so the
-                    // previous build's key would now sit beside a newer seq and be served as its
-                    // snapshot. Detach it: an absent file is honest, stale rows under a fresh seq
-                    // are not — and with the CSV gone nothing else masks the gap.
-                    checkpoint.detachParquet();
-                    metrics.checkpointTableUnmaterialized("parquet_failed");
-                    log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                            + "artifact this build (check the declared schema against the data, or "
-                            + "delta.checkpoint.max-temp-bytes against the table's size)",
-                            tableName, siteId, e);
-                } finally {
-                    // The scratch file is this build's litter whichever way the table ended: kept,
-                    // it would fill the node one checkpoint cycle at a time.
-                    deleteQuietly(snapshot, tableName, siteId);
-                }
+                return;
             }
 
-            checkpointRepository.save(checkpoint);
+            // One table at a time: write this table's rows to disk, hand the file to S3, drop
+            // it. Materialization therefore costs one row-group buffer and one scratch file at
+            // a time instead of one encoded Parquet per table. The new frame (issue #126) is
+            // serialized later, in materialize, and only when seq advanced.
+            //
+            // One table's coercion failure (schema drift, bad value) must not abort the whole
+            // build: the pointer would freeze, retention would stop, and segments would grow
+            // unbounded. Skip that table and keep going — the same skip-and-continue contract
+            // as DeltaEgressService.
+            Path snapshot = createScratchFile(siteId);
+            try {
+                metrics.timeCheckpointPhase("parquet", () ->
+                        ParquetCheckpointWriter.writeParquet(snapshot, tableName, tableSchema,
+                                dataRows(rows), maxTempBytes, parquetProperties.rowGroupBytes()));
+                metrics.timeCheckpointPhase("upload", () ->
+                        checkpoint.attachParquet(checkpointStorage.uploadParquet(
+                                siteId, tableName, seq, snapshot)));
+                checkpointRepository.save(checkpoint);
+            } catch (RuntimeException e) {
+                // When seq advanced, the previous key would sit beside a newer seq and be served
+                // as its snapshot — detach it. On a same-seq rematerialize the last-good object
+                // is still at that key; keep the row pointing at it.
+                if (abandonStaleSnapshot(checkpoint, advancingSeq)) {
+                    checkpointRepository.save(checkpoint);
+                }
+                metrics.checkpointTableUnmaterialized("parquet_failed");
+                log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
+                        + "artifact this build (check the declared schema against the data, or "
+                        + "delta.checkpoint.max-temp-bytes against the table's size)",
+                        tableName, siteId, e);
+            } finally {
+                // The scratch file is this build's litter whichever way the table ended: kept,
+                // it would fill the node one checkpoint cycle at a time.
+                deleteQuietly(snapshot, tableName, siteId);
+            }
         });
+    }
+
+    /**
+     * Detach the snapshot key only when keeping it would lie (seq moved, or there was never a
+     * key). A same-seq rematerialize that fails must leave a still-valid last-good key in place.
+     *
+     * @return {@code true} when the row changed and must be saved
+     */
+    private static boolean abandonStaleSnapshot(Checkpoint checkpoint, boolean advancingSeq) {
+        if (advancingSeq || checkpoint.getS3KeyParquet() == null) {
+            checkpoint.detachParquet();
+            return true;
+        }
+        return false;
     }
 
     private boolean hasUnmaterializedTables(UUID siteId) {
