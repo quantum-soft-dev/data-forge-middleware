@@ -453,6 +453,39 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- scratch-pod-private-sweep: `ParquetScratchOrphanSweeper` deletes scratch older than the running
+  JVM where the directory is declared pod-private (issue #141). #127's age filter was the only rule,
+  startup pass included, and #131 then moved the deployed scratch onto a `parquet-scratch`
+  `emptyDir` with `sizeLimit: 6Gi` — a volume cleared only when the **pod** goes away, so it
+  survives a liveness or OOM kill. A container restart mid-build therefore parked one
+  `batch-parquet-*` per claimed table (and any `checkpoint-*`) on the volume for the full **4 h**
+  window, while the lease-expired claim was retried after `DELTA_BATCH_PARQUET_LEASE_SECONDS`
+  (30 min) and allocated a second full set; the penalty for filling that directory is a kubelet
+  **eviction**, not wasted disk. New key `delta.parquet.scratch-private-to-pod`
+  (`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`, default **false**, `"true"` in
+  `k8s/base/configmap.yaml` beside the two `*_TEMP_DIR` keys it describes) makes the sweep cutoff
+  the **later** of `now - age` and this JVM's start, so it is never softer than the age filter and
+  converges back to it once the process outlives the window. The bound is the **JVM's start**, not
+  "the first tick": the sweeper's `initialDelay` is 0 and `resumePendingRebuilds()` fires at
+  startup too, so an unconditional startup sweep would race a live writer. It is
+  `ProcessHandle.current().info().startInstant()` rather than the bean's own construction, so a
+  future eager writer running during context refresh stays out of scope, and it is truncated
+  to whole seconds because file mtime can be second-resolution — a file written in the startup
+  second must round to "not older". Startup logs the mode and the directories, the only signal an
+  operator has left if a deployment is patched out of band. Default false leaves #127's reasoning
+  untouched for a shared
+  volume, where a file older than this JVM can belong to a live sibling; the lease half is
+  independent of the mount, so **lowering the age globally is still not the fix**. Chosen over an
+  unconditional startup sweep (the ticket's option 2) because "older than my start" proves the file
+  is not *mine*, not that it is not *live* — that step needs the volume claim, which the deployment
+  makes in the same directory as the mount, and a test parses both base manifests to enforce the
+  one direction that is a safety property: **flag set ⇒** both temp-dir keys name
+  `/scratch/parquet` **and** the volume behind it is an `emptyDir` (turning the flag off stays
+  available as a rollback, and an overlay may only ever set it to false). Left open and ticketed as
+  **#146**: the sweep tick shares one `TaskScheduler` thread with the all-sites checkpoint build, so
+  "at most one sweep interval" assumes that thread is free. No REST, gRPC, DTO, metric, S3-key,
+  migration, or frontend change. See `docs/delta-client-v2-guide.md` ("Sizing note", "Orphans
+  outlive a container restart"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-baseline-epoch: The checkpoint epoch guard now covers a **re-baseline** as well as a
   wipe, and the event published after a build can no longer act on a history that is already gone
   (issue #142, consolidating #143). `DeltaRebaselineService.reset` deletes every `checkpoints` row of

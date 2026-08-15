@@ -29,5 +29,11 @@ data:
   # ParquetScratchOrphanSweeper deduplicates the two paths before sweeping.
   DELTA_CHECKPOINT_TEMP_DIR: "/scratch/parquet"
   DELTA_BATCH_PARQUET_TEMP_DIR: "/scratch/parquet"
+  # That emptyDir is pod-private and is cleared only when the pod goes away, so it outlives a
+  # liveness or OOM kill. Declaring it lets the sweeper also drop scratch older than the running
+  # JVM — a dead predecessor's files — instead of holding them for the full four-hour age window
+  # on a volume with a sizeLimit (issue #141). This is a claim about the mount above: move the
+  # temp dirs off the emptyDir and this has to go with them.
+  DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: "true"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"

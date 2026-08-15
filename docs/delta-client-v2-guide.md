@@ -603,12 +603,18 @@ You don't write these — they're how downstream tools read your data:
   `checkpoint-*` / `batch-parquet-*` files older than `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`
   (`delta.parquet.scratch-orphan-age-seconds`, default **4 hours**) from the configured directories,
   on startup and then every `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS` (default 1 hour). Frame scratch
-  files use the same `checkpoint-` prefix, so they are swept too. Age is the only safe filter in
-  general: the directory may be a volume a sibling replica is writing into, and the batch-parquet
-  lease is renewed for the life of a live build, so it is not a bound on file age. (On the GKE
-  deployment the directory is a *pod-private* `emptyDir`, where the sibling-replica half of that
-  reasoning does not apply — which is why an unconditional sweep at startup is possible there and
-  is tracked as #141. The lease half still applies, so do not shorten the age instead.) Raise the
+  files use the same `checkpoint-` prefix, so they are swept too. Age is the only safe filter on a
+  volume this process may share: a sibling replica may be writing into it, and the batch-parquet
+  lease is renewed for the life of a live build, so it is not a bound on file age. Where the
+  directory is written by this pod alone — the GKE `emptyDir` — say so with
+  `DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD` (`delta.parquet.scratch-private-to-pod`, default
+  **false**, set `true` in `k8s/base/configmap.yaml`): the sweep cutoff then becomes the **later**
+  of the age window and this JVM's start, so scratch a dead predecessor left behind goes on the
+  first tick instead of four hours later (issue #141). It is the JVM's start rather than "the first
+  run" on purpose — a rebuild resumed at startup can overlap that tick, and files this process
+  created are never in scope. Once the process has been up longer than the age window the two rules
+  coincide again. Leave the flag false for a genuinely shared volume, and do not shorten the age
+  instead: the lease half of the reasoning is independent of the mount. Raise the
   age if a create-to-delete
   interval can exceed four hours (completed-batch files are created before replay starts). What all
   of this bounds is materialization, not reconstruction: **the fold is still in heap**.
@@ -625,8 +631,10 @@ point at it through `k8s/base/configmap.yaml`, and the container declares
 writable layer and logs. The request is the half that matters for placement: without it the
 scheduler does not account for local disk at all, and two builds on one node can drive it into disk
 pressure and evict unrelated pods. `emptyDir` is deliberate over a PersistentVolume — the scratch
-dies with the pod, which keeps `ParquetScratchOrphanSweeper` belt-and-braces rather than
-load-bearing — and the default (node-disk) medium is deliberate too, since `medium: Memory` would
+dies with the pod, so nothing accumulates across pod generations, and being pod-private it is what
+licenses the sweeper's second rule (`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`, see "Orphans outlive a
+container restart"; within *one* pod's lifetime that sweep is load-bearing, not belt-and-braces) —
+and the default (node-disk) medium is deliberate too, since `medium: Memory` would
 be a tmpfs charged against the container's *memory* limit. Request equals limit so the reserved
 amount is the enforced amount; GKE Autopilot caps a pod's ephemeral storage at 10 GiB, so the total
 has to stay under that.
@@ -659,8 +667,10 @@ batch_peak      = delta.batch-parquet.max-concurrent (2)
                     x tables claimed per batch          # one scratch file per claimed table,
                                                         # all opened before the shared replay
                     x largest per-table artifact
-orphan_residue  = whatever a container restart left behind, until the orphan sweep ages it out
-                    # see "Orphans outlive a container restart now" below
+orphan_residue  = whatever a container restart left behind, until the next sweep tick
+                    # bounded by DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS (1 h) on this
+                    # deployment, not by the 4 h age window — see "Orphans outlive a
+                    # container restart" below
 ```
 
 There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
@@ -669,16 +679,18 @@ to check before assuming the budget still holds; #128 also raised how often larg
 since a scheduled build now rematerializes every table whose snapshot is missing and a forced
 rebuild rewrites all of them.
 
-**Orphans outlive a container restart now.** When scratch lived in the container's writable layer,
-a restarted container got an empty `/tmp`. An `emptyDir` is cleared only when the *pod* goes away,
-so after a liveness kill or an OOM kill mid-build the dead attempt's files stay on the volume, and
-`ParquetScratchOrphanSweeper` leaves anything younger than
-`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` (4 h) alone — while a lease-expired batch claim is
-retried within `DELTA_BATCH_PARQUET_LEASE_SECONDS` (30 min) and allocates a second full set. Budget
-for that residue, or shorten the age for this deployment — but not below the longest legitimate
-create-to-delete interval, because a live build's files are exactly as old as the build. Sweeping
-a pod-private volume unconditionally at startup (every file present then belongs to a previous
-container, so nothing live can be lost) is issue **#141**.
+**Orphans outlive a container restart.** When scratch lived in the container's writable layer, a
+restarted container got an empty `/tmp`. An `emptyDir` is cleared only when the *pod* goes away, so
+after a liveness kill or an OOM kill mid-build the dead attempt's files stay on the volume — while
+a lease-expired batch claim is retried within `DELTA_BATCH_PARQUET_LEASE_SECONDS` (30 min) and
+allocates a second full set. The age filter alone would hold that residue for four hours, which is
+why this deployment declares the volume pod-private
+(`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: "true"` in `k8s/base/configmap.yaml`, issue **#141**):
+everything present when the JVM starts belongs to a previous container, so the restarted process
+drops it on its first sweep tick and the residue term shrinks to at most one sweep interval. Do
+**not** shorten `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` to chase the same effect — a live
+build's files are exactly as old as the build, so a lower age deletes live work. And if the two
+`*_TEMP_DIR` keys are ever moved off the pod-private volume, the flag has to move with them.
 
 **6 GiB is an assumption, not a measurement**: we have no observed maximum for
 a checkpoint frame or a batch artifact on test/prod. The only sized artifact on record is the 439k-row
@@ -734,8 +746,8 @@ sign of life, which a live build refreshes as it goes. Operators can tune the co
 `DELTA_BATCH_PARQUET_MAX_CONCURRENT`, `DELTA_BATCH_PARQUET_SWEEP_MS`,
 `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,
 `DELTA_BATCH_PARQUET_LEASE_SECONDS`, `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`,
-`DELTA_BATCH_PARQUET_TEMP_DIR`, `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`, and
-`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`.
+`DELTA_BATCH_PARQUET_TEMP_DIR`, `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`,
+`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, and `DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`.
 
 Batches that completed **before** this feature shipped have no manifest row. A finished batch is
 backfilled on demand: the first Parquet click enqueues its tables from the raw segments and answers
@@ -1268,9 +1280,11 @@ pod's heap. The
 per-segment egress writer renders its (seal-bounded, ≤ 16 MiB of records) file in memory, so there
 the budget bounds only the encoder's own buffer; it takes the same key deliberately, because all
 three writers share one pod's heap and one tuning decision.
-`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` / `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS` sit next to
+`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` / `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS` /
+`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD` sit next to
 that key because both file-backed writers share the same recovery: leftover `checkpoint-*` and
-`batch-parquet-*` files older than the age are deleted from the configured temp directories.
+`batch-parquet-*` files older than the age — or, on a volume declared pod-private, older than the
+running JVM — are deleted from the configured temp directories.
 
 Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream
 `read` and `decode` is protobuf parse excluding the record consumer. On **egress**,
