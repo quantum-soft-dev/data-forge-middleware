@@ -39,6 +39,12 @@ spring:
       # six would put scheduler threads in competition with Flyway and the test's own queries.
       # Nothing in the suite asserts scheduling concurrency against this profile —
       # ScheduledTaskIsolationTest builds its own context from the shipped values.
+      #
+      # This is deliberately below the production floor (a thread free while all three long tasks
+      # run, i.e. four), and it has to be: four is not below the four connections above, so the two
+      # rules cannot both hold here. Timeliness is a production property, connection pressure is the
+      # one that bites in a suite of cached contexts, so the smaller number wins and
+      # shouldSizeThePoolAboveTheLongRunningTasks checks the shipped profile only.
       pool:
         size: 2
 

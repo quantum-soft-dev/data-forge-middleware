@@ -491,7 +491,11 @@ pages/{feature}/            # Route pages
   interrupted** on context close (which is what they were as virtual threads), and the queue of
   not-yet-due ticks is **dropped** — a plain shutdown still runs queued *delayed* tasks and every
   cron tick is queued as one, so without it the pod would sit with parked threads until the monthly
-  partition job came due, and any `await-termination-period` would be certain to time out. `shutdownNow()` would
+  partition job came due, and any `await-termination-period` would be certain to time out. Waiting
+  also opts out of Spring's early-stop signal, so a small `ThreadPoolTaskScheduler` subclass shuts the
+  executor down on `ContextClosedEvent` — otherwise the scheduler keeps triggering until its own bean
+  is destroyed, past the `@PreDestroy` of its peers, and `BatchRetentionScheduler`'s programmatic cron
+  (which nothing cancels) could start a cleanup on a closed `DataSource`. `shutdownNow()` would
   not merely stop the 02:00 build — `CheckpointService` catches the interrupt per table and detaches
   that table's snapshot key, so a deployment at the wrong minute would leave a 404 behind until the
   nightly rematerialize; a doomed build should die with the process instead

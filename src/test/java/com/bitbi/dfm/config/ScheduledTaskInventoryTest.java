@@ -148,12 +148,17 @@ class ScheduledTaskInventoryTest {
                         + "audit and the pool derivation in application.yml need re-reading");
     }
 
+    /**
+     * The shipped profile only. A profile may deliberately go below this floor when its own
+     * constraints make the two rules unsatisfiable together — {@code test} shrinks the connection
+     * pool to four, and four scheduler threads would not be below four connections.
+     */
     @Test
     @DisplayName("the pool leaves a thread free for a short tick while every long task runs")
     void shouldSizeThePoolAboveTheLongRunningTasks() {
         long longRunning = ANNOTATED_TASKS.values().stream().filter(Cost.LONG::equals).count()
                 + (PROGRAMMATIC_TASK_COST == Cost.LONG ? 1 : 0);
-        int poolSize = ScheduledTaskIsolationTest.shippedPoolSize();
+        int poolSize = shippedPoolSize();
 
         assertTrue(poolSize > longRunning,
                 "spring.task.scheduling.pool.size is " + poolSize + " but " + longRunning
@@ -172,7 +177,7 @@ class ScheduledTaskInventoryTest {
     @Test
     @DisplayName("the pool stays below the database pool in every profile, so ticks cannot starve requests")
     void shouldKeepThePoolBelowTheDatabasePool() {
-        int basePool = ScheduledTaskIsolationTest.shippedPoolSize();
+        int basePool = shippedPoolSize();
         int baseHikari = requireInt(baseYaml(), HIKARI_KEY);
 
         assertBelowDatabasePool("application.yml", basePool, baseHikari);
@@ -197,6 +202,11 @@ class ScheduledTaskInventoryTest {
     private static final String POOL_KEY = "spring.task.scheduling.pool.size";
 
     private static final String HIKARI_KEY = "spring.datasource.hikari.maximum-pool-size";
+
+    /** The shipped {@code spring.task.scheduling.pool.size}, tolerating the {@code ${ENV:n}} form. */
+    static int shippedPoolSize() {
+        return requireInt(baseYaml(), POOL_KEY);
+    }
 
     private static Map<String, Object> baseYaml() {
         Map<String, Object> yaml = optionalYaml("application.yml");

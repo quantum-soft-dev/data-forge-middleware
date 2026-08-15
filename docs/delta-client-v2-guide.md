@@ -794,7 +794,10 @@ would have called `shutdownNow()`, and an interrupted checkpoint build does not 
 02:00 deployment would leave a table answering `404` until the nightly rematerialize. A doomed build
 should die with the process instead. Dropping the queue is what keeps that from costing anything: a
 plain shutdown still runs already-queued *delayed* tasks, and every cron tick is queued as one, so
-the pod would otherwise sit with parked threads until the monthly partition job came due.
+the pod would otherwise sit with parked threads until the monthly partition job came due. The
+scheduler also stops triggering the moment the context closes, rather than when its own bean is
+destroyed — otherwise a tick due in between could open a transaction on a `DataSource` its peers had
+already closed.
 `spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants
 shutdown to wait for what is running.
 

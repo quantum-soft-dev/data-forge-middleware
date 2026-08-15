@@ -1,8 +1,10 @@
 package com.bitbi.dfm.config;
 
 import org.springframework.boot.task.ThreadPoolTaskSchedulerBuilder;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
@@ -36,9 +38,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * <p>Two properties come with the pool that the hand-off scheduler did not offer, and both are
  * wanted here: a task never overlaps <em>itself</em> ({@code ScheduledThreadPoolExecutor} will not
  * run two executions of the same periodic task concurrently), and the number of threads scheduled
- * work can occupy is bounded — it has to stay below the Hikari pool, or a burst of ticks could
- * starve request threads of database connections. The size and its derivation live next to the key
- * in {@code application.yml}; {@code ScheduledTaskInventoryTest} keeps them honest.</p>
+ * work can occupy is bounded, which matters because nearly every tick opens a database connection.
+ * The size, its derivation and what the bound does and does not promise live next to the key in
+ * {@code application.yml}; {@code ScheduledTaskInventoryTest} keeps them honest.</p>
  *
  * <p>The virtual-thread setting itself is untouched — it still applies to the web layer. It never
  * reached {@code @Async}: {@code AsyncConfiguration} and {@code PluginAsyncConfiguration} register
@@ -54,9 +56,9 @@ public class SchedulingConfiguration {
 
     /**
      * The application's {@code TaskScheduler}, built from Boot's builder so every
-     * {@code spring.task.scheduling.*} property keeps its documented meaning, with two shutdown
-     * settings fixed in code because they are properties of <em>these tasks</em> rather than of a
-     * deployment — and because both of them silently changed when the scheduler did.
+     * {@code spring.task.scheduling.*} property keeps its documented meaning, with the shutdown
+     * behaviour fixed in code because it is a property of <em>these tasks</em> rather than of a
+     * deployment — and because it silently changed when the scheduler did.
      *
      * <p><b>No interrupt on shutdown.</b> Boot defaults
      * {@code spring.task.scheduling.shutdown.await-termination} to false, which makes
@@ -84,13 +86,15 @@ public class SchedulingConfiguration {
      * hold the JVM open after the context closes until the grace period ran out and SIGKILL landed.
      * Virtual threads are always daemon, so this restores what the previous scheduler gave.</p>
      *
-     * <p><b>The one difference left</b> is the window between {@code ContextClosedEvent} and this
-     * bean's destruction: waiting for tasks means Spring skips the early-stop signal, so a tick due
-     * inside that window still starts, where the previous scheduler stopped triggering at the event.
-     * It is bounded by the lifecycle stop phase and costs at worst a log line and a rolled-back
-     * transaction — every scheduled method here either catches its own failure or is caught by the
-     * scheduler's log-and-suppress error handler — which is a smaller price than the detached
-     * snapshot the interrupt buys.</p>
+     * <p><b>Stop triggering at {@code ContextClosedEvent}.</b> Waiting for tasks also opts the
+     * scheduler out of Spring's early-stop signal, which would leave it triggering new ticks until
+     * this bean's own destruction — past the {@code @PreDestroy} of its peers, so a tick could open a
+     * transaction on a closed {@code DataSource}. Annotated tasks are cancelled during bean
+     * destruction, but {@code BatchRetentionScheduler}'s programmatic cron is cancelled by nobody, so
+     * that window is real. {@link EarlyShutdownTaskScheduler} closes it by shutting the executor down
+     * when the event arrives, which under the settings above means "start nothing new, interrupt
+     * nothing running" — the behaviour {@code SimpleAsyncTaskScheduler} had, and the reason the two
+     * settings can be kept.</p>
      *
      * @param builder Boot's scheduler builder, pre-populated from {@code spring.task.scheduling.*}
      * @return the scheduler backing every {@code @Scheduled} method and
@@ -98,10 +102,43 @@ public class SchedulingConfiguration {
      */
     @Bean
     public ThreadPoolTaskScheduler taskScheduler(ThreadPoolTaskSchedulerBuilder builder) {
-        ThreadPoolTaskScheduler scheduler = builder.build();
+        ThreadPoolTaskScheduler scheduler = builder.configure(new EarlyShutdownTaskScheduler());
         scheduler.setWaitForTasksToCompleteOnShutdown(true);
         scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         scheduler.setDaemon(true);
         return scheduler;
+    }
+
+    /**
+     * A {@link ThreadPoolTaskScheduler} that stops triggering when the context closes instead of
+     * when it is destroyed.
+     *
+     * <p>{@code ExecutorConfigurationSupport} couples the two things this application wants apart: a
+     * scheduler that waits for its tasks takes the "late shutdown" branch, which skips
+     * {@code initiateEarlyShutdown()} and makes {@code stop()} a no-op, while the branch that does
+     * stop early shuts down by interrupting. Calling {@code initiateShutdown()} from the event gives
+     * the missing combination — it honours {@code waitForTasksToCompleteOnShutdown}, so it is a plain
+     * {@code shutdown()}: the queue is dropped, nothing running is interrupted, and no further tick
+     * starts. Destruction then calls {@code shutdown()} again, which is a no-op on an executor
+     * already shut down.</p>
+     */
+    static final class EarlyShutdownTaskScheduler extends ThreadPoolTaskScheduler {
+
+        /** The context this scheduler belongs to; a parent's close must not shut it down. */
+        private transient ApplicationContext ownContext;
+
+        @Override
+        public void setApplicationContext(ApplicationContext applicationContext) {
+            super.setApplicationContext(applicationContext);
+            this.ownContext = applicationContext;
+        }
+
+        @Override
+        public void onApplicationEvent(ContextClosedEvent event) {
+            super.onApplicationEvent(event);
+            if (event.getApplicationContext() == this.ownContext) {
+                initiateShutdown();
+            }
+        }
     }
 }

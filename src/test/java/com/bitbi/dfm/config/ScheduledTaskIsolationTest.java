@@ -5,30 +5,24 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
-import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.PropertySource;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.SimpleAsyncTaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -132,9 +126,10 @@ class ScheduledTaskIsolationTest {
     @DisplayName("closing the context neither interrupts a running task nor waits on its thread")
     void shouldNotInterruptARunningTaskOnShutdown() throws InterruptedException {
         ShutdownWitness witness = new ShutdownWitness();
-        java.util.concurrent.atomic.AtomicReference<ThreadPoolTaskScheduler> scheduler =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicReference<ThreadPoolTaskScheduler> scheduler = new AtomicReference<>();
 
+        // The witness blocks until released below — after the context has closed — so the task is
+        // guaranteed to be running throughout shutdown rather than depending on it being slow enough.
         runner()
                 .withUserConfiguration(SchedulingConfiguration.class)
                 .withBean(ShutdownWitness.class, () -> witness)
@@ -144,18 +139,25 @@ class ScheduledTaskIsolationTest {
                     witness.awaitStarted();
                 });
 
-        assertTrue(witness.awaitFinished(), "the task never finished after the context closed");
-        Awaitility.await("the executor terminates once the running task is done")
-                .atMost(PROGRESS_WINDOW)
-                .pollInterval(Duration.ofMillis(TICK_MS))
-                .until(() -> scheduler.get().getScheduledThreadPoolExecutor().isTerminated());
         assertFalse(witness.wasInterrupted(),
                 "shutdown interrupted a running scheduled task. Boot's await-termination default is "
                         + "false, which means shutdownNow(); SchedulingConfiguration overrides it because "
                         + "an interrupted checkpoint build detaches the table it was writing");
+        assertTrue(witness.stillRunning(),
+                "the task was gone before the context closed, so this run proves nothing");
         assertTrue(witness.ranOnDaemonThread(),
                 "without the interrupt, a non-daemon pool thread would hold the JVM open after the "
                         + "context closed until the pod's grace period expired");
+        assertTrue(LifecycleWitness.executorWasShutDownAtStop(),
+                "the executor was still triggering when the lifecycle stop phase began: a tick due in "
+                        + "that window can open a transaction on a DataSource its peers have closed");
+
+        witness.release();
+        assertTrue(witness.awaitFinished(), "the task never finished after being released");
+        Awaitility.await("the executor terminates once the running task is done")
+                .atMost(PROGRESS_WINDOW)
+                .pollInterval(Duration.ofMillis(TICK_MS))
+                .until(() -> scheduler.get().getScheduledThreadPoolExecutor().isTerminated());
     }
 
     private static void assertNeighbourKeepsTicking(Hog hog, Neighbour neighbour) throws InterruptedException {
@@ -184,18 +186,13 @@ class ScheduledTaskIsolationTest {
                         "spring.task.scheduling.pool.size=" + shippedPoolSize());
     }
 
-    /** The pool size {@code application.yml} declares, so the shipped value is what gets exercised. */
+    /**
+     * The pool size {@code application.yml} declares, so the shipped value is what gets exercised.
+     * Read through {@link ScheduledTaskInventoryTest}, which owns the YAML reading and tolerates the
+     * {@code ${ENV:default}} form the key may take.
+     */
     static int shippedPoolSize() {
-        YamlPropertySourceLoader loader = new YamlPropertySourceLoader();
-        try {
-            List<PropertySource<?>> sources = loader.load("application.yml", new ClassPathResource("application.yml"));
-            assertEquals(1, sources.size(), "application.yml should yield a single document");
-            Object value = sources.get(0).getProperty("spring.task.scheduling.pool.size");
-            assertNotNull(value, "spring.task.scheduling.pool.size must be declared (issue #146)");
-            return Integer.parseInt(value.toString().trim());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        return ScheduledTaskInventoryTest.shippedPoolSize();
     }
 
     /** A scheduled task that occupies its thread until released. */
@@ -278,10 +275,8 @@ class ScheduledTaskIsolationTest {
     /** Records how a task fared while the context was being closed around it. */
     static class ShutdownWitness {
 
-        /** Long enough that the context is closing while the task is still inside its sleep. */
-        private static final long WORK_MS = 1_500L;
-
         private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
         private final CountDownLatch finished = new CountDownLatch(1);
         private volatile boolean interrupted;
         private volatile boolean daemon;
@@ -294,7 +289,9 @@ class ScheduledTaskIsolationTest {
             daemon = Thread.currentThread().isDaemon();
             started.countDown();
             try {
-                Thread.sleep(WORK_MS);
+                // Held until the assertions have run, so the task is provably still on its thread
+                // for the whole of shutdown.
+                release.await(HOG_BUDGET_SECONDS, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 interrupted = true;
                 Thread.currentThread().interrupt();
@@ -304,6 +301,14 @@ class ScheduledTaskIsolationTest {
 
         void awaitStarted() throws InterruptedException {
             assertTrue(started.await(PROGRESS_WINDOW.toSeconds(), TimeUnit.SECONDS), "the task never started");
+        }
+
+        void release() {
+            release.countDown();
+        }
+
+        boolean stillRunning() {
+            return finished.getCount() > 0;
         }
 
         boolean awaitFinished() throws InterruptedException {
@@ -316,6 +321,44 @@ class ScheduledTaskIsolationTest {
 
         boolean ranOnDaemonThread() {
             return daemon;
+        }
+    }
+
+    /**
+     * Reads whether the scheduler had already stopped triggering by the time the lifecycle stop
+     * phase began — which runs strictly after {@code ContextClosedEvent} is published, so it is a
+     * deterministic place to observe the early shutdown rather than a race with listener order.
+     */
+    static class LifecycleWitness implements org.springframework.context.SmartLifecycle {
+
+        private static volatile boolean shutDownAtStop;
+
+        private final ThreadPoolTaskScheduler scheduler;
+        private volatile boolean running;
+
+        LifecycleWitness(ThreadPoolTaskScheduler scheduler) {
+            this.scheduler = scheduler;
+            shutDownAtStop = false;
+        }
+
+        static boolean executorWasShutDownAtStop() {
+            return shutDownAtStop;
+        }
+
+        @Override
+        public void start() {
+            running = true;
+        }
+
+        @Override
+        public void stop() {
+            shutDownAtStop = scheduler.getScheduledThreadPoolExecutor().isShutdown();
+            running = false;
+        }
+
+        @Override
+        public boolean isRunning() {
+            return running;
         }
     }
 
@@ -345,6 +388,11 @@ class ScheduledTaskIsolationTest {
         @Bean
         DistantCronTask distantCronTask(TaskScheduler scheduler) {
             return new DistantCronTask(scheduler);
+        }
+
+        @Bean
+        LifecycleWitness lifecycleWitness(ThreadPoolTaskScheduler scheduler) {
+            return new LifecycleWitness(scheduler);
         }
     }
 
