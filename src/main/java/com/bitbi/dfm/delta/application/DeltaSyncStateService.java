@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
@@ -141,7 +142,7 @@ public class DeltaSyncStateService {
 
     /**
      * Take the site's pending-wipe flag (issue #89), but only if the site is still on
-     * {@code baselineEpoch}. The caller that gets {@code true} owns the post-wipe follow-up work —
+     * {@code epoch}. The caller that gets {@code true} owns the post-wipe follow-up work —
      * currently the Bit BI baseline recapture — and no other will.
      *
      * <p>The epoch is what keeps a <em>stale</em> caller from spending the flag (issue #142).
@@ -150,13 +151,13 @@ public class DeltaSyncStateService {
      * new wipe's flag and recapture baselines from a {@code checkpoints} table the wipe has just
      * emptied, losing the automatic re-initialization for good.</p>
      *
-     * @param siteId        site identifier
-     * @param baselineEpoch the epoch the caller's checkpoint belongs to
+     * @param siteId site identifier
+     * @param epoch  the epoch the caller's checkpoint belongs to
      * @return {@code true} when this call consumed a pending wipe of that epoch
      */
     @Transactional
-    public boolean consumeWipePending(UUID siteId, long baselineEpoch) {
-        return repository.clearWipePending(siteId, baselineEpoch) > 0;
+    public boolean consumeWipePending(UUID siteId, SiteEpoch epoch) {
+        return repository.clearWipePending(siteId, epoch.generation(), epoch.baselineEpoch()) > 0;
     }
 
     /**
@@ -271,5 +272,15 @@ public class DeltaSyncStateService {
     public record SyncStateView(long lastAppliedSeq, long lastCheckpointSeq, int schemaVersion,
                                 boolean needRebaseline, boolean rebaselineNotified,
                                 long generation, long baselineEpoch) {
+
+        /**
+         * Both epochs as the pair {@code CheckpointEpochGuard} compares — neither subsumes the other
+         * across a rolling deployment (issue #142).
+         *
+         * @return the site's epoch pair
+         */
+        public SiteEpoch epoch() {
+            return new SiteEpoch(generation, baselineEpoch);
+        }
     }
 }

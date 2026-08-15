@@ -73,6 +73,18 @@ public class DeltaRebaselineService {
         // it waits here and is then refused because resetForRebaseline moved the baseline epoch.
         // Loading the row last, as a plain read, left a window between the checkpoint deletes and
         // the epoch bump in which a guarded write could land and outlive the reset.
+        //
+        // A site that has never synced has no row to lock, so the mutex is vacuous there (as it is
+        // in DeltaSiteWipeService, which documents the same caveat): the row is created here, and
+        // two operations racing on a fresh site collide on the primary key instead. There is also no
+        // checkpoint history for a build to resurrect on such a site.
+        //
+        // The reset runs first inside DeltaSessionCommitService.commit, so this lock is now held for
+        // the rest of that transaction — including the tail segment's S3 upload. That is a longer
+        // hold than the flush-time lock it replaces, and it is deliberate: the alternative is the
+        // window above. What waits on it (a guarded checkpoint write, clearWipePending, a wipe) is
+        // short and, in the guard's case, about to be refused anyway. Getting S3 out of the
+        // ingestion commit transaction altogether is the real fix and is tracked as issue #147.
         SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(siteId)
                 .orElseGet(() -> SiteSyncState.initial(siteId));
 

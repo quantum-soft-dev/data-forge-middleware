@@ -51,8 +51,10 @@ public interface JpaSiteSyncStateRepository
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE SiteSyncState s SET s.wipePending = false "
             + "WHERE s.siteId = :siteId AND s.wipePending = true "
-            + "AND s.baselineEpoch = :baselineEpoch")
-    int clearWipePending(@Param("siteId") UUID siteId, @Param("baselineEpoch") long baselineEpoch);
+            + "AND s.generation = :generation AND s.baselineEpoch = :baselineEpoch")
+    int clearWipePending(@Param("siteId") UUID siteId,
+                         @Param("generation") long generation,
+                         @Param("baselineEpoch") long baselineEpoch);
 
     /**
      * Conditional single-statement stamp (issue #84): no entity load, no lost update against a

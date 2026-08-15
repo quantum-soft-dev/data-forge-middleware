@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.junit.jupiter.api.Test;
@@ -23,8 +24,9 @@ import static org.mockito.Mockito.when;
 
 /**
  * The row-side half of the wipe race (issue #136), widened to the re-baseline (issue #142): a
- * database write belonging to a checkpoint build may only land while the site is still on the
- * baseline epoch that build started from.
+ * database write belonging to a checkpoint build may only land while the site is still on the epoch
+ * pair that build started from — the wire {@code generation} and the server-internal
+ * {@code baseline_epoch}, neither of which subsumes the other across a rolling deployment.
  */
 class CheckpointEpochGuardTest {
 
@@ -35,12 +37,34 @@ class CheckpointEpochGuardTest {
 
     @Test
     void runsTheWriteWhileTheSiteIsStillOnTheSameEpoch() {
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(3L)));
+        SiteSyncState unchanged = wiped(3L);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(unchanged));
         AtomicBoolean written = new AtomicBoolean();
 
-        guard.inEpoch(SITE, 3L, () -> written.set(true));
+        guard.inEpoch(SITE, SiteEpoch.of(unchanged), () -> written.set(true));
 
         assertTrue(written.get());
+    }
+
+    @Test
+    void refusesTheWriteWhenOnlyTheGenerationMoved() {
+        // The rolling-deployment case, and the reason the guard compares a pair rather than the
+        // "strongest" counter. A pod that predates baseline_epoch bumps generation alone, so during
+        // the mixed-version window a wipe issued from an old pod leaves baseline_epoch untouched —
+        // and a new pod watching only that would let the pre-wipe pointer back in, re-opening #136
+        // through the fix for #142.
+        // Mocked rather than built through resetForWipe: this state is precisely the one the current
+        // entity cannot produce — a wipe that moved the generation and left the baseline epoch at 0.
+        SiteSyncState wipedByAnOldPod = mock(SiteSyncState.class);
+        when(wipedByAnOldPod.getGeneration()).thenReturn(1L);
+        when(wipedByAnOldPod.getBaselineEpoch()).thenReturn(0L);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wipedByAnOldPod));
+        AtomicBoolean written = new AtomicBoolean();
+
+        assertThrows(CheckpointEpochGuard.EpochChangedException.class,
+                () -> guard.inEpoch(SITE, SiteEpoch.INITIAL, () -> written.set(true)));
+
+        assertFalse(written.get(), "a generation-only move is still a destroyed history");
     }
 
     @Test
@@ -55,7 +79,7 @@ class CheckpointEpochGuardTest {
         AtomicBoolean written = new AtomicBoolean();
 
         assertThrows(CheckpointEpochGuard.EpochChangedException.class,
-                () -> guard.inEpoch(SITE, 0L, () -> written.set(true)));
+                () -> guard.inEpoch(SITE, baseline(0L), () -> written.set(true)));
 
         assertEquals(0L, rebaselined.getGeneration(), "the wire epoch must be untouched by a re-baseline");
         assertFalse(written.get(), "a write from the discarded baseline must not reach the database");
@@ -70,7 +94,7 @@ class CheckpointEpochGuardTest {
 
         CheckpointEpochGuard.EpochChangedException failure =
                 assertThrows(CheckpointEpochGuard.EpochChangedException.class,
-                        () -> guard.inEpoch(SITE, 0L, () -> written.set(true)));
+                        () -> guard.inEpoch(SITE, SiteEpoch.INITIAL, () -> written.set(true)));
 
         assertFalse(written.get(), "a stale-epoch write must not reach the database");
         assertTrue(failure.getMessage().contains(SITE.toString()));
@@ -82,7 +106,7 @@ class CheckpointEpochGuardTest {
         // write would then land right after its commit. The lock is what serializes the two.
         when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(0L)));
 
-        guard.inEpoch(SITE, 0L, () -> {
+        guard.inEpoch(SITE, SiteEpoch.INITIAL, () -> {
         });
 
         verify(syncStateRepository).findBySiteIdForUpdate(SITE);
@@ -96,11 +120,11 @@ class CheckpointEpochGuardTest {
         when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.empty());
         AtomicBoolean written = new AtomicBoolean();
 
-        guard.inEpoch(SITE, 0L, () -> written.set(true));
+        guard.inEpoch(SITE, SiteEpoch.INITIAL, () -> written.set(true));
 
         assertTrue(written.get());
         assertThrows(CheckpointEpochGuard.EpochChangedException.class,
-                () -> guard.inEpoch(SITE, 2L, () -> {
+                () -> guard.inEpoch(SITE, baseline(2L), () -> {
                 }));
     }
 
@@ -110,7 +134,7 @@ class CheckpointEpochGuardTest {
         // check and the write it protects would no longer be serialized against the wipe. And
         // joining an ambient one would hold that lock across the build's S3 round-trips and make a
         // refusal poison the caller's transaction instead of discarding the build.
-        Method inEpoch = CheckpointEpochGuard.class.getMethod("inEpoch", UUID.class, long.class, Runnable.class);
+        Method inEpoch = CheckpointEpochGuard.class.getMethod("inEpoch", UUID.class, SiteEpoch.class, Runnable.class);
         Transactional transactional = inEpoch.getAnnotation(Transactional.class);
 
         assertNotNull(transactional, "the epoch check and the write it guards must share a transaction");
@@ -125,11 +149,16 @@ class CheckpointEpochGuardTest {
 
         CheckpointEpochGuard.EpochChangedException failure =
                 assertThrows(CheckpointEpochGuard.EpochChangedException.class,
-                        () -> guard.inEpoch(SITE, 2L, () -> {
+                        () -> guard.inEpoch(SITE, baseline(2L), () -> {
                         }));
 
-        assertEquals(2L, failure.getExpectedEpoch());
-        assertEquals(4L, failure.getActualEpoch());
+        assertEquals(baseline(2L), failure.getExpectedEpoch());
+        assertEquals(4L, failure.getActualEpoch().baselineEpoch());
+    }
+
+    /** The epoch pair of a site that has only ever been re-baselined {@code n} times. */
+    private static SiteEpoch baseline(long n) {
+        return new SiteEpoch(0L, n);
     }
 
     private static SiteSyncState wiped(long epochs) {

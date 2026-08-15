@@ -7,6 +7,7 @@ import com.bitbi.dfm.delta.application.CheckpointService;
 import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
 import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.SiteHistoryWipeSummary;
+import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
@@ -380,12 +381,12 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L,
                 List.of(insert(1L, "Ann"), insert(2L, "Bob")));
         checkpointService.buildCheckpoint(SITE_ID);
-        long generation = syncStateService.getSyncState(SITE_ID).generation();
+        SiteEpoch epoch = syncStateService.getSyncState(SITE_ID).epoch();
 
         wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
         org.assertj.core.api.Assertions
-                .assertThatThrownBy(() -> epochGuard.inEpoch(SITE_ID, generation,
+                .assertThatThrownBy(() -> epochGuard.inEpoch(SITE_ID, epoch,
                         () -> syncStateService.recordCheckpoint(SITE_ID, 2L)))
                 .isInstanceOf(CheckpointEpochGuard.EpochChangedException.class);
         assertThat(jdbc.queryForObject(
@@ -464,7 +465,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L,
                 List.of(insert(1L, "Ann"), insert(2L, "Bob")));
         checkpointService.buildCheckpoint(SITE_ID);
-        long epochTheBuildFolded = syncStateService.getSyncState(SITE_ID).baselineEpoch();
+        SiteEpoch epochTheBuildFolded = syncStateService.getSyncState(SITE_ID).epoch();
 
         wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 

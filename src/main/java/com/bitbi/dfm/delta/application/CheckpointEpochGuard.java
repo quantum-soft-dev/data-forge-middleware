@@ -1,6 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
-import com.bitbi.dfm.delta.domain.SiteSyncState;
+import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -34,8 +34,8 @@ import java.util.UUID;
  * <p>The guard is the narrow serialization that closes it. Each write runs in its own short
  * transaction that first takes the {@code site_sync_state} row lock a wipe ({@code
  * DeltaSiteWipeService}) and a re-baseline ({@code DeltaRebaselineService}) both hold for their
- * whole transaction, then compares the site's {@code baseline_epoch} with the one the build read
- * when it started. Only two orderings survive: the write commits before the lock is taken (so the
+ * whole transaction, then compares the site's epoch pair with the one the build read when
+ * it started. Only two orderings survive: the write commits before the lock is taken (so the
  * wipe's or re-baseline's own deletes remove it), or it waits and then sees the bumped epoch and is
  * refused. No S3 traffic happens inside the lock, so the build still holds a connection only for the
  * length of a single statement.</p>
@@ -58,10 +58,16 @@ public class CheckpointEpochGuard {
     }
 
     /**
-     * Run one checkpoint-build write, but only while the site is still on {@code baselineEpoch}.
+     * Run one checkpoint-build write, but only while the site is still on {@code epoch}.
      *
-     * <p>A site with no {@code site_sync_state} row counts as epoch 0: it has never synced, so a
-     * wipe of it would destroy nothing, and the row is created by the pointer write itself.</p>
+     * <p>Both halves of {@link SiteEpoch} are compared. Neither subsumes the other across a rolling
+     * deployment: a pod that predates {@code baseline_epoch} bumps {@code generation} alone, so a
+     * wipe issued from one during the mixed-version window would be invisible to a guard watching
+     * only the baseline epoch — #136's hole, re-opened through #142's fix.</p>
+     *
+     * <p>A site with no {@code site_sync_state} row counts as {@link SiteEpoch#INITIAL}: it has never
+     * synced, so a wipe of it would destroy nothing, and the row is created by the pointer write
+     * itself.</p>
      *
      * <p>{@link Propagation#REQUIRES_NEW} makes "short transaction" structural rather than a
      * property of today's callers. Joining an ambient transaction would hold the row lock for
@@ -72,19 +78,19 @@ public class CheckpointEpochGuard {
      * that choice: a caller that already holds this row's lock would block on itself, which is why
      * the build stays non-transactional (pinned by a test on {@code buildCheckpoint}).</p>
      *
-     * @param siteId        site whose epoch the build started from
-     * @param baselineEpoch the {@code baseline_epoch} that build read
-     * @param write         the write to perform under the row lock
+     * @param siteId site whose epoch the build started from
+     * @param epoch  the epoch pair that build read
+     * @param write  the write to perform under the row lock
      * @throws EpochChangedException when the site was wiped or re-baselined since the build started;
      *                               the caller must discard the whole build rather than retry the write
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void inEpoch(UUID siteId, long baselineEpoch, Runnable write) {
-        long current = syncStateRepository.findBySiteIdForUpdate(siteId)
-                .map(SiteSyncState::getBaselineEpoch)
-                .orElse(0L);
-        if (current != baselineEpoch) {
-            throw new EpochChangedException(siteId, baselineEpoch, current);
+    public void inEpoch(UUID siteId, SiteEpoch epoch, Runnable write) {
+        SiteEpoch current = syncStateRepository.findBySiteIdForUpdate(siteId)
+                .map(SiteEpoch::of)
+                .orElse(SiteEpoch.INITIAL);
+        if (!current.equals(epoch)) {
+            throw new EpochChangedException(siteId, epoch, current);
         }
         write.run();
     }
@@ -95,27 +101,27 @@ public class CheckpointEpochGuard {
      */
     public static class EpochChangedException extends RuntimeException {
 
-        private final long expectedEpoch;
-        private final long actualEpoch;
+        private final SiteEpoch expectedEpoch;
+        private final SiteEpoch actualEpoch;
 
-        public EpochChangedException(UUID siteId, long expectedEpoch, long actualEpoch) {
-            super("Site " + siteId + " moved from baseline epoch " + expectedEpoch + " to "
-                    + actualEpoch + " while its checkpoint was being built");
+        public EpochChangedException(UUID siteId, SiteEpoch expectedEpoch, SiteEpoch actualEpoch) {
+            super("Site " + siteId + " moved from " + expectedEpoch + " to " + actualEpoch
+                    + " while its checkpoint was being built");
             this.expectedEpoch = expectedEpoch;
             this.actualEpoch = actualEpoch;
         }
 
         /**
-         * @return the baseline epoch the discarded build started from
+         * @return the epoch the discarded build started from
          */
-        public long getExpectedEpoch() {
+        public SiteEpoch getExpectedEpoch() {
             return expectedEpoch;
         }
 
         /**
-         * @return the baseline epoch the site is on now
+         * @return the epoch the site is on now
          */
-        public long getActualEpoch() {
+        public SiteEpoch getActualEpoch() {
             return actualEpoch;
         }
     }

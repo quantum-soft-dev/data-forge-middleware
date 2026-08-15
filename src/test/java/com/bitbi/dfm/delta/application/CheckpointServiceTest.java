@@ -6,6 +6,7 @@ import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
+import com.bitbi.dfm.delta.domain.SiteEpoch;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
@@ -762,6 +763,35 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void readsTheEpochNoLaterThanTheDataItGuards() {
+        // The guard only works if the epoch is read no *later* than the segments it will fold.
+        // Reading the segments first left a window: a re-baseline committing between the two reads
+        // gave the build the pre-reset segment list together with the *new* epoch, so every guarded
+        // write compared equal and was approved — it folded the discarded baseline, uploaded a frame
+        // at the old lastSeq and moved the pointer there. Exactly the resurrection the guard exists
+        // to stop, arrived at through the guard.
+        //
+        // The reset is simulated as committing during the sync-state read: with the correct order it
+        // lands before the segment list is taken (so the build sees the new, empty history), with the
+        // wrong one after it (so the build folds the old history at the new epoch).
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        when(syncStateService.getSyncState(SITE)).thenAnswer(invocation -> {
+            when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+            return new SyncStateView(0L, 0L, 1, false, false, 0L, 1L);
+        });
+        SiteSyncState rebaselined = SiteSyncState.initial(SITE);
+        rebaselined.resetForRebaseline(0L);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(rebaselined));
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointRepository, never()).save(any());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+    }
+
+    @Test
     void publishesTheCheckpointEventWithTheEpochTheBuildFolded() {
         // Issue #142, part 2. The event is published after the guarded pointer write has committed,
         // so a wipe can commit in the gap. Carrying the build's own epoch is what lets the listener
@@ -769,15 +799,18 @@ class CheckpointServiceTest {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 3L, 5L));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
-        SiteSyncState atEpochFive = SiteSyncState.initial(SITE);
-        for (int i = 0; i < 5; i++) {
-            atEpochFive.resetForRebaseline(0L);
+        // Three wipes then two re-baselines: generation 3, baseline epoch 5. Both halves travel.
+        SiteSyncState history = SiteSyncState.initial(SITE);
+        for (int i = 0; i < 3; i++) {
+            history.resetForWipe();
         }
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(atEpochFive));
+        history.resetForRebaseline(0L);
+        history.resetForRebaseline(0L);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(history));
 
         service.buildCheckpoint(SITE);
 
-        verify(eventPublisher).publishEvent(new CheckpointRecordedEvent(SITE, 2L, 5L));
+        verify(eventPublisher).publishEvent(new CheckpointRecordedEvent(SITE, 2L, new SiteEpoch(3L, 5L)));
     }
 
     // --- helpers ---

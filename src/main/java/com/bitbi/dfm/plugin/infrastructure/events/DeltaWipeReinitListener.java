@@ -77,7 +77,7 @@ public class DeltaWipeReinitListener {
         // spend this wipe's pending re-init on a recapture that reads the checkpoints table the wipe
         // has just emptied — zero baselines frozen, and the first genuine post-wipe checkpoint left
         // with nothing to consume.
-        if (!syncStateService.consumeWipePending(event.siteId(), event.baselineEpoch())) {
+        if (!syncStateService.consumeWipePending(event.siteId(), event.epoch())) {
             return; // an ordinary checkpoint — the overwhelmingly common case
         }
 
