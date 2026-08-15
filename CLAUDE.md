@@ -461,7 +461,8 @@ pages/{feature}/            # Route pages
   partial sweep rather than a total miss. The wipe takes its start instant before the transaction
   and skips objects newer than that on **both** `egress/{siteId}/` and `checkpoints/{siteId}/`, so
   a concurrent rebuild or egress `PutObject` cannot have its fresh object deleted while the row
-  that names it survives. A prefix that could not be listed, or was listed only partially, is
+  that names it survives. S3 `LastModified` is second-resolution, so anything in the wipe's own
+  second is treated as newer. A prefix that could not be listed, or was listed only partially, is
   reported as `prefixesNotSwept` on `SiteHistoryWipeSummary` / the wipe DTO — distinct from
   `s3DeleteErrors`, which the UI quotes as an object count. The Danger zone tells the operator to
   repeat the wipe rather than inventing a number. `BatchDeletionService` and `BatchRetentionService`

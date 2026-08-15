@@ -758,9 +758,10 @@ are counted in `s3DeleteErrors` and left as orphans (the same trade-off retentio
 `checkpoints/{siteId}/`) that could not be listed, or were listed only partially — do not quote it
 as an object count. The Danger zone tells the operator to **repeat the wipe**, which is safe and
 finishes the cleanup (issue #122). A listing that dies mid-pagination still sweeps the pages it
-already read. Objects whose S3 `lastModified` is after the wipe's start instant are skipped, so a
-concurrent rebuild or egress worker cannot have its fresh object deleted while the row that names
-it survives.
+already read. Objects whose S3 `LastModified` is in the wipe's own second or later are skipped — the bucket
+timestamp is second-resolution, so a concurrent `PutObject` in that second cannot be told apart
+from a pre-wipe object. A concurrent rebuild or egress worker therefore cannot have its fresh
+object deleted while the row that names it survives.
 
 **What the client sees.** `NEED_REBASELINE` alone cannot express a wipe: it means "send a full
 snapshot", not "your counters are meaningless now". So `site_sync_state.generation` (V48) is an epoch
