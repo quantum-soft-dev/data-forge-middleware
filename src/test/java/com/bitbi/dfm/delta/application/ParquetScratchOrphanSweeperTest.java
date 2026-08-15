@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -246,15 +247,34 @@ class ParquetScratchOrphanSweeperTest {
     void theDeployedEmptyDirIsDeclaredPodPrivate() throws IOException {
         // The flag is a claim about the mount, and the mount is two files away. Whoever moves the
         // scratch off the pod-private emptyDir has to move the claim in the same commit.
-        Path configMap = Path.of("k8s/base/configmap.yaml");
-        String manifest = Files.readString(configMap);
-        boolean mountedOnTheScratchVolume = manifest.contains("DELTA_CHECKPOINT_TEMP_DIR: \"/scratch/parquet\"")
-                || manifest.contains("DELTA_BATCH_PARQUET_TEMP_DIR: \"/scratch/parquet\"");
+        String manifest = Files.readString(Path.of("k8s/base/configmap.yaml"));
+        // BOTH directories, because the flag is per process and the sweeper walks both: one key
+        // left on a shared volume is enough to start deleting a sibling replica's live scratch.
+        boolean everyTempDirIsTheScratchVolume =
+                manifest.contains("DELTA_CHECKPOINT_TEMP_DIR: \"/scratch/parquet\"")
+                        && manifest.contains("DELTA_BATCH_PARQUET_TEMP_DIR: \"/scratch/parquet\"");
 
-        assertEquals(mountedOnTheScratchVolume,
+        assertEquals(everyTempDirIsTheScratchVolume,
                 manifest.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: \"true\""),
-                "k8s/base/configmap.yaml must declare the scratch pod-private exactly while it points "
-                        + "the temp dirs at the parquet-scratch emptyDir");
+                "k8s/base/configmap.yaml must declare the scratch pod-private exactly while both "
+                        + "temp-dir keys point at the parquet-scratch emptyDir");
+    }
+
+    @Test
+    void noOverlayRedirectsTheScratchBehindThatGuard() throws IOException {
+        // The guard above reads the base manifest, so it is only the whole truth while no overlay
+        // redefines these keys. An overlay that needs to must extend the guard, not slip past it.
+        try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {
+            for (Path file : overlays.filter(Files::isRegularFile).toList()) {
+                String body = Files.readString(file);
+                assertFalse(body.contains("DELTA_CHECKPOINT_TEMP_DIR")
+                                || body.contains("DELTA_BATCH_PARQUET_TEMP_DIR")
+                                || body.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD"),
+                        file + " overrides the scratch mount or its pod-private claim; "
+                                + "theDeployedEmptyDirIsDeclaredPodPrivate no longer covers the "
+                                + "rendered configuration and must be widened to this overlay");
+            }
+        }
     }
 
     @Test

@@ -117,8 +117,11 @@ spec:
         # This is per POD, not per container. Unlike the writable layer it SURVIVES a
         # liveness/OOM kill, so within one pod's lifetime ParquetScratchOrphanSweeper (#127)
         # is load-bearing rather than belt-and-braces: a dead attempt's files hold the volume
-        # until the 4h orphan age, while its batch claim is retried after 30 min. Budgeted as
-        # a residue term; the unconditional-startup-sweep fix is #141.
+        # while its batch claim is retried after 30 min. Because the volume is pod-private,
+        # DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD (configmap.yaml, #141) lets the restarted
+        # container drop them on its first sweep tick instead of holding them for the 4h
+        # orphan age — so the residue term in the sizing note is one sweep interval. Moving
+        # the temp dirs off this volume means dropping that flag in the same commit.
         # sizeLimit is enforced by kubelet: crossing it EVICTS the pod. It is not a
         # graceful, per-table skip like delta.*.max-temp-bytes — see the sizing note in
         # docs/delta-client-v2-guide.md.

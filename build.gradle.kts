@@ -152,6 +152,13 @@ tasks.named<Test>("test") {
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir("src/main/resources/db/migration")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // ParquetScratchOrphanSweeperTest asserts that the manifests declare the scratch pod-private
+    // exactly while they mount it on the emptyDir (#141). Without these inputs a commit that
+    // touches only k8s/ leaves `test` UP-TO-DATE and the guard never runs.
+    inputs.files("k8s/base/configmap.yaml")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir("k8s/overlays")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 
     if (project.hasProperty("excludeIntegration")) {
         exclude("**/integration/**")
