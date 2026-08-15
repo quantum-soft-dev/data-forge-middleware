@@ -78,8 +78,13 @@ public class CheckpointService {
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.max-temp-bytes:10737418240}") long maxTempBytes,
+                             // Falls back to the per-table key, not to a literal: before #138 one
+                             // key governed both files, so an operator who had lowered it to fit a
+                             // small scratch disk must keep the frame bounded by that same number
+                             // until they say otherwise.
                              @org.springframework.beans.factory.annotation.Value(
-                                     "${delta.checkpoint.max-frame-temp-bytes:10737418240}")
+                                     "${delta.checkpoint.max-frame-temp-bytes:"
+                                             + "${delta.checkpoint.max-temp-bytes:10737418240}}")
                              long maxFrameTempBytes) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
@@ -271,10 +276,13 @@ public class CheckpointService {
             // was and name the key, or the operator has only a byte count to go on. Rethrown
             // unchanged: an oversized frame still ends the build.
             log.error("The checkpoint reload frame for site {} at seq {} crossed "
-                    + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned "
-                    + "and the pointer stays at its previous seq. Raise that key (and the scratch "
-                    + "volume behind it) rather than the per-table ceiling",
-                    siteId, seq, maxFrameTempBytes);
+                    + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned. "
+                    + "last_checkpoint_seq stays where it was, so retention is frozen and the next "
+                    + "build repeats this, but the per-table snapshots of this build were already "
+                    + "written at seq {} and their predecessors are now unreferenced objects. "
+                    + "Raise that key (and the scratch volume behind it) rather than the per-table "
+                    + "ceiling",
+                    siteId, seq, maxFrameTempBytes, seq);
             throw e;
         } finally {
             deleteQuietly(frame, "_frame", siteId);

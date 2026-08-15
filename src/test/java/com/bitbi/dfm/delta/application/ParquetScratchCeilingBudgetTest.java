@@ -35,10 +35,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact &lt;= sizeLimit
  * </pre>
  *
- * <p>It is a <b>floor on the guarantee, not the budget</b>: the batch term is really
- * {@code x tables claimed per batch}, a multiplier no per-file key can bound — only a
- * directory-wide reservation can, which is issue #150. Orphan residue (#127, #141) is outside it
- * too. What the guard does buy is that the three numbers, the concurrency they assume and the
+ * <p><b>Read the batch term as "one claimed table per batch build".</b> A real batch build opens one
+ * scratch file per claimed table (#038), so a two-table batch already doubles that term and a 6Gi
+ * volume can still be overrun — no per-file ceiling can bound a count, only the directory-wide
+ * reservation of issue #150 can, and orphan residue (#127, #141) sits outside the inequality as
+ * well. So this is a <b>floor on the guarantee, not the budget</b>: it fixes the single-table worst
+ * case, and what it really buys is that the three ceilings, the concurrency they assume and the
  * volume behind them can no longer drift apart silently.</p>
  */
 class ParquetScratchCeilingBudgetTest {
@@ -67,10 +69,11 @@ class ParquetScratchCeilingBudgetTest {
                         + HISTORIC_DEFAULT_BYTES + "}"),
                 "delta.checkpoint.max-temp-bytes stays the per-table snapshot ceiling at its "
                         + "historic default");
-        assertTrue(yaml.contains("max-frame-temp-bytes: ${" + FRAME_CEILING_KEY + ":"
-                        + HISTORIC_DEFAULT_BYTES + "}"),
-                "delta.checkpoint.max-frame-temp-bytes must default to the value the frame was "
-                        + "governed by before the split, so an unset key behaves as today");
+        assertTrue(yaml.contains("max-frame-temp-bytes: ${" + FRAME_CEILING_KEY + ":${"
+                        + SNAPSHOT_CEILING_KEY + ":" + HISTORIC_DEFAULT_BYTES + "}}"),
+                "an unset frame ceiling must inherit the key that governed the frame before the "
+                        + "split — falling back to the literal 10 GiB would silently unbound the "
+                        + "frame for an operator who had lowered the single key for a small disk");
         assertTrue(yaml.contains("max-temp-bytes: ${" + BATCH_CEILING_KEY + ":"
                         + HISTORIC_DEFAULT_BYTES + "}"),
                 "the completed-batch default is untouched by this split");
@@ -79,10 +82,18 @@ class ParquetScratchCeilingBudgetTest {
     @Test
     void theDeployedCeilingsRefuseBeforeTheScratchVolumeFills() throws IOException {
         Map<String, Object> data = child(loadManifest("k8s/base/configmap.yaml"), "data");
-        if (!SCRATCH_MOUNT_PATH.equals(data.get("DELTA_CHECKPOINT_TEMP_DIR"))
-                && !SCRATCH_MOUNT_PATH.equals(data.get("DELTA_BATCH_PARQUET_TEMP_DIR"))) {
-            // Nothing is on the bounded volume, so there is no budget to keep. Any other
-            // arrangement has to bring its own guard rather than silently retiring this one.
+        if (!onScratchVolume(data.get("DELTA_CHECKPOINT_TEMP_DIR"))
+                && !onScratchVolume(data.get("DELTA_BATCH_PARQUET_TEMP_DIR"))) {
+            // Neither writer is on the bounded volume, so there is no budget to keep — but the
+            // guard must not fail *open* on a typo. If the pod still mounts the volume, this is a
+            // drift between the two manifests, not a deliberate move: fail and make someone say
+            // which it is. (`onScratchVolume` accepts a subdirectory of the mount, which is on the
+            // volume too — only a genuinely different path retires the budget.)
+            assertFalse(mountsScratchVolume(),
+                    "the pod still mounts " + SCRATCH_MOUNT_PATH + " but neither *_TEMP_DIR points "
+                            + "into it: either the writers moved off the bounded volume — and this "
+                            + "guard must be widened to wherever they went — or one of the two keys "
+                            + "is a typo and the scratch is silently on the writable layer");
             return;
         }
 
@@ -103,7 +114,8 @@ class ParquetScratchCeilingBudgetTest {
         long peak = CONCURRENT_CHECKPOINT_BUILDS * Math.max(snapshotCeiling, frameCeiling)
                 + batchConcurrency * batchCeiling;
         assertTrue(peak <= sizeLimit,
-                "the worst case allowed by these ceilings is " + peak + " B on a " + sizeLimit
+                "the single-claimed-table worst case allowed by these ceilings is " + peak
+                        + " B on a " + sizeLimit
                         + " B volume, so kubelet evicts the pod before the application refuses: "
                         + CONCURRENT_CHECKPOINT_BUILDS + " x max(" + snapshotCeiling + ", "
                         + frameCeiling + ") + " + batchConcurrency + " x " + batchCeiling
@@ -136,6 +148,31 @@ class ParquetScratchCeilingBudgetTest {
                                 + "no longer covers the rendered configuration and must be widened to it");
             }
         }
+    }
+
+    /** A configured directory is on the bounded volume if it is the mount or lives under it. */
+    private static boolean onScratchVolume(Object configuredDirectory) {
+        if (configuredDirectory == null) {
+            return false;
+        }
+        String directory = String.valueOf(configuredDirectory).trim();
+        while (directory.length() > 1 && directory.endsWith("/")) {
+            directory = directory.substring(0, directory.length() - 1);
+        }
+        return directory.equals(SCRATCH_MOUNT_PATH) || directory.startsWith(SCRATCH_MOUNT_PATH + "/");
+    }
+
+    private static boolean mountsScratchVolume() throws IOException {
+        Map<String, Object> deployment = loadManifest("k8s/base/deployment-backend.yaml");
+        Map<String, Object> podSpec = child(child(child(deployment, "spec"), "template"), "spec");
+        for (Map<String, Object> container : children(podSpec, "containers")) {
+            for (Map<String, Object> mount : children(container, "volumeMounts")) {
+                if (SCRATCH_MOUNT_PATH.equals(mount.get("mountPath"))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

@@ -575,7 +575,7 @@ You don't write these — they're how downstream tools read your data:
   file is streamed to S3, then deleted, so a build holds one Parquet row-group buffer and one
   scratch file at a time instead of a whole table's encoded bytes per table. `DELTA_CHECKPOINT_TEMP_DIR`
   (default `java.io.tmpdir` — point it at a scratch volume if the node's default is small) and
-  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB, **2 GiB on the deployed volume** — see the
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB, **1 GiB on the deployed volume** — see the
   sizing note) govern that file; a table that would cross the
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
@@ -681,18 +681,33 @@ raising `max-concurrent`, or shrinking the `sizeLimit` on its own fails the buil
 quietly restoring the eviction. It also requires the **frame** ceiling to be the wider of the two,
 because that is the one whose failure is expensive.
 
-It remains a floor on the guarantee, not the whole budget: the batch term is really
-`x tables claimed per batch`, a multiplier no per-file key can bound — only a directory-wide
-reservation can, and that is **#150**. Orphan residue is outside it too (bounded by one sweep
-interval since #141). For scale, the largest artifact on record is in the low hundreds of MiB, so
-these are 3–5x headroom. If a site outgrows them, raise the frame ceiling first — a skipped table is
-visible and repairs itself, while an aborted build stops the pointer and retention behind it — and
-note that each extra GiB of frame costs **two** GiB of volume, so `sizeLimit` and
-`ephemeral-storage` move in the same commit. A completed-batch artifact above its ceiling is
-`ABANDONED` on the first attempt and answers `404` from then on (the failure is deterministic):
-raise `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` and requeue the row through
-`POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue` — the
-records themselves are still in the changelog segments and their per-segment Parquet.
+**Read the batch term as one claimed table per build, and the whole thing as a floor on the
+guarantee rather than the budget.** A batch build opens one scratch file *per claimed table*, so a
+two-table batch already doubles that term and a 6Gi volume can be overrun again — a count is not
+something a per-file ceiling can bound. Only a directory-wide reservation can, and that is **#150**;
+until it lands the deployment's protection is real but partial, and orphan residue (bounded by one
+sweep interval since #141) sits outside the inequality as well.
+
+**Crossing a ceiling is cheaper than an eviction, but none of the three outcomes repairs itself.**
+For scale, the largest artifact on record is in the low hundreds of MiB, so these ceilings are 3–5x
+headroom — but a *deterministically* oversized artifact fails the same way on every retry:
+
+- **a checkpoint table** is skipped and, on a seq-advancing build, `s3_key_parquet` is **detached**
+  (keeping it would serve an older snapshot under a newer seq), so the table disappears from the
+  Bit BI / Parquet Export listing and stays gone; the nightly rematerialize retries it and fails
+  identically (#149). Raise `DELTA_CHECKPOINT_MAX_TEMP_BYTES`.
+- **the frame** aborts the build: `last_checkpoint_seq` does not move, retention stays frozen, and
+  every following build repeats the work — including re-uploading a full set of per-table snapshots
+  at a new seq, orphaning the previous objects (#153). Raise
+  `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` first when a site outgrows the pair, and note each extra
+  GiB of frame costs **two** GiB of volume, so `sizeLimit` and `ephemeral-storage` move in the same
+  commit.
+- **a completed-batch artifact** is `ABANDONED` on the first attempt and answers `404` from then on.
+  Raise `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` and requeue the row through
+  `POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue`.
+
+In every case the records themselves are still in the changelog segments and their per-segment
+Parquet; what is lost is the derived artifact until the ceiling is raised.
 
 **Recomputing the budget.** The peak is a checkpoint build and completed-batch builds running at
 once:

@@ -464,7 +464,9 @@ pages/{feature}/            # Route pages
   no skip, no metric, in-flight ingest dies with it. New
   `delta.checkpoint.max-frame-temp-bytes` (`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`) bounds the frame
   alone and defaults to the **same 10 GiB** the shared key carried, so an unset key behaves as
-  before; `delta.checkpoint.max-temp-bytes` keeps its name and its per-table, graceful meaning, and
+  before — and unset it inherits `delta.checkpoint.max-temp-bytes` rather than a literal, so an
+  operator who had lowered the single key for a small disk does not silently lose the frame bound;
+  `delta.checkpoint.max-temp-bytes` keeps its name and its per-table, graceful meaning, and
   `delta.batch-parquet.max-temp-bytes` keeps its name, its default and its per-file scope.
   **The application defaults did not move** — the
   process cannot know how large the directory it was handed is, so the values that must sit below
@@ -475,15 +477,21 @@ pages/{feature}/            # Route pages
   `deltaRebuildExecutor` are not mutually excluded), each holding one file at a time.
   `ParquetScratchCeilingBudgetTest` recomputes that from the manifests — reading the batch
   concurrency from the ConfigMap or the `application.yml` default — requires the **frame** ceiling
-  to be the wider of the two, and fails if an overlay redefines any side, so the volume and the
-  ceilings cannot drift apart. It is a **floor on the guarantee, not the budget**: a batch build
-  opens one file per claimed table, a multiplier no per-file key can bound — the directory-wide
-  reservation (`delta.parquet.max-scratch-bytes`) is filed as **#150** rather than folded in here.
-  Two consequences worth knowing before an upgrade of the deployment: a checkpoint table above 1Gi
-  is skipped (visible, self-healing) while the **frame** above 2Gi aborts the build, so raise the
-  frame first and remember it costs two GiB of volume per GiB; and a completed-batch artifact above
-  1Gi is `ABANDONED` on its first attempt and answers 404 until an operator raises the key and
-  requeues the row (039's admin route) — the records themselves stay in the segments. No REST, gRPC,
+  to be the wider of the two, fails if an overlay redefines any side, and fails *closed* if the
+  temp dirs and the mount drift apart, so the volume and the ceilings cannot separate silently.
+  The batch term assumes **one claimed table per build**, which makes this a
+  **floor on the guarantee, not the budget**: a real build opens one file per claimed table, a
+  count no per-file key can bound — the directory-wide reservation
+  (`delta.parquet.max-scratch-bytes`) is filed as **#150** rather than folded in here.
+  What an operator must know before this deployment change: **none of the three refusals repairs
+  itself** when the artifact is deterministically oversized. A checkpoint table is skipped *and*
+  has `s3_key_parquet` detached on a seq-advancing build, so it 404s for Bit BI / Parquet Export
+  and the nightly rematerialize fails identically (#149); the **frame** aborts the build, freezing
+  the pointer and retention while every following build re-uploads a full generation of snapshots
+  (#153, filed from this review); a completed-batch artifact is `ABANDONED` on the first attempt and
+  404s until the key is raised and the row requeued (039's admin route). In each case the records
+  themselves stay in the segments — what is lost is the derived artifact. Raise the frame ceiling
+  first, and remember it costs two GiB of volume per GiB. No REST, gRPC,
   DTO, migration, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`
   ("Sizing note"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-tick-work-list: The nightly checkpoint tick no longer walks past a site whose changelog

@@ -47,21 +47,27 @@ data:
   #     2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact <= sizeLimit
   #     2 x max(1Gi, 2Gi)                           + 2              x 1Gi            =  6Gi
   # The 2x is the two checkpoint build paths (the 02:00 sweep and a forced rebuild on
-  # deltaRebuildExecutor are not mutually excluded), each holding one file at a time.
-  # The frame is deliberately the widest: crossing it ABORTS the build and freezes the pointer,
-  # while a table simply skips and is rematerialized by a later build. Raising it costs 2 GiB of
-  # volume per GiB, so grow sizeLimit and ephemeral-storage in the same commit.
+  # deltaRebuildExecutor are not mutually excluded), each holding one file at a time. The batch
+  # term assumes ONE claimed table per build — a real build opens one file per claimed table, so
+  # this is the single-table worst case, not the whole budget; bounding a *count* needs the
+  # directory-wide reservation of issue #150. Orphan residue after a container restart (#141) sits
+  # outside it too.
   #
-  # This is a floor on the guarantee, not the whole budget: a batch build opens one file PER
-  # CLAIMED TABLE, so the batch term is really `x tables`, which no per-file key can bound —
-  # that is issue #150. Orphan residue after a container restart is bounded by one sweep
-  # interval (#141), not counted here.
+  # The frame is deliberately the widest ceiling, because its failure is the expensive one, and
+  # raising it costs 2 GiB of volume per GiB — grow sizeLimit and ephemeral-storage in the same
+  # commit.
   #
   # For scale, the largest artifact on record is in the low hundreds of MiB, so these are 3-5x
-  # headroom. An artifact above the batch ceiling is ABANDONED on its first attempt and stays
-  # 404 (the failure is deterministic): recovery is to raise this key and requeue the row through
-  # POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{id}/requeue — the data
-  # itself is still in the changelog segments and their per-segment Parquet.
+  # headroom. NONE of the three refusals repairs itself if the artifact is deterministically too
+  # big — each needs the ceiling raised:
+  #   * table  -> skipped, and on a seq-advancing build s3_key_parquet is DETACHED, so the table
+  #               404s for Bit BI / Parquet Export and the nightly retry fails the same way (#149)
+  #   * frame  -> the build aborts, the pointer and retention freeze, and every following build
+  #               re-uploads a full set of snapshots at a new seq, orphaning the previous ones (#153)
+  #   * batch  -> ABANDONED on the first attempt and 404 thereafter; raise the key and requeue via
+  #               POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{id}/requeue
+  # In all three the records themselves are still in the changelog segments and their per-segment
+  # Parquet; what is lost is the derived artifact.
   DELTA_CHECKPOINT_MAX_TEMP_BYTES: "1073741824"
   DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES: "2147483648"
   DELTA_BATCH_PARQUET_MAX_TEMP_BYTES: "1073741824"

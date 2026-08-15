@@ -256,7 +256,10 @@ delta:
     # how big the directory it was handed is, so the defaults below stay generous.
     temp-dir: ${DELTA_CHECKPOINT_TEMP_DIR:${java.io.tmpdir}}
     max-temp-bytes: ${DELTA_CHECKPOINT_MAX_TEMP_BYTES:10737418240}
-    max-frame-temp-bytes: ${DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES:10737418240}
+    # Unset, this inherits DELTA_CHECKPOINT_MAX_TEMP_BYTES rather than the literal 10 GiB: before
+    # the split one key bounded both files, so an operator who had lowered it for a small scratch
+    # disk must keep the frame bounded by that same number until they raise it deliberately.
+    max-frame-temp-bytes: ${DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES:${DELTA_CHECKPOINT_MAX_TEMP_BYTES:10737418240}}
   parquet:
     # Row-group budget for every V2 Parquet writer (checkpoint snapshots, per-segment egress and
     # completed-batch artifacts). A writer buffers one row group in heap before flushing, so with
