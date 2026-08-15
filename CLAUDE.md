@@ -453,6 +453,31 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- scratch-pod-private-sweep: `ParquetScratchOrphanSweeper` deletes scratch older than the running
+  JVM where the directory is declared pod-private (issue #141). #127's age filter was the only rule,
+  startup pass included, and #131 then moved the deployed scratch onto a `parquet-scratch`
+  `emptyDir` with `sizeLimit: 6Gi` — a volume cleared only when the **pod** goes away, so it
+  survives a liveness or OOM kill. A container restart mid-build therefore parked one
+  `batch-parquet-*` per claimed table (and any `checkpoint-*`) on the volume for the full **4 h**
+  window, while the lease-expired claim was retried after `DELTA_BATCH_PARQUET_LEASE_SECONDS`
+  (30 min) and allocated a second full set; the penalty for filling that directory is a kubelet
+  **eviction**, not wasted disk. New key `delta.parquet.scratch-private-to-pod`
+  (`DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`, default **false**, `"true"` in
+  `k8s/base/configmap.yaml` beside the two `*_TEMP_DIR` keys it describes) makes the sweep cutoff
+  the **later** of `now - age` and this JVM's start, so it is never softer than the age filter and
+  converges back to it once the process outlives the window. The bound is the **JVM's start**, not
+  "the first tick": the sweeper's `initialDelay` is 0 and `resumePendingRebuilds()` fires at
+  startup too, so an unconditional startup sweep would race a live writer. The instant is truncated
+  to whole seconds because file mtime can be second-resolution — a file written in the startup
+  second must round to "not older". Default false leaves #127's reasoning untouched for a shared
+  volume, where a file older than this JVM can belong to a live sibling; the lease half is
+  independent of the mount, so **lowering the age globally is still not the fix**. Chosen over an
+  unconditional startup sweep (the ticket's option 2) because "older than my start" proves the file
+  is not *mine*, not that it is not *live* — that step needs the volume claim, which the deployment
+  makes in the same directory as the mount, and a test asserts the configmap declares the flag
+  exactly while the temp-dirs point at `/scratch/parquet`. No REST, gRPC, DTO, metric, S3-key,
+  migration, or frontend change. See `docs/delta-client-v2-guide.md` ("Sizing note", "Orphans
+  outlive a container restart"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-wipe-serialization: A checkpoint build that overlaps a site history wipe is discarded
   instead of resurrecting the epoch it was built for (issue #136, the row-side half of #122).
   `CheckpointService.buildCheckpoint` is non-transactional by design — frame download, one download
