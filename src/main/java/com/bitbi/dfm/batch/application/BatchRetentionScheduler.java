@@ -82,8 +82,21 @@ public class BatchRetentionScheduler {
             } catch (Exception e) {
                 logger.error("Failed to schedule retention cleanup with cron='{}'. Falling back to cron='{}'.",
                         desiredCron, DEFAULT_FALLBACK_CRON, e);
-                scheduledFuture = taskScheduler.schedule(this::runRetentionCleanup, new CronTrigger(DEFAULT_FALLBACK_CRON));
-                scheduledCron = DEFAULT_FALLBACK_CRON;
+                try {
+                    scheduledFuture = taskScheduler.schedule(this::runRetentionCleanup, new CronTrigger(DEFAULT_FALLBACK_CRON));
+                    scheduledCron = DEFAULT_FALLBACK_CRON;
+                } catch (Exception fallbackFailure) {
+                    // The fallback cron is a constant, so what rejects it is the scheduler itself —
+                    // shut down since issue #146 when the context closes rather than when its bean is
+                    // destroyed. This runs from an @EventListener inside the admin's transaction, so
+                    // letting it escape would roll back a saved schedule and answer 500 to a request
+                    // that arrived while the pod was going away. There is nothing left to schedule in
+                    // a dying context; the next instance reschedules from the stored setting.
+                    scheduledFuture = null;
+                    scheduledCron = null;
+                    logger.error("Retention cleanup could not be scheduled at all (cron='{}'); leaving it "
+                            + "unscheduled in this instance.", DEFAULT_FALLBACK_CRON, fallbackFailure);
+                }
             }
         }
     }

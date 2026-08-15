@@ -98,8 +98,9 @@ class ScheduledTaskInventoryTest {
         // One listing per scratch directory, plus the deletes; the tick whose timeliness the sizing
         // note in docs/delta-client-v2-guide.md depends on.
         tasks.put("com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeper#sweep", Cost.SHORT);
-        // One SELECT plus a bounded number of single-row transitions.
-        tasks.put("com.bitbi.dfm.batch.application.BatchTimeoutScheduler#checkExpiredBatches", Cost.SHORT);
+        // findExpiredBatches has no LIMIT and the whole loop is one transaction, so after a backlog
+        // this holds its thread and its connection for as long as the backlog is deep.
+        tasks.put("com.bitbi.dfm.batch.application.BatchTimeoutScheduler#checkExpiredBatches", Cost.LONG);
         // One DDL statement each; a missed run is a failing insert next month.
         tasks.put("com.bitbi.dfm.error.application.PartitionScheduler#createNextMonthPartition", Cost.SHORT);
         tasks.put("com.bitbi.dfm.error.application.PartitionScheduler#dropOldPartitions", Cost.SHORT);
