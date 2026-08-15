@@ -17,6 +17,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
@@ -70,7 +72,7 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
     private String password;
 
     @BeforeEach
-    void activateAndSeed() {
+    void activateAndSeed() throws java.io.IOException {
         jdbc.update("DELETE FROM download_links");
         jdbc.update("DELETE FROM account_plugins WHERE plugin_id = 'parquet-export'");
         jdbc.update("DELETE FROM batch_parquet_artifacts WHERE site_id = ?", SITE_STORE_01);
@@ -94,8 +96,10 @@ class ParquetExportIntegrationTest extends BaseIntegrationTest {
                 UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890")); // COMPLETED batch of store-01 (test-data.sql)
         storage.uploadDelta(SITE_STORE_01, "orders", 100, 250, "parquet-bytes-delta".getBytes(StandardCharsets.UTF_8));
 
-        String parquetKey = storage.uploadParquet(SITE_STORE_01, "orders", 250,
-                "parquet-bytes-checkpoint".getBytes(StandardCharsets.UTF_8));
+        Path checkpointFile = Files.createTempFile("checkpoint-fixture-", ".parquet");
+        Files.writeString(checkpointFile, "parquet-bytes-checkpoint");
+        String parquetKey = storage.uploadParquet(SITE_STORE_01, "orders", 250, checkpointFile);
+        Files.delete(checkpointFile);
         Checkpoint checkpoint = Checkpoint.create(SITE_STORE_01, "orders", 250, 5);
         checkpoint.attachParquet(parquetKey);
         checkpointRepository.save(checkpoint);

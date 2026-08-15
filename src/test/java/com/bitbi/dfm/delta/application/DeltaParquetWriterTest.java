@@ -38,6 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class DeltaParquetWriterTest {
 
+    private static final long ROW_GROUP_BYTES = 8L * 1024 * 1024;
+
     @TempDir
     Path tempDir;
 
@@ -54,7 +56,7 @@ class DeltaParquetWriterTest {
                         Map.of("id", intVal(1), "name", strVal("Ann"), "price", decVal("12.50"))),
                 change(Op.DELETE, 2L, Map.of("id", intVal(1)), Map.of()));
 
-        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records));
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records, ROW_GROUP_BYTES));
 
         assertEquals(2, rows.size());
 
@@ -80,7 +82,7 @@ class DeltaParquetWriterTest {
                 change(Op.INSERT, 7L, Map.of("id", intVal(3)),
                         Map.of("id", intVal(3), "name", strVal("Cid"), "price", decVal("1.00"))));
 
-        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records));
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records, ROW_GROUP_BYTES));
         Schema avro = rows.get(0).getSchema();
 
         assertEquals(Schema.Type.STRING, avro.getField("_op").schema().getType());
@@ -100,7 +102,7 @@ class DeltaParquetWriterTest {
         List<ChangeRecord> records = List.of(
                 change(Op.UPDATE, 9L, Map.of("id", intVal(5)), Map.of("name", strVal("Renamed"))));
 
-        GenericRecord row = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records)).get(0);
+        GenericRecord row = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records, ROW_GROUP_BYTES)).get(0);
 
         assertEquals("UPDATE", row.get("_op").toString());
         assertEquals(5L, row.get("id"));
@@ -119,7 +121,7 @@ class DeltaParquetWriterTest {
                 change(Op.UPDATE, 2L, Map.of("id", intVal(1)),
                         Map.of("name", nullVal())));
 
-        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records));
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", SCHEMA, records, ROW_GROUP_BYTES));
 
         // INSERT: full after-image, _changed is null (means "all columns present").
         assertNull(rows.get(0).get("_changed"), "INSERT carries the full row; _changed is null");
@@ -149,7 +151,7 @@ class DeltaParquetWriterTest {
                 change(Op.INSERT, 2L, Map.of("id", intVal(2)),
                         Map.of("id", intVal(2), "price", decVal("1.05"))));
 
-        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", narrow, records));
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", narrow, records, ROW_GROUP_BYTES));
 
         assertEquals(new BigDecimal("1234567.89"), rows.get(0).get("price"));
         assertEquals(new BigDecimal("1.05"), rows.get(1).get("price"));
@@ -170,7 +172,7 @@ class DeltaParquetWriterTest {
                 change(Op.INSERT, 1L, Map.of("id", intVal(1)),
                         Map.of("id", intVal(1), "amount", decVal("123456789"))));
 
-        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", narrow, records));
+        List<GenericRecord> rows = readBack(DeltaParquetWriter.toDeltaParquet("customers", narrow, records, ROW_GROUP_BYTES));
 
         assertEquals(new BigDecimal("123456789.00"), rows.get(0).get("amount"));
         LogicalTypes.Decimal decimal = (LogicalTypes.Decimal) branch(rows.get(0).getSchema(), "amount").getLogicalType();
@@ -198,7 +200,7 @@ class DeltaParquetWriterTest {
                 output, "customers", narrow, consumer -> {
                     passes.incrementAndGet();
                     records.forEach(consumer);
-                });
+                }, Long.MAX_VALUE, ROW_GROUP_BYTES);
 
         assertEquals(2, passes.get(), "decimal scan + file write; neither pass retains the dataset");
         assertEquals(3, result.rowCount());
@@ -232,7 +234,7 @@ class DeltaParquetWriterTest {
                 output, "customers", noDecimals, consumer -> {
                     passes.incrementAndGet();
                     records.forEach(consumer);
-                });
+                }, Long.MAX_VALUE, ROW_GROUP_BYTES);
 
         assertEquals(1, passes.get(), "nothing to measure — the changelog is replayed once");
         assertEquals(2, result.rowCount());
@@ -269,7 +271,7 @@ class DeltaParquetWriterTest {
                 requests, consumer -> {
                     passes.incrementAndGet();
                     records.forEach(consumer);
-                }, Long.MAX_VALUE);
+                }, Long.MAX_VALUE, ROW_GROUP_BYTES);
 
         assertEquals(1, passes.get(), "table count must not multiply raw changelog replay");
         assertTrue(result.failures().isEmpty());
@@ -307,7 +309,7 @@ class DeltaParquetWriterTest {
                 requests, consumer -> {
                     passes.incrementAndGet();
                     records.forEach(consumer);
-                }, Long.MAX_VALUE);
+                }, Long.MAX_VALUE, ROW_GROUP_BYTES);
 
         assertEquals(2, passes.get(), "one shared decimal scan plus one shared write replay");
         assertTrue(result.failures().isEmpty());
@@ -336,6 +338,7 @@ class DeltaParquetWriterTest {
                         Map.of("id", intVal(1)),
                         Map.of("id", intVal(1), "amount", decVal("1.00")))),
                 Long.MAX_VALUE,
+                ROW_GROUP_BYTES,
                 clock);
 
         assertTrue(clock.decimalScanAttempted());
@@ -360,6 +363,7 @@ class DeltaParquetWriterTest {
                 consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
                         Map.of("id", intVal(1)), Map.of("id", intVal(1), "name", strVal("Ann")))),
                 Long.MAX_VALUE,
+                ROW_GROUP_BYTES,
                 clock);
 
         assertFalse(clock.decimalScanAttempted());
@@ -385,6 +389,7 @@ class DeltaParquetWriterTest {
                             throw new IllegalStateException("scan source failed");
                         },
                         Long.MAX_VALUE,
+                        ROW_GROUP_BYTES,
                         clock));
 
         assertTrue(clock.decimalScanAttempted());
@@ -411,7 +416,7 @@ class DeltaParquetWriterTest {
                 tempDir.resolve("orders-out-of-order.parquet"), schema));
 
         DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
-                requests, consumer -> records.forEach(consumer), Long.MAX_VALUE);
+                requests, consumer -> records.forEach(consumer), Long.MAX_VALUE, ROW_GROUP_BYTES);
 
         assertEquals(2, result.files().get("customers").rowCount());
         assertEquals(List.of(1L, 4L), readBack(requests.get("customers").output()).stream()
@@ -435,7 +440,8 @@ class DeltaParquetWriterTest {
 
         DeltaParquetWriter.BatchWriteResult result = DeltaParquetWriter.writeBatchDeltaParquet(
                 requests, consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
-                        Map.of("id", intVal(1)), Map.of("id", intVal(1)))), Long.MAX_VALUE);
+                        Map.of("id", intVal(1)), Map.of("id", intVal(1)))), Long.MAX_VALUE,
+                ROW_GROUP_BYTES);
 
         assertEquals(1, result.files().get("customers").rowCount());
         assertFalse(result.files().containsKey("broken"));
@@ -448,10 +454,10 @@ class DeltaParquetWriterTest {
                 new ColumnDefinition("id", "bigint", false)), List.of("id"), List.of());
         Path output = tempDir.resolve("bounded.parquet");
 
-        assertThrows(DeltaParquetWriter.ArtifactSizeLimitExceededException.class,
+        assertThrows(ArtifactSizeLimitExceededException.class,
                 () -> DeltaParquetWriter.writeDeltaParquet(output, "customers", noDecimals,
                         consumer -> consumer.accept(changeForTable("customers", Op.INSERT, 1L,
-                                Map.of("id", intVal(1)), Map.of("id", intVal(1)))), 8));
+                                Map.of("id", intVal(1)), Map.of("id", intVal(1)))), 8, ROW_GROUP_BYTES));
 
         assertTrue(Files.size(output) <= 8,
                 "the limit is a write guard, not a policy checked after the full file exists");
@@ -465,7 +471,71 @@ class DeltaParquetWriterTest {
 
         assertThrows(IllegalArgumentException.class, () -> DeltaParquetWriter.writeDeltaParquet(
                 tempDir.resolve("out-of-order.parquet"), "customers", SCHEMA,
-                consumer -> records.forEach(consumer)));
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, ROW_GROUP_BYTES));
+    }
+
+    @Test
+    void fileWriterFlushesRowGroupsAtTheConfiguredByteBudget() throws Exception {
+        // The streaming writer keeps only the current row group in heap, so that budget — not the
+        // parquet-mr implicit ~128 MB — is what bounds a build's memory. Same data, two budgets.
+        List<ChangeRecord> records = noisyRecords("customers", 4000);
+        Path split = tempDir.resolve("delta-split.parquet");
+        Path single = tempDir.resolve("delta-single.parquet");
+
+        DeltaParquetWriter.writeDeltaParquet(split, "customers", NOISY_SCHEMA,
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, 64L * 1024);
+        DeltaParquetWriter.writeDeltaParquet(single, "customers", NOISY_SCHEMA,
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, 128L * 1024 * 1024);
+
+        assertTrue(rowGroupCount(split) > 1, "a 64 KiB budget must flush several row groups");
+        assertEquals(1, rowGroupCount(single), "a 128 MiB budget must keep one row group");
+    }
+
+    @Test
+    void batchWriterFlushesRowGroupsAtTheConfiguredByteBudget() throws Exception {
+        // Each open per-table writer of a grouped batch build holds its own row-group buffer, so
+        // this is the budget that multiplies by the table count on the completed-batch path.
+        List<ChangeRecord> records = noisyRecords("customers", 4000);
+        Path split = tempDir.resolve("batch-split.parquet");
+        Path single = tempDir.resolve("batch-single.parquet");
+
+        DeltaParquetWriter.writeBatchDeltaParquet(
+                Map.of("customers", new DeltaParquetWriter.TableWriteRequest(split, NOISY_SCHEMA)),
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, 64L * 1024);
+        DeltaParquetWriter.writeBatchDeltaParquet(
+                Map.of("customers", new DeltaParquetWriter.TableWriteRequest(single, NOISY_SCHEMA)),
+                consumer -> records.forEach(consumer), Long.MAX_VALUE, 128L * 1024 * 1024);
+
+        assertTrue(rowGroupCount(split) > 1, "a 64 KiB budget must flush several row groups");
+        assertEquals(1, rowGroupCount(single), "a 128 MiB budget must keep one row group");
+    }
+
+    private static final TableSchema NOISY_SCHEMA = new TableSchema(List.of(
+            new ColumnDefinition("id", "bigint", false),
+            new ColumnDefinition("payload", "varchar(255)", false)),
+            List.of("id"), List.of());
+
+    /** Records whose payload does not compress away, so the buffered size actually reaches a budget. */
+    private static List<ChangeRecord> noisyRecords(String table, int count) {
+        java.util.Random random = new java.util.Random(112L);
+        List<ChangeRecord> records = new java.util.ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            byte[] noise = new byte[150];
+            random.nextBytes(noise);
+            records.add(changeForTable(table, Op.INSERT, i + 1L, Map.of("id", intVal(i)),
+                    Map.of("id", intVal(i), "payload",
+                            strVal(java.util.Base64.getEncoder().encodeToString(noise)))));
+        }
+        return records;
+    }
+
+    private static int rowGroupCount(Path file) throws Exception {
+        try (org.apache.parquet.hadoop.ParquetFileReader reader =
+                     org.apache.parquet.hadoop.ParquetFileReader.open(new LocalInputFile(file),
+                             org.apache.parquet.ParquetReadOptions.builder(new PlainParquetConfiguration())
+                                     .build())) {
+            return reader.getRowGroups().size();
+        }
     }
 
     private List<GenericRecord> readBack(byte[] parquet) throws Exception {

@@ -229,6 +229,20 @@ delta:
     # Orphaned provisional segments (a snapshot whose pod died mid-stream) collected per sweep pass.
     provisional-sweep-batch: ${DELTA_PROVISIONAL_SWEEP_BATCH:500}
     provisional-sweep-millis: ${DELTA_PROVISIONAL_SWEEP_MILLIS:900000}
+  checkpoint:
+    # A checkpoint snapshot is written to a local file per table and streamed to S3 from there
+    # (issue #112), so a table is never materialized in heap. Point temp-dir at a scratch volume if
+    # the node's default tmpdir is small; max-temp-bytes refuses a table that would fill it.
+    temp-dir: ${DELTA_CHECKPOINT_TEMP_DIR:${java.io.tmpdir}}
+    max-temp-bytes: ${DELTA_CHECKPOINT_MAX_TEMP_BYTES:10737418240}
+  parquet:
+    # Row-group budget for every V2 Parquet writer (checkpoint snapshots, per-segment egress and
+    # completed-batch artifacts). A writer buffers one row group in heap before flushing, so with
+    # file-backed output this is the last multiplier of peak memory: open writers x this value.
+    # parquet-mr's implicit default is ~128 MB, which a grouped batch build (one writer per claimed
+    # table) multiplies past a 2-3 Gi pod. Lowering it further costs compression and, on a multi-GB
+    # batch artifact, multiplies the footer metadata every reader parses up front.
+    row-group-bytes: ${DELTA_PARQUET_ROW_GROUP_BYTES:16777216}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}

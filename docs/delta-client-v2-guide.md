@@ -570,7 +570,29 @@ You don't write these — they're how downstream tools read your data:
   Consumers that prefer a full load over replaying the delta stream download it from the Delta Sync
   UI (presigned URL, 15 min). It is the **only** format a checkpoint build materializes since issue
   #113 — a table with no submitted schema therefore produces no snapshot at all, which is counted as
-  `delta.checkpoint.tables.unmaterialized{reason=no_schema}`.
+  `delta.checkpoint.tables.unmaterialized{reason=no_schema}`. Since issue #112 the snapshot is built
+  **on disk, one table at a time**: the table's folded rows are streamed into a scratch file and the
+  file is streamed to S3, then deleted, so a build holds one Parquet row-group buffer and one
+  scratch file at a time instead of a whole table's encoded bytes per table. `DELTA_CHECKPOINT_TEMP_DIR`
+  (default `java.io.tmpdir` — point it at a scratch volume if the node's default is small) and
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB) govern that file; a table that would cross the
+  ceiling is stopped during the write and skipped as
+  `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
+  the declared schema cannot render. An **unusable scratch directory** (missing, read-only, out of
+  inodes) is the one failure that is not a table-level skip: it would hit every table alike, and
+  detaching every snapshot key while the pointer advanced would leave the site with no downloadable
+  checkpoint until fresh segments arrive, so the build aborts with the pointer where it was and the
+  next run redoes it (`CheckpointScheduler` catches per site, so the sweep continues). An aborted
+  build can leave tables split across two seqs — those already written carry the new seq, the rest
+  the previous one — until the next successful build re-materializes all of them; the per-table rows
+  were never written atomically, so a consumer that needs one consistent instant should compare the
+  `seq` of the tables it downloads. What all of this bounds is materialization, not reconstruction:
+  **the fold is still in heap**, and so is the new frame the build serializes at the end (one
+  all-tables copy — issue #126). `delta.checkpoint.duration{phase=fold}` is the number to watch on a
+  very large site. Sizing note: `DELTA_CHECKPOINT_MAX_TEMP_BYTES` and
+  `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` both default to 10 GiB and, unless `*_TEMP_DIR` is pointed
+  elsewhere, both spend it in the container's writable layer, which declares no `ephemeral-storage`
+  request — mount a volume or lower the ceilings before a site's snapshot approaches them.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
@@ -1013,6 +1035,22 @@ of the same name). `{phase="total"}` is the whole cycle. Inner phases:
 | `delta.batch-parquet.duration` | `download`, `decode`, `decimal_scan`, `write`, `upload` |
 | `delta.egress.duration` | `download`, `write`, `upload` |
 | `delta.checkpoint.duration` | `download_frame`, `fold`, `parquet`, `upload` |
+
+**Row-group budget.** Every V2 Parquet writer — checkpoint snapshot, per-segment egress and
+completed-batch artifact — takes its row-group size from `DELTA_PARQUET_ROW_GROUP_BYTES`
+(`delta.parquet.row-group-bytes`, default 16 MiB). A writer buffers one row group in heap before
+flushing it, so with file-backed writers this value, times the number of writers open at once, is
+what bounds a build's memory: a batch claim opens one writer per claimed table, and parquet-mr's
+own default (~128 MB) multiplied that way does not fit a 2–3 Gi pod. It is a **memory ceiling, not
+a compression knob** — lowering it costs a little compression ratio and adds row-group metadata,
+raising it buys nothing but risk above the heap it costs. It is also the floor on how many row
+groups a big artifact carries: a multi-GB completed-batch file at 16 MiB keeps its footer (row
+groups × columns, parsed in full before a reader touches data) in the hundreds of entries, which is
+why the default sits at the top of the range rather than the bottom. Move it only together with the
+pod's heap. The
+per-segment egress writer renders its (seal-bounded, ≤ 16 MiB of records) file in memory, so there
+the budget bounds only the encoder's own buffer; it takes the same key deliberately, because all
+three writers share one pod's heap and one tuning decision.
 
 Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream
 `read` and `decode` is protobuf parse excluding the record consumer. On **egress**,

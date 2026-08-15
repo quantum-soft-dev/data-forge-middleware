@@ -62,6 +62,10 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    /** Resolved exactly as CheckpointService resolves it, so the leak assertion cannot go vacuous. */
+    @org.springframework.beans.factory.annotation.Value("${delta.checkpoint.temp-dir:${java.io.tmpdir}}")
+    private String checkpointTempDirectory;
+
     @Test
     void materializesTypedParquetSnapshotMatchingSiteSchema() throws Exception {
         seedCustomersSchema();
@@ -112,6 +116,51 @@ class CheckpointParquetIntegrationTest extends BaseIntegrationTest {
             assertNotNull(reader.read(), "second row present");
             // Row count matches the folded state (2 inserts).
             org.junit.jupiter.api.Assertions.assertNull(reader.read(), "exactly two rows");
+        }
+    }
+
+    @Test
+    void streamsALargeTableThroughDiskWithoutMaterializingItInHeap() throws Exception {
+        // Issue #112: the snapshot is written to a scratch file and streamed to S3 from there, so a
+        // table far larger than any single buffer completes — and leaves no file behind afterwards.
+        seedCustomersSchema();
+        int rowCount = 20_000;
+        List<ChangeRecord> records = new java.util.ArrayList<>(rowCount);
+        for (int i = 1; i <= rowCount; i++) {
+            records.add(rec("customers", Op.INSERT, i,
+                    key("id", intVal(i)),
+                    data("id", intVal(i), "name", strVal("customer-" + i), "amount", decVal("1.25"),
+                            "joined_on", strVal("2024-03-10"))));
+        }
+        changelogSegmentService.persist(SITE, BATCH, "FULL_SNAPSHOT", 1L, records);
+        List<Path> scratchBefore = scratchSnapshots();
+
+        checkpointService.buildCheckpoint(SITE);
+
+        Checkpoint checkpoint = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
+        assertEquals(rowCount, checkpoint.getRowCount());
+        assertNotNull(checkpoint.getS3KeyParquet(), "Parquet key must be attached");
+
+        Path file = tempDir.resolve("large-snapshot.parquet");
+        Files.write(file, checkpointStorage.download(checkpoint.getS3KeyParquet()));
+        int read = 0;
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new LocalInputFile(file))
+                .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .build()) {
+            while (reader.read() != null) {
+                read++;
+            }
+        }
+        assertEquals(rowCount, read, "every folded row reached the uploaded snapshot");
+        assertEquals(scratchBefore, scratchSnapshots(), "the build must not leave scratch files behind");
+    }
+
+    /** The checkpoint scratch files of this site in the directory the service actually writes to. */
+    private List<Path> scratchSnapshots() throws Exception {
+        try (java.util.stream.Stream<Path> files = Files.list(Path.of(checkpointTempDirectory))) {
+            return files.filter(path -> path.getFileName().toString().startsWith("checkpoint-" + SITE))
+                    .sorted().toList();
         }
     }
 

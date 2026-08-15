@@ -11,19 +11,14 @@ import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.conf.PlainParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
-import org.apache.parquet.io.OutputFile;
-import org.apache.parquet.io.PositionOutputStream;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.file.Files;
-import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -62,9 +57,11 @@ public final class DeltaParquetWriter {
      * @param tableName   table name (Parquet record name)
      * @param tableSchema the stored PG schema for the table
      * @param records     the segment's change records for this table, in seq order
+     * @param rowGroupBytes the configured row-group budget ({@link DeltaParquetProperties})
      * @return Parquet file bytes
      */
-    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records) {
+    public static byte[] toDeltaParquet(String tableName, TableSchema tableSchema, List<ChangeRecord> records,
+                                        long rowGroupBytes) {
         List<Map<String, Value>> cellRows = new ArrayList<>(records.size());
         for (ChangeRecord change : records) {
             Map<String, Value> cells = new LinkedHashMap<>(change.getKeyMap());
@@ -92,27 +89,20 @@ public final class DeltaParquetWriter {
             }
             rows.add(row);
         }
-        return ParquetCheckpointWriter.write(avro, rows, tableName);
+        return ParquetCheckpointWriter.write(avro, rows, tableName, rowGroupBytes);
     }
 
     /**
-     * Build one table's unified batch artifact with bounded heap use. The replay source is invoked
-     * once to write rows to the file, preceded by a scan pass <em>only</em> when the table declares
-     * decimal columns whose precision has to be measured losslessly.
-     * Records for other tables are ignored, allowing callers to replay mixed-table segments.
-     */
-    public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
-                                                    RecordReplay replay) {
-        return writeDeltaParquet(output, tableName, tableSchema, replay, Long.MAX_VALUE);
-    }
-
-    /**
-     * Write a unified artifact while refusing to put more than {@code maxBytes} on local disk.
+     * Build one table's unified batch artifact with bounded heap use, refusing to put more than
+     * {@code maxBytes} on local disk. The replay source is invoked once to write rows to the file,
+     * preceded by a scan pass <em>only</em> when the table declares decimal columns whose precision
+     * has to be measured losslessly. Records for other tables are ignored, allowing callers to
+     * replay mixed-table segments.
      *
      * @throws ArtifactSizeLimitExceededException as soon as the next write would cross the limit
      */
     public static FileWriteResult writeDeltaParquet(Path output, String tableName, TableSchema tableSchema,
-                                                    RecordReplay replay, long maxBytes) {
+                                                    RecordReplay replay, long maxBytes, long rowGroupBytes) {
         Schema base = ParquetSchemaMapper.toDeltaAvroSchema(tableName, tableSchema);
         Schema avro = widenDecimals(base, scanDecimalPrecisions(base, tableName, replay));
         AtomicLong rowCount = new AtomicLong();
@@ -123,6 +113,7 @@ public final class DeltaParquetWriter {
                 .withSchema(avro)
                 .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())
+                .withRowGroupSize(rowGroupBytes)
                 .withCompressionCodec(CODEC)
                 .build()) {
             replay.forEach(change -> {
@@ -159,13 +150,14 @@ public final class DeltaParquetWriter {
      * because no table can prove that it saw the complete changelog.
      */
     static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
-                                                    RecordReplay replay, long maxBytes) {
-        return writeBatchDeltaParquet(requests, replay, maxBytes, null);
+                                                    RecordReplay replay, long maxBytes,
+                                                    long rowGroupBytes) {
+        return writeBatchDeltaParquet(requests, replay, maxBytes, rowGroupBytes, null);
     }
 
     static BatchWriteResult writeBatchDeltaParquet(Map<String, TableWriteRequest> requests,
                                                     RecordReplay replay, long maxBytes,
-                                                    PhaseClock clock) {
+                                                    long rowGroupBytes, PhaseClock clock) {
         if (requests.isEmpty()) {
             return new BatchWriteResult(Map.of(), Map.of());
         }
@@ -218,7 +210,8 @@ public final class DeltaParquetWriter {
             }
             try {
                 Schema avro = widenDecimals(baseSchemas.get(tableName), decimalPrecisions.get(tableName));
-                writers.put(tableName, new TableWriter(tableName, entry.getValue(), avro, maxBytes));
+                writers.put(tableName, new TableWriter(tableName, entry.getValue(), avro, maxBytes,
+                        rowGroupBytes));
             } catch (RuntimeException | IOException e) {
                 failures.put(tableName, failure(e));
             }
@@ -426,8 +419,8 @@ public final class DeltaParquetWriter {
         private long rowCount;
         private long previousSeq = Long.MIN_VALUE;
 
-        private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes)
-                throws IOException {
+        private TableWriter(String tableName, TableWriteRequest request, Schema avro, long maxBytes,
+                            long rowGroupBytes) throws IOException {
             this.tableName = tableName;
             this.request = request;
             this.avro = avro;
@@ -436,6 +429,7 @@ public final class DeltaParquetWriter {
                     .withSchema(avro)
                     .withDataModel(ParquetCheckpointWriter.logicalTypeModel())
                     .withConf(new PlainParquetConfiguration())
+                    .withRowGroupSize(rowGroupBytes)
                     .withCompressionCodec(CODEC)
                     .build();
         }
@@ -465,88 +459,6 @@ public final class DeltaParquetWriter {
         @Override
         public void close() throws IOException {
             writer.close();
-        }
-    }
-
-    /** Raised when a unified artifact would exceed its configured local-file policy. */
-    public static final class ArtifactSizeLimitExceededException extends RuntimeException {
-        private ArtifactSizeLimitExceededException(long maxBytes) {
-            super("Artifact exceeds temp-file limit of " + maxBytes + " bytes");
-        }
-    }
-
-    /** Minimal Hadoop-free Parquet output backed by a local file. */
-    private static final class FileOutputFile implements OutputFile {
-        private final Path path;
-        private final long maxBytes;
-
-        private FileOutputFile(Path path, long maxBytes) {
-            this.path = path;
-            this.maxBytes = maxBytes;
-        }
-
-        @Override
-        public PositionOutputStream create(long blockSizeHint) throws IOException {
-            return stream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE);
-        }
-
-        @Override
-        public PositionOutputStream createOrOverwrite(long blockSizeHint) throws IOException {
-            return stream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE);
-        }
-
-        @Override
-        public boolean supportsBlockSize() {
-            return false;
-        }
-
-        @Override
-        public long defaultBlockSize() {
-            return 0L;
-        }
-
-        private PositionOutputStream stream(OpenOption... options) throws IOException {
-            OutputStream output = Files.newOutputStream(path, options);
-            return new PositionOutputStream() {
-                private long position;
-
-                @Override
-                public long getPos() {
-                    return position;
-                }
-
-                @Override
-                public void write(int value) throws IOException {
-                    checkCapacity(1);
-                    output.write(value);
-                    position++;
-                }
-
-                @Override
-                public void write(byte[] bytes, int offset, int length) throws IOException {
-                    checkCapacity(length);
-                    output.write(bytes, offset, length);
-                    position += length;
-                }
-
-                @Override
-                public void flush() throws IOException {
-                    output.flush();
-                }
-
-                @Override
-                public void close() throws IOException {
-                    output.close();
-                }
-
-                private void checkCapacity(int length) {
-                    if (length > maxBytes - position) {
-                        throw new ArtifactSizeLimitExceededException(maxBytes);
-                    }
-                }
-            };
         }
     }
 }

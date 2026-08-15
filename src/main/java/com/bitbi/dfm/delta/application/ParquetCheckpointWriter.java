@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -43,7 +44,11 @@ import java.util.Map;
  * parsed by the schema. Logical types (decimal, date, timestamp-micros) are written through the
  * standard Avro conversions ({@link #logicalTypeModel()}); a reader using the same model reads exact
  * {@link BigDecimal}/{@link LocalDate}/{@link Instant} values back. Writing is Hadoop-free
- * (in-memory {@link OutputFile} + {@link PlainParquetConfiguration}), mirroring the T4.1 smoke proof.</p>
+ * ({@link OutputFile} + {@link PlainParquetConfiguration}), mirroring the T4.1 smoke proof.</p>
+ *
+ * <p>A checkpoint snapshot streams to a local file ({@link #writeParquet}, issue #112) so the peak
+ * is one row-group buffer rather than the whole table; the small, seal-bounded per-segment egress
+ * slice still renders in memory ({@link #write}).</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -58,32 +63,51 @@ public final class ParquetCheckpointWriter {
     }
 
     /**
-     * Write the rows to an in-memory Parquet file typed from the table schema.
+     * Stream the rows to a local Parquet file typed from the table schema.
      *
-     * @param tableName   table name (Parquet record name)
-     * @param tableSchema the stored PG schema for the table
-     * @param rows        each row's column → wire value (present columns only; absent = null cell)
-     * @return Parquet file bytes
+     * <p>Nothing but the current Parquet row group is held in heap (issue #112): the rows are
+     * traversed, not collected, and the encoded file goes straight to {@code output}. The traversal
+     * happens twice only when the table declares decimal columns whose envelope must be measured
+     * losslessly before the schema is fixed.</p>
+     *
+     * @param output        the local file to write (truncated if it exists)
+     * @param tableName     table name (Parquet record name)
+     * @param tableSchema   the stored PG schema for the table
+     * @param rows          each row's column → wire value (present columns only; absent = null cell)
+     * @param maxBytes      refuse to put more than this many bytes on local disk
+     * @param rowGroupBytes the configured row-group budget ({@link DeltaParquetProperties})
+     * @throws ArtifactSizeLimitExceededException as soon as the next write would cross {@code maxBytes}
      */
-    public static byte[] toParquet(String tableName, TableSchema tableSchema, List<Map<String, Value>> rows) {
+    public static void writeParquet(Path output, String tableName, TableSchema tableSchema,
+                                    Iterable<Map<String, Value>> rows, long maxBytes, long rowGroupBytes) {
         Schema avro = widenDecimalsToFit(ParquetSchemaMapper.toAvroSchema(tableName, tableSchema), rows);
-        List<GenericRecord> records = new java.util.ArrayList<>(rows.size());
-        for (Map<String, Value> row : rows) {
-            records.add(toRecord(avro, tableSchema, row));
+        try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(
+                        new FileOutputFile(output, maxBytes))
+                .withSchema(avro)
+                .withDataModel(logicalTypeModel())
+                .withConf(new PlainParquetConfiguration())
+                .withRowGroupSize(rowGroupBytes)
+                .withCompressionCodec(CODEC)
+                .build()) {
+            for (Map<String, Value> row : rows) {
+                writer.write(toRecord(avro, tableSchema, row));
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write Parquet file for table " + tableName, e);
         }
-        return write(avro, records, tableName);
     }
 
     /**
      * Write pre-built Avro records to an in-memory Parquet file (shared by the checkpoint and
      * delta writers).
      */
-    static byte[] write(Schema avro, List<GenericRecord> records, String tableName) {
+    static byte[] write(Schema avro, List<GenericRecord> records, String tableName, long rowGroupBytes) {
         InMemoryOutputFile output = new InMemoryOutputFile();
         try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(output)
                 .withSchema(avro)
                 .withDataModel(logicalTypeModel())
                 .withConf(new PlainParquetConfiguration())
+                .withRowGroupSize(rowGroupBytes)
                 .withCompressionCodec(CODEC)
                 .build()) {
             for (GenericRecord record : records) {
@@ -109,34 +133,51 @@ public final class ParquetCheckpointWriter {
      * it on write regardless — and the precision grows to the widest value actually present
      * (measured after that rescale). Shared by the checkpoint and delta writers.
      *
+     * <p>The rows are traversed <b>once</b>, and not at all when no column declares a decimal, so a
+     * caller may hand over a lazily iterated view of its state instead of a materialized list.</p>
+     *
      * @param recordSchema the schema typed from the declared columns
      * @param rows         each row's column → wire value
      * @return the same schema, or a rebuilt one with widened decimal columns
      */
-    static Schema widenDecimalsToFit(Schema recordSchema, List<Map<String, Value>> rows) {
-        Map<String, Integer> widened = null;
+    static Schema widenDecimalsToFit(Schema recordSchema, Iterable<Map<String, Value>> rows) {
+        Map<String, LogicalTypes.Decimal> declared = new java.util.LinkedHashMap<>();
         for (Schema.Field field : recordSchema.getFields()) {
-            if (!(branch(field.schema()).getLogicalType() instanceof LogicalTypes.Decimal decimal)) {
-                continue;
+            if (branch(field.schema()).getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+                declared.put(field.name(), decimal);
             }
-            int needed = decimal.getPrecision();
-            for (Map<String, Value> row : rows) {
-                Value value = row.get(field.name());
+        }
+        if (declared.isEmpty()) {
+            return recordSchema;
+        }
+
+        Map<String, Integer> needed = new java.util.LinkedHashMap<>();
+        declared.forEach((name, decimal) -> needed.put(name, decimal.getPrecision()));
+        for (Map<String, Value> row : rows) {
+            for (Map.Entry<String, LogicalTypes.Decimal> column : declared.entrySet()) {
+                Value value = row.get(column.getKey());
                 Object java = value == null ? null : ValueMapper.toJava(value);
                 if (java == null) {
                     continue;
                 }
-                needed = Math.max(needed,
-                        toBigDecimal(java).setScale(decimal.getScale(), RoundingMode.HALF_UP).precision());
+                needed.merge(column.getKey(), toBigDecimal(java)
+                        .setScale(column.getValue().getScale(), RoundingMode.HALF_UP).precision(), Math::max);
             }
-            if (needed > decimal.getPrecision()) {
+        }
+
+        Map<String, Integer> widened = null;
+        for (Map.Entry<String, LogicalTypes.Decimal> column : declared.entrySet()) {
+            LogicalTypes.Decimal decimal = column.getValue();
+            int precision = needed.get(column.getKey());
+            if (precision > decimal.getPrecision()) {
                 if (widened == null) {
                     widened = new java.util.LinkedHashMap<>();
                 }
-                widened.put(field.name(), needed);
+                widened.put(column.getKey(), precision);
                 log.warn("Column {} of table {} declared decimal({},{}) but its data needs precision {} — "
                                 + "widening the Parquet type (check the declared schema against the data)",
-                        field.name(), recordSchema.getName(), decimal.getPrecision(), decimal.getScale(), needed);
+                        column.getKey(), recordSchema.getName(), decimal.getPrecision(),
+                        decimal.getScale(), precision);
             }
         }
         if (widened == null) {

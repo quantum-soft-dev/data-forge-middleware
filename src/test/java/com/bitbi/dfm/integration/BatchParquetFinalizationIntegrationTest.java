@@ -2,6 +2,7 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.delta.application.BatchParquetFinalizationService;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.DeltaParquetProperties;
 import com.bitbi.dfm.delta.application.ParquetCheckpointWriter;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
@@ -343,14 +344,16 @@ class BatchParquetFinalizationIntegrationTest extends BaseIntegrationTest {
 
     private BatchParquetFinalizationService service(S3CheckpointStorage storageToUse, int maxAttempts) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, batchRepository, storageToUse, metrics, transactionManager,
+                segmentService, schemaService, batchRepository, storageToUse, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), transactionManager,
                 tempDir.toString(), 10_000_000L, 0, maxAttempts, 3600);
     }
 
     /** Same finalizer, but with an already-elapsed build lease so stale claims are reclaimed. */
     private BatchParquetFinalizationService leasedService(S3CheckpointStorage storageToUse) {
         return new BatchParquetFinalizationService(artifactRepository, segmentRepository,
-                segmentService, schemaService, batchRepository, storageToUse, metrics, transactionManager,
+                segmentService, schemaService, batchRepository, storageToUse, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), transactionManager,
                 tempDir.toString(), 10_000_000L, 0, 5, 0);
     }
 

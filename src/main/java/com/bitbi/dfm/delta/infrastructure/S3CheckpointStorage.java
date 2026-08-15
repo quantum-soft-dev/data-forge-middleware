@@ -20,6 +20,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
@@ -50,23 +51,28 @@ public class S3CheckpointStorage {
     /**
      * Upload a typed Parquet snapshot for a table checkpoint (full per-table load — B3).
      *
-     * <p>Layout: {@code checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet}.</p>
+     * <p>Layout: {@code checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet}. The snapshot is
+     * streamed from a local file (issue #112) — it is never held in heap as a {@code byte[]}.</p>
      *
      * @return the S3 key written
      */
-    public String uploadParquet(UUID siteId, String tableName, long seq, byte[] content) {
+    public String uploadParquet(UUID siteId, String tableName, long seq, Path file) {
         String s3Key = String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq);
         try {
+            long size = java.nio.file.Files.size(file);
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(bucketName)
                     .key(s3Key)
                     .contentType("application/vnd.apache.parquet")
-                    .contentLength((long) content.length)
+                    .contentLength(size)
                     .build();
-            s3Client.putObject(request, RequestBody.fromBytes(content));
-            log.info("Stored checkpoint Parquet: key={}, size={}", s3Key, content.length);
+            s3Client.putObject(request, RequestBody.fromFile(file));
+            log.info("Stored checkpoint Parquet: key={}, size={}", s3Key, size);
             return s3Key;
-        } catch (S3Exception e) {
+            // RequestBody.fromFile opens the file lazily, wrapping a read failure in an
+            // UncheckedIOException: convert it too, so every failure of this upload reaches the
+            // caller as one type instead of leaking the SDK's internals into the caller's catch.
+        } catch (S3Exception | IOException | UncheckedIOException e) {
             throw new CheckpointStorageException("Failed to store checkpoint Parquet: " + s3Key, e);
         }
     }
