@@ -441,7 +441,9 @@ class CheckpointServiceTest {
         ParquetCheckpointWriter.writeParquet(probeParquet, "customers", customersSchema(),
                 List.of(first.getDataMap(), second.getDataMap()),
                 Long.MAX_VALUE, 8L * 1024 * 1024);
-        ChangelogCodec.write(List.of(first, second), probeFrame, Long.MAX_VALUE);
+        try (java.io.OutputStream out = Files.newOutputStream(probeFrame)) {
+            ChangelogCodec.write(List.of(first, second), out);
+        }
         long parquetSize = Files.size(probeParquet);
         long frameSize = Files.size(probeFrame);
         Files.delete(probeParquet);

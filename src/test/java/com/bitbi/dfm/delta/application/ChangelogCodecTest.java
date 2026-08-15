@@ -49,18 +49,23 @@ class ChangelogCodecTest {
         List<ChangeRecord> source = List.of(record(1), record(2));
         Path file = tempDir.resolve("frame.pb.gz");
 
-        ChangelogCodec.write(source, file, Long.MAX_VALUE);
+        try (java.io.OutputStream out = Files.newOutputStream(file)) {
+            ChangelogCodec.write(source, out);
+        }
 
         assertEquals(source, ChangelogCodec.parse(Files.readAllBytes(file)));
     }
 
     @Test
-    void writeStopsWhenTheScratchFileWouldCrossTheCeiling() {
+    void writeStopsWhenTheScratchFileWouldCrossTheCeiling() throws IOException {
         List<ChangeRecord> source = List.of(record(1), record(2), record(3));
         Path file = tempDir.resolve("frame.pb.gz");
 
-        assertThrows(ArtifactSizeLimitExceededException.class,
-                () -> ChangelogCodec.write(source, file, 8L));
+        assertThrows(ArtifactSizeLimitExceededException.class, () -> {
+            try (java.io.OutputStream out = new CappedOutputStream(Files.newOutputStream(file), 8L)) {
+                ChangelogCodec.write(source, out);
+            }
+        });
     }
 
     private static ChangeRecord record(long seq) {

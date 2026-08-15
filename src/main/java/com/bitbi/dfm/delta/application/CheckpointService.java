@@ -17,6 +17,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -221,7 +222,12 @@ public class CheckpointService {
         Path frame = createScratchFile(siteId, ".pb.gz");
         try {
             metrics.timeCheckpointPhase("upload", () -> {
-                ChangelogCodec.write(CheckpointFrame.records(state), frame, maxTempBytes);
+                try (OutputStream out = new CappedOutputStream(
+                        Files.newOutputStream(frame), maxTempBytes)) {
+                    ChangelogCodec.write(CheckpointFrame.records(state), out);
+                } catch (IOException e) {
+                    throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
+                }
                 checkpointStorage.uploadFrame(siteId, seq, frame);
             });
         } finally {

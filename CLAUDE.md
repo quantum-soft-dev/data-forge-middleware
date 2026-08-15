@@ -456,9 +456,9 @@ pages/{feature}/            # Route pages
 - stream-checkpoint-frame: The checkpoint build no longer collects the all-INSERT reload frame into
   a `List<ChangeRecord>` and a gzip `byte[]` (issue #126, the leftover copy after #112 put each
   table's Parquet on disk). `CheckpointFrame.records` walks the fold one record at a time,
-  `ChangelogCodec.write` gzips that sequence onto a scratch file under the same
-  `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes` as the snapshot, and
-  `S3CheckpointStorage.uploadFrame` takes the `Path` (`RequestBody.fromFile`). The file is deleted
+  `ChangelogCodec.write` gzips that sequence to an `OutputStream`; the build wraps it in
+  `CappedOutputStream` under the same `delta.checkpoint.temp-dir` / `delta.checkpoint.max-temp-bytes`
+  as the snapshot, and `S3CheckpointStorage.uploadFrame` takes the `Path` (`RequestBody.fromFile`). The file is deleted
   in `finally`. Crossing the ceiling aborts the build — the frame is the next seed, unlike a single
   oversized table which is still skipped. On-disk bytes are the same gzipped length-delimited
   protobuf `parse` already reads. **The site fold stays in heap** (a later ticket). No API, DTO,
