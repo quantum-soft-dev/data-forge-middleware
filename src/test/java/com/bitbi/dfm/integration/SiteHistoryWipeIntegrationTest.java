@@ -8,6 +8,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
@@ -185,7 +186,10 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 3L, List.of(insert(3L, "Cy")));
         checkpointService.buildCheckpoint(SITE_ID);
 
-        List<String> beforeWipe = checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)).keys();
+        S3PrefixListing beforeListing =
+                checkpointStorage.listPrefix(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        assertThat(beforeListing.truncated()).isFalse();
+        List<String> beforeWipe = beforeListing.keys();
         assertThat(beforeWipe.stream().filter(key -> key.endsWith("snapshot.parquet")).toList())
                 .as("one table, two builds, two snapshot objects")
                 .hasSize(2);
@@ -199,7 +203,10 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
 
         assertThat(summary.s3DeleteErrors()).isZero();
         assertThat(summary.prefixesNotSwept()).isZero();
-        assertThat(checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)).keys())
+        S3PrefixListing afterListing =
+                checkpointStorage.listPrefix(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        assertThat(afterListing.truncated()).isFalse();
+        assertThat(afterListing.keys())
                 .as("a clean slate means the whole prefix, not just the newest key on the row")
                 .isEmpty();
     }

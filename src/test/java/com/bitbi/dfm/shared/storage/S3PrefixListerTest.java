@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -84,6 +85,32 @@ class S3PrefixListerTest {
 
         assertThat(listing.truncated()).isTrue();
         assertThat(listing.keys()).containsExactly("kept");
+    }
+
+    @Test
+    @DisplayName("requireCompleteKeys throws when the walk was truncated")
+    void requireCompleteKeysThrowsWhenTruncated() {
+        S3Client s3 = mock(S3Client.class);
+        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
+        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
+        when(paginator.iterator()).thenReturn(throwingAfter(
+                List.of(page(object("kept", T1))),
+                S3Exception.builder().statusCode(500).message("InternalError").build()).iterator());
+
+        assertThatThrownBy(() -> S3PrefixLister.requireCompleteKeys(s3, "bucket", "egress/site/"))
+                .isInstanceOf(S3PrefixLister.IncompletePrefixException.class);
+    }
+
+    @Test
+    @DisplayName("requireCompleteKeys returns every key of a finished walk")
+    void requireCompleteKeysReturnsKeysWhenComplete() {
+        S3Client s3 = mock(S3Client.class);
+        ListObjectsV2Iterable paginator = mock(ListObjectsV2Iterable.class);
+        when(s3.listObjectsV2Paginator(any(ListObjectsV2Request.class))).thenReturn(paginator);
+        when(paginator.iterator()).thenReturn(List.of(page(object("a", T1), object("b", T2))).iterator());
+
+        assertThat(S3PrefixLister.requireCompleteKeys(s3, "bucket", "egress/site/"))
+                .containsExactly("a", "b");
     }
 
     private static ListObjectsV2Response page(S3Object... objects) {

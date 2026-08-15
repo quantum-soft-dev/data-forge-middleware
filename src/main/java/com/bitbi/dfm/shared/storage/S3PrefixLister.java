@@ -45,6 +45,33 @@ public final class S3PrefixLister {
     }
 
     /**
+     * Every key under {@code prefix}, or a throw if the walk was incomplete.
+     *
+     * <p>Callers that need a complete key set (batch deletion, retention) use this. The wipe
+     * uses {@link #listAll} and inspects {@link S3PrefixListing#truncated()} itself.</p>
+     *
+     * @param client the S3 client
+     * @param bucket bucket name
+     * @param prefix key prefix
+     * @return every key under the prefix
+     * @throws IncompletePrefixException when the walk stopped early
+     */
+    public static List<String> requireCompleteKeys(S3Client client, String bucket, String prefix) {
+        S3PrefixListing listing = listAll(client, bucket, prefix);
+        if (listing.truncated()) {
+            throw new IncompletePrefixException(prefix);
+        }
+        return listing.keys();
+    }
+
+    /** The paginated walk of {@code prefix} did not finish. */
+    public static final class IncompletePrefixException extends RuntimeException {
+        public IncompletePrefixException(String prefix) {
+            super("Incomplete listing of prefix: " + prefix);
+        }
+    }
+
+    /**
      * Drain an already-opened page iterable, keeping whatever arrived before a failure.
      *
      * @param pages S3 list pages

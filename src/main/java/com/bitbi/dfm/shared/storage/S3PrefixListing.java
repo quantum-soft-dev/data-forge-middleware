@@ -1,18 +1,16 @@
 package com.bitbi.dfm.shared.storage;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Result of walking one S3 prefix, page by page (issue #122).
+ * Result of walking one S3 prefix, page by page.
  *
  * <p>A mid-pagination failure does not discard the pages already read: {@link #truncated()} is
- * {@code true} and {@link #objects()} holds whatever arrived before the throw. Callers that used
- * to infer "complete" from a normal return must now inspect the flag.</p>
+ * {@code true} and {@link #objects()} holds whatever arrived before the throw.</p>
  *
  * @param objects    objects from the pages that were read
- * @param truncated  {@code true} when the walk stopped early (failed listing or partial page set)
+ * @param truncated  {@code true} when the walk stopped early
  */
 public record S3PrefixListing(List<S3ListedObject> objects, boolean truncated) {
 
@@ -30,19 +28,6 @@ public record S3PrefixListing(List<S3ListedObject> objects, boolean truncated) {
 
     public static S3PrefixListing empty() {
         return complete(List.of());
-    }
-
-    /**
-     * A complete listing of keys whose timestamps are irrelevant to the caller. Used by tests
-     * and by callers that only want the key set of a finished walk.
-     *
-     * @param keys object keys
-     * @return a complete listing at the epoch, which every wipe cut-off treats as old
-     */
-    public static S3PrefixListing completeKeys(List<String> keys) {
-        return complete(keys.stream()
-                .map(key -> new S3ListedObject(key, Instant.EPOCH))
-                .toList());
     }
 
     public List<String> keys() {

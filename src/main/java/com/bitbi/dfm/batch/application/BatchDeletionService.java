@@ -6,7 +6,6 @@ import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,15 +91,7 @@ public class BatchDeletionService {
     private void deleteObjects(List<String> objectKeys, String batchParquetPrefix, UUID batchId) {
         LinkedHashSet<String> discovered = new LinkedHashSet<>(objectKeys);
         try {
-            S3PrefixListing listing = storage.listAllKeys(batchParquetPrefix);
-            if (listing.truncated()) {
-                // Same fallback as a thrown listing: the recorded keys are the complete set we
-                // trust. A partial prefix walk is not used (issue #122).
-                log.warn("Batch {} deleted but its Parquet prefix listing was truncated; "
-                        + "exact-key cleanup continues", batchId);
-            } else {
-                discovered.addAll(listing.keys());
-            }
+            discovered.addAll(storage.listAllKeys(batchParquetPrefix));
         } catch (RuntimeException e) {
             log.warn("Batch {} deleted but its Parquet prefix could not be enumerated; "
                     + "exact-key cleanup continues", batchId, e);

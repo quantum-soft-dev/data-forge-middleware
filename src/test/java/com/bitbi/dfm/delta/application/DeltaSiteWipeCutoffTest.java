@@ -1,5 +1,6 @@
-package com.bitbi.dfm.shared.storage;
+package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.shared.storage.S3ListedObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -10,18 +11,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The wipe cut-off is compared to S3 {@code LastModified}, which is second-resolution.
  */
-@DisplayName("S3ListedObject.lastModifiedAfter")
-class S3ListedObjectTest {
+@DisplayName("DeltaSiteWipeService.writtenAtOrAfterWipeSecond")
+class DeltaSiteWipeCutoffTest {
 
     @Test
     @DisplayName("an object timestamped in the wipe's own second is treated as newer")
     void sameSecondAsWipeStartIsNewer() {
-        // S3 floors LastModified to the whole second. A PutObject 200ms after a wipe that
-        // started at .200 of the same second is stored as T+0s and must not be deleted.
         Instant startedAt = Instant.parse("2026-08-15T12:00:00.200Z");
         Instant s3Second = Instant.parse("2026-08-15T12:00:00Z");
 
-        assertThat(new S3ListedObject("k", s3Second).lastModifiedAfter(startedAt)).isTrue();
+        assertThat(DeltaSiteWipeService.writtenAtOrAfterWipeSecond(
+                new S3ListedObject("k", s3Second), startedAt)).isTrue();
     }
 
     @Test
@@ -30,12 +30,14 @@ class S3ListedObjectTest {
         Instant startedAt = Instant.parse("2026-08-15T12:00:00.200Z");
         Instant previous = Instant.parse("2026-08-15T11:59:59Z");
 
-        assertThat(new S3ListedObject("k", previous).lastModifiedAfter(startedAt)).isFalse();
+        assertThat(DeltaSiteWipeService.writtenAtOrAfterWipeSecond(
+                new S3ListedObject("k", previous), startedAt)).isFalse();
     }
 
     @Test
-    @DisplayName("a missing lastModified is treated as newer — the safe direction for the race")
+    @DisplayName("a missing lastModified is treated as newer")
     void nullLastModifiedIsNewer() {
-        assertThat(new S3ListedObject("k", null).lastModifiedAfter(Instant.now())).isTrue();
+        assertThat(DeltaSiteWipeService.writtenAtOrAfterWipeSecond(
+                new S3ListedObject("k", null), Instant.now())).isTrue();
     }
 }

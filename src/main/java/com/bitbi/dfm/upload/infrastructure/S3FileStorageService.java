@@ -1,7 +1,6 @@
 package com.bitbi.dfm.upload.infrastructure;
 
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -145,18 +144,18 @@ public class S3FileStorageService {
     }
 
     /**
-     * Every object under a prefix, following all S3 continuation pages (issue #122).
-     *
-     * <p>A mid-pagination failure returns the pages already read plus {@code truncated=true}
-     * instead of throwing the whole walk away. {@code BatchDeletionService} and
-     * {@code BatchRetentionService} keep their complete-listing behaviour and fall back to
-     * recorded exact keys only when the result is truncated.</p>
+     * Every object key under a prefix, following all S3 continuation pages.
      *
      * @param prefix the prefix to enumerate
-     * @return the pages read, with lastModified per object and a truncation flag
+     * @return every key under the prefix
+     * @throws FileStorageException when the walk did not finish
      */
-    public S3PrefixListing listAllKeys(String prefix) {
-        return S3PrefixLister.listAll(s3Client, bucketName, prefix);
+    public List<String> listAllKeys(String prefix) {
+        try {
+            return S3PrefixLister.requireCompleteKeys(s3Client, bucketName, prefix);
+        } catch (S3PrefixLister.IncompletePrefixException e) {
+            throw new FileStorageException("Failed to list objects under prefix: " + prefix, e);
+        }
     }
 
     /**

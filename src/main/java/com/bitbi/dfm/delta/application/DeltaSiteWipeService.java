@@ -30,6 +30,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -164,19 +165,22 @@ public class DeltaSiteWipeService {
         WipedRows wiped = transactionTemplate.execute(
                 status -> wipeRows(site, initiator, ipAddress, userAgent));
 
-        PrefixSweep sweep = new PrefixSweep();
-        sweep.add(unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId()), startedAt));
-        sweep.add(unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId()), startedAt));
+        S3PrefixListing egress = listSitePrefix(
+                site.getId(), S3CheckpointStorage.egressPrefix(site.getId()));
+        S3PrefixListing checkpoints = listSitePrefix(
+                site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId()));
 
         List<String> objects = new ArrayList<>(wiped.s3Keys());
-        objects.addAll(sweep.keys);
+        objects.addAll(keysPredating(egress, startedAt));
+        objects.addAll(keysPredating(checkpoints, startedAt));
+        int prefixesNotSwept = (egress.truncated() ? 1 : 0) + (checkpoints.truncated() ? 1 : 0);
 
         SiteHistoryWipeSummary summary = new SiteHistoryWipeSummary(
                 wiped.generation(), wiped.deletedBatches(), wiped.deletedSegments(),
                 wiped.deletedCheckpoints(), wiped.deletedFiles(), wiped.deletedSqlGenerations(),
                 wiped.deletedErrorLogs(), wiped.deletedBytes(),
                 deleteObjects(site.getId(), objects.stream().distinct().toList()),
-                sweep.prefixesNotSwept,
+                prefixesNotSwept,
                 wiped.baselineBatchDetached());
         log.info("Site history wiped by {}: siteId={}, generation={}, batches={}, segments={}, "
                         + "checkpoints={}, files={}, sqlGenerations={}, errorLogs={}, bytes={}, "
@@ -223,65 +227,6 @@ public class DeltaSiteWipeService {
                     + "object(s) are left as orphans — the rows are already gone, so re-running the "
                     + "wipe is safe and is how they get swept", siteId, objects.size(), e);
             return objects.size();
-        }
-    }
-
-    /**
-     * Everything under one of the site's whole-site prefixes, named or not by a surviving row.
-     *
-     * <p><b>Egress</b> ({@code egress/{siteId}/{table}/delta/seq={first}-{last}.parquet}) derives
-     * its key from sequence numbers alone — and a wipe is the one operation that sends those numbers
-     * back to zero. Left in place, a pre-wipe file whose {@code (firstSeq, lastSeq)} pair happens to
-     * recur in the new epoch is listed by {@code ParquetExportCatalogDao} as the new epoch's delta
-     * unless egress overwrites it, which it does not for a table missing from the new segment or
-     * skipped by the per-table coercion guard. (The batch download endpoint is no longer exposed to
-     * this: since 036 it resolves an exact {@code batch_parquet_artifacts} row instead of deriving a
-     * seq-based key.)</p>
-     *
-     * <p><b>Checkpoints</b> ({@code checkpoints/{siteId}/…}) have the same problem for a different
-     * reason (issue #118). The {@code checkpoints} row is one per {@code (site, table)} and reused
-     * across builds: each build writes {@code …/{table}/seq={seq}/snapshot.parquet} under a new
-     * {@code seq} and replaces the key on the row, so the previous build's object is unreferenced
-     * the moment it is superseded — and {@link Checkpoint#detachParquet()} drops the last reference
-     * outright when a build advances the row without materializing a file. Nothing else sweeps them:
-     * changelog retention prunes segments, and no lifecycle rule covers this prefix. The
-     * {@code _frame/seq={seq}/frame.pb.gz} reload frames go the same way: no row has ever named one,
-     * so the wipe is the only thing that can remove them. They are dead bytes rather than a stale
-     * read — a build writes its frame at the seq it ends on and only then advances the pointer, so
-     * the frame the next build reads is always the one this epoch just wrote, overwriting any
-     * pre-wipe namesake at that key.</p>
-     *
-     * <p>Enumerated after the commit: a paginated S3 walk has no business inside the transaction,
-     * and the objects are only reachable through keys the rows never held. The keys recorded on the
-     * rows are collected too and stay the fallback, so one prefix failing to list — logged and
-     * swallowed, since the rows are already gone and failing here would report a completed wipe as a
-     * 500 — costs neither the other prefix nor the exact keys. A truncated or failed listing is
-     * reported as {@code prefixesNotSwept} rather than folded into {@code s3DeleteErrors} (issue
-     * #122). Objects whose {@code lastModified} is after the wipe's start instant are skipped, so a
-     * concurrent producer cannot have its fresh object swept while the row that names it survives.</p>
-     *
-     * @param siteId    the site being wiped, for the log line
-     * @param prefix    the whole-site prefix to enumerate
-     * @param startedAt the instant the wipe began; newer objects are left alone
-     * @return the keys that predate the wipe, plus whether the listing was incomplete
-     */
-    private PrefixListingResult unreferencedObjects(UUID siteId, String prefix, Instant startedAt) {
-        try {
-            S3PrefixListing listing = checkpointStorage.listAllKeys(prefix);
-            List<String> keys = listing.objects().stream()
-                    .filter(object -> !object.lastModifiedAfter(startedAt))
-                    .map(S3ListedObject::key)
-                    .toList();
-            if (listing.truncated()) {
-                log.warn("Listing of {} for site {} was truncated after {} object(s); the pages "
-                                + "already read are swept and the wipe is worth repeating",
-                        prefix, siteId, listing.objects().size());
-            }
-            return new PrefixListingResult(keys, listing.truncated());
-        } catch (RuntimeException e) {
-            log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans "
-                    + "and the wipe is worth repeating once listing works again", prefix, siteId, e);
-            return new PrefixListingResult(List.of(), true);
         }
     }
 
@@ -446,20 +391,32 @@ public class DeltaSiteWipeService {
                              List<String> s3Keys) {
     }
 
-    /** Keys found under one prefix, plus whether that listing was incomplete. */
-    private record PrefixListingResult(List<String> keys, boolean incomplete) {
+    private S3PrefixListing listSitePrefix(UUID siteId, String prefix) {
+        S3PrefixListing listing = checkpointStorage.listPrefix(prefix);
+        if (listing.truncated()) {
+            log.warn("Listing of {} for site {} was truncated after {} object(s); the pages "
+                            + "already read are swept and the wipe is worth repeating",
+                    prefix, siteId, listing.objects().size());
+        }
+        return listing;
     }
 
-    /** Accumulates both whole-site prefix walks. */
-    private static final class PrefixSweep {
-        private final List<String> keys = new ArrayList<>();
-        private int prefixesNotSwept;
+    private static List<String> keysPredating(S3PrefixListing listing, Instant startedAt) {
+        return listing.objects().stream()
+                .filter(object -> !writtenAtOrAfterWipeSecond(object, startedAt))
+                .map(S3ListedObject::key)
+                .toList();
+    }
 
-        private void add(PrefixListingResult result) {
-            keys.addAll(result.keys());
-            if (result.incomplete()) {
-                prefixesNotSwept++;
-            }
+    /**
+     * S3 {@code LastModified} is second-resolution. Same second as the wipe, and a missing
+     * timestamp, count as newer — the safe direction for a concurrent PutObject.
+     */
+    static boolean writtenAtOrAfterWipeSecond(S3ListedObject object, Instant startedAt) {
+        Instant lastModified = object.lastModified();
+        if (lastModified == null || startedAt == null) {
+            return true;
         }
+        return !lastModified.isBefore(startedAt.truncatedTo(ChronoUnit.SECONDS));
     }
 }

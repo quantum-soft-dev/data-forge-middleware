@@ -187,18 +187,17 @@ public class S3CheckpointStorage {
     }
 
     /**
-     * Every object under a prefix, following continuation tokens (issue #122).
+     * Every object under a prefix, following continuation tokens.
      *
-     * <p>Unlike {@link #listKeys}, this one is meant for whole-site prefixes (issue #89 — the
-     * history wipe walks {@code egress/{siteId}/} and {@code checkpoints/{siteId}/}), where a
-     * single 1000-key page truncates silently and would leave most of the objects behind. A
-     * mid-pagination failure returns the pages already read plus {@code truncated=true} instead
-     * of throwing the whole walk away.</p>
+     * <p>Unlike {@link #listKeys}, this is the whole-prefix walk (site history wipe of
+     * {@code egress/{siteId}/} and {@code checkpoints/{siteId}/}). A mid-pagination failure
+     * returns the pages already read plus {@code truncated=true} instead of throwing the
+     * walk away.</p>
      *
      * @param prefix the prefix to enumerate
      * @return the pages read, with lastModified per object and a truncation flag
      */
-    public S3PrefixListing listAllKeys(String prefix) {
+    public S3PrefixListing listPrefix(String prefix) {
         return S3PrefixLister.listAll(s3Client, bucketName, prefix);
     }
 

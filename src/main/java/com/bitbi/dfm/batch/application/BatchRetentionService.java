@@ -9,7 +9,6 @@ import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
-import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService.DeleteObjectsResult;
 import org.slf4j.Logger;
@@ -90,14 +89,7 @@ public class BatchRetentionService {
         List<String> keys = new ArrayList<>(dbResult.s3Keys);
         for (String prefix : dbResult.batchParquetPrefixes) {
             try {
-                S3PrefixListing listing = s3FileStorageService.listAllKeys(prefix);
-                if (listing.truncated()) {
-                    logger.warn("Could not finish enumerating batch Parquet objects under {}; "
-                            + "exact-key cleanup continues", prefix);
-                    dbResult.summary.errors.add("S3 list truncated for " + prefix);
-                } else {
-                    keys.addAll(listing.keys());
-                }
+                keys.addAll(s3FileStorageService.listAllKeys(prefix));
             } catch (RuntimeException e) {
                 logger.warn("Could not enumerate batch Parquet objects under {}; exact-key cleanup continues",
                         prefix, e);

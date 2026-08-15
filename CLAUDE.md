@@ -456,8 +456,8 @@ pages/{feature}/            # Route pages
 - wipe-prefix-sweep: The site-history wipe's post-commit prefix walk is bounded, resumable and
   honest (issue #122, consolidating #123 and #124). `S3PrefixLister` walks `ListObjectsV2` page by
   page and returns the pages already read plus `lastModified` per object and a truncation flag —
-  `S3CheckpointStorage` and `S3FileStorageService` share it, so a mid-pagination outage is a
-  partial sweep rather than a total miss. The wipe takes its start instant before the transaction
+  `S3CheckpointStorage.listPrefix` (wipe) and `S3FileStorageService.listAllKeys` (batch
+  deletion/retention — complete or throw) both use it. The wipe takes its start instant before the transaction
   and skips objects newer than that on **both** `egress/{siteId}/` and `checkpoints/{siteId}/`, so
   a concurrent rebuild or egress `PutObject` cannot have its fresh object deleted while the row
   that names it survives. S3 `LastModified` is second-resolution, so anything in the wipe's own
