@@ -14,10 +14,11 @@ spring:
         # a checkpoint build, which can run for hours, postponed the scratch sweep, the batch
         # timeout sweep and the monthly partition creation behind it.
         #
-        # Six is derived, not guessed: two of the thirteen scheduled tasks hold their thread for
-        # minutes or longer (the nightly checkpoint build and the retention cleanup, both due at
-        # 02:00 by default), so at least three are needed for a short tick never to queue behind
-        # them; six leaves headroom for the burst of short ticks that fall on the same second, and
+        # Six is derived, not guessed: three of the fifteen scheduled tasks can hold their thread
+        # for minutes (the nightly checkpoint build and the retention cleanup, both due at 02:00 by
+        # default, and the orphaned-provisional sweep in its 500-segment worst case), so at least
+        # four are needed for a short tick never to queue behind them; six leaves headroom for the
+        # burst of short ticks that fall on the same second, and
         # stays below spring.datasource.hikari.maximum-pool-size so scheduled work cannot starve
         # request threads of database connections. Adding a scheduled task that blocks means
         # revisiting this — ScheduledTaskInventoryTest fails until the audit is redone.
