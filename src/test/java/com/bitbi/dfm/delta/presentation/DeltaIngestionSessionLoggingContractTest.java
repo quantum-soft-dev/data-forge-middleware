@@ -132,7 +132,7 @@ class DeltaIngestionSessionLoggingContractTest extends DeltaIngestionContractTes
     @Test
     void aFailedFinalCommitOnAContinuousCloseIsAlsoLoggedWithItsStackTrace() throws Exception {
         openableBatch(UUID.randomUUID());
-        when(changelogSegmentService.persist(any(), any(), any(), anyLong(), any()))
+        when(changelogSegmentService.persistPrepared(any()))
                 .thenThrow(new IllegalStateException("segment write failed"));
 
         runSession(req -> {

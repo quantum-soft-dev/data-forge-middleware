@@ -1,12 +1,7 @@
 package com.bitbi.dfm.delta.application;
 
-import com.bitbi.dfm.batch.application.BatchLifecycleService;
-import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.UUID;
@@ -16,8 +11,16 @@ import java.util.UUID;
  *
  * <p>Persisting the changelog segment, advancing the site watermark, and completing the batch were
  * three independent transactions; a failure between them could leave the watermark ahead of a batch
- * still {@code IN_PROGRESS}, wedging the site. This service runs them in a single transaction so they
- * either all commit or all roll back.</p>
+ * still {@code IN_PROGRESS}, wedging the site. {@link DeltaSessionCommitTransaction} runs them in a
+ * single transaction so they either all commit or all roll back.</p>
+ *
+ * <p>This class opens <em>no</em> transaction of its own (issue #147). It is the ordering half of
+ * the commit: the segment's bytes go to object storage first, with nothing open, and only then is
+ * the transaction entered — so the row locks it takes, including the {@code site_sync_state} row a
+ * FULL_SNAPSHOT re-baseline locks before it deletes anything (issue #142), are never held across a
+ * network upload. An upload whose transaction then rolls back leaves an unreachable orphan object,
+ * exactly as it did when the upload sat inside the transaction: nothing deleted it on rollback
+ * then either.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -26,21 +29,12 @@ import java.util.UUID;
 public class DeltaSessionCommitService {
 
     private final ChangelogSegmentService changelogSegmentService;
-    private final DeltaSyncStateService syncStateService;
-    private final BatchLifecycleService batchLifecycleService;
-    private final DeltaEgressWorker egressWorker;
-    private final DeltaRebaselineService rebaselineService;
+    private final DeltaSessionCommitTransaction transaction;
 
     public DeltaSessionCommitService(ChangelogSegmentService changelogSegmentService,
-                                     DeltaSyncStateService syncStateService,
-                                     BatchLifecycleService batchLifecycleService,
-                                     DeltaEgressWorker egressWorker,
-                                     DeltaRebaselineService rebaselineService) {
+                                     DeltaSessionCommitTransaction transaction) {
         this.changelogSegmentService = changelogSegmentService;
-        this.syncStateService = syncStateService;
-        this.batchLifecycleService = batchLifecycleService;
-        this.egressWorker = egressWorker;
-        this.rebaselineService = rebaselineService;
+        this.transaction = transaction;
     }
 
     /**
@@ -82,34 +76,15 @@ public class DeltaSessionCommitService {
      *
      * @param sessionFirstSeq first sequence of the session (== {@code firstSeq} when it never sealed)
      */
-    @Transactional
     public String commit(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
                          List<ChangeRecord> records, boolean rebaseline, long sessionFirstSeq) {
-        if (rebaseline) {
-            // Wipe the old baseline first (in this transaction) — it deletes all prior committed
-            // segments, so it must run before the tail segment is persisted below. Provisional
-            // segments sealed earlier in this session are excluded by construction (033/T03).
-            rebaselineService.reset(siteId, sessionFirstSeq);
-        }
-        String segmentKey = "";
-        // An empty session persists no segment: a degenerate segment at first_seq=watermark+1 would
-        // not advance the watermark and would then collide on UNIQUE(site_id, first_seq).
-        if (!records.isEmpty()) {
-            ChangelogSegment segment = changelogSegmentService.persist(siteId, batchId, mode, firstSeq, records);
-            segmentKey = segment.getS3Key();
-            wakeEgressAfterCommit();
-        }
-        if (rebaseline) {
-            // Publish the segments sealed earlier in this session, after the old baseline is gone and
-            // before the watermark moves: readers switch from the whole old baseline to the whole new
-            // one in one transaction. A no-op for a snapshot small enough never to have sealed.
-            if (changelogSegmentService.publishProvisional(batchId) > 0) {
-                wakeEgressAfterCommit();
-            }
-        }
-        syncStateService.advanceWatermark(siteId, committedSeq);
-        batchLifecycleService.completeBatch(batchId);
-        return segmentKey;
+        // Upload first, transaction second (issue #147). An empty session uploads nothing: a
+        // degenerate segment at first_seq=watermark+1 would not advance the watermark and would then
+        // collide on UNIQUE(site_id, first_seq).
+        PreparedSegment prepared = records.isEmpty()
+                ? null
+                : changelogSegmentService.prepare(siteId, batchId, mode, firstSeq, records);
+        return transaction.commit(siteId, batchId, committedSeq, prepared, rebaseline, sessionFirstSeq);
     }
 
     /**
@@ -126,12 +101,11 @@ public class DeltaSessionCommitService {
      * @param toBatchId   the replacement batch
      * @return number of segments moved
      */
-    @Transactional
     public int reassignProvisionalSegments(UUID fromBatchId, UUID toBatchId) {
         if (fromBatchId == null || fromBatchId.equals(toBatchId)) {
             return 0;
         }
-        return changelogSegmentService.reassignProvisionalBatch(fromBatchId, toBatchId);
+        return transaction.reassignProvisionalSegments(fromBatchId, toBatchId);
     }
 
     /**
@@ -152,13 +126,13 @@ public class DeltaSessionCommitService {
      * @param records  accepted change records
      * @return the persisted segment's S3 key, or {@code ""} when {@code records} is empty (no-op)
      */
-    @Transactional
     public String commitProvisionalSegment(UUID siteId, UUID batchId, String mode, long firstSeq,
                                            List<ChangeRecord> records) {
         if (records.isEmpty()) {
             return "";
         }
-        return changelogSegmentService.persistProvisional(siteId, batchId, mode, firstSeq, records).getS3Key();
+        return transaction.commitProvisionalSegment(
+                changelogSegmentService.prepare(siteId, batchId, mode, firstSeq, records));
     }
 
     /**
@@ -175,32 +149,12 @@ public class DeltaSessionCommitService {
      * @param records      accepted change records
      * @return the persisted segment's S3 key, or {@code ""} when {@code records} is empty (no-op)
      */
-    @Transactional
     public String commitSegment(UUID siteId, UUID batchId, String mode, long firstSeq, long committedSeq,
                                 List<ChangeRecord> records) {
         if (records.isEmpty()) {
             return "";
         }
-        ChangelogSegment segment = changelogSegmentService.persist(siteId, batchId, mode, firstSeq, records);
-        wakeEgressAfterCommit();
-        syncStateService.advanceWatermark(siteId, committedSeq);
-        return segment.getS3Key();
-    }
-
-    /**
-     * Wake the delta egress worker once this transaction commits (T8.4) — the worker must see the
-     * committed segment row. Outside a transaction (unit tests) the wake is immediate.
-     */
-    private void wakeEgressAfterCommit() {
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    egressWorker.wake();
-                }
-            });
-        } else {
-            egressWorker.wake();
-        }
+        return transaction.commitSegment(siteId, committedSeq,
+                changelogSegmentService.prepare(siteId, batchId, mode, firstSeq, records));
     }
 }
