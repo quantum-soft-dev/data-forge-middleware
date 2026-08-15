@@ -487,8 +487,9 @@ pages/{feature}/            # Route pages
   with leases), and the only genuinely new pairing — the two provisional-segment deletes — is one
   the base deployment's two replicas could already produce. A pool also gives something the
   hand-off scheduler did not: `ScheduledThreadPoolExecutor` never runs two executions of the same
-  periodic task at once, so a slow fixed-rate tick can no longer overlap itself. Virtual threads
-  stay on for the web layer and `@Async`; only scheduling is pinned. No REST, gRPC, DTO, migration,
+  periodic task at once, so a slow fixed-rate tick can no longer overlap itself. Virtual threads stay
+  on for the web layer; they never reached `@Async`, whose sites all name an `Executor` bean that
+  made Boot's virtual-thread `applicationTaskExecutor` back off. Only scheduling is pinned. No REST, gRPC, DTO, migration,
   metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("One sweep interval means
   the tick runs when it is due").
 - split-scratch-ceilings: The checkpoint scratch ceiling is two keys, and the deployed values sit
@@ -582,7 +583,7 @@ pages/{feature}/            # Route pages
   `/scratch/parquet` **and** the volume behind it is an `emptyDir` (turning the flag off stays
   available as a rollback, and an overlay may only ever set it to false). The "at most one sweep
   interval" bound assumed the tick runs when it is due, which #146 has since made true by pinning
-  the scheduler (see scheduler-pool below). No REST, gRPC, DTO, metric, S3-key,
+  the scheduler (see scheduler-pool above). No REST, gRPC, DTO, metric, S3-key,
   migration, or frontend change. See `docs/delta-client-v2-guide.md` ("Sizing note", "Orphans
   outlive a container restart"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-baseline-epoch: The checkpoint epoch guard now covers a **re-baseline** as well as a

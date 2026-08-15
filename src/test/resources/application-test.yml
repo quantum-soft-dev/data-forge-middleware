@@ -31,6 +31,17 @@ spring:
       minimum-idle: 0
       idle-timeout: 10000
 
+  task:
+    scheduling:
+      # The scheduler pool has to stay below the connection pool above (issue #146), and the pool
+      # above is four here rather than the production ten. Every context boots its scheduled tasks,
+      # eight of which are due immediately and several of which open a connection, so the shipped
+      # six would put scheduler threads in competition with Flyway and the test's own queries.
+      # Nothing in the suite asserts scheduling concurrency against this profile —
+      # ScheduledTaskIsolationTest builds its own context from the shipped values.
+      pool:
+        size: 2
+
 # LocalStack S3 configuration for tests
 s3:
   bucket:

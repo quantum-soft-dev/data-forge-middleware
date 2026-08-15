@@ -19,7 +19,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  *   <li><b>Flag on.</b> Cron and fixed-rate ticks are handed off to a fresh virtual thread and are
  *       genuinely independent — but a <em>fixed-delay</em> tick runs on the scheduler's own single
  *       thread, because fixed-delay semantics require the next delay to start when the previous run
- *       ends. All six fixed-delay ticks in this application therefore share one thread, and one of
+ *       ends. All eight fixed-delay ticks in this application therefore share one thread, and one of
  *       them blocking postpones the rest.</li>
  *   <li><b>Flag off.</b> Every tick shares one platform thread — the failure the ticket describes,
  *       where the nightly checkpoint build postpones the scratch sweep, the batch timeout sweep and
@@ -40,8 +40,11 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * starve request threads of database connections. The size and its derivation live next to the key
  * in {@code application.yml}; {@code ScheduledTaskInventoryTest} keeps them honest.</p>
  *
- * <p>The virtual-thread setting itself is untouched: it still applies to the web layer and to
- * {@code @Async}. Only scheduling is pinned.</p>
+ * <p>The virtual-thread setting itself is untouched — it still applies to the web layer. It never
+ * reached {@code @Async}: {@code AsyncConfiguration} and {@code PluginAsyncConfiguration} register
+ * {@code Executor} beans, so Boot's virtual-thread {@code applicationTaskExecutor} had already
+ * backed off and every {@code @Async} site names a platform-thread pool. Only scheduling changes
+ * here.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0

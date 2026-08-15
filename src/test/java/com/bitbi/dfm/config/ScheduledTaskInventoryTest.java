@@ -161,29 +161,92 @@ class ScheduledTaskInventoryTest {
                         + "queue behind them, which is the failure of issue #146 in a smaller pool");
     }
 
-    @Test
-    @DisplayName("the pool stays below the database pool so scheduled work cannot starve requests")
-    void shouldKeepThePoolBelowTheDatabasePool() {
-        int poolSize = ScheduledTaskIsolationTest.shippedPoolSize();
-        int hikariPoolSize = hikariMaximumPoolSize();
+    /**
+     * Every profile file that could change either side of the inequality. A profile that overrides
+     * one pool and not the other is the way this invariant breaks unnoticed — {@code test} shrinks
+     * the connection pool to 4 and would otherwise have inherited 6 scheduler threads.
+     */
+    private static final java.util.List<String> PROFILE_FILES = java.util.List.of(
+            "application-dev.yml", "application-prod.yml", "application-test.yml");
 
-        assertTrue(poolSize < hikariPoolSize,
-                "spring.task.scheduling.pool.size (" + poolSize + ") must stay below "
-                        + "spring.datasource.hikari.maximum-pool-size (" + hikariPoolSize + "): almost every "
-                        + "scheduled task opens a connection, and a burst of ticks must not be able to take "
-                        + "them all from the request threads");
+    @Test
+    @DisplayName("the pool stays below the database pool in every profile, so ticks cannot starve requests")
+    void shouldKeepThePoolBelowTheDatabasePool() {
+        int basePool = ScheduledTaskIsolationTest.shippedPoolSize();
+        int baseHikari = requireInt(baseYaml(), HIKARI_KEY);
+
+        assertBelowDatabasePool("application.yml", basePool, baseHikari);
+        for (String profile : PROFILE_FILES) {
+            Map<String, Object> yaml = optionalYaml(profile);
+            if (yaml == null) {
+                continue;
+            }
+            assertBelowDatabasePool(profile,
+                    readInt(yaml, POOL_KEY, basePool), readInt(yaml, HIKARI_KEY, baseHikari));
+        }
     }
 
-    private static int hikariMaximumPoolSize() {
-        YamlPropertySourceLoader loader = new YamlPropertySourceLoader();
+    private static void assertBelowDatabasePool(String source, int poolSize, int hikariPoolSize) {
+        assertTrue(poolSize < hikariPoolSize,
+                "in " + source + " the effective spring.task.scheduling.pool.size (" + poolSize
+                        + ") must stay below spring.datasource.hikari.maximum-pool-size (" + hikariPoolSize
+                        + "): almost every scheduled task opens a connection, and a burst of ticks must not "
+                        + "be able to take them all. A profile that resizes one pool has to resize the other");
+    }
+
+    private static final String POOL_KEY = "spring.task.scheduling.pool.size";
+
+    private static final String HIKARI_KEY = "spring.datasource.hikari.maximum-pool-size";
+
+    private static Map<String, Object> baseYaml() {
+        Map<String, Object> yaml = optionalYaml("application.yml");
+        assertNotNull(yaml, "application.yml must be on the classpath");
+        return yaml;
+    }
+
+    /** Flattened properties of a classpath YAML, or {@code null} when the file does not exist. */
+    private static Map<String, Object> optionalYaml(String name) {
+        ClassPathResource resource = new ClassPathResource(name);
+        if (!resource.exists()) {
+            return null;
+        }
+        Map<String, Object> properties = new LinkedHashMap<>();
         try {
-            java.util.List<PropertySource<?>> sources =
-                    loader.load("application.yml", new ClassPathResource("application.yml"));
-            Object value = sources.get(0).getProperty("spring.datasource.hikari.maximum-pool-size");
-            assertNotNull(value, "spring.datasource.hikari.maximum-pool-size must be declared");
-            return Integer.parseInt(value.toString().trim());
+            for (PropertySource<?> source : new YamlPropertySourceLoader().load(name, resource)) {
+                for (String key : ((org.springframework.core.env.EnumerablePropertySource<?>) source)
+                        .getPropertyNames()) {
+                    properties.put(key, source.getProperty(key));
+                }
+            }
         } catch (IOException e) {
             throw new java.io.UncheckedIOException(e);
+        }
+        return properties;
+    }
+
+    private static int requireInt(Map<String, Object> yaml, String key) {
+        Object value = yaml.get(key);
+        assertNotNull(value, key + " must be declared in application.yml");
+        return parseInt(key, value);
+    }
+
+    private static int readInt(Map<String, Object> yaml, String key, int fallback) {
+        Object value = yaml.get(key);
+        return value == null ? fallback : parseInt(key, value);
+    }
+
+    /** Accepts a literal or a {@code ${ENV:default}} placeholder, whose default is the shipped value. */
+    private static int parseInt(String key, Object value) {
+        String text = value.toString().trim();
+        java.util.regex.Matcher placeholder =
+                java.util.regex.Pattern.compile("^\\$\\{[^:}]+:(-?\\d+)}$").matcher(text);
+        if (placeholder.matches()) {
+            text = placeholder.group(1);
+        }
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            throw new AssertionError(key + " must be an integer or ${ENV:integer}, found: " + text, e);
         }
     }
 

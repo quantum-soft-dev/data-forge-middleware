@@ -784,8 +784,14 @@ consequences for an operator:
   has no bound anyone can quote, because a sweep tick can sit behind a whole checkpoint build.
 - **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Nearly every
   scheduled task opens a connection; a pool as wide as Hikari's lets a burst of ticks take the
-  connections request threads need. `ScheduledTaskInventoryTest` fails on both mistakes, and on a
-  new `@Scheduled` method landing without the audit behind that number being redone.
+  connections request threads need.
+
+`ScheduledTaskInventoryTest` guards both numbers **as they are declared in the YAML** — every
+profile, so one that resizes the connection pool has to resize this one too — and fails when a new
+`@Scheduled` method lands without the audit behind the size being redone. An environment override is
+outside its reach by definition: `SPRING_TASK_SCHEDULING_POOL_SIZE` set at deploy time is checked by
+nobody, so treat it the way the scratch ceilings are treated and change it in the manifests, in the
+open.
 
 **6 GiB is an assumption, not a measurement**: we have no observed maximum for
 a checkpoint frame or a batch artifact on test/prod. The only sized artifact on record is the 439k-row
