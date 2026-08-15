@@ -1,6 +1,7 @@
 package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.shared.api.ApiRoutes;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -12,6 +13,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @DisplayName("Batch Retention Schedule Admin API Integration Tests")
 class BatchRetentionScheduleAdminControllerIntegrationTest extends BaseIntegrationTest {
+
+    @BeforeEach
+    void clearSharedAppSettings() {
+        clearAppSettings();
+    }
 
     @Test
     @DisplayName("GET schedule with Auth0 admin token should return effective schedule")
@@ -78,6 +84,30 @@ class BatchRetentionScheduleAdminControllerIntegrationTest extends BaseIntegrati
         mockMvc.perform(get(ApiRoutes.SETTINGS_BATCH_RETENTION_SCHEDULE)
                         .header("Authorization", jwtToken))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET schedule should return CONFIG after a leftover app_settings row is cleared")
+    void getSchedule_afterLeftoverAppSettingsCleared_shouldReturnConfig() throws Exception {
+        String auth0Token = "Bearer mock.admin.jwt.token";
+
+        mockMvc.perform(put(ApiRoutes.SETTINGS_BATCH_RETENTION_SCHEDULE)
+                        .header("Authorization", auth0Token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                { "cron": "0 0 3 * * *" }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("DB"));
+
+        clearAppSettings();
+
+        mockMvc.perform(get(ApiRoutes.SETTINGS_BATCH_RETENTION_SCHEDULE)
+                        .header("Authorization", auth0Token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cron").value("0 0 2 * * *"))
+                .andExpect(jsonPath("$.source").value("CONFIG"))
+                .andExpect(jsonPath("$.updatedAt").isEmpty());
     }
 }
 

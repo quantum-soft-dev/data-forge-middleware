@@ -227,9 +227,8 @@ mutation. The ready-to-run GraphQL lives in `/github-issue` (step 8).
 CI on a PR from a feature branch is `backend-test` + `frontend-test` only — `code-quality` and
 `dependency-analysis` gate on `run_full_pipeline`, which is true for `develop`/`release`/`main`
 alone, so their absence is not a failure. `./gradlew test -PexcludeIntegration` still needs Docker
-(~30 contract tests use Testcontainers); without it the gate dies inside `Unsafe.java`. The
-`SqlGenerationService` concurrency tests are known-flaky and fail on a clean tree too — re-run
-before blaming your change, but never write off a red check without checking which one it is.
+(~30 contract tests use Testcontainers); without it the gate dies inside `Unsafe.java`. Never
+write off a red check without checking which test it is.
 
 The merge into `develop` never happens without a human go-ahead. Normally that go-ahead is per PR,
 via `/merge <pr>` (invoking it is the authorization). That command re-checks readiness, merges
@@ -454,6 +453,16 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- order-dependent-test-flakes: Two `backend-test` flakes no longer depend on suite order or a
+  one-second clock (issue #119). `BatchRetentionScheduleAdminControllerIntegrationTest` was
+  asserting the CONFIG fallback against a shared `app_settings` row that the sibling PUT (and any
+  other class that wrote the table) left behind — `test-data.sql` never touches it.
+  `BaseIntegrationTest.clearAppSettings()` deletes the table, the retention-schedule class calls
+  it in `@BeforeEach`, and a leftover-then-clear test pins the isolation.
+  `SqlGenerationConcurrencyTest` no longer waits for S3 work to start and then for
+  `tryAcquire(1s)` to expire: the first holder blocks at the first statement after acquire, and
+  `regenerateForBatch` is asserted via the semaphore queue gauge. No API, DTO, migration,
+  configuration or frontend change.
 - checkpoint-parquet-on-disk: The V2 checkpoint build materializes its snapshots on disk, one table
   at a time, and every V2 Parquet writer takes an explicit row-group budget (issue #112, which
   absorbed #114). `ParquetCheckpointWriter.toParquet` used to copy a table's folded rows into a
