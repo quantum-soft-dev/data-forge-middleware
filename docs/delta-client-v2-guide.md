@@ -671,9 +671,13 @@ beside the `*_TEMP_DIR` keys that put the writers on the volume — the applicat
 The deployed values are the formula below solved for 6Gi:
 
 ```
-2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact  <=  sizeLimit
-2 x max(1Gi,              2Gi)              + 2              x 1Gi             =   6Gi
+2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch  <=  sizeLimit - 1Gi
+2 x max(1Gi,              1.5Gi)            + 2              x 1Gi   =   5Gi        <=  5Gi
 ```
+
+The reserved gigabyte is not decoration: scratch a dead container left behind survives on the
+pod-private volume until the next sweep tick (#141), and kubelet acts on usage *exceeding* the
+limit rather than reaching it — solving to exact equality would make the modelled peak an eviction.
 
 `ParquetScratchCeilingBudgetTest` recomputes exactly that from the manifests — including the batch
 concurrency, taken from the ConfigMap or from the `application.yml` default — so raising a ceiling,
@@ -685,8 +689,19 @@ because that is the one whose failure is expensive.
 guarantee rather than the budget.** A batch build opens one scratch file *per claimed table*, so a
 two-table batch already doubles that term and a 6Gi volume can be overrun again — a count is not
 something a per-file ceiling can bound. Only a directory-wide reservation can, and that is **#150**;
-until it lands the deployment's protection is real but partial, and orphan residue (bounded by one
-sweep interval since #141) sits outside the inequality as well.
+until it lands the deployment's protection is real but partial. The reserved gigabyte is an
+allowance for restart residue, not a proof about it either — a dead build leaves one file per
+claimed table, the same multiplier.
+
+**Before rolling new ceilings out to a site that has been running a while, measure instead of
+assuming.** One listing settles whether any of them is already too low, and a frame that is
+*already* larger than its ceiling turns a working site into one whose build aborts every night
+(#153) — the one regression these values can cause:
+
+```bash
+gsutil du -h gs://<bucket>/checkpoints/<siteId>/_frame/   # largest reload frame
+gsutil du -h gs://<bucket>/egress/<siteId>/batches/       # largest completed-batch artifact
+```
 
 **Crossing a ceiling is cheaper than an eviction, but none of the three outcomes repairs itself.**
 For scale, the largest artifact on record is in the low hundreds of MiB, so these ceilings are 3–5x

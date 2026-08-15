@@ -56,6 +56,16 @@ class ParquetScratchCeilingBudgetTest {
     /** Both checkpoint build paths can hold one scratch file each at the same time. */
     private static final int CONCURRENT_CHECKPOINT_BUILDS = 2;
 
+    /**
+     * Kept free at the modelled peak. Two things live outside the inequality and would otherwise
+     * turn "fits exactly" into an eviction: scratch a dead container left behind, which survives on
+     * the pod-private volume until the next sweep tick (#141), and the fact that kubelet acts on
+     * usage <em>exceeding</em> the limit rather than reaching it. It is an allowance, not a proof —
+     * a dead build leaves one file per claimed table, which is #150's territory like everything
+     * else about that multiplier.
+     */
+    private static final long RESIDUE_RESERVE_BYTES = 1024L * 1024 * 1024;
+
     private static final String SNAPSHOT_CEILING_KEY = "DELTA_CHECKPOINT_MAX_TEMP_BYTES";
     private static final String FRAME_CEILING_KEY = "DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES";
     private static final String BATCH_CEILING_KEY = "DELTA_BATCH_PARQUET_MAX_TEMP_BYTES";
@@ -69,11 +79,13 @@ class ParquetScratchCeilingBudgetTest {
                         + HISTORIC_DEFAULT_BYTES + "}"),
                 "delta.checkpoint.max-temp-bytes stays the per-table snapshot ceiling at its "
                         + "historic default");
-        assertTrue(yaml.contains("max-frame-temp-bytes: ${" + FRAME_CEILING_KEY + ":${"
-                        + SNAPSHOT_CEILING_KEY + ":" + HISTORIC_DEFAULT_BYTES + "}}"),
-                "an unset frame ceiling must inherit the key that governed the frame before the "
-                        + "split — falling back to the literal 10 GiB would silently unbound the "
-                        + "frame for an operator who had lowered the single key for a small disk");
+        assertTrue(yaml.contains("max-frame-temp-bytes: ${" + FRAME_CEILING_KEY
+                        + ":${delta.checkpoint.max-temp-bytes}}"),
+                "an unset frame ceiling must inherit the resolved per-table ceiling — the property, "
+                        + "not the environment variable, so it follows a value set through a profile "
+                        + "yml or SPRING_APPLICATION_JSON too. Falling back to a literal would "
+                        + "silently unbound the frame for an operator who had lowered the single key "
+                        + "for a small disk");
         assertTrue(yaml.contains("max-temp-bytes: ${" + BATCH_CEILING_KEY + ":"
                         + HISTORIC_DEFAULT_BYTES + "}"),
                 "the completed-batch default is untouched by this split");
@@ -113,10 +125,12 @@ class ParquetScratchCeilingBudgetTest {
         long sizeLimit = scratchVolumeSizeLimitBytes();
         long peak = CONCURRENT_CHECKPOINT_BUILDS * Math.max(snapshotCeiling, frameCeiling)
                 + batchConcurrency * batchCeiling;
-        assertTrue(peak <= sizeLimit,
+        long budget = sizeLimit - RESIDUE_RESERVE_BYTES;
+        assertTrue(peak <= budget,
                 "the single-claimed-table worst case allowed by these ceilings is " + peak
-                        + " B on a " + sizeLimit
-                        + " B volume, so kubelet evicts the pod before the application refuses: "
+                        + " B against a budget of " + budget + " B (" + sizeLimit + " B volume less "
+                        + RESIDUE_RESERVE_BYTES + " B kept free for restart residue), so kubelet can "
+                        + "still evict the pod before the application refuses: "
                         + CONCURRENT_CHECKPOINT_BUILDS + " x max(" + snapshotCeiling + ", "
                         + frameCeiling + ") + " + batchConcurrency + " x " + batchCeiling
                         + ". Move the ceilings and the volume together — see the sizing note in "
@@ -138,7 +152,9 @@ class ParquetScratchCeilingBudgetTest {
         Pattern sizeLimitOverride = Pattern.compile("^\\s*sizeLimit\\s*:", Pattern.MULTILINE);
         try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {
             for (Path file : overlays.filter(ParquetScratchCeilingBudgetTest::isYaml).toList()) {
-                String body = Files.readString(file);
+                // Comments stripped first: an overlay that merely *documents* the budget is not
+                // redefining it, and failing it with "redefines a scratch ceiling" would be a lie.
+                String body = withoutComments(Files.readString(file));
                 boolean touchesScratch = body.contains("parquet-scratch")
                         || body.contains(SCRATCH_MOUNT_PATH);
                 assertFalse(ceilingOverride.matcher(body).find()
@@ -148,6 +164,19 @@ class ParquetScratchCeilingBudgetTest {
                                 + "no longer covers the rendered configuration and must be widened to it");
             }
         }
+    }
+
+    /**
+     * Drop YAML comments, so a documented key is not read as a declared one. A {@code #} inside a
+     * quoted scalar would be stripped too; no manifest here has one, and the cost of that mistake
+     * is a false negative on one line, not a false alarm.
+     */
+    private static String withoutComments(String yaml) {
+        return yaml.lines()
+                .map(line -> line.replaceFirst("(^|\\s)#.*$", ""))
+                .reduce(new StringBuilder(), (buffer, line) -> buffer.append(line).append('\n'),
+                        StringBuilder::append)
+                .toString();
     }
 
     /** A configured directory is on the bounded volume if it is the mount or lives under it. */

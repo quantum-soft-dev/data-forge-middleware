@@ -78,10 +78,12 @@ public class CheckpointService {
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.max-temp-bytes:10737418240}") long maxTempBytes,
-                             // Falls back to the per-table key, not to a literal: before #138 one
-                             // key governed both files, so an operator who had lowered it to fit a
-                             // small scratch disk must keep the frame bounded by that same number
-                             // until they say otherwise.
+                             // Falls back to the per-table property, not to a literal: before #138
+                             // one key governed both files, so an operator who had lowered it to
+                             // fit a small scratch disk must keep the frame bounded by that same
+                             // number until they say otherwise. application.yml always defines
+                             // both keys, so this chain is the no-yml (test, embedded) path; the
+                             // deployed one is the identical fallback written there.
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.max-frame-temp-bytes:"
                                              + "${delta.checkpoint.max-temp-bytes:10737418240}}")

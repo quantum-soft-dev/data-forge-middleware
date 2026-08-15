@@ -472,7 +472,9 @@ pages/{feature}/            # Route pages
   process cannot know how large the directory it was handed is, so the values that must sit below
   the volume are declared beside it, in `k8s/base/configmap.yaml` next to the `*_TEMP_DIR` keys
   (the split #141 used for `scratch-private-to-pod`). They are the sizing note's own worst case
-  solved for the 6Gi volume — `2 x max(table 1Gi, frame 2Gi) + max-concurrent 2 x batch 1Gi = 6Gi`,
+  solved for the 6Gi volume with a gigabyte kept free for restart residue and for the fact that
+  kubelet acts on *exceeding* the limit —
+  `2 x max(table 1Gi, frame 1.5Gi) + max-concurrent 2 x batch 1Gi = 5Gi <= 6Gi - 1Gi`,
   the `2 x` being the two checkpoint build paths (the cron sweep and a forced rebuild on
   `deltaRebuildExecutor` are not mutually excluded), each holding one file at a time.
   `ParquetScratchCeilingBudgetTest` recomputes that from the manifests — reading the batch
