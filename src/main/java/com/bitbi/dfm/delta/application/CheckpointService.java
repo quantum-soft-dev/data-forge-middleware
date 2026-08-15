@@ -55,6 +55,7 @@ public class CheckpointService {
     private final DeltaMetrics metrics;
     private final DeltaParquetProperties parquetProperties;
     private final ApplicationEventPublisher eventPublisher;
+    private final CheckpointEpochGuard epochGuard;
     private final Path tempDirectory;
     private final long maxTempBytes;
 
@@ -67,6 +68,7 @@ public class CheckpointService {
                              DeltaMetrics metrics,
                              DeltaParquetProperties parquetProperties,
                              ApplicationEventPublisher eventPublisher,
+                             CheckpointEpochGuard epochGuard,
                              // fully qualified: the delta wire Value is imported above
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
@@ -81,6 +83,7 @@ public class CheckpointService {
         this.metrics = metrics;
         this.parquetProperties = parquetProperties;
         this.eventPublisher = eventPublisher;
+        this.epochGuard = epochGuard;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
     }
@@ -106,6 +109,11 @@ public class CheckpointService {
      * own short transactions; a failure mid-loop leaves idempotent per-table rows that the next
      * build overwrites, and the pointer only advances at the very end ({@code recordCheckpoint}).</p>
      *
+     * <p>Each of those short transactions goes through {@link CheckpointEpochGuard}, which takes the
+     * {@code site_sync_state} row lock a history wipe holds and refuses the write if the site's
+     * epoch moved. A build overtaken by a wipe is discarded — it returns an empty fold rather than
+     * restoring the pre-wipe rows and checkpoint pointer (issue #136).</p>
+     *
      * @param siteId site identifier
      * @return folded state: table → row-identity → folded row (empty if there is nothing to fold)
      */
@@ -126,7 +134,12 @@ public class CheckpointService {
 
     private Map<String, Map<String, FoldedRow>> run(UUID siteId, SnapshotPass idlePass) {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
-        long checkpointSeq = syncStateService.getSyncState(siteId).lastCheckpointSeq();
+        DeltaSyncStateService.SyncStateView syncState = syncStateService.getSyncState(siteId);
+        long checkpointSeq = syncState.lastCheckpointSeq();
+        // The epoch this build belongs to. Every row it writes is checked against it under the
+        // site_sync_state row lock, so a history wipe that commits mid-build discards the build
+        // instead of having its deletes undone by it (issue #136).
+        long generation = syncState.generation();
         boolean haveFrame = checkpointSeq > 0 && checkpointStorage.frameExists(siteId, checkpointSeq);
         boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
 
@@ -136,6 +149,17 @@ public class CheckpointService {
         // pruning it would silently publish a truncated checkpoint and advance the pointer, making
         // the loss durable. Refuse and let the build fail loudly instead.
         if (checkpointSeq > 0 && !haveFrame && historyPruned) {
+            // Unless a wipe took them. It deletes the frame and the segments after committing the
+            // new epoch, so a build that read the pointer just before it sees exactly this state —
+            // and raising the loudest alarm in this subsystem for a routine operator action would
+            // be wrong. Re-read the epoch and discard instead. (The re-read can itself lose the
+            // race, in which case the alarm is raised as before; a wipe repeated on that site
+            // clears it, since the pointer is 0 by then.)
+            if (syncStateService.getSyncState(siteId).generation() != generation) {
+                log.warn("Discarding the checkpoint build for site {}: it was wiped while the build "
+                        + "was reading, taking frame@{} with it", siteId, checkpointSeq);
+                return Map.of();
+            }
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
                             + " is unreadable and earlier segments are pruned — refusing lossy refold",
@@ -145,6 +169,24 @@ public class CheckpointService {
             return Map.of();
         }
 
+        try {
+            return build(siteId, idlePass, segments, checkpointSeq, generation, haveFrame);
+        } catch (CheckpointEpochGuard.EpochChangedException e) {
+            // Not a failure of this build: the site's history was destroyed under it, so there is
+            // nothing left to publish. Whatever rows it did commit were taken by the wipe's own
+            // deletes (they can only have committed before the wipe took the row lock), and the
+            // objects it uploaded are orphans the next wipe sweeps.
+            log.warn("Discarding the checkpoint build for site {}: {}", siteId, e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private Map<String, Map<String, FoldedRow>> build(UUID siteId,
+                                                      SnapshotPass idlePass,
+                                                      List<ChangelogSegment> segments,
+                                                      long checkpointSeq,
+                                                      long generation,
+                                                      boolean haveFrame) {
         // Empty incremental work still belongs in phase=total: the frame download already ran.
         return metrics.timeCheckpoint(() -> {
             byte[] frameBytes = haveFrame
@@ -164,16 +206,17 @@ public class CheckpointService {
                         && !hasUnmaterializedTables(siteId))) {
                     return seed;
                 }
-                writeSnapshots(siteId, seed, checkpointSeq, idlePass);
+                writeSnapshots(siteId, seed, checkpointSeq, idlePass, generation);
                 return seed;
             }
-            return materialize(siteId, seed, newSegments);
+            return materialize(siteId, seed, newSegments, generation);
         });
     }
 
     private Map<String, Map<String, FoldedRow>> materialize(UUID siteId,
                                                             Map<String, Map<String, FoldedRow>> seed,
-                                                            List<ChangelogSegment> newSegments) {
+                                                            List<ChangelogSegment> newSegments,
+                                                            long generation) {
         Map<String, Map<String, FoldedRow>> state = metrics.timeCheckpointPhase("fold", () -> {
             List<ChangeRecord> newRecords = new ArrayList<>();
             for (ChangelogSegment segment : newSegments) {
@@ -182,7 +225,7 @@ public class CheckpointService {
             return ChangelogFold.fold(seed, newRecords);
         });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
-        writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL);
+        writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, generation);
 
         // Persist the new all-INSERT frame so the next build seeds from it and earlier segments
         // can be pruned. Same file-backed path as the snapshot (issue #126): one record at a
@@ -202,7 +245,7 @@ public class CheckpointService {
         } finally {
             deleteQuietly(frame, "_frame", siteId);
         }
-        syncStateService.recordCheckpoint(siteId, seq);
+        epochGuard.inEpoch(siteId, generation, () -> syncStateService.recordCheckpoint(siteId, seq));
         // The single choke point every checkpoint build passes through, scheduled or forced. The
         // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
         // first moment post-wipe at which there are checkpoint seqs to freeze as SQL baselines.
@@ -223,11 +266,15 @@ public class CheckpointService {
      * <p>{@link SnapshotPass#INCREMENTAL} advances seq and detaches a failed key.
      * {@link SnapshotPass#RETRY_MISSING} and {@link SnapshotPass#FORCE} stay on the recorded
      * pointer and keep a last-good key if the rewrite fails.</p>
+     *
+     * <p>Every row write goes through {@link CheckpointEpochGuard}, so a build whose site was wiped
+     * mid-flight stops here instead of re-inserting the rows the wipe just deleted.</p>
      */
     private void writeSnapshots(UUID siteId,
                                 Map<String, Map<String, FoldedRow>> state,
                                 long seq,
-                                SnapshotPass pass) {
+                                SnapshotPass pass,
+                                long generation) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
         // Every table's snapshot goes through the same scratch directory, one at a time. Creating
@@ -259,8 +306,11 @@ public class CheckpointService {
                 // table simply has nothing to download until a schema arrives. The client is
                 // required to SubmitSchema before its first session, so this means the site is
                 // misconfigured — count it so the hole is visible rather than silent.
+                // Write first, then report — the reverse of the catch below, and deliberately so:
+                // there is no cause to preserve here, and an epoch refusal must leave the meter
+                // alone. A discarded build has no tables to report a hole for.
                 if (abandonStaleSnapshot(checkpoint, pass)) {
-                    checkpointRepository.save(checkpoint);
+                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
                 }
                 metrics.checkpointTableUnmaterialized("no_schema");
                 log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
@@ -286,19 +336,26 @@ public class CheckpointService {
                 metrics.timeCheckpointPhase("upload", () ->
                         checkpoint.attachParquet(checkpointStorage.uploadParquet(
                                 siteId, tableName, seq, snapshot)));
-                checkpointRepository.save(checkpoint);
+                epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+            } catch (CheckpointEpochGuard.EpochChangedException e) {
+                // A wiped site is not a fact about this table: nothing this build produced may be
+                // published, so it must escape the per-table skip below and end the whole build.
+                throw e;
             } catch (RuntimeException e) {
-                // When seq advanced, the previous key would sit beside a newer seq and be served
-                // as its snapshot — detach it. On a same-seq rematerialize the last-good object
-                // is still at that key; keep the row pointing at it.
-                if (abandonStaleSnapshot(checkpoint, pass)) {
-                    checkpointRepository.save(checkpoint);
-                }
+                // Report the cause first: the detach below goes through the epoch guard, which
+                // throws rather than returns when the site was wiped mid-build, and this table's
+                // actual failure (schema drift, an oversized table) would leave no trace at all.
                 metrics.checkpointTableUnmaterialized("parquet_failed");
                 log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
                         + "artifact this build (check the declared schema against the data, or "
                         + "delta.checkpoint.max-temp-bytes against the table's size)",
                         tableName, siteId, e);
+                // When seq advanced, the previous key would sit beside a newer seq and be served
+                // as its snapshot — detach it. On a same-seq rematerialize the last-good object
+                // is still at that key; keep the row pointing at it.
+                if (abandonStaleSnapshot(checkpoint, pass)) {
+                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+                }
             } finally {
                 // The scratch file is this build's litter whichever way the table ended: kept,
                 // it would fill the node one checkpoint cycle at a time.

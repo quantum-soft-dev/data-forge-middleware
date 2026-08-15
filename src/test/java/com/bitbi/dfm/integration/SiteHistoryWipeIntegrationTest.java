@@ -1,9 +1,14 @@
 package com.bitbi.dfm.integration;
 
+import com.bitbi.dfm.delta.application.ChangelogRetentionService;
 import com.bitbi.dfm.delta.application.ChangelogSegmentService;
+import com.bitbi.dfm.delta.application.CheckpointEpochGuard;
 import com.bitbi.dfm.delta.application.CheckpointService;
 import com.bitbi.dfm.delta.application.DeltaSiteWipeService;
+import com.bitbi.dfm.delta.application.DeltaSyncStateService;
 import com.bitbi.dfm.delta.application.SiteHistoryWipeSummary;
+import com.bitbi.dfm.delta.domain.SiteSyncState;
+import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
@@ -21,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,6 +35,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -70,6 +81,21 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private SiteSyncStateRepository syncStateRepository;
+
+    @Autowired
+    private DeltaSyncStateService syncStateService;
+
+    @Autowired
+    private CheckpointEpochGuard epochGuard;
+
+    @Autowired
+    private ChangelogRetentionService retentionService;
 
     private Site site;
 
@@ -274,6 +300,94 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         assertThat(count("SELECT COUNT(*) FROM batches WHERE site_id = ?")).isPositive();
     }
 
+    // --- a checkpoint build racing the wipe (issue #136) ---
+
+    @Test
+    @DisplayName("a checkpoint build overtaken by the wipe cannot restore the pre-wipe pointer")
+    void concurrentCheckpointBuildCannotOutliveTheWipe() throws Exception {
+        // The pre-wipe history the racing build folds. The build is deliberately started while a
+        // transaction already holds the site_sync_state row the way DeltaSiteWipeService holds it
+        // for its whole transaction, so the build reads the old epoch and writes into the new one.
+        UUID batchId = seedBatch();
+        changelogSegmentService.persist(SITE_ID, batchId, "FULL_SNAPSHOT", 1L,
+                List.of(insert(1L, "Ann"), insert(2L, "Bob")));
+        syncStateService.advanceWatermark(SITE_ID, 2L);
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        CountDownLatch locked = new CountDownLatch(1);
+        Future<?> wipe = executor.submit(() -> transactionTemplate.execute(status -> {
+            SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(SITE_ID).orElseThrow();
+            locked.countDown();
+            // Hold the row while the build does its S3 work, then destroy the history and commit.
+            holdTheLock();
+            jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", SITE_ID);
+            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE_ID);
+            state.resetForWipe();
+            syncStateRepository.save(state);
+            return null;
+        }));
+        assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+        try {
+            // Reads generation 0; every row it writes waits for the lock above and is then refused.
+            checkpointService.buildCheckpoint(SITE_ID);
+            wipe.get(30, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        // Self-verifying: the build must actually have reached the write it was refused at. If it
+        // ever started after the commit instead — nothing left to fold, immediate return — every
+        // assertion below would pass while covering nothing, and this one would not. (The simulated
+        // wipe deletes rows only, so the discarded build's object is still there to prove it ran.)
+        assertThat(checkpointStorage.listKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)))
+                .as("the racing build must have uploaded its snapshot before the guard refused it")
+                .anyMatch(key -> key.endsWith("seq=2/snapshot.parquet"));
+
+        assertThat(count("SELECT COUNT(*) FROM checkpoints WHERE site_id = ?"))
+                .as("a resurrected checkpoint row would name pre-wipe bytes")
+                .isZero();
+        Map<String, Object> state = jdbc.queryForMap(
+                "SELECT * FROM site_sync_state WHERE site_id = ?", SITE_ID);
+        assertThat(state.get("generation")).isEqualTo(1L);
+        assertThat(state.get("last_checkpoint_seq"))
+                .as("a pre-wipe pointer is what makes retention prune the new epoch")
+                .isEqualTo(0L);
+
+        // The new epoch is healthy: its segments are not "below checkpoint", and the next build
+        // seeds from zero instead of refusing a lossy refold against a frame that no longer exists.
+        declareCustomersSchema();
+        changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L, List.of(insert(1L, "Ann")));
+        assertThat(retentionService.prune(SITE_ID)).isZero();
+        assertThat(count("SELECT COUNT(*) FROM changelog_segments WHERE site_id = ?")).isEqualTo(1);
+
+        checkpointService.buildCheckpoint(SITE_ID);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT last_checkpoint_seq FROM site_sync_state WHERE site_id = ?", Long.class, SITE_ID))
+                .isEqualTo(1L);
+        assertThat(count("SELECT COUNT(*) FROM checkpoints WHERE site_id = ?")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a checkpoint write from the previous epoch is refused after a real wipe")
+    void checkpointWriteFromThePreviousEpochIsRefused() {
+        changelogSegmentService.persist(SITE_ID, seedBatch(), "FULL_SNAPSHOT", 1L,
+                List.of(insert(1L, "Ann"), insert(2L, "Bob")));
+        checkpointService.buildCheckpoint(SITE_ID);
+        long generation = syncStateService.getSyncState(SITE_ID).generation();
+
+        wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
+
+        org.assertj.core.api.Assertions
+                .assertThatThrownBy(() -> epochGuard.inEpoch(SITE_ID, generation,
+                        () -> syncStateService.recordCheckpoint(SITE_ID, 2L)))
+                .isInstanceOf(CheckpointEpochGuard.EpochChangedException.class);
+        assertThat(jdbc.queryForObject(
+                "SELECT last_checkpoint_seq FROM site_sync_state WHERE site_id = ?", Long.class, SITE_ID))
+                .isZero();
+    }
+
     // --- Bit BI auto-reinit on the first post-wipe checkpoint ---
 
     @Test
@@ -355,6 +469,20 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         long remainderMs = 1000L - (Instant.now().toEpochMilli() % 1000L);
         try {
             Thread.sleep(remainderMs + 50L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Keep the {@code site_sync_state} row locked long enough for the racing build to reach its
+     * first write. Whether it blocks here or arrives after the commit, the epoch it read is stale
+     * either way — the hold only decides which of the two orderings the test exercises.
+     */
+    private static void holdTheLock() {
+        try {
+            Thread.sleep(1500L);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

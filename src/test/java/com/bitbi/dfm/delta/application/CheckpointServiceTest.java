@@ -5,6 +5,8 @@ import com.bitbi.dfm.delta.domain.ChangelogSegment;
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.Checkpoint;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.delta.domain.SiteSyncState;
+import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
@@ -66,6 +68,12 @@ class CheckpointServiceTest {
     private final DeltaMetrics metrics = mock(DeltaMetrics.class);
     private final org.springframework.context.ApplicationEventPublisher eventPublisher =
             mock(org.springframework.context.ApplicationEventPublisher.class);
+    /**
+     * The real guard over a mocked row: an unstubbed {@code findBySiteIdForUpdate} answers "no row",
+     * i.e. generation 0 — the epoch every fixture here builds at.
+     */
+    private final SiteSyncStateRepository syncStateRepository = mock(SiteSyncStateRepository.class);
+    private final CheckpointEpochGuard epochGuard = new CheckpointEpochGuard(syncStateRepository);
 
     private CheckpointService service;
 
@@ -75,7 +83,7 @@ class CheckpointServiceTest {
         service = new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 tempDirectory.toString(), Long.MAX_VALUE);
         when(metrics.timeCheckpoint(any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(0)).get());
         when(metrics.timeCheckpointPhase(any(), any(Supplier.class)))
@@ -318,7 +326,7 @@ class CheckpointServiceTest {
         service = new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 tempDirectory.toString(), 8L);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
 
@@ -389,7 +397,7 @@ class CheckpointServiceTest {
         service = new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 readOnly.toString(), Long.MAX_VALUE);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
 
@@ -410,7 +418,7 @@ class CheckpointServiceTest {
         service = new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 tempDirectory.toString(), ceiling);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordFrameUploads();
@@ -641,7 +649,106 @@ class CheckpointServiceTest {
         assertEquals(2L, firstSave.getValue().getSeq());
     }
 
+    @Test
+    void discardsTheBuildWhenAWipeBumpedTheEpochMidBuild() {
+        // Issue #136. The build read the pre-wipe epoch; by the time it writes, the wipe has
+        // committed. Re-inserting the row and the pre-wipe pointer would make retention prune the
+        // new epoch's segments as "below checkpoint" and strand the site on "refusing lossy refold".
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        wipedTo(1L);
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE), "a discarded build folds to nothing");
+
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void doesNotMistakeAWipeForAPerTableParquetFailure() {
+        // The per-table catch exists so one unrenderable table cannot freeze the pointer. An epoch
+        // change is the opposite: nothing about this build may be published, so it must escape the
+        // catch instead of being counted as a skip and letting the next table try.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        wipedTo(1L);
+
+        service.buildCheckpoint(SITE);
+
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        assertEquals(1, uploaded.size(), "the build stops at the first table it cannot publish");
+    }
+
+    @Test
+    void discardsARematerializeWhenAWipeBumpedTheEpoch() {
+        // The idle passes (#128) write rows too, at the recorded pointer — a wipe must stop them
+        // just as it stops an advancing build.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        Checkpoint detached = Checkpoint.create(SITE, "customers", 2L, 2L);
+        parkAtPointer(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))), detached);
+        recordUploads("checkpoints/recovered-key");
+        wipedTo(1L);
+
+        service.buildCheckpoint(SITE);
+
+        // The key is attached to the in-memory row before the write is attempted; what matters is
+        // that the write is refused, so the wiped site keeps no trace of the recovered snapshot.
+        verify(syncStateRepository).findBySiteIdForUpdate(SITE);
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void discardsInsteadOfRaisingTheLossyRefoldAlarmWhenTheSiteWasWiped() {
+        // Same surface state as refusesLossyRefoldWhenFrameUnreadableAndHistoryPruned — pointer at
+        // 10, no frame, early segments gone — but here a wipe caused it, and reporting a routine
+        // operator action as this subsystem's data-loss alarm would send someone hunting a
+        // corruption that never happened.
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L))
+                .thenReturn(new SyncStateView(0L, 0L, 0, true, false, 1L));
+        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        ChangelogSegment survivor = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+    }
+
+    @Test
+    void takesTheEpochLockBeforeWritingTheRowAndThePointer() {
+        // The positive half: every write of a healthy build goes through the same row lock the
+        // wipe holds, which is what makes the two orderings the only possible ones.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(syncStateRepository, times(2)).findBySiteIdForUpdate(SITE);
+        verify(checkpointRepository).save(any());
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
     // --- helpers ---
+
+    /** The site has been wiped {@code generation} times since this build read its sync state. */
+    private void wipedTo(long generation) {
+        SiteSyncState wiped = SiteSyncState.initial(SITE);
+        for (long i = 0; i < generation; i++) {
+            wiped.resetForWipe();
+        }
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped));
+    }
 
     /**
      * Park the site at an already-recorded checkpoint: the pointer matches the last segment,
