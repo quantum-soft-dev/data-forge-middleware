@@ -12,9 +12,14 @@
 -- site's checkpoints — a wipe and a re-baseline alike — and never sent to the client. The guard keys
 -- on it; `generation` keeps its wire meaning unchanged.
 --
--- Backward compatible: existing rows start at 0, which is what a build reading them sees, so no
--- build in flight across the deployment is spuriously refused. The counter only has to be monotonic
--- per site, not comparable with `generation`.
+-- Backward compatible in both directions, which needs saying because only one of them is obvious.
+-- Forwards: existing rows start at 0, which is what a build reading them sees, so no build in flight
+-- across the deployment is spuriously refused. Backwards: a pod that predates this column does not
+-- map it, so a wipe it commits during a rolling deployment bumps `generation` and leaves
+-- `baseline_epoch` where it was — which is why CheckpointEpochGuard and clearWipePending compare the
+-- **pair** (`SiteEpoch`) rather than this column alone. A guard watching only `baseline_epoch` would
+-- be blind to an old pod's wipe for the length of the rollout, reintroducing #136 through #142's fix.
+-- The counter only has to be monotonic per site; it is never compared with `generation`.
 ALTER TABLE site_sync_state
     ADD COLUMN baseline_epoch BIGINT NOT NULL DEFAULT 0;
 
