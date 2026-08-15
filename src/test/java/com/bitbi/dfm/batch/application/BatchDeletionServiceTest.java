@@ -6,6 +6,8 @@ import com.bitbi.dfm.delta.application.ChangelogSegmentService;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.storage.S3ListedObject;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -14,6 +16,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -51,7 +54,7 @@ class BatchDeletionServiceTest {
                 .thenReturn(List.of("delta/site/segments/1.pb.gz"));
         String prefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
         String orphanKey = prefix + "attempts/dead/sales%20orders.parquet";
-        when(storage.listAllKeys(prefix)).thenReturn(List.of(orphanKey));
+        when(storage.listAllKeys(prefix)).thenReturn(S3PrefixListing.completeKeys(List.of(orphanKey)));
         List<String> objectKeys = List.of(
                 building.expectedS3Key(), "delta/site/segments/1.pb.gz", orphanKey);
         when(storage.deleteObjects(objectKeys))
@@ -117,5 +120,30 @@ class BatchDeletionServiceTest {
         verify(artifactRepository, never()).deleteByBatchId(batchId);
         verify(segmentService, never()).deleteByBatchId(batchId);
         verify(storage, never()).deleteObjects(List.of());
+    }
+
+    @Test
+    void truncatedPrefixListingFallsBackToRecordedExactKeysOnly() {
+        UUID batchId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getSiteId()).thenReturn(siteId);
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        artifact.markBuilding();
+        String recordedKey = artifact.expectedS3Key();
+        artifact.markReady(recordedKey, 1, 4, "hash");
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact));
+        when(segmentService.deleteMetadataByBatchId(batchId)).thenReturn(List.of());
+        String prefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
+        String orphanKey = prefix + "attempts/dead/items.parquet";
+        when(storage.listAllKeys(prefix)).thenReturn(S3PrefixListing.truncated(List.of(
+                new S3ListedObject(orphanKey, Instant.EPOCH))));
+        when(storage.deleteObjects(List.of(recordedKey)))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
+
+        assertTrue(service.deleteBatch(batchId));
+
+        verify(storage).deleteObjects(List.of(recordedKey));
     }
 }

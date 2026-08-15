@@ -18,6 +18,9 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * @param s3DeleteErrors        objects known to have been left behind — the ones the bucket refused,
  *                              or every object handed to a delete phase that failed outright
  *                              (orphans, not data loss; a floor rather than a census, see #123)
+ * @param prefixesNotSwept      prefixes that could not be listed or were listed only partially.
+ *                              Distinct from {@code s3DeleteErrors}: do not quote this as an
+ *                              object count — repeat the wipe (issue #122)
  * @param baselineBatchDetached whether a plugin activation's baseline batch had to be nulled
  */
 @Schema(description = "Summary of a completed site history wipe")
@@ -31,6 +34,7 @@ public record SiteHistoryWipeResponseDto(
         int deletedErrorLogs,
         long deletedBytes,
         int s3DeleteErrors,
+        int prefixesNotSwept,
         boolean baselineBatchDetached) {
 
     /**
@@ -50,6 +54,7 @@ public record SiteHistoryWipeResponseDto(
                 summary.deletedErrorLogs(),
                 summary.deletedBytes(),
                 summary.s3DeleteErrors(),
+                summary.prefixesNotSwept(),
                 summary.baselineBatchDetached());
     }
 }

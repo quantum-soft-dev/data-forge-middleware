@@ -7,6 +7,8 @@ import com.bitbi.dfm.delta.domain.BatchParquetArtifact;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
+import com.bitbi.dfm.shared.storage.S3ListedObject;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
 import com.bitbi.dfm.upload.infrastructure.S3FileStorageService;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -139,7 +142,8 @@ class BatchRetentionServiceTest {
         BatchParquetArtifact building = BatchParquetArtifact.pending(batchId, siteId, "items");
         building.markBuilding();
         when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact, building));
-        when(s3FileStorageService.listAllKeys(batchPrefix)).thenReturn(List.of(winnerKey, orphanKey));
+        when(s3FileStorageService.listAllKeys(batchPrefix))
+                .thenReturn(S3PrefixListing.completeKeys(List.of(winnerKey, orphanKey)));
 
         ArgumentCaptor<List<String>> deleted = ArgumentCaptor.forClass(List.class);
         when(s3FileStorageService.deleteObjects(any())).thenReturn(new DeleteObjectsResult(1, List.of()));
@@ -196,6 +200,40 @@ class BatchRetentionServiceTest {
     }
 
     @Test
+    @DisplayName("truncated prefix listing falls back to recorded exact keys only")
+    void cleanupFallsBackToRecordedKeysWhenPrefixListingIsTruncated() {
+        Site site = mock(Site.class);
+        Batch batch = mock(Batch.class);
+        when(site.getId()).thenReturn(siteId);
+        when(site.getRetentionDays()).thenReturn(45);
+        when(siteRepository.findById(siteId)).thenReturn(Optional.of(site));
+        when(batchRepository.findCleanupCandidatesForSite(eq(siteId), any(), anyInt()))
+                .thenReturn(List.of(batch));
+        when(batch.getId()).thenReturn(batchId);
+        when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        BatchParquetArtifact legacy = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        legacy.markBuilding();
+        String legacyKey = legacy.expectedS3Key();
+        legacy.markReady(legacyKey, 1, 4, "hash");
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(legacy));
+        String orphanKey = S3CheckpointStorage.batchParquetPrefix(siteId, batchId)
+                + "attempts/dead/items.parquet";
+        when(s3FileStorageService.listAllKeys(S3CheckpointStorage.batchParquetPrefix(siteId, batchId)))
+                .thenReturn(S3PrefixListing.truncated(List.of(new S3ListedObject(orphanKey, Instant.EPOCH))));
+        when(s3FileStorageService.deleteObjects(List.of(legacyKey)))
+                .thenReturn(new DeleteObjectsResult(1, List.of()));
+
+        BatchRetentionService.BatchCleanupSummary summary = service.runCleanup(
+                new BatchRetentionService.BatchCleanupRequest(
+                        siteId, null, null, LocalDateTime.now().minusDays(1), 10, false));
+
+        assertThat(summary.deletedBatches()).isEqualTo(1);
+        verify(s3FileStorageService).deleteObjects(List.of(legacyKey));
+        verify(batchRepository).deleteById(batchId);
+    }
+
+    @Test
     @DisplayName("cleanup should still delete DB records even if S3 deletion returns errors (best-effort)")
     void cleanup_shouldDeleteDbWhenS3Errors() {
         Site site = mock(Site.class);
@@ -213,6 +251,8 @@ class BatchRetentionServiceTest {
         when(fileKey.getFileSize()).thenReturn(100L);
         when(uploadedFileRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of(fileKey));
         when(sqlGenerationRepository.findS3KeysByBatchId(batchId)).thenReturn(List.of());
+        when(s3FileStorageService.listAllKeys(any()))
+                .thenReturn(S3PrefixListing.empty());
 
         when(s3FileStorageService.deleteObjects(any()))
                 .thenReturn(new DeleteObjectsResult(0, List.of("error")));

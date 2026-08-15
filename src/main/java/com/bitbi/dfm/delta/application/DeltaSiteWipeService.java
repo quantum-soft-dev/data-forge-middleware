@@ -16,6 +16,8 @@ import com.bitbi.dfm.error.domain.ErrorLogRepository;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
+import com.bitbi.dfm.shared.storage.S3ListedObject;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
@@ -27,6 +29,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -157,26 +160,31 @@ public class DeltaSiteWipeService {
      * @throws ConcurrentSessionException when a batch committed while the wipe was running
      */
     public SiteHistoryWipeSummary wipe(Site site, Initiator initiator, String ipAddress, String userAgent) {
+        Instant startedAt = Instant.now();
         WipedRows wiped = transactionTemplate.execute(
                 status -> wipeRows(site, initiator, ipAddress, userAgent));
 
+        PrefixSweep sweep = new PrefixSweep();
+        sweep.add(unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId()), startedAt));
+        sweep.add(unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId()), startedAt));
+
         List<String> objects = new ArrayList<>(wiped.s3Keys());
-        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.egressPrefix(site.getId())));
-        objects.addAll(unreferencedObjects(site.getId(), S3CheckpointStorage.checkpointPrefix(site.getId())));
+        objects.addAll(sweep.keys);
 
         SiteHistoryWipeSummary summary = new SiteHistoryWipeSummary(
                 wiped.generation(), wiped.deletedBatches(), wiped.deletedSegments(),
                 wiped.deletedCheckpoints(), wiped.deletedFiles(), wiped.deletedSqlGenerations(),
                 wiped.deletedErrorLogs(), wiped.deletedBytes(),
                 deleteObjects(site.getId(), objects.stream().distinct().toList()),
+                sweep.prefixesNotSwept,
                 wiped.baselineBatchDetached());
         log.info("Site history wiped by {}: siteId={}, generation={}, batches={}, segments={}, "
                         + "checkpoints={}, files={}, sqlGenerations={}, errorLogs={}, bytes={}, "
-                        + "s3Errors={}, baselineDetached={}",
+                        + "s3Errors={}, prefixesNotSwept={}, baselineDetached={}",
                 initiator, site.getId(), summary.generation(), summary.deletedBatches(),
                 summary.deletedSegments(), summary.deletedCheckpoints(), summary.deletedFiles(),
                 summary.deletedSqlGenerations(), summary.deletedErrorLogs(), summary.deletedBytes(),
-                summary.s3DeleteErrors(), summary.baselineBatchDetached());
+                summary.s3DeleteErrors(), summary.prefixesNotSwept(), summary.baselineBatchDetached());
         return summary;
     }
 
@@ -247,19 +255,33 @@ public class DeltaSiteWipeService {
      * and the objects are only reachable through keys the rows never held. The keys recorded on the
      * rows are collected too and stay the fallback, so one prefix failing to list — logged and
      * swallowed, since the rows are already gone and failing here would report a completed wipe as a
-     * 500 — costs neither the other prefix nor the exact keys.</p>
+     * 500 — costs neither the other prefix nor the exact keys. A truncated or failed listing is
+     * reported as {@code prefixesNotSwept} rather than folded into {@code s3DeleteErrors} (issue
+     * #122). Objects whose {@code lastModified} is after the wipe's start instant are skipped, so a
+     * concurrent producer cannot have its fresh object swept while the row that names it survives.</p>
      *
-     * @param siteId the site being wiped, for the log line
-     * @param prefix the whole-site prefix to enumerate
-     * @return every key under the prefix, or an empty list when it could not be listed
+     * @param siteId    the site being wiped, for the log line
+     * @param prefix    the whole-site prefix to enumerate
+     * @param startedAt the instant the wipe began; newer objects are left alone
+     * @return the keys that predate the wipe, plus whether the listing was incomplete
      */
-    private List<String> unreferencedObjects(UUID siteId, String prefix) {
+    private PrefixListingResult unreferencedObjects(UUID siteId, String prefix, Instant startedAt) {
         try {
-            return checkpointStorage.listAllKeys(prefix);
+            S3PrefixListing listing = checkpointStorage.listAllKeys(prefix);
+            List<String> keys = listing.objects().stream()
+                    .filter(object -> !object.lastModifiedAfter(startedAt))
+                    .map(S3ListedObject::key)
+                    .toList();
+            if (listing.truncated()) {
+                log.warn("Listing of {} for site {} was truncated after {} object(s); the pages "
+                                + "already read are swept and the wipe is worth repeating",
+                        prefix, siteId, listing.objects().size());
+            }
+            return new PrefixListingResult(keys, listing.truncated());
         } catch (RuntimeException e) {
             log.warn("Could not enumerate {} for site {}; the objects under it are left as orphans "
                     + "and the wipe is worth repeating once listing works again", prefix, siteId, e);
-            return List.of();
+            return new PrefixListingResult(List.of(), true);
         }
     }
 
@@ -422,5 +444,22 @@ public class DeltaSiteWipeService {
                              int deletedCheckpoints, int deletedFiles, int deletedSqlGenerations,
                              int deletedErrorLogs, long deletedBytes, boolean baselineBatchDetached,
                              List<String> s3Keys) {
+    }
+
+    /** Keys found under one prefix, plus whether that listing was incomplete. */
+    private record PrefixListingResult(List<String> keys, boolean incomplete) {
+    }
+
+    /** Accumulates both whole-site prefix walks. */
+    private static final class PrefixSweep {
+        private final List<String> keys = new ArrayList<>();
+        private int prefixesNotSwept;
+
+        private void add(PrefixListingResult result) {
+            keys.addAll(result.keys());
+            if (result.incomplete()) {
+                prefixesNotSwept++;
+            }
+        }
     }
 }

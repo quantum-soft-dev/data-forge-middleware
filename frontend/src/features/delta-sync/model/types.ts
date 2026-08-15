@@ -82,6 +82,7 @@ export const siteHistoryWipeResultSchema = z.object({
   deletedErrorLogs: z.number(),
   deletedBytes: z.number(),
   s3DeleteErrors: z.number(),
+  prefixesNotSwept: z.number(),
   baselineBatchDetached: z.boolean(),
 });
 export type SiteHistoryWipeResult = z.infer<typeof siteHistoryWipeResultSchema>;

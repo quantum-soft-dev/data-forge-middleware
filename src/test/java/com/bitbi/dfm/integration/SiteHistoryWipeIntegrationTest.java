@@ -126,6 +126,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         assertThat(summary.deletedErrorLogs()).isGreaterThanOrEqualTo(1);
         assertThat(summary.baselineBatchDetached()).isTrue();
         assertThat(summary.s3DeleteErrors()).isZero();
+        assertThat(summary.prefixesNotSwept()).isZero();
 
         assertThat(count("SELECT COUNT(*) FROM batches WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM changelog_segments WHERE site_id = ?")).isZero();
@@ -166,6 +167,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
         assertThat(summary.s3DeleteErrors()).isZero();
+        assertThat(summary.prefixesNotSwept()).isZero();
         assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).isEmpty();
     }
 
@@ -181,7 +183,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 3L, List.of(insert(3L, "Cy")));
         checkpointService.buildCheckpoint(SITE_ID);
 
-        List<String> beforeWipe = checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        List<String> beforeWipe = checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)).keys();
         assertThat(beforeWipe.stream().filter(key -> key.endsWith("snapshot.parquet")).toList())
                 .as("one table, two builds, two snapshot objects")
                 .hasSize(2);
@@ -193,7 +195,8 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
         assertThat(summary.s3DeleteErrors()).isZero();
-        assertThat(checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)))
+        assertThat(summary.prefixesNotSwept()).isZero();
+        assertThat(checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)).keys())
                 .as("a clean slate means the whole prefix, not just the newest key on the row")
                 .isEmpty();
     }

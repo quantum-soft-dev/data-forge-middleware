@@ -72,6 +72,7 @@ class DeltaSiteWipeRestContractTest extends BaseIntegrationTest {
                 .andExpect(jsonPath("$.deletedErrorLogs").isNumber())
                 .andExpect(jsonPath("$.deletedBytes").isNumber())
                 .andExpect(jsonPath("$.s3DeleteErrors").isNumber())
+                .andExpect(jsonPath("$.prefixesNotSwept").isNumber())
                 .andExpect(jsonPath("$.baselineBatchDetached").isBoolean());
     }
 

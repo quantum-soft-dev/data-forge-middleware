@@ -1,5 +1,7 @@
 package com.bitbi.dfm.upload.infrastructure;
 
+import com.bitbi.dfm.shared.storage.S3PrefixLister;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,11 +10,9 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
-import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -144,17 +144,19 @@ public class S3FileStorageService {
         return new DeleteObjectsResult(deletedCount, errors);
     }
 
-    /** Return every object key under a prefix, following all S3 continuation pages. */
-    public List<String> listAllKeys(String prefix) {
-        try {
-            return s3Client.listObjectsV2Paginator(ListObjectsV2Request.builder()
-                            .bucket(bucketName)
-                            .prefix(prefix)
-                            .build())
-                    .contents().stream().map(S3Object::key).toList();
-        } catch (S3Exception e) {
-            throw new FileStorageException("Failed to list objects under prefix: " + prefix, e);
-        }
+    /**
+     * Every object under a prefix, following all S3 continuation pages (issue #122).
+     *
+     * <p>A mid-pagination failure returns the pages already read plus {@code truncated=true}
+     * instead of throwing the whole walk away. {@code BatchDeletionService} and
+     * {@code BatchRetentionService} keep their complete-listing behaviour and fall back to
+     * recorded exact keys only when the result is truncated.</p>
+     *
+     * @param prefix the prefix to enumerate
+     * @return the pages read, with lastModified per object and a truncation flag
+     */
+    public S3PrefixListing listAllKeys(String prefix) {
+        return S3PrefixLister.listAll(s3Client, bucketName, prefix);
     }
 
     /**

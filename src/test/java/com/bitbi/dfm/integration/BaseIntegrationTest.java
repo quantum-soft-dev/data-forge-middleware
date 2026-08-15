@@ -102,7 +102,7 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
     }
 
     private void purgePrefix(String prefix) {
-        for (String key : egressCleanupStorage.listAllKeys(prefix)) {
+        for (String key : egressCleanupStorage.listAllKeys(prefix).keys()) {
             egressCleanupS3Client.deleteObject(
                     DeleteObjectRequest.builder().bucket(egressCleanupBucket).key(key).build());
         }

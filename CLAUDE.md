@@ -454,6 +454,22 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- wipe-prefix-sweep: The site-history wipe's post-commit prefix walk is bounded, resumable and
+  honest (issue #122, consolidating #123 and #124). `S3PrefixLister` walks `ListObjectsV2` page by
+  page and returns the pages already read plus `lastModified` per object and a truncation flag —
+  `S3CheckpointStorage` and `S3FileStorageService` share it, so a mid-pagination outage is a
+  partial sweep rather than a total miss. The wipe takes its start instant before the transaction
+  and skips objects newer than that on **both** `egress/{siteId}/` and `checkpoints/{siteId}/`, so
+  a concurrent rebuild or egress `PutObject` cannot have its fresh object deleted while the row
+  that names it survives. A prefix that could not be listed, or was listed only partially, is
+  reported as `prefixesNotSwept` on `SiteHistoryWipeSummary` / the wipe DTO — distinct from
+  `s3DeleteErrors`, which the UI quotes as an object count. The Danger zone tells the operator to
+  repeat the wipe rather than inventing a number. `BatchDeletionService` and `BatchRetentionService`
+  keep their complete-listing behaviour and fall back to recorded exact keys only on a truncated
+  listing. No migration, configuration-key, gRPC, or S3-key change. The row-side race in which
+  `CheckpointService.buildCheckpoint` re-inserts a pre-wipe pointer after the wipe commits is
+  **not** closed here — the cut-off protects the objects; serializing the build behind the
+  `site_sync_state` lock is a separate decision.
 - checkpoint-parquet-on-disk: The V2 checkpoint build materializes its snapshots on disk, one table
   at a time, and every V2 Parquet writer takes an explicit row-group budget (issue #112, which
   absorbed #114). `ParquetCheckpointWriter.toParquet` used to copy a table's folded rows into a
