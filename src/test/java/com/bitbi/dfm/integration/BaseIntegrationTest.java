@@ -8,6 +8,7 @@ import com.bitbi.dfm.site.domain.SiteRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -68,6 +69,9 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Autowired
+    private JdbcTemplate sharedStateCleanupJdbc;
+
+    @Autowired
     private S3CheckpointStorage egressCleanupStorage;
 
     @Autowired
@@ -87,6 +91,16 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
      */
     protected void purgeEgressPrefix(UUID siteId) {
         purgePrefix(S3CheckpointStorage.egressPrefix(siteId));
+    }
+
+    /**
+     * Delete every row in {@code app_settings}. The PostgreSQL database is shared across the whole
+     * suite, so any test that asserts the CONFIG fallback ({@code source=CONFIG}, empty
+     * {@code updatedAt}) must clear in {@code @BeforeEach} — otherwise those assertions pass or
+     * fail depending on what other test methods or classes persisted (issue #119).
+     */
+    protected void clearAppSettings() {
+        sharedStateCleanupJdbc.update("DELETE FROM app_settings");
     }
 
     /**
