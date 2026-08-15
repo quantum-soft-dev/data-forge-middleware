@@ -57,24 +57,8 @@ public class S3CheckpointStorage {
      * @return the S3 key written
      */
     public String uploadParquet(UUID siteId, String tableName, long seq, Path file) {
-        String s3Key = String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq);
-        try {
-            long size = java.nio.file.Files.size(file);
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(s3Key)
-                    .contentType("application/vnd.apache.parquet")
-                    .contentLength(size)
-                    .build();
-            s3Client.putObject(request, RequestBody.fromFile(file));
-            log.info("Stored checkpoint Parquet: key={}, size={}", s3Key, size);
-            return s3Key;
-            // RequestBody.fromFile opens the file lazily, wrapping a read failure in an
-            // UncheckedIOException: convert it too, so every failure of this upload reaches the
-            // caller as one type instead of leaking the SDK's internals into the caller's catch.
-        } catch (S3Exception | IOException | UncheckedIOException e) {
-            throw new CheckpointStorageException("Failed to store checkpoint Parquet: " + s3Key, e);
-        }
+        return putFile(String.format("checkpoints/%s/%s/seq=%d/snapshot.parquet", siteId, tableName, seq),
+                "application/vnd.apache.parquet", file, "checkpoint Parquet");
     }
 
     /**
@@ -105,21 +89,8 @@ public class S3CheckpointStorage {
     /** Upload one completed batch/table artifact directly from a local file. */
     public String uploadBatchParquet(UUID siteId, UUID batchId, String tableName,
                                      UUID claimToken, Path file) {
-        String s3Key = BatchParquetArtifactKey.attempt(siteId, batchId, tableName, claimToken);
-        try {
-            long size = java.nio.file.Files.size(file);
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(s3Key)
-                    .contentType("application/vnd.apache.parquet")
-                    .contentLength(size)
-                    .build();
-            s3Client.putObject(request, RequestBody.fromFile(file));
-            log.info("Stored unified batch Parquet: key={}, size={}", s3Key, size);
-            return s3Key;
-        } catch (S3Exception | IOException e) {
-            throw new CheckpointStorageException("Failed to store unified batch Parquet: " + s3Key, e);
-        }
+        return putFile(BatchParquetArtifactKey.attempt(siteId, batchId, tableName, claimToken),
+                "application/vnd.apache.parquet", file, "unified batch Parquet");
     }
 
     /**
@@ -213,23 +184,28 @@ public class S3CheckpointStorage {
      * @return the S3 key written
      */
     public String uploadFrame(UUID siteId, long seq, Path file) {
-        String s3Key = frameKey(siteId, seq);
+        return putFile(frameKey(siteId, seq), "application/octet-stream", file, "checkpoint frame");
+    }
+
+    /**
+     * Stream a local file to {@code s3Key}. {@code RequestBody.fromFile} opens the file lazily
+     * and wraps a read failure in {@link UncheckedIOException} — convert that too, so every
+     * failure of this upload is one {@link CheckpointStorageException}.
+     */
+    private String putFile(String s3Key, String contentType, Path file, String what) {
         try {
             long size = java.nio.file.Files.size(file);
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(bucketName)
                     .key(s3Key)
-                    .contentType("application/octet-stream")
+                    .contentType(contentType)
                     .contentLength(size)
                     .build();
             s3Client.putObject(request, RequestBody.fromFile(file));
-            log.info("Stored checkpoint frame: key={}, size={}", s3Key, size);
+            log.info("Stored {}: key={}, size={}", what, s3Key, size);
             return s3Key;
-            // RequestBody.fromFile opens the file lazily, wrapping a read failure in an
-            // UncheckedIOException: convert it too, so every failure of this upload reaches the
-            // caller as one type instead of leaking the SDK's internals into the caller's catch.
         } catch (S3Exception | IOException | UncheckedIOException e) {
-            throw new CheckpointStorageException("Failed to store checkpoint frame: " + s3Key, e);
+            throw new CheckpointStorageException("Failed to store " + what + ": " + s3Key, e);
         }
     }
 
