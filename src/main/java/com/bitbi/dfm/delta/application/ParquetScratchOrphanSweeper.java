@@ -2,7 +2,6 @@ package com.bitbi.dfm.delta.application;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -13,7 +12,6 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
-import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -25,7 +23,7 @@ import java.util.Set;
  * <p>Both writers already delete their own files on the happy path
  * ({@link CheckpointService}, {@link BatchParquetFinalizationService}). This sweeper is the
  * recovery path for a shared persistent {@code temp-dir}: it lists only the configured
- * directories, matches the prefixes those writers use, and refuses to delete anything whose
+ * directories, matches {@link ParquetScratch} prefixes, and refuses to delete anything whose
  * last-modified time is still inside {@code delta.parquet.scratch-orphan-age-seconds}. Age is
  * the only safe filter — a sibling replica may be writing into the same volume, and the
  * batch-parquet lease is renewed for the life of a live build, so it is not a bound on file
@@ -50,31 +48,20 @@ public class ParquetScratchOrphanSweeper {
     /** Default interval between sweeps (1 hour). The first tick runs as soon as the scheduler starts. */
     public static final String DEFAULT_SWEEP_MS = "3600000";
 
-    static final String CHECKPOINT_PREFIX = "checkpoint-";
-    static final String BATCH_PARQUET_PREFIX = "batch-parquet-";
-
     private final Set<Path> directories;
     private final long ageSeconds;
-    private final Clock clock;
 
-    @Autowired
     public ParquetScratchOrphanSweeper(
             @Value("${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String checkpointTempDir,
             @Value("${delta.batch-parquet.temp-dir:${java.io.tmpdir}}") String batchParquetTempDir,
             @Value("${delta.parquet.scratch-orphan-age-seconds:" + DEFAULT_AGE_SECONDS + "}")
             long ageSeconds) {
-        this(checkpointTempDir, batchParquetTempDir, ageSeconds, Clock.systemUTC());
-    }
-
-    ParquetScratchOrphanSweeper(String checkpointTempDir, String batchParquetTempDir,
-                                long ageSeconds, Clock clock) {
         if (ageSeconds <= 0) {
             throw new IllegalArgumentException(
                     "delta.parquet.scratch-orphan-age-seconds must be positive, got " + ageSeconds);
         }
         this.directories = uniqueDirectories(checkpointTempDir, batchParquetTempDir);
         this.ageSeconds = ageSeconds;
-        this.clock = clock;
     }
 
     /**
@@ -86,7 +73,7 @@ public class ParquetScratchOrphanSweeper {
             initialDelayString = "0",
             fixedDelayString = "${delta.parquet.scratch-orphan-sweep-ms:" + DEFAULT_SWEEP_MS + "}")
     public void sweep() {
-        Instant cutoff = clock.instant().minusSeconds(ageSeconds);
+        Instant cutoff = Instant.now().minusSeconds(ageSeconds);
         for (Path directory : directories) {
             sweepDirectory(directory, cutoff);
         }
@@ -107,7 +94,7 @@ public class ParquetScratchOrphanSweeper {
 
     private void deleteIfOrphan(Path path, Instant cutoff) {
         String name = path.getFileName().toString();
-        if (!isScratchName(name)) {
+        if (!ParquetScratch.matches(name)) {
             return;
         }
         try {
@@ -123,10 +110,6 @@ public class ParquetScratchOrphanSweeper {
         } catch (IOException e) {
             log.warn("Could not inspect or delete parquet scratch file {}", path, e);
         }
-    }
-
-    static boolean isScratchName(String name) {
-        return name.startsWith(CHECKPOINT_PREFIX) || name.startsWith(BATCH_PARQUET_PREFIX);
     }
 
     private static Set<Path> uniqueDirectories(String... configured) {

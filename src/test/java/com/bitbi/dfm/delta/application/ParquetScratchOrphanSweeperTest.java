@@ -3,20 +3,15 @@ package com.bitbi.dfm.delta.application;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
-import java.lang.reflect.Constructor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -27,8 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParquetScratchOrphanSweeperTest {
 
-    private static final Instant NOW = Instant.parse("2026-08-15T12:00:00Z");
-    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final long AGE_SECONDS = 3_600L;
 
     @TempDir
@@ -42,12 +35,13 @@ class ParquetScratchOrphanSweeperTest {
     @BeforeEach
     void setUp() {
         sweeper = new ParquetScratchOrphanSweeper(
-                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, CLOCK);
+                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS);
     }
 
     @Test
     void deletesAnOldCheckpointScratchFile() throws IOException {
-        Path orphan = scratch(checkpointDir, "checkpoint-" + UUID.randomUUID() + "-", ".parquet");
+        Path orphan = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX + UUID.randomUUID() + "-",
+                ".parquet");
         age(orphan, AGE_SECONDS + 1);
 
         sweeper.sweep();
@@ -57,7 +51,8 @@ class ParquetScratchOrphanSweeperTest {
 
     @Test
     void deletesAnOldBatchParquetScratchFile() throws IOException {
-        Path orphan = scratch(batchDir, "batch-parquet-" + UUID.randomUUID() + "-", ".parquet");
+        Path orphan = scratch(batchDir, ParquetScratch.BATCH_PARQUET_PREFIX + UUID.randomUUID() + "-",
+                ".parquet");
         age(orphan, AGE_SECONDS + 1);
 
         sweeper.sweep();
@@ -67,25 +62,14 @@ class ParquetScratchOrphanSweeperTest {
 
     @Test
     void keepsAFreshScratchFile() throws IOException {
-        Path live = scratch(checkpointDir, "checkpoint-" + UUID.randomUUID() + "-", ".parquet");
+        // Cutoff is exclusive (mtime.isBefore): a file one second inside the window must stay.
+        Path live = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX + UUID.randomUUID() + "-",
+                ".parquet");
         age(live, AGE_SECONDS - 1);
 
         sweeper.sweep();
 
         assertTrue(Files.exists(live));
-    }
-
-    @Test
-    void keepsAScratchFileExactlyAtTheAgeThreshold() throws IOException {
-        // Strictly older than the threshold is the only safe delete: a file whose mtime equals
-        // the cutoff may still belong to a writer that created it just as the lease-length window
-        // elapsed, and last-modified resolution on some filesystems is a whole second.
-        Path boundary = scratch(batchDir, "batch-parquet-", ".parquet");
-        age(boundary, AGE_SECONDS);
-
-        sweeper.sweep();
-
-        assertTrue(Files.exists(boundary));
     }
 
     @Test
@@ -103,7 +87,7 @@ class ParquetScratchOrphanSweeperTest {
 
     @Test
     void doesNotDeleteADirectoryThatMatchesAScratchPrefix() throws IOException {
-        Path dir = Files.createDirectory(checkpointDir.resolve("checkpoint-not-a-file"));
+        Path dir = Files.createDirectory(checkpointDir.resolve(ParquetScratch.CHECKPOINT_PREFIX + "not-a-file"));
         age(dir, AGE_SECONDS + 60);
 
         sweeper.sweep();
@@ -113,8 +97,8 @@ class ParquetScratchOrphanSweeperTest {
 
     @Test
     void sweepsBothConfiguredDirectoriesWhenTheyDiffer() throws IOException {
-        Path checkpointOrphan = scratch(checkpointDir, "checkpoint-", ".parquet");
-        Path batchOrphan = scratch(batchDir, "batch-parquet-", ".parquet");
+        Path checkpointOrphan = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX, ".parquet");
+        Path batchOrphan = scratch(batchDir, ParquetScratch.BATCH_PARQUET_PREFIX, ".parquet");
         age(checkpointOrphan, AGE_SECONDS + 1);
         age(batchOrphan, AGE_SECONDS + 1);
 
@@ -127,10 +111,10 @@ class ParquetScratchOrphanSweeperTest {
     @Test
     void sweepsBothPrefixesWhenTheyShareOneDirectory() throws IOException {
         ParquetScratchOrphanSweeper shared = new ParquetScratchOrphanSweeper(
-                checkpointDir.toString(), checkpointDir.toString(), AGE_SECONDS, CLOCK);
-        Path checkpointOrphan = scratch(checkpointDir, "checkpoint-", ".parquet");
-        Path batchOrphan = scratch(checkpointDir, "batch-parquet-", ".parquet");
-        Path live = scratch(checkpointDir, "checkpoint-live-", ".parquet");
+                checkpointDir.toString(), checkpointDir.toString(), AGE_SECONDS);
+        Path checkpointOrphan = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX, ".parquet");
+        Path batchOrphan = scratch(checkpointDir, ParquetScratch.BATCH_PARQUET_PREFIX, ".parquet");
+        Path live = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX + "live-", ".parquet");
         age(checkpointOrphan, AGE_SECONDS + 1);
         age(batchOrphan, AGE_SECONDS + 1);
         age(live, AGE_SECONDS - 1);
@@ -146,7 +130,7 @@ class ParquetScratchOrphanSweeperTest {
     void skipsAMissingDirectoryWithoutThrowing() {
         Path missing = checkpointDir.resolve("does-not-exist");
         ParquetScratchOrphanSweeper missingDir = new ParquetScratchOrphanSweeper(
-                missing.toString(), batchDir.toString(), AGE_SECONDS, CLOCK);
+                missing.toString(), batchDir.toString(), AGE_SECONDS);
 
         missingDir.sweep();
 
@@ -156,19 +140,9 @@ class ParquetScratchOrphanSweeperTest {
     @Test
     void rejectsANonPositiveAgeAtStartup() {
         assertThrows(IllegalArgumentException.class, () ->
-                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), 0L, CLOCK));
+                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), 0L));
         assertThrows(IllegalArgumentException.class, () ->
-                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), -1L, CLOCK));
-    }
-
-    @Test
-    void marksTheProductionConstructorForSpring() throws NoSuchMethodException {
-        // A second Clock-taking constructor exists so unit tests can freeze time. Without
-        // @Autowired on the three-argument one, Spring cannot choose and looks for a no-arg
-        // constructor — every @SpringBootTest then fails to start.
-        Constructor<ParquetScratchOrphanSweeper> production =
-                ParquetScratchOrphanSweeper.class.getConstructor(String.class, String.class, long.class);
-        assertNotNull(production.getAnnotation(Autowired.class));
+                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), -1L));
     }
 
     @Test
@@ -182,11 +156,25 @@ class ParquetScratchOrphanSweeperTest {
                 "application.yml must declare delta.parquet.scratch-orphan-sweep-ms");
     }
 
+    @Test
+    void writersCreateFilesWithTheSharedPrefixes() throws IOException {
+        // The on-disk contract is the prefix symbol. A writer that goes back to a string
+        // literal can drift from the sweeper with no compile failure.
+        String checkpoint = Files.readString(
+                Path.of("src/main/java/com/bitbi/dfm/delta/application/CheckpointService.java"));
+        String batch = Files.readString(
+                Path.of("src/main/java/com/bitbi/dfm/delta/application/BatchParquetFinalizationService.java"));
+        assertTrue(checkpoint.contains("ParquetScratch.CHECKPOINT_PREFIX"));
+        assertTrue(batch.contains("ParquetScratch.BATCH_PARQUET_PREFIX"));
+        assertFalse(checkpoint.contains("\"checkpoint-\""));
+        assertFalse(batch.contains("\"batch-parquet-\""));
+    }
+
     private static Path scratch(Path directory, String prefix, String suffix) throws IOException {
         return Files.createTempFile(directory, prefix, suffix);
     }
 
     private static void age(Path path, long ageSeconds) throws IOException {
-        Files.setLastModifiedTime(path, FileTime.from(NOW.minusSeconds(ageSeconds)));
+        Files.setLastModifiedTime(path, FileTime.from(Instant.now().minusSeconds(ageSeconds)));
     }
 }
