@@ -336,6 +336,14 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
             executor.shutdownNow();
         }
 
+        // Self-verifying: the build must actually have reached the write it was refused at. If it
+        // ever started after the commit instead — nothing left to fold, immediate return — every
+        // assertion below would pass while covering nothing, and this one would not. (The simulated
+        // wipe deletes rows only, so the discarded build's object is still there to prove it ran.)
+        assertThat(checkpointStorage.listKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)))
+                .as("the racing build must have uploaded its snapshot before the guard refused it")
+                .anyMatch(key -> key.endsWith("seq=2/snapshot.parquet"));
+
         assertThat(count("SELECT COUNT(*) FROM checkpoints WHERE site_id = ?"))
                 .as("a resurrected checkpoint row would name pre-wipe bytes")
                 .isZero();

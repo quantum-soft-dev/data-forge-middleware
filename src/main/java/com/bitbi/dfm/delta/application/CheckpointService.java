@@ -149,6 +149,17 @@ public class CheckpointService {
         // pruning it would silently publish a truncated checkpoint and advance the pointer, making
         // the loss durable. Refuse and let the build fail loudly instead.
         if (checkpointSeq > 0 && !haveFrame && historyPruned) {
+            // Unless a wipe took them. It deletes the frame and the segments after committing the
+            // new epoch, so a build that read the pointer just before it sees exactly this state —
+            // and raising the loudest alarm in this subsystem for a routine operator action would
+            // be wrong. Re-read the epoch and discard instead. (The re-read can itself lose the
+            // race, in which case the alarm is raised as before; a wipe repeated on that site
+            // clears it, since the pointer is 0 by then.)
+            if (syncStateService.getSyncState(siteId).generation() != generation) {
+                log.warn("Discarding the checkpoint build for site {}: it was wiped while the build "
+                        + "was reading, taking frame@{} with it", siteId, checkpointSeq);
+                return Map.of();
+            }
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
                             + " is unreadable and earlier segments are pruned — refusing lossy refold",
@@ -295,15 +306,16 @@ public class CheckpointService {
                 // table simply has nothing to download until a schema arrives. The client is
                 // required to SubmitSchema before its first session, so this means the site is
                 // misconfigured — count it so the hole is visible rather than silent.
-                // Report before writing: the guarded save throws rather than returns when the
-                // site was wiped mid-build, and this table's hole would then go unrecorded.
+                // Write first, then report — the reverse of the catch below, and deliberately so:
+                // there is no cause to preserve here, and an epoch refusal must leave the meter
+                // alone. A discarded build has no tables to report a hole for.
+                if (abandonStaleSnapshot(checkpoint, pass)) {
+                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+                }
                 metrics.checkpointTableUnmaterialized("no_schema");
                 log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
                         + "without a downloadable artifact (the client must SubmitSchema)",
                         tableName, siteId);
-                if (abandonStaleSnapshot(checkpoint, pass)) {
-                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
-                }
                 return;
             }
 

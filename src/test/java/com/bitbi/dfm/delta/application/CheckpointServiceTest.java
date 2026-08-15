@@ -706,6 +706,26 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void discardsInsteadOfRaisingTheLossyRefoldAlarmWhenTheSiteWasWiped() {
+        // Same surface state as refusesLossyRefoldWhenFrameUnreadableAndHistoryPruned — pointer at
+        // 10, no frame, early segments gone — but here a wipe caused it, and reporting a routine
+        // operator action as this subsystem's data-loss alarm would send someone hunting a
+        // corruption that never happened.
+        when(syncStateService.getSyncState(SITE))
+                .thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L))
+                .thenReturn(new SyncStateView(0L, 0L, 0, true, false, 1L));
+        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        ChangelogSegment survivor = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+    }
+
+    @Test
     void takesTheEpochLockBeforeWritingTheRowAndThePointer() {
         // The positive half: every write of a healthy build goes through the same row lock the
         // wipe holds, which is what makes the two orderings the only possible ones.
