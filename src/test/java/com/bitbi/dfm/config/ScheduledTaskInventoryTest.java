@@ -279,8 +279,14 @@ class ScheduledTaskInventoryTest {
             if (!isProductionClass(type)) {
                 continue;
             }
-            for (Method method : type.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(Scheduled.class)) {
+            // getAllDeclaredMethods walks the hierarchy and MergedAnnotations sees through
+            // @Schedules, so neither an inherited tick nor a repeated one can hide. The name is the
+            // concrete class, which is what actually gets scheduled.
+            for (Method method : org.springframework.util.ReflectionUtils.getAllDeclaredMethods(type)) {
+                if (org.springframework.core.annotation.MergedAnnotations
+                        .from(method, org.springframework.core.annotation.MergedAnnotations
+                                .SearchStrategy.TYPE_HIERARCHY)
+                        .isPresent(Scheduled.class)) {
                     found.add(type.getName() + "#" + method.getName());
                 }
             }

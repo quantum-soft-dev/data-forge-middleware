@@ -132,14 +132,23 @@ class ScheduledTaskIsolationTest {
     @DisplayName("closing the context neither interrupts a running task nor waits on its thread")
     void shouldNotInterruptARunningTaskOnShutdown() throws InterruptedException {
         ShutdownWitness witness = new ShutdownWitness();
+        java.util.concurrent.atomic.AtomicReference<ThreadPoolTaskScheduler> scheduler =
+                new java.util.concurrent.atomic.AtomicReference<>();
 
         runner()
                 .withUserConfiguration(SchedulingConfiguration.class)
                 .withBean(ShutdownWitness.class, () -> witness)
                 .withUserConfiguration(ShutdownWitnessConfiguration.class)
-                .run(context -> witness.awaitStarted());
+                .run(context -> {
+                    scheduler.set(context.getBean(ThreadPoolTaskScheduler.class));
+                    witness.awaitStarted();
+                });
 
         assertTrue(witness.awaitFinished(), "the task never finished after the context closed");
+        Awaitility.await("the executor terminates once the running task is done")
+                .atMost(PROGRESS_WINDOW)
+                .pollInterval(Duration.ofMillis(TICK_MS))
+                .until(() -> scheduler.get().getScheduledThreadPoolExecutor().isTerminated());
         assertFalse(witness.wasInterrupted(),
                 "shutdown interrupted a running scheduled task. Boot's await-termination default is "
                         + "false, which means shutdownNow(); SchedulingConfiguration overrides it because "
@@ -310,9 +319,33 @@ class ScheduledTaskIsolationTest {
         }
     }
 
+    /**
+     * A cron tick due far in the future, installed the way {@code BatchRetentionScheduler} installs
+     * its admin-editable schedule — straight on the {@code TaskScheduler}, so no annotation
+     * post-processor cancels it on the way out.
+     *
+     * <p>Spring queues every cron fire as a one-shot <em>delayed</em> task
+     * ({@code ReschedulingRunnable}), and a plain {@code shutdown()} keeps running those. Without
+     * {@code setExecuteExistingDelayedTasksAfterShutdownPolicy(false)} this single future keeps the
+     * executor and its threads alive for a year.</p>
+     */
+    static class DistantCronTask {
+
+        DistantCronTask(TaskScheduler scheduler) {
+            scheduler.schedule(() -> {
+                // never runs during a test; the future exists to sit in the delayed queue
+            }, new org.springframework.scheduling.support.CronTrigger("0 0 0 1 1 *"));
+        }
+    }
+
     @Configuration(proxyBeanMethods = false)
     @EnableScheduling
     static class ShutdownWitnessConfiguration {
+
+        @Bean
+        DistantCronTask distantCronTask(TaskScheduler scheduler) {
+            return new DistantCronTask(scheduler);
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

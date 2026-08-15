@@ -486,9 +486,12 @@ pages/{feature}/            # Route pages
   already carry their own guard (`ReentrantLock`, `AtomicBoolean`, `FOR UPDATE SKIP LOCKED` claims
   with leases), and the only genuinely new pairing — the two provisional-segment deletes — is one
   the base deployment's two replicas could already produce. A pool also stops a periodic task
-  overlapping itself — and changes what a rollout does to a running one, so two shutdown settings are
-  fixed in code rather than left to Boot's defaults: the threads are **daemon** and are **not
-  interrupted** on context close, which is what they were as virtual threads. `shutdownNow()` would
+  overlapping itself — and changes what a rollout does to a running one, so three shutdown settings
+  are fixed in code rather than left to Boot's defaults: the threads are **daemon**, they are **not
+  interrupted** on context close (which is what they were as virtual threads), and the queue of
+  not-yet-due ticks is **dropped** — a plain shutdown still runs queued *delayed* tasks and every
+  cron tick is queued as one, so without it the pod would sit with parked threads until the monthly
+  partition job came due, and any `await-termination-period` would be certain to time out. `shutdownNow()` would
   not merely stop the 02:00 build — `CheckpointService` catches the interrupt per table and detaches
   that table's snapshot key, so a deployment at the wrong minute would leave a 404 behind until the
   nightly rematerialize; a doomed build should die with the process instead

@@ -61,19 +61,36 @@ public class SchedulingConfiguration {
      * <p><b>No interrupt on shutdown.</b> Boot defaults
      * {@code spring.task.scheduling.shutdown.await-termination} to false, which makes
      * {@code ExecutorConfigurationSupport} call {@code shutdownNow()} and interrupt whatever is
-     * running. The scheduler this replaces never did: cron and fixed-rate bodies ran on virtual
-     * threads that its {@code close()} does not touch. The difference is not academic — a rollout
-     * during the 02:00 build would interrupt {@code CheckpointService} mid-table, and its per-table
-     * {@code catch} turns any {@code RuntimeException} into a recorded failure that detaches the
-     * table's snapshot key on an advancing seq, so a table would 404 for Bit BI and Parquet Export
-     * until a later rematerialize. A doomed build should die with the process, not write a
-     * conclusion on the way out. Only the boolean is fixed;
+     * running. That is a change for the task where it matters most: a cron body such as the 02:00
+     * checkpoint build ran on a virtual thread the previous scheduler never touched. Interrupting it
+     * does not merely stop it — {@code CheckpointService} catches any {@code RuntimeException} per
+     * table and records a failure that detaches the table's snapshot key on an advancing seq, so a
+     * table would 404 for Bit BI and Parquet Export until a later rematerialize. A doomed build
+     * should die with the process, not write a conclusion on the way out. (Fixed-delay bodies were
+     * interrupted before, by {@code SimpleAsyncTaskScheduler.close()}; they now get the same
+     * treatment as the rest.) Only the boolean is fixed;
      * {@code spring.task.scheduling.shutdown.await-termination-period} still applies if a
      * deployment wants shutdown to wait.</p>
      *
-     * <p><b>Daemon threads.</b> The corollary: without the interrupt, non-daemon pool threads would
+     * <p><b>Queued tasks are dropped anyway.</b> The flag above alone would keep the executor alive:
+     * a plain {@code shutdown()} still runs already-queued <em>delayed</em> tasks, and Spring
+     * schedules every cron tick as one ({@code ReschedulingRunnable}), so a context would not
+     * terminate until the furthest cron came due — a month away, for the monthly partition job —
+     * leaving its threads parked, its ticks firing against a closed context, and any
+     * {@code await-termination-period} certain to time out. Dropping the delayed queue keeps the
+     * no-interrupt property and lets the executor terminate as soon as what is running finishes.</p>
+     *
+     * <p><b>Daemon threads.</b> The corollary of not interrupting: non-daemon pool threads would
      * hold the JVM open after the context closes until the grace period ran out and SIGKILL landed.
      * Virtual threads are always daemon, so this restores what the previous scheduler gave.</p>
+     *
+     * <p><b>The one difference left</b> is the window between {@code ContextClosedEvent} and this
+     * bean's destruction: waiting for tasks means Spring skips the early-stop signal, so a tick due
+     * inside that window still starts, where the previous scheduler stopped triggering at the event.
+     * It is bounded by the lifecycle stop phase and costs at worst a log line and a rolled-back
+     * transaction — every scheduled method here either catches its own failure or is caught by the
+     * scheduler's log-and-suppress error handler — which is a smaller price than the detached
+     * snapshot the interrupt buys.</p>
      *
      * @param builder Boot's scheduler builder, pre-populated from {@code spring.task.scheduling.*}
      * @return the scheduler backing every {@code @Scheduled} method and
@@ -83,6 +100,7 @@ public class SchedulingConfiguration {
     public ThreadPoolTaskScheduler taskScheduler(ThreadPoolTaskSchedulerBuilder builder) {
         ThreadPoolTaskScheduler scheduler = builder.build();
         scheduler.setWaitForTasksToCompleteOnShutdown(true);
+        scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         scheduler.setDaemon(true);
         return scheduler;
     }
