@@ -233,31 +233,6 @@ public class S3CheckpointStorage {
         }
     }
 
-    /**
-     * Upload the all-INSERT checkpoint frame from already-gzipped bytes.
-     *
-     * <p>Kept for the current {@code CheckpointService} call site; the next change streams the
-     * frame through {@link #uploadFrame(UUID, long, Path)} and this overload goes away.</p>
-     *
-     * @return the S3 key written
-     */
-    public String uploadFrame(UUID siteId, long seq, byte[] content) {
-        String s3Key = frameKey(siteId, seq);
-        try {
-            PutObjectRequest request = PutObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(s3Key)
-                    .contentType("application/octet-stream")
-                    .contentLength((long) content.length)
-                    .build();
-            s3Client.putObject(request, RequestBody.fromBytes(content));
-            log.info("Stored checkpoint frame: key={}, size={}", s3Key, content.length);
-            return s3Key;
-        } catch (S3Exception e) {
-            throw new CheckpointStorageException("Failed to store checkpoint frame: " + s3Key, e);
-        }
-    }
-
     /** Download the checkpoint frame bytes for a site at a given sequence. */
     public byte[] downloadFrame(UUID siteId, long seq) {
         return download(frameKey(siteId, seq));

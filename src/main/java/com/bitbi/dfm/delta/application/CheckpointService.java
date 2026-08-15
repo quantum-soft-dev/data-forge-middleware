@@ -179,8 +179,7 @@ public class CheckpointService {
             } else {
                 // One table at a time: write this table's rows to disk, hand the file to S3, drop
                 // it. Materialization therefore costs one row-group buffer and one scratch file at
-                // a time instead of one encoded Parquet per table. (The frame upload below still
-                // builds an all-tables copy — issue #126.)
+                // a time instead of one encoded Parquet per table.
                 //
                 // One table's coercion failure (schema drift, bad value) must not abort the whole
                 // build: the pointer would freeze, retention would stop, and segments would grow
@@ -215,10 +214,19 @@ public class CheckpointService {
             checkpointRepository.save(checkpoint);
         });
 
-        // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
-        metrics.timeCheckpointPhase("upload", () ->
-                checkpointStorage.uploadFrame(siteId, seq,
-                        ChangelogCodec.serialize(CheckpointFrame.toRecords(state))));
+        // Persist the new all-INSERT frame so the next build seeds from it and earlier segments
+        // can be pruned. Same file-backed path as the snapshot (issue #126): one record at a
+        // time into a scratch file, then RequestBody.fromFile — never a collected List and
+        // never a gzip byte[]. The site fold itself stays in heap.
+        Path frame = createScratchFile(siteId, ".pb.gz");
+        try {
+            metrics.timeCheckpointPhase("upload", () -> {
+                ChangelogCodec.write(CheckpointFrame.records(state), frame, maxTempBytes);
+                checkpointStorage.uploadFrame(siteId, seq, frame);
+            });
+        } finally {
+            deleteQuietly(frame, "_frame", siteId);
+        }
         syncStateService.recordCheckpoint(siteId, seq);
         // The single choke point every checkpoint build passes through, scheduled or forced. The
         // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
@@ -255,8 +263,12 @@ public class CheckpointService {
      * single oversized or unrenderable table cannot freeze the pointer and stop retention.</p>
      */
     private Path createScratchFile(UUID siteId) {
+        return createScratchFile(siteId, ".parquet");
+    }
+
+    private Path createScratchFile(UUID siteId, String suffix) {
         try {
-            return Files.createTempFile(tempDirectory, "checkpoint-" + siteId + "-", ".parquet");
+            return Files.createTempFile(tempDirectory, "checkpoint-" + siteId + "-", suffix);
         } catch (IOException e) {
             throw new UncheckedIOException(
                     "Cannot create a checkpoint scratch file in " + tempDirectory, e);
