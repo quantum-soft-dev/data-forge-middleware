@@ -6,6 +6,28 @@ spring:
     virtual:
       enabled: true
 
+  task:
+    scheduling:
+      pool:
+        # Threads shared by every @Scheduled method and by BatchRetentionScheduler's dynamic cron
+        # (issue #146). One is Spring Boot's default and is what the application effectively had:
+        # a checkpoint build, which can run for hours, postponed the scratch sweep, the batch
+        # timeout sweep and the monthly partition creation behind it.
+        #
+        # Six is derived, not guessed: two of the thirteen scheduled tasks hold their thread for
+        # minutes or longer (the nightly checkpoint build and the retention cleanup, both due at
+        # 02:00 by default), so at least three are needed for a short tick never to queue behind
+        # them; six leaves headroom for the burst of short ticks that fall on the same second, and
+        # stays below spring.datasource.hikari.maximum-pool-size so scheduled work cannot starve
+        # request threads of database connections. Adding a scheduled task that blocks means
+        # revisiting this — ScheduledTaskInventoryTest fails until the audit is redone.
+        #
+        # The key is the standard Spring Boot one, so SPRING_TASK_SCHEDULING_POOL_SIZE overrides it
+        # without a placeholder of our own. It only takes effect because SchedulingConfiguration
+        # declares the TaskScheduler bean: under spring.threads.virtual.enabled the auto-configured
+        # scheduler is a SimpleAsyncTaskScheduler, which this key does not configure at all.
+        size: 6
+
   security:
     oauth2:
       resourceserver:
