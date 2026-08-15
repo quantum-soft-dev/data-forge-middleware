@@ -124,7 +124,9 @@ spec:
         # the temp dirs off this volume means dropping that flag in the same commit.
         # sizeLimit is enforced by kubelet: crossing it EVICTS the pod. It is not a
         # graceful, per-table skip like delta.*.max-temp-bytes — see the sizing note in
-        # docs/delta-client-v2-guide.md.
+        # docs/delta-client-v2-guide.md. Since issue #138 the per-file ceilings in
+        # configmap.yaml are set to a third of this number each, so the application refuses
+        # first; changing this value means revisiting them (a test enforces the ratio).
         # Directory permissions: emptyDir is created 0777, so the non-root `dfm` user
         # from the image can write to it without an fsGroup.
         - name: parquet-scratch

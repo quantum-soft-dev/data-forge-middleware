@@ -231,26 +231,32 @@ delta:
     provisional-sweep-millis: ${DELTA_PROVISIONAL_SWEEP_MILLIS:900000}
   checkpoint:
     # A checkpoint snapshot is written to a local file per table and streamed to S3 from there
-    # (issue #112); the all-INSERT reload frame uses the same directory and ceiling (issue #126).
-    # Point temp-dir at a scratch volume if the node's default tmpdir is small. max-temp-bytes
-    # skips a table whose Parquet would fill it, and aborts the build if the frame would.
+    # (issue #112); the all-INSERT reload frame is written the same way, into the same directory
+    # (issue #126). Point temp-dir at a scratch volume if the node's default tmpdir is small.
     #
-    # On GKE both temp-dir keys point at the `parquet-scratch` emptyDir (see
-    # k8s/base/configmap.yaml and k8s/base/deployment-backend.yaml). That volume declares
-    # sizeLimit 6Gi inside an 8Gi container ephemeral-storage request/limit (issue #131).
-    # NOTE the two guards are not the same kind of thing:
-    #   * max-temp-bytes below is PER FILE and graceful — a table is skipped
-    #     (delta.checkpoint.tables.unmaterialized{reason=parquet_failed}), the frame aborts
-    #     the build, and the pointer stays put.
-    #   * the volume sizeLimit is for the WHOLE directory and is enforced by kubelet, which
-    #     EVICTS the pod. There is no skip and no metric.
-    # The 10 GiB defaults are therefore above the deployed volume budget: on that deployment
-    # the volume is the binding constraint, so an eviction happens before the app ever
-    # refuses. Recompute the budget with the worst case in docs/delta-client-v2-guide.md
-    # ("Sizing note") rather than lowering these ceilings blindly — one key governs two files
-    # with different failure semantics (issue #126), so splitting them is its own ticket (#138).
+    # TWO ceilings, because the two files fail differently (issue #138):
+    #   * max-temp-bytes is PER TABLE and graceful — a table whose Parquet would cross it is
+    #     skipped (delta.checkpoint.tables.unmaterialized{reason=parquet_failed}) and repaired by
+    #     a later build's rematerialize (#128). This is the one to lower: the cost of setting it
+    #     too low is a visible, self-healing hole.
+    #   * max-frame-temp-bytes is for the whole-site reload frame and ABORTS the build, because
+    #     the frame is the next incremental seed and there is nothing to fall back on. Setting it
+    #     too low turns a disk guard into a stuck checkpoint pipeline (no pointer, no retention)
+    #     on exactly the sites large enough to need one, so it is deliberately the wider of the
+    #     two. Both default to the 10 GiB the single key used to carry, so an upgrade changes
+    #     nothing.
+    # A THIRD guard is not ours and is harsher than both: where temp-dir is a volume with a
+    # sizeLimit, that limit is for the WHOLE directory and kubelet enforces it by EVICTING the
+    # pod — no skip, no metric, in-flight ingest dies with it. The ceilings here are per FILE and
+    # cannot bound a directory shared by several live writers, so they must be set below it with
+    # room for the concurrent files: see docs/delta-client-v2-guide.md ("Sizing note") for the
+    # worst-case formula. On GKE both temp-dir keys point at the `parquet-scratch` emptyDir
+    # (sizeLimit 6Gi in an 8Gi ephemeral-storage request/limit, issue #131), and the ceilings for
+    # that volume are declared beside it in k8s/base/configmap.yaml — the application cannot know
+    # how big the directory it was handed is, so the defaults below stay generous.
     temp-dir: ${DELTA_CHECKPOINT_TEMP_DIR:${java.io.tmpdir}}
     max-temp-bytes: ${DELTA_CHECKPOINT_MAX_TEMP_BYTES:10737418240}
+    max-frame-temp-bytes: ${DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES:10737418240}
   parquet:
     # Row-group budget for every V2 Parquet writer (checkpoint snapshots, per-segment egress and
     # completed-batch artifacts). A writer buffers one row group in heap before flushing, so with
@@ -298,13 +304,17 @@ delta:
     # of this while it builds, so it bounds worker death, not how long a build may legitimately run.
     lease-seconds: ${DELTA_BATCH_PARQUET_LEASE_SECONDS:1800}
     # A completed artifact is file-backed; refuse upload if the local file exceeds this policy.
-    # PER FILE, like the checkpoint ceiling above — and this path is the one that multiplies:
+    # Crossing it abandons that artifact on its first, deterministic attempt.
+    # PER FILE, like the checkpoint ceilings above — and this path is the one that multiplies:
     # a batch build opens one scratch file per claimed table at once, and max-concurrent (2)
     # builds can run together, so the directory sees 2 x tables x file at peak while this key
-    # only ever sees one file. The directory itself is bounded by the deployment, not here:
-    # temp-dir points at the `parquet-scratch` emptyDir (sizeLimit 6Gi) on GKE, and crossing
-    # THAT is a kubelet eviction, not a per-artifact refusal. Worst case and how to recompute
-    # the volume budget: docs/delta-client-v2-guide.md ("Sizing note"), issue #131.
+    # only ever sees one file. Lowering it therefore shrinks the peak roughly in proportion, but
+    # never bounds it: no per-file ceiling can, which is why the directory-wide reservation is
+    # tracked separately (issue #150). The directory is bounded by the deployment, not here:
+    # temp-dir points at the `parquet-scratch` emptyDir (sizeLimit 6Gi) on GKE, crossing THAT is
+    # a kubelet eviction rather than a per-artifact refusal, and the value used on that volume is
+    # declared beside it in k8s/base/configmap.yaml. Worst case and how to recompute the volume
+    # budget: docs/delta-client-v2-guide.md ("Sizing note"), issues #131 and #138.
     max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:10737418240}
     temp-dir: ${DELTA_BATCH_PARQUET_TEMP_DIR:${java.io.tmpdir}}
 

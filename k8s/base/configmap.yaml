@@ -35,5 +35,21 @@ data:
   # on a volume with a sizeLimit (issue #141). This is a claim about the mount above: move the
   # temp dirs off the emptyDir and this has to go with them.
   DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: "true"
+  # Per-file ceilings for that volume (issue #138). The application defaults are 10 GiB — above
+  # the 6Gi sizeLimit — so without these the binding constraint is the volume, and its failure
+  # mode is a kubelet EVICTION of the pod rather than a skipped table or an abandoned artifact.
+  # The volume size is declared in deployment-backend.yaml, so the ceilings that must sit below
+  # it are declared here, beside the temp dirs that put the writers on it — the application has
+  # no way to know how large the directory it was handed is.
+  # 2Gi each = a third of the volume, the smallest realistic peak being three concurrent files:
+  # two checkpoint builds (the 02:00 sweep plus a forced rebuild on its own executor) and one
+  # completed-batch artifact. It is a floor on the guarantee, not the budget — a batch build
+  # opens one file per claimed table, which no per-file key can bound (issue #150). For scale:
+  # the largest artifact on record is in the low hundreds of MiB, so 2Gi is ~10x headroom.
+  # Raise MAX_FRAME first if a site outgrows this: a table skip is visible and self-healing
+  # (rematerialized by a later build), while the frame aborts the whole build.
+  DELTA_CHECKPOINT_MAX_TEMP_BYTES: "2147483648"
+  DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES: "2147483648"
+  DELTA_BATCH_PARQUET_MAX_TEMP_BYTES: "2147483648"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"

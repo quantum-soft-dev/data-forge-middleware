@@ -58,7 +58,10 @@ public class CheckpointService {
     private final ApplicationEventPublisher eventPublisher;
     private final CheckpointEpochGuard epochGuard;
     private final Path tempDirectory;
+    /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
     private final long maxTempBytes;
+    /** Reload-frame ceiling: crossing it aborts the build, so it is deliberately its own key. */
+    private final long maxFrameTempBytes;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
@@ -74,7 +77,10 @@ public class CheckpointService {
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
                              @org.springframework.beans.factory.annotation.Value(
-                                     "${delta.checkpoint.max-temp-bytes:10737418240}") long maxTempBytes) {
+                                     "${delta.checkpoint.max-temp-bytes:10737418240}") long maxTempBytes,
+                             @org.springframework.beans.factory.annotation.Value(
+                                     "${delta.checkpoint.max-frame-temp-bytes:10737418240}")
+                             long maxFrameTempBytes) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
@@ -87,6 +93,7 @@ public class CheckpointService {
         this.epochGuard = epochGuard;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
+        this.maxFrameTempBytes = maxFrameTempBytes;
     }
 
     /**
@@ -241,11 +248,17 @@ public class CheckpointService {
         // can be pruned. Same file-backed path as the snapshot (issue #126): one record at a
         // time into a scratch file, then RequestBody.fromFile — never a collected List and
         // never a gzip byte[]. The site fold itself stays in heap.
+        //
+        // Its own ceiling, not the snapshot's (issue #138). The two files share a directory but
+        // not a failure mode: an oversized table is skipped and repaired by the next build, while
+        // an oversized frame ends the build, because the frame is the next incremental seed. One
+        // key for both meant the value had to be set for the harsher of the two, which left it
+        // above the deployed scratch volume and made a kubelet eviction the first thing to happen.
         Path frame = createScratchFile(siteId, ".pb.gz");
         try {
             metrics.timeCheckpointPhase("upload", () -> {
                 try (OutputStream out = new CappedOutputStream(
-                        Files.newOutputStream(frame), maxTempBytes)) {
+                        Files.newOutputStream(frame), maxFrameTempBytes)) {
                     ChangelogCodec.write(CheckpointFrame.records(state), out);
                 } catch (IOException e) {
                     throw new UncheckedIOException("Failed to write checkpoint frame for site " + siteId, e);
