@@ -19,6 +19,10 @@ package com.bitbi.dfm.delta.application;
  *                              floor rather than a census — a whole failed 1000-key batch counts as
  *                              one (issue #123). Orphans, not data loss: the rows naming them are
  *                              already gone, and re-running the wipe is safe and sweeps them
+ * @param prefixesNotSwept      prefixes that could not be listed, or were listed only partially.
+ *                              Distinct from {@code s3DeleteErrors}: a skipped prefix would report
+ *                              as {@code 0} deletes and hide that nothing under it was swept
+ *                              (issue #122). Repeat the wipe to finish the cleanup
  * @param baselineBatchDetached whether a plugin activation's {@code baseline_batch_id} pointed at a
  *                              destroyed batch and had to be nulled
  */
@@ -32,5 +36,6 @@ public record SiteHistoryWipeSummary(
         int deletedErrorLogs,
         long deletedBytes,
         int s3DeleteErrors,
+        int prefixesNotSwept,
         boolean baselineBatchDetached) {
 }

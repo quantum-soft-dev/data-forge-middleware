@@ -1,6 +1,8 @@
 package com.bitbi.dfm.delta.infrastructure;
 
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
+import com.bitbi.dfm.shared.storage.S3PrefixLister;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -156,23 +158,18 @@ public class S3CheckpointStorage {
     }
 
     /**
-     * Every key under a prefix, following continuation tokens.
+     * Every object under a prefix, following continuation tokens.
      *
-     * <p>Unlike {@link #listKeys}, this one is meant for whole-site prefixes (issue #89 — the
-     * history wipe walks {@code egress/{siteId}/}), where a single 1000-key page truncates
-     * silently and would leave most of the objects behind.</p>
+     * <p>Unlike {@link #listKeys}, this is the whole-prefix walk (site history wipe of
+     * {@code egress/{siteId}/} and {@code checkpoints/{siteId}/}). A mid-pagination failure
+     * returns the pages already read plus {@code truncated=true} instead of throwing the
+     * walk away.</p>
      *
      * @param prefix the prefix to enumerate
-     * @return all keys under it
+     * @return the pages read, with lastModified per object and a truncation flag
      */
-    public List<String> listAllKeys(String prefix) {
-        try {
-            return s3Client.listObjectsV2Paginator(ListObjectsV2Request.builder()
-                            .bucket(bucketName).prefix(prefix).build())
-                    .contents().stream().map(S3Object::key).toList();
-        } catch (S3Exception e) {
-            throw new CheckpointStorageException("Failed to list objects under prefix: " + prefix, e);
-        }
+    public S3PrefixListing listPrefix(String prefix) {
+        return S3PrefixLister.listAll(s3Client, bucketName, prefix);
     }
 
     /**

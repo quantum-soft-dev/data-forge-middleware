@@ -28,6 +28,7 @@ const summary = {
   deletedErrorLogs: 33,
   deletedBytes: 123456789,
   s3DeleteErrors: 0,
+  prefixesNotSwept: 0,
   baselineBatchDetached: false,
 }
 

@@ -8,6 +8,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.plugin.domain.AccountPlugin;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaseline;
@@ -23,6 +24,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -126,6 +128,7 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         assertThat(summary.deletedErrorLogs()).isGreaterThanOrEqualTo(1);
         assertThat(summary.baselineBatchDetached()).isTrue();
         assertThat(summary.s3DeleteErrors()).isZero();
+        assertThat(summary.prefixesNotSwept()).isZero();
 
         assertThat(count("SELECT COUNT(*) FROM batches WHERE site_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM changelog_segments WHERE site_id = ?")).isZero();
@@ -162,10 +165,12 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
             throw new java.io.UncheckedIOException(e);
         }
         assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).hasSize(3);
+        letS3LastModifiedFallBehindTheWipe();
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
         assertThat(summary.s3DeleteErrors()).isZero();
+        assertThat(summary.prefixesNotSwept()).isZero();
         assertThat(checkpointStorage.listKeys(S3CheckpointStorage.egressPrefix(SITE_ID))).isEmpty();
     }
 
@@ -181,7 +186,10 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 3L, List.of(insert(3L, "Cy")));
         checkpointService.buildCheckpoint(SITE_ID);
 
-        List<String> beforeWipe = checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        S3PrefixListing beforeListing =
+                checkpointStorage.listPrefix(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        assertThat(beforeListing.truncated()).isFalse();
+        List<String> beforeWipe = beforeListing.keys();
         assertThat(beforeWipe.stream().filter(key -> key.endsWith("snapshot.parquet")).toList())
                 .as("one table, two builds, two snapshot objects")
                 .hasSize(2);
@@ -189,11 +197,16 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
                 "SELECT s3_key_parquet FROM checkpoints WHERE site_id = ? AND table_name = 'customers'",
                 String.class, SITE_ID);
         assertThat(beforeWipe).contains(recordedKey);
+        letS3LastModifiedFallBehindTheWipe();
 
         SiteHistoryWipeSummary summary = wipeService.wipe(site, DeltaSiteWipeService.Initiator.ADMIN);
 
         assertThat(summary.s3DeleteErrors()).isZero();
-        assertThat(checkpointStorage.listAllKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)))
+        assertThat(summary.prefixesNotSwept()).isZero();
+        S3PrefixListing afterListing =
+                checkpointStorage.listPrefix(S3CheckpointStorage.checkpointPrefix(SITE_ID));
+        assertThat(afterListing.truncated()).isFalse();
+        assertThat(afterListing.keys())
                 .as("a clean slate means the whole prefix, not just the newest key on the row")
                 .isEmpty();
     }
@@ -332,6 +345,21 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
     }
 
     // --- fixtures ---
+
+    /**
+     * S3 {@code LastModified} is second-resolution; the wipe skips anything in its own second so a
+     * concurrent PutObject is not deleted. Wait until the next second so objects written in this
+     * test are unambiguously older than the wipe.
+     */
+    private static void letS3LastModifiedFallBehindTheWipe() {
+        long remainderMs = 1000L - (Instant.now().toEpochMilli() % 1000L);
+        try {
+            Thread.sleep(remainderMs + 50L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
 
     /**
      * The audit write is {@code @Async} and {@code plugin_audit_logs} is partitioned with no test

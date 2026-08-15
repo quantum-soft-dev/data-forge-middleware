@@ -13,6 +13,8 @@ import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.error.domain.ErrorLogRepository;
+import com.bitbi.dfm.shared.storage.S3ListedObject;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.plugin.domain.AccountPluginRepository;
 import com.bitbi.dfm.plugin.domain.PluginDeltaBaselineRepository;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
@@ -32,6 +34,7 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -94,7 +97,7 @@ class DeltaSiteWipeServiceTest {
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(List.of());
         when(artifactRepository.findS3KeysBySiteId(SITE_ID)).thenReturn(List.of());
         when(s3FileStorageService.deleteObjects(anyList())).thenReturn(new DeleteObjectsResult(0, List.of()));
-        when(checkpointStorage.listAllKeys(any())).thenReturn(List.of());
+        when(checkpointStorage.listPrefix(any())).thenReturn(S3PrefixListing.empty());
         when(batchRepository.countBySiteId(SITE_ID)).thenReturn(0L);
     }
 
@@ -142,6 +145,12 @@ class DeltaSiteWipeServiceTest {
         when(checkpoint.getS3KeyCsv()).thenReturn(csvKey);
         when(checkpoint.getS3KeyParquet()).thenReturn(parquetKey);
         return checkpoint;
+    }
+
+    private static S3PrefixListing listingOf(String... keys) {
+        return S3PrefixListing.complete(java.util.Arrays.stream(keys)
+                .map(key -> new S3ListedObject(key, Instant.EPOCH))
+                .toList());
     }
 
     @Test
@@ -230,6 +239,7 @@ class DeltaSiteWipeServiceTest {
         assertThat(summary.deletedSqlGenerations()).isEqualTo(1);
         assertThat(summary.deletedFiles()).isEqualTo(2);
         assertThat(summary.deletedBytes()).isEqualTo(370L);
+        assertThat(summary.prefixesNotSwept()).isZero();
         assertThat(summary.baselineBatchDetached()).isFalse();
     }
 
@@ -261,7 +271,7 @@ class DeltaSiteWipeServiceTest {
         // The wipe resets the sequence counter, so these keys — derived from seq alone — are reused
         // by the new epoch. A survivor would be served as a post-wipe batch's delta by
         // BatchParquetDownloadService whenever egress does not overwrite it.
-        when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/")).thenReturn(List.of(
+        when(checkpointStorage.listPrefix("egress/" + SITE_ID + "/")).thenReturn(listingOf(
                 "egress/" + SITE_ID + "/orders/delta/seq=1-1000.parquet",
                 "egress/" + SITE_ID + "/items/delta/seq=1-1000.parquet"));
 
@@ -283,20 +293,21 @@ class DeltaSiteWipeServiceTest {
         assertThatThrownBy(() -> service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN))
                 .isInstanceOf(DeltaSiteWipeService.ConcurrentSessionException.class);
 
-        verify(checkpointStorage, never()).listAllKeys(any());
+        verify(checkpointStorage, never()).listPrefix(any());
     }
 
     @Test
     @DisplayName("a failed listing leaves orphans but does not fail a committed wipe")
     void shouldSurviveEgressListingFailure() {
-        when(checkpointStorage.listAllKeys(any()))
-                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
+        when(checkpointStorage.listPrefix(any()))
+                .thenReturn(S3PrefixListing.truncated(List.of()));
         when(batchRepository.deleteBySiteId(SITE_ID)).thenReturn(7);
 
         SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
 
         // The rows are already committed as gone; reporting a completed wipe as a 500 would be worse.
         assertThat(summary.deletedBatches()).isEqualTo(7);
+        assertThat(summary.prefixesNotSwept()).isEqualTo(2);
         verify(s3FileStorageService).deleteObjects(anyList());
     }
 
@@ -328,7 +339,7 @@ class DeltaSiteWipeServiceTest {
         List<Checkpoint> checkpoints = List.of(
                 checkpoint(null, "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet"));
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
-        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/")).thenReturn(List.of(
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/")).thenReturn(listingOf(
                 "checkpoints/" + SITE_ID + "/customers/seq=10/snapshot.csv.gz",
                 "checkpoints/" + SITE_ID + "/customers/seq=20/snapshot.parquet",
                 "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet",
@@ -355,10 +366,11 @@ class DeltaSiteWipeServiceTest {
                 "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.csv.gz",
                 "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet"));
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
-        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/"))
-                .thenThrow(new S3CheckpointStorage.CheckpointStorageException("boom", null));
-        when(checkpointStorage.listAllKeys("egress/" + SITE_ID + "/"))
-                .thenReturn(List.of("egress/" + SITE_ID + "/orders/delta/seq=1-2.parquet"));
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.truncated(List.of()));
+        when(checkpointStorage.listPrefix("egress/" + SITE_ID + "/"))
+                .thenReturn(listingOf(
+                        "egress/" + SITE_ID + "/orders/delta/seq=1-2.parquet"));
 
         service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
 
@@ -373,6 +385,83 @@ class DeltaSiteWipeServiceTest {
     }
 
     @Test
+    @DisplayName("a listing that dies mid-pagination still sweeps the pages already read")
+    void shouldSweepPagesReadBeforeATruncatedListing() {
+        String kept = "checkpoints/" + SITE_ID + "/customers/seq=10/snapshot.parquet";
+        String frame = "checkpoints/" + SITE_ID + "/_frame/seq=10/frame.pb.gz";
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.truncated(List.of(
+                        new S3ListedObject(kept, Instant.EPOCH),
+                        new S3ListedObject(frame, Instant.EPOCH))));
+
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(s3FileStorageService).deleteObjects(keys.capture());
+        assertThat(keys.getValue()).contains(kept, frame);
+    }
+
+    @Test
+    @DisplayName("an object written after the wipe started is left on both prefixes")
+    void shouldSkipObjectsNewerThanTheWipeStart() {
+        Instant now = Instant.now();
+        String oldEgress = "egress/" + SITE_ID + "/orders/delta/seq=1-2.parquet";
+        String newEgress = "egress/" + SITE_ID + "/orders/delta/seq=3-4.parquet";
+        String oldCheckpoint = "checkpoints/" + SITE_ID + "/customers/seq=10/snapshot.parquet";
+        String newCheckpoint = "checkpoints/" + SITE_ID + "/customers/seq=11/snapshot.parquet";
+        String newFrame = "checkpoints/" + SITE_ID + "/_frame/seq=11/frame.pb.gz";
+        when(checkpointStorage.listPrefix("egress/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.complete(List.of(
+                        new S3ListedObject(oldEgress, now.minusSeconds(30)),
+                        new S3ListedObject(newEgress, now.plusSeconds(60)))));
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.complete(List.of(
+                        new S3ListedObject(oldCheckpoint, now.minusSeconds(30)),
+                        new S3ListedObject(newCheckpoint, now.plusSeconds(60)),
+                        new S3ListedObject(newFrame, now.plusSeconds(60)))));
+
+        service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> keys = ArgumentCaptor.forClass(List.class);
+        verify(s3FileStorageService).deleteObjects(keys.capture());
+        assertThat(keys.getValue()).containsExactlyInAnyOrder(oldEgress, oldCheckpoint);
+        assertThat(keys.getValue()).doesNotContain(newEgress, newCheckpoint, newFrame);
+    }
+
+    @Test
+    @DisplayName("a truncated prefix is reported separately from s3DeleteErrors")
+    void shouldReportATruncatedPrefixWithoutInflatingDeleteErrors() {
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.truncated(List.of(
+                        new S3ListedObject(
+                                "checkpoints/" + SITE_ID + "/customers/seq=10/snapshot.parquet",
+                                Instant.EPOCH))));
+        when(s3FileStorageService.deleteObjects(anyList()))
+                .thenReturn(new DeleteObjectsResult(1, List.of()));
+
+        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.prefixesNotSwept()).isEqualTo(1);
+        assertThat(summary.s3DeleteErrors()).isZero();
+    }
+
+    @Test
+    @DisplayName("a truncated listing counts as a prefix that was not swept")
+    void shouldCountATruncatedListingAsAPrefixNotSwept() {
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.truncated(List.of()));
+        when(checkpointStorage.listPrefix("egress/" + SITE_ID + "/"))
+                .thenReturn(S3PrefixListing.empty());
+
+        SiteHistoryWipeSummary summary = service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
+
+        assertThat(summary.prefixesNotSwept()).isEqualTo(1);
+        assertThat(summary.s3DeleteErrors()).isZero();
+    }
+
+    @Test
     @DisplayName("does not enumerate the checkpoint prefix for a wipe that rolled back")
     void shouldNotTouchCheckpointPrefixWhenRolledBack() {
         when(batchRepository.countBySiteId(SITE_ID)).thenReturn(1L);
@@ -380,7 +469,7 @@ class DeltaSiteWipeServiceTest {
         assertThatThrownBy(() -> service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN))
                 .isInstanceOf(DeltaSiteWipeService.ConcurrentSessionException.class);
 
-        verify(checkpointStorage, never()).listAllKeys("checkpoints/" + SITE_ID + "/");
+        verify(checkpointStorage, never()).listPrefix("checkpoints/" + SITE_ID + "/");
     }
 
     @Test
@@ -389,7 +478,8 @@ class DeltaSiteWipeServiceTest {
         String current = "checkpoints/" + SITE_ID + "/customers/seq=30/snapshot.parquet";
         List<Checkpoint> checkpoints = List.of(checkpoint(null, current));
         when(checkpointRepository.findBySiteId(SITE_ID)).thenReturn(checkpoints);
-        when(checkpointStorage.listAllKeys("checkpoints/" + SITE_ID + "/")).thenReturn(List.of(current));
+        when(checkpointStorage.listPrefix("checkpoints/" + SITE_ID + "/"))
+                .thenReturn(listingOf(current));
 
         service.wipe(site(), DeltaSiteWipeService.Initiator.ADMIN);
 

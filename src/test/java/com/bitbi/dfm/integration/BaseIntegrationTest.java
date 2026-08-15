@@ -3,6 +3,7 @@ package com.bitbi.dfm.integration;
 import com.bitbi.dfm.auth.domain.JwtToken;
 import com.bitbi.dfm.auth.infrastructure.JwtTokenProvider;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import com.bitbi.dfm.site.domain.Site;
 import com.bitbi.dfm.site.domain.SiteRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,7 +117,11 @@ public abstract class BaseIntegrationTest extends AbstractIntegrationTest {
     }
 
     private void purgePrefix(String prefix) {
-        for (String key : egressCleanupStorage.listAllKeys(prefix)) {
+        S3PrefixListing listing = egressCleanupStorage.listPrefix(prefix);
+        if (listing.truncated()) {
+            throw new IllegalStateException("Could not list " + prefix + " to purge leftovers");
+        }
+        for (String key : listing.keys()) {
             egressCleanupS3Client.deleteObject(
                     DeleteObjectRequest.builder().bucket(egressCleanupBucket).key(key).build());
         }

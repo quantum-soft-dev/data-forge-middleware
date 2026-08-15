@@ -32,7 +32,12 @@ export function DangerZoneCard({ siteId, siteName, scope }: DangerZoneCardProps)
           `History wiped — ${result.deletedBatches} batches, ${result.deletedFiles} files removed. ` +
             `The client will re-upload a full snapshot on its next connect.`,
         );
-        if (result.s3DeleteErrors > 0) {
+        if (result.prefixesNotSwept > 0) {
+          // A skipped prefix is not an object count.
+          toast.warning(
+            'Some storage prefixes could not be swept completely. Repeat the wipe — it is safe and will finish the cleanup.',
+          );
+        } else if (result.s3DeleteErrors > 0) {
           // The rows are gone either way; this is about orphaned objects, not lost data.
           toast.warning(
             `${result.s3DeleteErrors} storage object(s) could not be deleted and were left behind.`,

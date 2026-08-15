@@ -1,5 +1,6 @@
 package com.bitbi.dfm.upload.infrastructure;
 
+import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,11 +9,9 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
-import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -144,15 +143,17 @@ public class S3FileStorageService {
         return new DeleteObjectsResult(deletedCount, errors);
     }
 
-    /** Return every object key under a prefix, following all S3 continuation pages. */
+    /**
+     * Every object key under a prefix, following all S3 continuation pages.
+     *
+     * @param prefix the prefix to enumerate
+     * @return every key under the prefix
+     * @throws FileStorageException when the walk did not finish
+     */
     public List<String> listAllKeys(String prefix) {
         try {
-            return s3Client.listObjectsV2Paginator(ListObjectsV2Request.builder()
-                            .bucket(bucketName)
-                            .prefix(prefix)
-                            .build())
-                    .contents().stream().map(S3Object::key).toList();
-        } catch (S3Exception e) {
+            return S3PrefixLister.requireCompleteKeys(s3Client, bucketName, prefix);
+        } catch (S3PrefixLister.IncompletePrefixException e) {
             throw new FileStorageException("Failed to list objects under prefix: " + prefix, e);
         }
     }

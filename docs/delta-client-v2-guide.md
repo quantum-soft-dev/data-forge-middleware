@@ -764,6 +764,7 @@ client authenticates with. Anything else is a `400`.
   "deletedFiles": 678, "deletedSqlGenerations": 9, "deletedErrorLogs": 33,
   "deletedBytes": 123456789,
   "s3DeleteErrors": 0,
+  "prefixesNotSwept": 0,
   "baselineBatchDetached": false
 }
 ```
@@ -774,6 +775,14 @@ client authenticates with. Anything else is a `400`.
 simply be retried. Rows are deleted inside one transaction and the S3 objects strictly after it
 commits, so a rollback never leaves rows pointing at files that are gone; objects the bucket refuses
 are counted in `s3DeleteErrors` and left as orphans (the same trade-off retention makes).
+`prefixesNotSwept` is a separate count of whole-site prefixes (`egress/{siteId}/` and
+`checkpoints/{siteId}/`) that could not be listed, or were listed only partially — do not quote it
+as an object count. The Danger zone tells the operator to **repeat the wipe**, which is safe and
+finishes the cleanup (issue #122). A listing that dies mid-pagination still sweeps the pages it
+already read. Objects whose S3 `LastModified` is in the wipe's own second or later are skipped — the bucket
+timestamp is second-resolution, so a concurrent `PutObject` in that second cannot be told apart
+from a pre-wipe object. A concurrent rebuild or egress worker therefore cannot have its fresh
+object deleted while the row that names it survives.
 
 **What the client sees.** `NEED_REBASELINE` alone cannot express a wipe: it means "send a full
 snapshot", not "your counters are meaningless now". So `site_sync_state.generation` (V48) is an epoch
@@ -850,8 +859,10 @@ derived from sequence numbers (`egress/{siteId}/{table}/delta/seq={first}-{last}
 sends those numbers back to zero. A listing failure is logged and the wipe still reports success
 because the database rows are already gone; so is a delete phase that fails outright, which reports
 every key it was handed as `s3DeleteErrors`. Treat that count as a floor rather than a census — a
-whole failed 1000-key delete batch is recorded as one entry (#123). Any non-zero value means the
-same thing: orphans remain, and re-running a wipe is safe and is how they get swept. Ordinary batch retention and explicit admin batch deletion likewise remove
+whole failed 1000-key delete batch is recorded as one entry (#123). A prefix that could not be
+listed, or was listed only partially, is reported separately as `prefixesNotSwept` rather than
+folded into that number (issue #122). Any non-zero value of either field means the same thing:
+orphans remain, and re-running a wipe is safe and is how they get swept. Ordinary batch retention and explicit admin batch deletion likewise remove
 the unified manifest rows, preserve recorded/legacy exact-key fallbacks, and paginate the complete
 batch prefix so a process-death attempt with no published metadata is still found. Explicit admin
 deletion defers prefix enumeration and object removal until its database transaction commits.

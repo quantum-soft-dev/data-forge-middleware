@@ -118,4 +118,28 @@ class BatchDeletionServiceTest {
         verify(segmentService, never()).deleteByBatchId(batchId);
         verify(storage, never()).deleteObjects(List.of());
     }
+
+    @Test
+    void truncatedPrefixListingFallsBackToRecordedExactKeysOnly() {
+        UUID batchId = UUID.randomUUID();
+        UUID siteId = UUID.randomUUID();
+        Batch batch = mock(Batch.class);
+        when(batch.getSiteId()).thenReturn(siteId);
+        BatchParquetArtifact artifact = BatchParquetArtifact.pending(batchId, siteId, "orders");
+        artifact.markBuilding();
+        String recordedKey = artifact.expectedS3Key();
+        artifact.markReady(recordedKey, 1, 4, "hash");
+        when(batchRepository.findById(batchId)).thenReturn(Optional.of(batch));
+        when(artifactRepository.findByBatchId(batchId)).thenReturn(List.of(artifact));
+        when(segmentService.deleteMetadataByBatchId(batchId)).thenReturn(List.of());
+        String prefix = S3CheckpointStorage.batchParquetPrefix(siteId, batchId);
+        when(storage.listAllKeys(prefix))
+                .thenThrow(new S3FileStorageService.FileStorageException("list truncated"));
+        when(storage.deleteObjects(List.of(recordedKey)))
+                .thenReturn(new S3FileStorageService.DeleteObjectsResult(1, List.of()));
+
+        assertTrue(service.deleteBatch(batchId));
+
+        verify(storage).deleteObjects(List.of(recordedKey));
+    }
 }
