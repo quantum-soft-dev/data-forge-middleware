@@ -96,6 +96,34 @@ public class CheckpointEpochGuard {
     }
 
     /**
+     * Refuse the build here and now if the site's baseline has already been replaced — the same
+     * check {@link #inEpoch} makes, with nothing to write.
+     *
+     * <p>It exists for the one artifact that is not a database write: the reload frame (issue #153
+     * moved it ahead of the per-table snapshots, since it is what decides whether the build may
+     * finish at all). Writing and uploading a multi-GiB frame is the longest unguarded stretch of a
+     * build, and it now comes first, so without this the build's first contact with the row lock
+     * would be after that stretch rather than before it. This does not make the frame upload
+     * atomic — a wipe committing <em>during</em> the upload is still possible, and its object is
+     * still swept by re-running the wipe — but it keeps the window no wider than it was when
+     * {@code writeSnapshots} ran first.</p>
+     *
+     * <p>The lock is released when this short transaction commits, so it is never held across the
+     * S3 call that follows.</p>
+     *
+     * @param siteId site whose epoch the build started from
+     * @param epoch  the epoch pair that build read
+     * @throws EpochChangedException when the site was wiped or re-baselined since the build started
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void requireEpoch(UUID siteId, SiteEpoch epoch) {
+        // Self-invocation is deliberate and safe: the proxy applies REQUIRES_NEW at *this* method,
+        // and the inner call runs inside the transaction it opened. Do not remove the annotation
+        // here on the grounds that inEpoch carries one — the inner call would then run unguarded.
+        inEpoch(siteId, epoch, () -> { });
+    }
+
+    /**
      * The site's baseline was replaced — wiped or re-baselined — while the checkpoint being written
      * was still being built, so nothing that build produced may be published.
      */

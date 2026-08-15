@@ -173,12 +173,20 @@ public class DeltaMetrics {
      *
      * <p>The tag values are the aborts that <b>do not repair themselves</b>, which is what makes a
      * non-zero rate a page rather than a blip: {@code frame_too_large} is deterministic for a given
-     * fold, and {@code lossy_refold} is a missing seed frame over a pruned history. Three other
-     * ways a build can end are deliberately absent — an unreadable scratch directory and an S3
-     * refusal are transient and cost only that tick (the first would also hit every site at once,
-     * so it is an infrastructure alarm rather than a site's), and a build discarded because the
-     * site's history was replaced under it (issues #136, #142) is a normal outcome of an operator
-     * action, not a frozen pointer.</p>
+     * fold, and {@code lossy_refold} is a seed frame that reads as absent over a pruned history.
+     * Three other ways a build can end are deliberately absent — an unreadable scratch directory
+     * and an S3 refusal on the frame are transient and cost only that tick (the first would also
+     * hit every site at once, so it is an infrastructure alarm rather than a site's), and a build
+     * discarded because the site's history was replaced under it (issues #136, #142) is a normal
+     * outcome of an operator action, not a frozen pointer.</p>
+     *
+     * <p><b>One caveat on {@code lossy_refold}, and it is the reason to read the count per site
+     * before acting:</b> {@code S3CheckpointStorage.exists} deliberately treats a {@code 403} as
+     * absence, because least-privilege IAM answers HEAD-on-a-missing-key that way. A bucket-policy
+     * or IAM read outage therefore makes the frame read as absent for <em>every</em> site at once,
+     * and each pruned-history site increments this counter for a condition that a permission fix
+     * clears. Many sites tripping in the same tick is that; one site tripping alone is the real
+     * thing. The 403 branch also logs a WARN naming the key, which is the tiebreaker.</p>
      *
      * @param reason {@code frame_too_large} or {@code lossy_refold}
      */

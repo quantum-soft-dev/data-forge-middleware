@@ -650,9 +650,17 @@ ceiling is raised or the site is re-baselined. Two things follow, and both are h
   site has fallen; the counter says *why*, the lag says *how bad*. The ERROR line names the key and
   the site. `reason=lossy_refold` is the second value and the other permanent freeze — a seed frame
   that reads as absent over a pruned history — so **alert on the meter, not on one tag**. The aborts
-  that are *not* on it are the ones that pass: an unreadable scratch directory and an S3 refusal
-  cost one tick, and a build discarded because the site's history was replaced under it (#136,
-  #142) is a normal outcome of an operator action.
+  that are *not* on it are the ones that pass: an unreadable scratch directory and an S3 refusal on
+  the frame cost one tick, and a build discarded because the site's history was replaced under it
+  (#136, #142) is a normal outcome of an operator action.
+
+  **Read `lossy_refold` per site before acting.** `S3CheckpointStorage.exists` treats a `403` as
+  absence on purpose — least-privilege IAM answers HEAD-on-a-missing-key that way, having no
+  `s3:ListBucket` — so a bucket-policy or IAM read outage makes the frame read as absent for *every*
+  site at once and each pruned-history site increments the counter for something a permission fix
+  clears. **Many sites in one tick is a permissions incident; one site alone is the real thing.**
+  The 403 branch logs a WARN naming the key, which is the tiebreaker. Distinguishing the two at
+  source is #157.
 - **A repeat costs nothing durable.** The frame is written first, so an abort leaves no snapshot
   object, no `checkpoints` row and no moved pointer. Before #153 the per-table snapshots were
   uploaded first, at the *new* seq, and their rows saved; the previous seq's objects were then

@@ -265,6 +265,15 @@ public class CheckpointService {
         // one per table and carries a single key), and nothing but a site wipe sweeps
         // `checkpoints/{siteId}/` (#118). Since crossing the ceiling is deterministic for the same
         // fold, that was one orphaned generation per nightly tick, indefinitely.
+        //
+        // The epoch is checked first, with nothing to write. Writing and uploading the frame is the
+        // longest stretch of a build that touches no row, and moving it to the front would
+        // otherwise mean the build's first contact with the site_sync_state lock came *after* it
+        // rather than before — a wipe or re-baseline that had already committed would be noticed
+        // only once the frame object was in the bucket. It does not make the upload atomic (a wipe
+        // committing during it still leaves an orphan the next wipe sweeps), but it keeps the
+        // window no wider than it was when writeSnapshots ran first.
+        epochGuard.requireEpoch(siteId, epoch);
         uploadFrame(siteId, seq, state);
         writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, epoch);
 
