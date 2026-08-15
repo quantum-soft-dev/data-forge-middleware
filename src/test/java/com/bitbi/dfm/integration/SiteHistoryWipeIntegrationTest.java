@@ -43,6 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -321,34 +322,47 @@ class SiteHistoryWipeIntegrationTest extends BaseIntegrationTest {
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         CountDownLatch locked = new CountDownLatch(1);
-        Future<?> wipe = executor.submit(() -> transactionTemplate.execute(status -> {
-            SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(SITE_ID).orElseThrow();
-            locked.countDown();
-            // Hold the row while the build does its S3 work, then destroy the history and commit.
-            holdTheLock();
-            jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", SITE_ID);
-            jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE_ID);
-            state.resetForWipe();
-            syncStateRepository.save(state);
+        AtomicLong wipeCommittedAt = new AtomicLong();
+        Future<?> wipe = executor.submit(() -> {
+            transactionTemplate.execute(status -> {
+                SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(SITE_ID).orElseThrow();
+                locked.countDown();
+                // Hold the row while the build folds, then destroy the history and commit.
+                holdTheLock();
+                jdbc.update("DELETE FROM checkpoints WHERE site_id = ?", SITE_ID);
+                jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE_ID);
+                state.resetForWipe();
+                syncStateRepository.save(state);
+                return null;
+            });
+            wipeCommittedAt.set(System.nanoTime());
             return null;
-        }));
+        });
         assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
 
+        long buildReturnedAt;
         try {
-            // Reads generation 0; every row it writes waits for the lock above and is then refused.
+            // Reads generation 0, folds the pre-wipe history, then waits for the lock above at the
+            // pre-frame epoch check and is refused.
             checkpointService.buildCheckpoint(SITE_ID);
+            buildReturnedAt = System.nanoTime();
             wipe.get(30, TimeUnit.SECONDS);
         } finally {
             executor.shutdownNow();
         }
 
-        // Self-verifying: the build must actually have reached the write it was refused at. If it
-        // ever started after the commit instead — nothing left to fold, immediate return — every
-        // assertion below would pass while covering nothing, and this one would not. (The simulated
-        // wipe deletes rows only, so the discarded build's object is still there to prove it ran.)
+        // Self-verifying, and it has to be: if the build ever started after the commit instead —
+        // nothing left to fold, immediate return — every assertion below would pass while covering
+        // nothing. Until issue #153 the proof was the snapshot object the build had already
+        // uploaded when the guard refused it. The build no longer writes anything before its first
+        // guarded call, so the proof is now that it *blocked* on the row lock: a build that did not
+        // reach the lock would have returned while the holder was still sleeping.
+        assertThat(buildReturnedAt - wipeCommittedAt.get())
+                .as("the racing build must have waited on the site_sync_state row lock")
+                .isPositive();
         assertThat(checkpointStorage.listKeys(S3CheckpointStorage.checkpointPrefix(SITE_ID)))
-                .as("the racing build must have uploaded its snapshot before the guard refused it")
-                .anyMatch(key -> key.endsWith("seq=2/snapshot.parquet"));
+                .as("a build refused at the pre-frame check must not have written the frame either")
+                .isEmpty();
 
         assertThat(count("SELECT COUNT(*) FROM checkpoints WHERE site_id = ?"))
                 .as("a resurrected checkpoint row would name pre-wipe bytes")
