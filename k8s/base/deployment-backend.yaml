@@ -55,6 +55,13 @@ spec:
           # ephemeral storage at 10Gi — keep the total below that).
           # Recomputing the budget, and its failure mode, are documented in
           # docs/delta-client-v2-guide.md ("Sizing note") — read that before changing it.
+          #
+          # FIRST ROLLOUT: this is the first time ephemeral-storage participates in
+          # scheduling. With maxUnavailable 0 / maxSurge 1 the surge pod must be placed
+          # before an old one goes away, so a node pool without 8Gi of allocatable
+          # ephemeral-storage free leaves it Pending and the rollout simply stalls —
+          # `kubectl rollout status` times out with no obvious cause. Check
+          # `kubectl describe node | grep -A5 Allocated` before the first deploy-dev/* tag.
           resources:
             requests:
               cpu: "500m"
@@ -103,10 +110,15 @@ spec:
               exec:
                 command: ["/bin/sh", "-c", "sleep 5"]
       volumes:
-        # emptyDir, deliberately not a PersistentVolume: the scratch dies with the pod,
-        # which keeps ParquetScratchOrphanSweeper (#127) belt-and-braces rather than
-        # load-bearing. Default medium (node disk) — `medium: Memory` would be a tmpfs
-        # charged against the container's memory limit instead.
+        # emptyDir, deliberately not a PersistentVolume: the scratch dies with the pod, so
+        # nothing accumulates across pod generations. Default medium (node disk) —
+        # `medium: Memory` would be a tmpfs charged against the container's memory limit
+        # instead.
+        # This is per POD, not per container. Unlike the writable layer it SURVIVES a
+        # liveness/OOM kill, so within one pod's lifetime ParquetScratchOrphanSweeper (#127)
+        # is load-bearing rather than belt-and-braces: a dead attempt's files hold the volume
+        # until the 4h orphan age, while its batch claim is retried after 30 min. Budgeted as
+        # a residue term; the unconditional-startup-sweep fix is #141.
         # sizeLimit is enforced by kubelet: crossing it EVICTS the pod. It is not a
         # graceful, per-table skip like delta.*.max-temp-bytes — see the sizing note in
         # docs/delta-client-v2-guide.md.

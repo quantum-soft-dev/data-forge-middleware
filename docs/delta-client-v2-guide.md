@@ -603,9 +603,13 @@ You don't write these — they're how downstream tools read your data:
   `checkpoint-*` / `batch-parquet-*` files older than `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`
   (`delta.parquet.scratch-orphan-age-seconds`, default **4 hours**) from the configured directories,
   on startup and then every `DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS` (default 1 hour). Frame scratch
-  files use the same `checkpoint-` prefix, so they are swept too. Age is the only safe filter: a
-  sibling replica may be writing into the same volume, and the batch-parquet lease is renewed for
-  the life of a live build, so it is not a bound on file age. Raise the age if a create-to-delete
+  files use the same `checkpoint-` prefix, so they are swept too. Age is the only safe filter in
+  general: the directory may be a volume a sibling replica is writing into, and the batch-parquet
+  lease is renewed for the life of a live build, so it is not a bound on file age. (On the GKE
+  deployment the directory is a *pod-private* `emptyDir`, where the sibling-replica half of that
+  reasoning does not apply — which is why an unconditional sweep at startup is possible there and
+  is tracked as #141. The lease half still applies, so do not shorten the age instead.) Raise the
+  age if a create-to-delete
   interval can exceed four hours (completed-batch files are created before replay starts). What all
   of this bounds is materialization, not reconstruction: **the fold is still in heap**.
   `delta.checkpoint.duration{phase=fold}` is the number to watch on a
@@ -701,6 +705,17 @@ check that it is a mount:
 ```bash
 kubectl exec deploy/forge-backend -n forge -- df -h /scratch/parquet   # its own filesystem line
 kubectl exec deploy/forge-backend -n forge -- ls -la /scratch/parquet  # checkpoint-* / batch-parquet-*
+```
+
+**The first rollout can stall on placement.** This is the first time `ephemeral-storage`
+participates in scheduling, and the deployment surges before it retires (`maxSurge: 1`,
+`maxUnavailable: 0`), so the new pod must be placed while the old one still holds its 8Gi. A node
+pool without that much allocatable ephemeral storage free leaves the surge pod `Pending` and
+`kubectl rollout status` just times out. Check capacity before the first `deploy-dev/*` tag:
+
+```bash
+kubectl describe node | grep -A6 "Allocated resources"
+kubectl get pods -n forge -o wide          # a Pending backend pod is the symptom
 ```
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
