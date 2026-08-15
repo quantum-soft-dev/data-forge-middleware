@@ -470,6 +470,18 @@ pages/{feature}/            # Route pages
   `CheckpointService.buildCheckpoint` re-inserts a pre-wipe pointer after the wipe commits is
   **not** closed here — the cut-off protects the objects; serializing the build behind the
   `site_sync_state` lock is a separate decision.
+- checkpoint-rematerialize: A checkpoint table left without a snapshot is rematerialized from the
+  existing frame, without waiting for new segments (issue #128). `CheckpointService.materialize`
+  used to detach Parquet on a per-table failure, save the row at the new `seq` and still advance
+  the pointer — after which `buildCheckpoint` saw an empty `newSegments` and returned the seed,
+  so even `POST .../delta/checkpoints/rebuild` was a no-op on a quiet site. A scheduled build now
+  retries any row whose `s3_key_parquet` is null; a forced rebuild rematerializes every table from
+  the frame (`rebuildFromFrame`). Neither path moves the pointer, re-uploads the
+  frame, or publishes `CheckpointRecordedEvent` — the fold has not changed, retention stays
+  monotonic. A same-seq rematerialize that fails keeps a still-valid last-good key; detach is
+  only for an advancing seq. After a full prune the frame is still enough — leftover changelog
+  rows are not required. No API shape, DTO, migration, configuration, metric name or frontend
+  change. See `docs/delta-client-v2-guide.md`.
 - parquet-scratch-orphan-sweep: File-backed Parquet scratch left behind when a process dies between
   `createTempFile` and `finally` is swept by prefix and age (issue #127).
   `ParquetScratchOrphanSweeper` lists `delta.checkpoint.temp-dir` and
@@ -519,9 +531,9 @@ pages/{feature}/            # Route pages
   runs write → upload → delete per table, so one row-group buffer and one scratch file exist at a
   time and the peak of *materialization* stops scaling with the table count. An **unusable scratch
   directory** (missing, read-only, out of inodes) aborts the build instead of being counted as a
-  table-level skip — it would hit every table alike, and skipping would detach every snapshot key
-  while the pointer advanced, which a forced rebuild cannot undo (a build with no new segments
-  returns early, tracked as #128). A failure *during* a write stays a per-table skip, so one
+  table-level skip — it would hit every table alike, and skipping would detach every last-good
+  snapshot while the pointer advanced. A later rematerialize (#128) can restore a per-table hole,
+  but a systemic scratch failure must not throw those keys away first. A failure *during* a write stays a per-table skip, so one
   oversized or unrenderable table still cannot freeze the pointer and stop retention. **The site fold
   stays in heap**; the all-tables frame that used to sit beside it is now file-backed (issue #126).
   Off-heap folding remains a separate ticket, and

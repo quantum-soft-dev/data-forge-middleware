@@ -55,6 +55,7 @@ class CheckpointServiceTest {
 
     private final List<UploadedSnapshot> uploaded = new ArrayList<>();
     private final List<UploadedSnapshot> uploadedFrames = new ArrayList<>();
+    private byte[] lastFrameBytes;
 
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
@@ -92,6 +93,12 @@ class CheckpointServiceTest {
                 record("customers", 1L, 1, "Ann"),
                 record("customers", 2L, 2, "Bob")));
         when(checkpointRepository.findBySiteIdAndTableName(eq(SITE), any())).thenReturn(Optional.empty());
+        when(checkpointStorage.uploadFrame(eq(SITE), anyLong(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    Path file = invocation.getArgument(2);
+                    lastFrameBytes = Files.readAllBytes(file);
+                    return "checkpoints/frame-key";
+                });
     }
 
     @Test
@@ -370,11 +377,11 @@ class CheckpointServiceTest {
     @Test
     void abortsTheBuildWhenTheScratchDirectoryCannotHoldASnapshot() throws IOException {
         // An unusable scratch directory is not this table's data — it would hit every table of
-        // every site alike. Counting it as a per-table skip would detach every snapshot key while
-        // the pointer still advanced, and nothing could restore them: a build with no new segments
-        // returns early, so even a forced rebuild is a no-op. Abort instead — the pointer stays put
-        // and the next run redoes the whole build. (A failure during the write stays a skip: see
-        // skipsOnlyTheTableThatCrossesTheLocalFileCeiling.)
+        // every site alike. Counting it as a per-table skip would detach every last-good snapshot
+        // while the pointer still advanced. Rematerialize can restore a per-table hole, but must
+        // not be asked to do so after we threw away the last downloadable keys. Abort instead —
+        // the pointer and keys stay put and the next run redoes the whole build. (A failure
+        // during the write stays a skip: see skipsOnlyTheTableThatCrossesTheLocalFileCeiling.)
         Path readOnly = Files.createDirectory(tempDirectory.resolve("read-only"));
         org.junit.jupiter.api.Assumptions.assumeTrue(
                 readOnly.toFile().setWritable(false) && !Files.isWritable(readOnly),
@@ -417,7 +424,240 @@ class CheckpointServiceTest {
         assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
     }
 
+    @Test
+    void rematerializesDetachedParquetOnTheNextBuildWithoutNewSegments() {
+        // Issue #128: a per-table upload failure detaches the snapshot and still advances the
+        // pointer. The next scheduled build used to return as soon as it saw no new segments,
+        // so a transient S3 error left the table undownloadable until fresh data arrived.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(firstSave.capture());
+        Checkpoint detached = firstSave.getValue();
+        assertNull(detached.getS3KeyParquet());
+        assertEquals(2L, detached.getSeq());
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, detached);
+        recordUploads("checkpoints/recovered-parquet-key");
+        clearInvocations(syncStateService, checkpointStorage, checkpointRepository, changelogSegmentService);
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        ArgumentCaptor<Checkpoint> recovered = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(recovered.capture());
+        assertEquals("checkpoints/recovered-parquet-key", recovered.getValue().getS3KeyParquet());
+        assertEquals(2L, recovered.getValue().getSeq(), "rematerialize must not invent a new seq");
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(changelogSegmentService, never()).readRecords(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void rematerializesOnlyTheTableThatStillHasNoArtifact() {
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any(Path.class)))
+                .thenReturn("checkpoints/customers-ok");
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("orders"), anyLong(), any(Path.class)))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository, times(2)).save(firstSave.capture());
+        Checkpoint customers = firstSave.getAllValues().stream()
+                .filter(c -> c.getTableName().equals("customers")).findFirst().orElseThrow();
+        Checkpoint orders = firstSave.getAllValues().stream()
+                .filter(c -> c.getTableName().equals("orders")).findFirst().orElseThrow();
+        assertNotNull(customers.getS3KeyParquet());
+        assertNull(orders.getS3KeyParquet());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, customers, orders);
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("orders"), eq(2L), any(Path.class)))
+                .thenReturn("checkpoints/orders-recovered");
+        clearInvocations(checkpointStorage, checkpointRepository);
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage, never()).uploadParquet(eq(SITE), eq("customers"), anyLong(), any());
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("orders"), eq(2L), any(Path.class));
+        ArgumentCaptor<Checkpoint> recovered = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(recovered.capture());
+        assertEquals(1, recovered.getAllValues().size(), "only the detached table is rewritten");
+        assertEquals("orders", recovered.getValue().getTableName());
+        assertEquals("checkpoints/orders-recovered", recovered.getValue().getS3KeyParquet());
+    }
+
+    @Test
+    void doesNotRewriteHealthyCheckpointsWhenThereAreNoNewSegments() {
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
+        clearInvocations(checkpointStorage, checkpointRepository, syncStateService);
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void forcedRebuildRematerializesFromTheFrameWhenThereAreNoNewSegments() {
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
+        uploaded.clear();
+        recordUploads("checkpoints/forced-rebuild-key");
+        clearInvocations(checkpointStorage, checkpointRepository, syncStateService);
+
+        service.rebuildFromFrame(SITE);
+
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        ArgumentCaptor<Checkpoint> rebuilt = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(rebuilt.capture());
+        assertEquals("checkpoints/forced-rebuild-key", rebuilt.getValue().getS3KeyParquet());
+        assertEquals(2L, rebuilt.getValue().getSeq());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void forcedRebuildKeepsThePreviousKeyWhenRematerializeFails() {
+        // Same-seq detach is wrong: a failed PutObject leaves the last-good object at
+        // checkpoints/{site}/{table}/seq={seq}/snapshot.parquet. Nulling the row would make
+        // a healthy table undownloadable. Detach is only valid when seq moved.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+        clearInvocations(checkpointRepository, syncStateService, eventPublisher);
+
+        service.rebuildFromFrame(SITE);
+
+        verify(checkpointRepository, never()).save(any());
+        assertEquals("checkpoints/parquet-key", saved.getValue().getS3KeyParquet());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void rematerializesDetachedParquetWhenAllSegmentsHaveBeenPruned() {
+        // The frame is the seed. After a full prune (audit-window 0) there are no leftover
+        // changelog rows, but rematerialize must still recover from the frame.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 refused the snapshot"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(firstSave.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, firstSave.getValue());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        recordUploads("checkpoints/recovered-after-prune");
+        clearInvocations(syncStateService, checkpointStorage, checkpointRepository, eventPublisher);
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+        ArgumentCaptor<Checkpoint> recovered = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(recovered.capture());
+        assertEquals("checkpoints/recovered-after-prune", recovered.getValue().getS3KeyParquet());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void refusesWhenFrameUnreadableAndNoSegmentsRemain() {
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L));
+        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void rematerializeDoesNotMoveThePointerWhenTheCauseRemains() {
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenThrow(new IllegalStateException("S3 still down"));
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(firstSave.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+
+        parkAtPointer(2L, lastFrameBytes, firstSave.getValue());
+        clearInvocations(syncStateService);
+
+        service.buildCheckpoint(SITE);
+
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        assertNull(firstSave.getValue().getS3KeyParquet());
+        assertEquals(2L, firstSave.getValue().getSeq());
+    }
+
     // --- helpers ---
+
+    /**
+     * Park the site at an already-recorded checkpoint: the pointer matches the last segment,
+     * the frame is readable, and the given rows are what {@code findBySiteId} returns. A build
+     * in this state used to be a no-op because {@code newSegments} is empty.
+     */
+    private void parkAtPointer(long seq, byte[] frameBytes, Checkpoint... rows) {
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L));
+        when(checkpointStorage.frameExists(SITE, seq)).thenReturn(true);
+        when(checkpointStorage.downloadFrame(SITE, seq)).thenReturn(frameBytes);
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(rows));
+        for (Checkpoint row : rows) {
+            when(checkpointRepository.findBySiteIdAndTableName(SITE, row.getTableName()))
+                    .thenReturn(Optional.of(row));
+        }
+    }
 
     /** Stub the upload, recording what each call saw on disk before the file is cleaned up. */
     private void recordUploads(String s3Key) {
