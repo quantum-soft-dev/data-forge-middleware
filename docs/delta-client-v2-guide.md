@@ -586,9 +586,15 @@ You don't write these — they're how downstream tools read your data:
   build can leave tables split across two seqs — those already written carry the new seq, the rest
   the previous one — until the next successful build re-materializes all of them; the per-table rows
   were never written atomically, so a consumer that needs one consistent instant should compare the
-  `seq` of the tables it downloads. What all of this bounds is materialization, not reconstruction:
-  **the fold is still in heap**, and so is the new frame the build serializes at the end (one
-  all-tables copy — issue #126). `delta.checkpoint.duration{phase=fold}` is the number to watch on a
+  `seq` of the tables it downloads. Since issue #126 the reload frame
+  (`checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz`) is written the same way: one `ChangeRecord`
+  at a time into a scratch file, then streamed to S3, then deleted. The on-disk form is unchanged
+  (gzipped length-delimited protobuf — the next build's `parse` still reads it). The same
+  `DELTA_CHECKPOINT_TEMP_DIR` / `DELTA_CHECKPOINT_MAX_TEMP_BYTES` pair governs that file; crossing
+  the ceiling **aborts the build** rather than skipping a table, because the frame is the next
+  incremental seed and there is nothing else to fall back on. What all of this bounds is
+  materialization, not reconstruction: **the fold is still in heap**.
+  `delta.checkpoint.duration{phase=fold}` is the number to watch on a
   very large site. Sizing note: `DELTA_CHECKPOINT_MAX_TEMP_BYTES` and
   `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` both default to 10 GiB and, unless `*_TEMP_DIR` is pointed
   elsewhere, both spend it in the container's writable layer, which declares no `ephemeral-storage`
