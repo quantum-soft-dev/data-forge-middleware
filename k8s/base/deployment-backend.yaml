@@ -38,13 +38,46 @@ spec:
                 name: forge-config
             - secretRef:
                 name: forge-secrets
+          # ephemeral-storage is declared because the Delta v2 Parquet writers are
+          # file-backed (issues #112/#126/#127/#131): they materialize checkpoint
+          # snapshots, the all-tables reload frame and completed-batch artifacts on
+          # local disk before streaming them to S3. Without a *request* the scheduler
+          # does not account for that disk at all when placing pods, so two builds
+          # could push a node into disk pressure and evict unrelated workloads.
+          #
+          # The request/limit covers the whole container: the parquet-scratch emptyDir
+          # below AND the writable layer (logs, JVM crash dumps). Budget:
+          #   6Gi  scratch volume (sizeLimit, see `volumes` at the bottom)
+          # + 2Gi  writable layer / logs headroom
+          # = 8Gi
+          # Request == limit so the amount the scheduler reserves is exactly the amount
+          # kubelet enforces (GKE Autopilot normalizes these anyway, and caps pod
+          # ephemeral storage at 10Gi — keep the total below that).
+          # Recomputing the budget, and its failure mode, are documented in
+          # docs/delta-client-v2-guide.md ("Sizing note") — read that before changing it.
+          #
+          # FIRST ROLLOUT: this is the first time ephemeral-storage participates in
+          # scheduling. With maxUnavailable 0 / maxSurge 1 the surge pod must be placed
+          # before an old one goes away, so a node pool without 8Gi of allocatable
+          # ephemeral-storage free leaves it Pending and the rollout simply stalls —
+          # `kubectl rollout status` times out with no obvious cause. Check
+          # `kubectl describe node | grep -A5 Allocated` before the first deploy-dev/* tag.
           resources:
             requests:
               cpu: "500m"
               memory: "1Gi"
+              ephemeral-storage: "8Gi"
             limits:
               cpu: "1500m"
               memory: "2Gi"
+              ephemeral-storage: "8Gi"
+          volumeMounts:
+            # Shared scratch for both file-backed Parquet writers. DELTA_CHECKPOINT_TEMP_DIR
+            # and DELTA_BATCH_PARQUET_TEMP_DIR point here (k8s/base/configmap.yaml) instead
+            # of the container's writable layer (java.io.tmpdir), so the emptyDir sizeLimit
+            # bounds the directory the two of them share.
+            - name: parquet-scratch
+              mountPath: /scratch/parquet
           # Slow boot: Flyway migrations + JVM warmup can take minutes.
           # startupProbe gates liveness/readiness until the app is actually up.
           # timeoutSeconds 5 everywhere: the default 1s is razor-thin under GC
@@ -76,6 +109,24 @@ spec:
             preStop:
               exec:
                 command: ["/bin/sh", "-c", "sleep 5"]
+      volumes:
+        # emptyDir, deliberately not a PersistentVolume: the scratch dies with the pod, so
+        # nothing accumulates across pod generations. Default medium (node disk) —
+        # `medium: Memory` would be a tmpfs charged against the container's memory limit
+        # instead.
+        # This is per POD, not per container. Unlike the writable layer it SURVIVES a
+        # liveness/OOM kill, so within one pod's lifetime ParquetScratchOrphanSweeper (#127)
+        # is load-bearing rather than belt-and-braces: a dead attempt's files hold the volume
+        # until the 4h orphan age, while its batch claim is retried after 30 min. Budgeted as
+        # a residue term; the unconditional-startup-sweep fix is #141.
+        # sizeLimit is enforced by kubelet: crossing it EVICTS the pod. It is not a
+        # graceful, per-table skip like delta.*.max-temp-bytes — see the sizing note in
+        # docs/delta-client-v2-guide.md.
+        # Directory permissions: emptyDir is created 0777, so the non-root `dfm` user
+        # from the image can write to it without an fsGroup.
+        - name: parquet-scratch
+          emptyDir:
+            sizeLimit: 6Gi
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone

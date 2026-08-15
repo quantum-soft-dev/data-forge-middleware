@@ -16,6 +16,13 @@ spec:
           # guard (delta.ingestion.max-session-bytes, auto = maxHeap/8) now
           # rejects such a session cleanly instead of OOMing, but this memory is
           # still what lets that legit snapshot size actually succeed.
+          #
+          # `ephemeral-storage` is deliberately NOT repeated here: this is a strategic
+          # merge patch and `requests`/`limits` are maps, so the base declaration (8Gi,
+          # see k8s/base/deployment-backend.yaml) merges in key by key and survives.
+          # Verified with `kubectl kustomize k8s/overlays/dev`. Do not convert this to a
+          # JSON-6902 `replace` on the whole `resources` object — that would silently
+          # drop the disk budget and the scheduler would stop reserving for it.
           resources:
             requests:
               cpu: "500m"
