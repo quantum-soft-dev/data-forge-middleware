@@ -575,7 +575,8 @@ You don't write these — they're how downstream tools read your data:
   file is streamed to S3, then deleted, so a build holds one Parquet row-group buffer and one
   scratch file at a time instead of a whole table's encoded bytes per table. `DELTA_CHECKPOINT_TEMP_DIR`
   (default `java.io.tmpdir` — point it at a scratch volume if the node's default is small) and
-  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB) govern that file; a table that would cross the
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (default 10 GiB, **2 GiB on the deployed volume** — see the
+  sizing note) govern that file; a table that would cross the
   ceiling is stopped during the write and skipped as
   `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, exactly like a table whose data
   the declared schema cannot render. A later scheduled build (or a forced rebuild) **rematerializes
@@ -601,10 +602,15 @@ You don't write these — they're how downstream tools read your data:
   `seq` of the tables it downloads. Since issue #126 the reload frame
   (`checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz`) is written the same way: one `ChangeRecord`
   at a time into a scratch file, then streamed to S3, then deleted. The on-disk form is unchanged
-  (gzipped length-delimited protobuf — the next build's `parse` still reads it). The same
-  `DELTA_CHECKPOINT_TEMP_DIR` / `DELTA_CHECKPOINT_MAX_TEMP_BYTES` pair governs that file; crossing
-  the ceiling **aborts the build** rather than skipping a table, because the frame is the next
-  incremental seed and there is nothing else to fall back on. The writers delete their own scratch
+  (gzipped length-delimited protobuf — the next build's `parse` still reads it). It goes into the same
+  `DELTA_CHECKPOINT_TEMP_DIR`, but since issue #138 it has **its own ceiling**,
+  `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` (`delta.checkpoint.max-frame-temp-bytes`, default 10 GiB —
+  the value the shared key carried, so an unset key behaves exactly as before): crossing it
+  **aborts the build** rather than skipping a table, because the frame is the next
+  incremental seed and there is nothing else to fall back on. That is why it is a separate key and
+  deliberately the wider of the two — the per-table ceiling can be pushed down under a scratch
+  volume, where the cost of guessing low is a visible, self-healing hole, while the same reduction
+  applied to the frame would stop the pointer and with it retention. The writers delete their own scratch
   file in `finally`; if the process dies first, `ParquetScratchOrphanSweeper` removes
   `checkpoint-*` / `batch-parquet-*` files older than `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`
   (`delta.parquet.scratch-orphan-age-seconds`, default **4 hours**) from the configured directories,
@@ -628,7 +634,8 @@ You don't write these — they're how downstream tools read your data:
   very large site.
 
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
-`DELTA_CHECKPOINT_MAX_TEMP_BYTES` and `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` (both 10 GiB by default)
+`DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
+`DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` (all 10 GiB by default)
 are enforced **per file**, inside each writer. Nothing in the application bounds the *directory*
 those files share. On GKE that bound is the manifest (issue #131): the backend container mounts a
 `parquet-scratch` `emptyDir` with `sizeLimit: 6Gi` at `/scratch/parquet`, both `*_TEMP_DIR` keys
@@ -645,16 +652,31 @@ be a tmpfs charged against the container's *memory* limit. Request equals limit 
 amount is the enforced amount; GKE Autopilot caps a pod's ephemeral storage at 10 GiB, so the total
 has to stay under that.
 
-**The two guards fail differently, and the deployed one is the harsher.** Crossing
-`max-temp-bytes` is graceful and observable: a checkpoint table is skipped as
+**The guards fail differently, and the deployed one is the harshest.** Crossing an application
+ceiling is graceful and observable: a checkpoint table is skipped as
 `delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, a completed-batch artifact is
-abandoned, the frame aborts its build. Crossing the volume `sizeLimit` is a **kubelet eviction of
-the whole pod** — no skip, no metric, an in-flight ingest stream dies with it. Because the 10 GiB
-per-file ceilings sit above the 6 GiB volume, the volume is the binding constraint on this
-deployment: the eviction happens first. Making the application refuse before kubelet acts is
-deliberately a separate ticket (**#138**) — since the frame moved into the same directory, the
-checkpoint key governs two files with opposite failure semantics, so a blind reduction converts a
-disk guard into a stuck checkpoint pipeline.
+abandoned, the frame aborts its build with the pointer and the keys where they were. Crossing the
+volume `sizeLimit` is a **kubelet eviction of the whole pod** — no skip, no metric, an in-flight
+ingest stream dies with it.
+
+**Which is why the deployed ceilings are not the defaults (issue #138).** With all three keys at
+10 GiB the volume was the binding constraint and the eviction happened first. Lowering the
+checkpoint key was not possible while it governed two files at once: an oversized *table* is
+skipped and rematerialized by a later build, while an oversized *frame* ends the build, because it
+is the next incremental seed. The frame now answers to its own
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`, and `k8s/base/configmap.yaml` sets all three ceilings to
+**2Gi** beside the `*_TEMP_DIR` keys that put the writers on the volume — the application defaults
+stay at 10 GiB, because nothing in the application knows how large the directory it was handed is.
+
+2Gi is **a third of the `sizeLimit`**, three concurrent files being the smallest realistic peak:
+two checkpoint builds (see the `2 x` in the formula below) plus one completed-batch artifact. A
+test (`ParquetScratchCeilingBudgetTest`) fails if a deployed ceiling rises above that third or the
+`sizeLimit` drops below three of them, so the two numbers cannot drift apart. It is a floor on the
+guarantee, not the budget: a batch build opens one file **per claimed table**, which no per-file
+key can bound — only a directory-wide reservation can, and that is **#150**. For scale, the largest
+artifact on record is in the low hundreds of MiB, so 2Gi is about an order of magnitude of headroom;
+if a site outgrows it, raise the frame ceiling first, since a skipped table is visible and repairs
+itself while an aborted build stops the pointer and retention behind it.
 
 **Recomputing the budget.** The peak is a checkpoint build and completed-batch builds running at
 once:
@@ -662,6 +684,8 @@ once:
 ```
 peak = checkpoint_peak + batch_peak + orphan_residue
 checkpoint_peak = 2 x max(largest per-table snapshot, whole-site reload frame)
+                    # each term capped by its own key since #138: DELTA_CHECKPOINT_MAX_TEMP_BYTES
+                    # for the snapshot, DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES for the frame
                     # one file at a time PER BUILD (the cron sweep walks one site and one table
                     # at a time, and since #126 the frame is written the same way) — but there
                     # are two build paths per pod: CheckpointScheduler's ReentrantLock guards
@@ -704,8 +728,9 @@ snapshot that OOMed a 1536Mi pod (see the comment in `k8s/overlays/dev/deploymen
 whose Parquet and gzipped-protobuf forms land in the tens to low hundreds of MiB — so 6 GiB is
 roughly an order of magnitude of headroom over the largest thing we know about. Replace it with a
 measurement when one exists: read the object sizes under `checkpoints/{siteId}/_frame/` and
-`egress/{siteId}/batches/`, feed the largest into the formula above, and move the `sizeLimit` and
-the `ephemeral-storage` pair together, keeping the ~2 GiB gap between them.
+`egress/{siteId}/batches/`, feed the largest into the formula above, and move the `sizeLimit`, the
+`ephemeral-storage` pair and the three per-file ceilings together — keeping the ~2 GiB gap between
+`sizeLimit` and `ephemeral-storage`, and each ceiling at or below a third of the new `sizeLimit`.
 
 The overlays do **not** repeat any of this. `dev` and `stage` patch `resources` with cpu/memory
 only, and because those are strategic merge patches over maps, the base `ephemeral-storage` entries
@@ -753,7 +778,10 @@ sign of life, which a live build refreshes as it goes. Operators can tune the co
 `DELTA_BATCH_PARQUET_RETRY_DELAY_SECONDS`, `DELTA_BATCH_PARQUET_MAX_ATTEMPTS`,
 `DELTA_BATCH_PARQUET_LEASE_SECONDS`, `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES`,
 `DELTA_BATCH_PARQUET_TEMP_DIR`, `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`,
-`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, and `DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`.
+`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, and `DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD`. The checkpoint
+path has its own pair of disk ceilings, `DELTA_CHECKPOINT_MAX_TEMP_BYTES` (per table) and
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` (the reload frame); all of them are per file and must be set
+against the directory budget in the sizing note above.
 
 Batches that completed **before** this feature shipped have no manifest row. A finished batch is
 backfilled on demand: the first Parquet click enqueues its tables from the raw segments and answers
