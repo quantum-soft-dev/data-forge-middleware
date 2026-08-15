@@ -453,6 +453,33 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- parquet-scratch-budget: The deployment now declares how much local disk the file-backed Parquet
+  writers may use (issue #131) — manifests and documentation only, no application code. The backend
+  container mounts a `parquet-scratch` `emptyDir` (`sizeLimit: 6Gi`) at `/scratch/parquet`,
+  `DELTA_CHECKPOINT_TEMP_DIR` / `DELTA_BATCH_PARQUET_TEMP_DIR` point at it through
+  `k8s/base/configmap.yaml` instead of `java.io.tmpdir` (the container's unbounded writable layer),
+  and the container declares `ephemeral-storage` **request and limit of 8Gi** — 6 GiB of scratch
+  plus ~2 GiB for logs and the writable layer, request == limit because Autopilot normalizes them
+  and caps a pod at 10 GiB. The *request* is the half that matters for placement: without it the
+  scheduler ignored local disk entirely, so two builds could push a node into disk pressure and
+  evict unrelated pods. `emptyDir` over a PersistentVolume keeps #127's orphan sweeper
+  belt-and-braces rather than load-bearing; the default node-disk medium is deliberate
+  (`medium: Memory` would be a tmpfs charged against the memory limit). **The overlays needed no
+  patch**: `dev`/`stage` patch `resources` with cpu/memory through a strategic merge, and
+  `requests`/`limits` are maps, so the base `ephemeral-storage` merges in and survives — verified
+  by rendering all three overlays; both patches carry a comment warning that a JSON-6902 `replace`
+  on `resources` would silently drop it. `*_MAX_TEMP_BYTES` are **unchanged at 10 GiB** and remain
+  per-file, so on this deployment the volume is the binding constraint and the failure mode is a
+  kubelet **eviction of the pod**, not the graceful per-table skip
+  (`delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`) the app-level ceiling gives:
+  making the app refuse first needs separate snapshot/frame ceilings (#126 put two files with
+  opposite failure semantics under one key) and is issue #138. **6 GiB is an assumption, not a
+  measurement** — no observed maximum for a checkpoint frame or batch artifact exists; the
+  worst-case formula (`1 x max(table snapshot, whole-site frame)` for the sequential checkpoint
+  build, plus `max-concurrent (2) x tables x artifact` for the batch build, which opens one scratch
+  file per claimed table) is in `docs/delta-client-v2-guide.md` ("Sizing note") together with how to
+  replace the guess. No API, DTO, migration, metric, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md`, `docs/cr-unified-batch-parquet.md`.
 - wipe-prefix-sweep: The site-history wipe's post-commit prefix walk is bounded, resumable and
   honest (issue #122, consolidating #123 and #124). `S3PrefixLister` walks `ListObjectsV2` page by
   page and returns the pages already read plus `lastModified` per object and a truncation flag —

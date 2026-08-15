@@ -609,10 +609,66 @@ You don't write these — they're how downstream tools read your data:
   interval can exceed four hours (completed-batch files are created before replay starts). What all
   of this bounds is materialization, not reconstruction: **the fold is still in heap**.
   `delta.checkpoint.duration{phase=fold}` is the number to watch on a
-  very large site. Sizing note: `DELTA_CHECKPOINT_MAX_TEMP_BYTES` and
-  `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` both default to 10 GiB and, unless `*_TEMP_DIR` is pointed
-  elsewhere, both spend it in the container's writable layer, which declares no `ephemeral-storage`
-  request — mount a volume or lower the ceilings before a site's snapshot approaches them.
+  very large site.
+
+**Sizing note — the scratch budget is declared by the deployment, not by the application.**
+`DELTA_CHECKPOINT_MAX_TEMP_BYTES` and `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` (both 10 GiB by default)
+are enforced **per file**, inside each writer. Nothing in the application bounds the *directory*
+those files share. On GKE that bound is the manifest (issue #131): the backend container mounts a
+`parquet-scratch` `emptyDir` with `sizeLimit: 6Gi` at `/scratch/parquet`, both `*_TEMP_DIR` keys
+point at it through `k8s/base/configmap.yaml`, and the container declares
+`ephemeral-storage` **request and limit of 8Gi** — 6 GiB of scratch plus 2 GiB of headroom for the
+writable layer and logs. The request is the half that matters for placement: without it the
+scheduler does not account for local disk at all, and two builds on one node can drive it into disk
+pressure and evict unrelated pods. `emptyDir` is deliberate over a PersistentVolume — the scratch
+dies with the pod, which keeps `ParquetScratchOrphanSweeper` belt-and-braces rather than
+load-bearing — and the default (node-disk) medium is deliberate too, since `medium: Memory` would
+be a tmpfs charged against the container's *memory* limit. Request equals limit so the reserved
+amount is the enforced amount; GKE Autopilot caps a pod's ephemeral storage at 10 GiB, so the total
+has to stay under that.
+
+**The two guards fail differently, and the deployed one is the harsher.** Crossing
+`max-temp-bytes` is graceful and observable: a checkpoint table is skipped as
+`delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`, a completed-batch artifact is
+abandoned, the frame aborts its build. Crossing the volume `sizeLimit` is a **kubelet eviction of
+the whole pod** — no skip, no metric, an in-flight ingest stream dies with it. Because the 10 GiB
+per-file ceilings sit above the 6 GiB volume, the volume is the binding constraint on this
+deployment: the eviction happens first. Making the application refuse before kubelet acts is
+deliberately a separate ticket (**#138**) — since the frame moved into the same directory, the
+checkpoint key governs two files with opposite failure semantics, so a blind reduction converts a
+disk guard into a stuck checkpoint pipeline.
+
+**Recomputing the budget.** The peak is a checkpoint build and completed-batch builds running at
+once:
+
+```
+peak = checkpoint_peak + batch_peak
+checkpoint_peak = 1 x max(largest per-table snapshot, whole-site reload frame)
+                    # builds are sequential (nightly cron, one site and one table at a time),
+                    # and since #126 the frame is written the same way, so one file at a time
+batch_peak      = delta.batch-parquet.max-concurrent (2)
+                    x tables claimed per batch          # one scratch file per claimed table,
+                                                        # all opened before the shared replay
+                    x largest per-table artifact
+```
+
+`delta.batch-parquet.max-concurrent` and the table count per site are the two multipliers to check
+before assuming the budget still holds; #128 also raised how often large files are written, since a
+scheduled build now rematerializes every table whose snapshot is missing and a forced rebuild
+rewrites all of them. **6 GiB is an assumption, not a measurement**: we have no observed maximum for
+a checkpoint frame or a batch artifact on test/prod. The only sized artifact on record is the 439k-row
+snapshot that OOMed a 1536Mi pod (see the comment in `k8s/overlays/dev/deployment-backend-patch.yaml`),
+whose Parquet and gzipped-protobuf forms land in the tens to low hundreds of MiB — so 6 GiB is
+roughly an order of magnitude of headroom over the largest thing we know about. Replace it with a
+measurement when one exists: read the object sizes under `checkpoints/{siteId}/_frame/` and
+`egress/{siteId}/batches/`, feed the largest into the formula above, and move the `sizeLimit` and
+the `ephemeral-storage` pair together, keeping the ~2 GiB gap between them.
+
+The overlays do **not** repeat any of this. `dev` and `stage` patch `resources` with cpu/memory
+only, and because those are strategic merge patches over maps, the base `ephemeral-storage` entries
+merge in and survive — verified with `kubectl kustomize k8s/overlays/{dev,stage,prod}`. Converting
+either patch to a JSON-6902 `replace` on the whole `resources` object would silently drop the disk
+budget.
 
 Realtime segment files appear **within seconds of `SessionCommitted`**. After the ingestion commit,
 the completion callback opens a new transaction, enqueues unified batch/table artifacts in a
