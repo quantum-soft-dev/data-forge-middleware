@@ -173,6 +173,24 @@ class SqlGenerationConcurrencyTest {
         meterRegistry = new SimpleMeterRegistry();
     }
 
+    /**
+     * Wait until the semaphore queue gauge reaches {@code expected}. A scheduling bound
+     * of a few seconds is only for the waiter thread to enter {@code tryAcquire}; the
+     * assertion itself is the observed queue length, not a timeout of the unit under test.
+     */
+    private void awaitSemaphoreQueueSize(int expected) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        Double last = null;
+        while (System.nanoTime() < deadlineNanos) {
+            last = meterRegistry.get("sql.generation.semaphore.queue.size").gauge().value();
+            if (last == expected) {
+                return;
+            }
+            TimeUnit.MILLISECONDS.sleep(10);
+        }
+        throw new AssertionError("semaphore queue size stayed at " + last + " instead of " + expected);
+    }
+
     @Nested
     @DisplayName("Semaphore Concurrency Limiting")
     class SemaphoreConcurrencyLimiting {
@@ -522,72 +540,44 @@ class SqlGenerationConcurrencyTest {
         @Test
         @DisplayName("should also protect regenerateForBatch with semaphore")
         void shouldProtectRegenerateForBatchWithSemaphore() throws Exception {
-            // Given - max 1 concurrent, short timeout
-            SqlGenerationService service = createService(1, 1);
+            // Long timeout: this test asserts that regenerateForBatch queues on the
+            // same semaphore, not that a 1s clock expires (issue #119).
+            SqlGenerationService service = createService(1, 120);
 
-            CountDownLatch blockLatch = new CountDownLatch(1);
-            CountDownLatch firstStarted = new CountDownLatch(1);
+            CountDownLatch holdPermit = new CountDownLatch(1);
+            CountDownLatch firstHoldsPermit = new CountDownLatch(1);
 
             UUID batchId1 = UUID.randomUUID();
             UUID batchId2 = UUID.randomUUID();
             Long pluginId1 = 1L;
             Long pluginId2 = 2L;
 
-            // First batch setup for generateSqlForBatch (holds semaphore)
-            setupMocksForBlockingGeneration(batchId1, pluginId1, blockLatch);
-
-            // Override S3 to signal first started
-            when(s3Client.getObject(any(GetObjectRequest.class))).thenAnswer(invocation -> {
-                firstStarted.countDown();
-                blockLatch.await();
-                String csv = "id,name\n1,Alice";
-                return new ResponseInputStream<>(
-                        GetObjectResponse.builder().build(),
-                        new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8))
-                );
+            // Block at the first statement after acquireSemaphore so the permit is
+            // held without depending on S3 / CSV work ever running.
+            when(accountPluginRepository.findById(pluginId1)).thenAnswer(invocation -> {
+                firstHoldsPermit.countDown();
+                if (!holdPermit.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("first holder was not released");
+                }
+                return Optional.of(mock(AccountPlugin.class));
             });
-
-            when(csvDiffService.compare(anyList(), anyList(), anyList()))
-                    .thenReturn(List.of());
-
-            // Second batch setup for regenerateForBatch
-            UUID siteId2 = UUID.randomUUID();
-            UUID accountId2 = UUID.randomUUID();
-
-            Batch batch2 = mock(Batch.class);
-            when(batch2.getId()).thenReturn(batchId2);
-            when(batch2.getSiteId()).thenReturn(siteId2);
-            when(batch2.getAccountId()).thenReturn(accountId2);
-
-            UploadedFile file2 = mock(UploadedFile.class);
-            when(file2.getOriginalFileName()).thenReturn("data2.csv");
-            when(file2.getS3Key()).thenReturn("account/site/data2.csv");
-            when(batch2.getUploadedFiles()).thenReturn(List.of(file2));
-
-            when(batchRepository.findByIdWithFiles(batchId2)).thenReturn(Optional.of(batch2));
-
-            Site site2 = mock(Site.class);
-            when(site2.getId()).thenReturn(siteId2);
-            when(site2.getDomain()).thenReturn("test2.com");
-            when(siteRepository.findById(siteId2)).thenReturn(Optional.of(site2));
-
-            when(batchRepository.findPreviousBatchForSiteWithFiles(siteId2, batchId2))
-                    .thenReturn(Optional.empty());
 
             ExecutorService executor = Executors.newFixedThreadPool(2);
             try {
-                // When - first task holds semaphore via generateSqlForBatch
-                executor.submit(() -> service.generateSqlForBatch(batchId1, pluginId1));
-                boolean started = firstStarted.await(5, TimeUnit.SECONDS);
-                assertThat(started).isTrue();
+                Future<?> first = executor.submit(() -> service.generateSqlForBatch(batchId1, pluginId1));
+                assertThat(firstHoldsPermit.await(5, TimeUnit.SECONDS))
+                        .as("first generateSqlForBatch should hold the semaphore").isTrue();
 
-                // Then - regenerateForBatch should also timeout
-                assertThatThrownBy(() -> service.regenerateForBatch(batchId2, pluginId2))
-                        .isInstanceOf(SqlGenerationException.class)
-                        .hasMessageContaining("timed out");
+                Future<?> regenerate = executor.submit(() -> service.regenerateForBatch(batchId2, pluginId2));
+                awaitSemaphoreQueueSize(1);
 
-                blockLatch.countDown();
+                assertThat(regenerate.isDone())
+                        .as("regenerateForBatch should still be waiting on the semaphore").isFalse();
+
+                holdPermit.countDown();
+                first.get(5, TimeUnit.SECONDS);
             } finally {
+                holdPermit.countDown();
                 executor.shutdownNow();
             }
         }
