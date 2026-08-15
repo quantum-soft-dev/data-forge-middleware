@@ -1185,11 +1185,17 @@ inside the lock") and the reason it matters here is the row lock above: since #1
 `site_sync_state` row lock as the commit's first statement, and a multi-second upload of a large
 snapshot tail used to sit inside that hold, pinning a HikariCP connection with it.
 
-What it costs: an upload whose transaction then rolls back leaves an object nobody references. That
-is not new — nothing deleted the object on rollback when the upload sat inside the transaction
-either — and the key carries a freshly minted segment id (`delta/{siteId}/segments/{segmentId}.pb.gz`),
-so the bytes are unreachable without the row. A site history wipe's `egress/` and `checkpoints/`
-walks do not cover this prefix; segment objects are removed by key from their rows, as before.
+What it costs: an upload whose transaction then fails leaves an object nobody references. The key
+carries a freshly minted segment id (`delta/{siteId}/segments/{segmentId}.pb.gz`), so the bytes are
+unreachable without the row — but also unreclaimable: segment objects are deleted by key **from
+their rows**, and a site history wipe's prefix walks cover `egress/` and `checkpoints/` only. That is
+not new (the upload always preceded the watermark advance and the batch completion, and nothing
+deleted it when those failed), and moving it ahead of the whole transaction adds one more way to get
+there — a failure inside `reset` itself, i.e. the row-lock wait behind a concurrent wipe. A client
+retries the whole session, so a repeatedly failing large snapshot leaves one full-size copy per
+attempt. Reclaiming them is tracked as **issue #158**; a compensating delete in the caller is
+deliberately *not* it, because an exception can surface after the transaction committed (an
+`AFTER_COMMIT` listener throwing) and the delete would then destroy a live segment.
 
 ---
 

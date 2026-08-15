@@ -116,7 +116,16 @@ public class ChangelogSegmentService {
      * Upload and record a segment in one call, for callers that are <em>not</em> inside a
      * transaction (test fixtures and maintenance code). The ingestion commit path uses
      * {@link #prepare} and {@link #persistPrepared} separately so that only the second half runs
-     * with the transaction open; {@link #prepare} refuses outright if one is.
+     * with the transaction open.
+     *
+     * <p>Two things to know before reaching for this pair. It <strong>throws</strong> when called
+     * with a transaction open — {@link #prepare} refuses — where the single {@code persist} it
+     * replaces would have quietly joined the caller's. And the row half runs <em>unproxied</em>:
+     * calling {@link #persistPrepared} on {@code this} bypasses its {@code @Transactional}, so the
+     * write happens in the transaction Spring Data opens around {@code save}. That is correct only
+     * while the row half stays a single statement — a second write added to {@code save} would
+     * silently stop being atomic here. Keep it one statement, or route the caller through
+     * {@link DeltaSessionCommitTransaction} as the ingestion path does.</p>
      *
      * @param siteId   site identifier
      * @param batchId  batch (session) identifier
@@ -124,6 +133,7 @@ public class ChangelogSegmentService {
      * @param firstSeq first sequence of the session
      * @param records  accepted change records (in sequence order)
      * @return the persisted segment metadata
+     * @throws IllegalStateException when called with a transaction already open
      */
     public ChangelogSegment persist(UUID siteId, UUID batchId, String mode, long firstSeq, List<ChangeRecord> records) {
         return persistPrepared(prepare(siteId, batchId, mode, firstSeq, records));

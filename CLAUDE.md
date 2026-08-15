@@ -480,7 +480,12 @@ pages/{feature}/            # Route pages
   trade-off is not new** — the upload was never compensated on rollback when it sat inside the
   transaction either, and the key carries a freshly minted segment id
   (`delta/{siteId}/segments/{segmentId}.pb.gz`), so an object left by a failed commit is unreachable
-  without its row; pinned by a test rather than left implicit. Proven where it matters by an
+  without its row; pinned by a test rather than left implicit. What the review added: the *window*
+  is wider than before, because a failure inside `reset` (the row-lock wait behind a concurrent wipe)
+  can now strand a full-size snapshot tail, and nothing sweeps `delta/{siteId}/segments/` — filed as
+  **#158**. A compensating delete in the caller is deliberately not the fix: an exception can also
+  surface *after* the transaction committed (an `AFTER_COMMIT` listener throwing), and the delete
+  would then destroy a live segment. Proven where it matters by an
   integration test that spies the real `S3ChangelogSegmentStorage` and asserts
   `isActualTransactionActive()` is false at the `PutObject`, on both the plain and the re-baseline
   path — the unit tests can only pin call order, since the transaction comes from a Spring proxy. No

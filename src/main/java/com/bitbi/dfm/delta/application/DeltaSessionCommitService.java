@@ -18,9 +18,17 @@ import java.util.UUID;
  * the commit: the segment's bytes go to object storage first, with nothing open, and only then is
  * the transaction entered — so the row locks it takes, including the {@code site_sync_state} row a
  * FULL_SNAPSHOT re-baseline locks before it deletes anything (issue #142), are never held across a
- * network upload. An upload whose transaction then rolls back leaves an unreachable orphan object,
- * exactly as it did when the upload sat inside the transaction: nothing deleted it on rollback
- * then either.</p>
+ * network upload.</p>
+ *
+ * <p>The cost is an object that outlives a transaction which never commits. Nothing resolves a
+ * segment without its row, so the bytes are unreachable, and the case is not new — the upload
+ * always preceded the watermark advance and the batch completion, and nothing deleted it when
+ * either of those failed. Moving it ahead of the whole transaction adds one more way to get there:
+ * a failure inside {@link DeltaRebaselineService#reset}, i.e. the row-lock wait behind a concurrent
+ * site history wipe. Compensating in a {@code catch} here would be wrong — an exception can also
+ * surface <em>after</em> the transaction committed (an {@code afterCommit} synchronization or an
+ * {@code AFTER_COMMIT} listener throwing), and deleting then would destroy a live segment.
+ * Reclaiming these objects is issue #158.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0

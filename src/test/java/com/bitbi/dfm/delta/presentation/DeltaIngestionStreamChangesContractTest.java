@@ -1323,6 +1323,11 @@ class DeltaIngestionStreamChangesContractTest extends DeltaIngestionContractTest
                 eq(101L), argThat((List<ChangeRecord> r) -> r.size() == 100));
         verify(changelogSegmentService).prepare(eq(SITE), eq(batchId), eq("FULL_SNAPSHOT"),
                 eq(201L), argThat((List<ChangeRecord> r) -> r.size() == 50));
+        // 033: the two seals are provisional (invisible to the fold and both work queues) and only
+        // the tail is written as a published segment. prepare() cannot say which — the upload is the
+        // same either way — so the split is asserted on the row half.
+        verify(changelogSegmentService, times(2)).persistPreparedProvisional(any());
+        verify(changelogSegmentService, times(1)).persistPrepared(any());
 
         // One batch, completed once; the baseline is reset from the session's first seq, not the
         // tail segment's, and the whole snapshot is published in the same commit.
