@@ -231,8 +231,9 @@ delta:
     provisional-sweep-millis: ${DELTA_PROVISIONAL_SWEEP_MILLIS:900000}
   checkpoint:
     # A checkpoint snapshot is written to a local file per table and streamed to S3 from there
-    # (issue #112), so a table is never materialized in heap. Point temp-dir at a scratch volume if
-    # the node's default tmpdir is small; max-temp-bytes refuses a table that would fill it.
+    # (issue #112); the all-INSERT reload frame uses the same directory and ceiling (issue #126).
+    # Point temp-dir at a scratch volume if the node's default tmpdir is small. max-temp-bytes
+    # skips a table whose Parquet would fill it, and aborts the build if the frame would.
     temp-dir: ${DELTA_CHECKPOINT_TEMP_DIR:${java.io.tmpdir}}
     max-temp-bytes: ${DELTA_CHECKPOINT_MAX_TEMP_BYTES:10737418240}
   parquet:

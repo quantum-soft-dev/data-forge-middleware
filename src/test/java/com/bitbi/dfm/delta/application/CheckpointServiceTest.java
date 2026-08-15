@@ -54,6 +54,8 @@ class CheckpointServiceTest {
     }
 
     private final List<UploadedSnapshot> uploaded = new ArrayList<>();
+    private final List<UploadedSnapshot> uploadedFrames = new ArrayList<>();
+    private byte[] lastFrameBytes;
 
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final ChangelogSegmentService changelogSegmentService = mock(ChangelogSegmentService.class);
@@ -91,6 +93,12 @@ class CheckpointServiceTest {
                 record("customers", 1L, 1, "Ann"),
                 record("customers", 2L, 2, "Bob")));
         when(checkpointRepository.findBySiteIdAndTableName(eq(SITE), any())).thenReturn(Optional.empty());
+        when(checkpointStorage.uploadFrame(eq(SITE), anyLong(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    Path file = invocation.getArgument(2);
+                    lastFrameBytes = Files.readAllBytes(file);
+                    return "checkpoints/frame-key";
+                });
     }
 
     @Test
@@ -120,7 +128,7 @@ class CheckpointServiceTest {
         service.buildCheckpoint(SITE);
 
         verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any());
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verifyNoMoreInteractions(checkpointStorage);
     }
 
@@ -169,7 +177,7 @@ class CheckpointServiceTest {
         assertNull(orders.getS3KeyParquet(), "failed parquet must not be attached");
         verify(metrics).checkpointTableUnmaterialized("parquet_failed");
 
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
@@ -210,7 +218,7 @@ class CheckpointServiceTest {
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
                 () -> service.buildCheckpoint(SITE));
 
-        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
     }
 
@@ -224,7 +232,7 @@ class CheckpointServiceTest {
         service.buildCheckpoint(SITE);
 
         verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
 
@@ -274,6 +282,51 @@ class CheckpointServiceTest {
                         .getMethod("buildCheckpoint", UUID.class)
                         .getAnnotation(org.springframework.transaction.annotation.Transactional.class),
                 "buildCheckpoint must not open a transaction spanning S3 round-trips");
+    }
+
+    @Test
+    void writesTheFrameToDiskAndRemovesItAfterUploading() throws IOException {
+        // The frame is a file handed to S3, not a collected List + gzip byte[] — and the file
+        // is this build's litter the same way the snapshot is (issue #126).
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+        recordFrameUploads();
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1, uploadedFrames.size());
+        assertTrue(uploadedFrames.get(0).sizeAtUpload() > 0, "the file must hold the frame at upload time");
+        assertEquals(List.of(), snapshotsOnDisk(), "the temporary frame must not outlive the build");
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+    }
+
+    @Test
+    void removesTheTemporaryFrameWhenTheUploadFails() throws IOException {
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+        when(checkpointStorage.uploadFrame(eq(SITE), anyLong(), any(Path.class)))
+                .thenThrow(new IllegalStateException("S3 refused the frame"));
+
+        assertThrows(IllegalStateException.class, () -> service.buildCheckpoint(SITE));
+
+        assertEquals(List.of(), snapshotsOnDisk(), "a failed frame upload must not leak its temporary file");
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void abortsTheBuildWhenTheFrameWouldCrossTheLocalFileCeiling() throws IOException {
+        // The frame is the next build's seed: unlike a single oversized table it cannot be
+        // skipped. Abort so the pointer stays put and the next run rewrites it.
+        service = new CheckpointService(
+                segmentRepository, changelogSegmentService, checkpointRepository,
+                syncStateService, checkpointStorage, siteSchemaService, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
+                tempDirectory.toString(), 8L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        assertThrows(ArtifactSizeLimitExceededException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        assertEquals(List.of(), snapshotsOnDisk(), "the half-written frame must not be left behind");
     }
 
     @Test
@@ -351,17 +404,22 @@ class CheckpointServiceTest {
     void skipsOnlyTheTableThatCrossesTheLocalFileCeiling() throws IOException {
         // A table too big for the configured ceiling is a fact about that table, so it keeps the
         // per-table skip — the build completes and the pointer advances, as with unrenderable data.
+        // The ceiling is shared with the frame (issue #126), so it has to sit between the two
+        // artifacts of this fixture: below the Parquet snapshot, above the gzipped 2-record frame.
+        long ceiling = ceilingBetweenFrameAndParquet();
         service = new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher,
-                tempDirectory.toString(), 8L);
+                tempDirectory.toString(), ceiling);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordFrameUploads();
 
         service.buildCheckpoint(SITE);
 
         verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
         verify(metrics).checkpointTableUnmaterialized("parquet_failed");
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
         assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
     }
@@ -383,10 +441,9 @@ class CheckpointServiceTest {
         assertNull(detached.getS3KeyParquet());
         assertEquals(2L, detached.getSeq());
         verify(syncStateService).recordCheckpoint(SITE, 2L);
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), detached);
+        parkAtPointer(2L, lastFrameBytes, detached);
         recordUploads("checkpoints/recovered-parquet-key");
         clearInvocations(syncStateService, checkpointStorage, checkpointRepository, changelogSegmentService);
 
@@ -426,10 +483,9 @@ class CheckpointServiceTest {
                 .filter(c -> c.getTableName().equals("orders")).findFirst().orElseThrow();
         assertNotNull(customers.getS3KeyParquet());
         assertNull(orders.getS3KeyParquet());
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), customers, orders);
+        parkAtPointer(2L, lastFrameBytes, customers, orders);
         when(checkpointStorage.uploadParquet(eq(SITE), eq("orders"), eq(2L), any(Path.class)))
                 .thenReturn("checkpoints/orders-recovered");
         clearInvocations(checkpointStorage, checkpointRepository);
@@ -454,10 +510,9 @@ class CheckpointServiceTest {
 
         ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(saved.capture());
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), saved.getValue());
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
         clearInvocations(checkpointStorage, checkpointRepository, syncStateService);
 
         service.buildCheckpoint(SITE);
@@ -476,10 +531,9 @@ class CheckpointServiceTest {
 
         ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(saved.capture());
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), saved.getValue());
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
         uploaded.clear();
         recordUploads("checkpoints/forced-rebuild-key");
         clearInvocations(checkpointStorage, checkpointRepository, syncStateService);
@@ -508,10 +562,9 @@ class CheckpointServiceTest {
 
         ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(saved.capture());
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), saved.getValue());
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
         when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
                 .thenThrow(new IllegalStateException("S3 refused the snapshot"));
         clearInvocations(checkpointRepository, syncStateService, eventPublisher);
@@ -536,10 +589,9 @@ class CheckpointServiceTest {
 
         ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(firstSave.capture());
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), firstSave.getValue());
+        parkAtPointer(2L, lastFrameBytes, firstSave.getValue());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
         recordUploads("checkpoints/recovered-after-prune");
         clearInvocations(syncStateService, checkpointStorage, checkpointRepository, eventPublisher);
@@ -577,10 +629,9 @@ class CheckpointServiceTest {
 
         ArgumentCaptor<Checkpoint> firstSave = ArgumentCaptor.forClass(Checkpoint.class);
         verify(checkpointRepository).save(firstSave.capture());
-        ArgumentCaptor<byte[]> frame = ArgumentCaptor.forClass(byte[].class);
-        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), frame.capture());
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
 
-        parkAtPointer(2L, frame.getValue(), firstSave.getValue());
+        parkAtPointer(2L, lastFrameBytes, firstSave.getValue());
         clearInvocations(syncStateService);
 
         service.buildCheckpoint(SITE);
@@ -615,6 +666,39 @@ class CheckpointServiceTest {
                     Path file = invocation.getArgument(3);
                     uploaded.add(new UploadedSnapshot(file, Files.size(file), snapshotsOnDisk().size()));
                     return s3Key;
+                });
+    }
+
+    /**
+     * A ceiling that this fixture's Parquet snapshot will cross and its gzipped frame will not,
+     * so the shared {@code max-temp-bytes} can still express a per-table skip.
+     */
+    private long ceilingBetweenFrameAndParquet() throws IOException {
+        Path probeParquet = tempDirectory.resolve("probe.parquet");
+        Path probeFrame = tempDirectory.resolve("probe.pb.gz");
+        ChangeRecord first = record("customers", 1L, 1, "Ann");
+        ChangeRecord second = record("customers", 2L, 2, "Bob");
+        ParquetCheckpointWriter.writeParquet(probeParquet, "customers", customersSchema(),
+                List.of(first.getDataMap(), second.getDataMap()),
+                Long.MAX_VALUE, 8L * 1024 * 1024);
+        try (java.io.OutputStream out = Files.newOutputStream(probeFrame)) {
+            ChangelogCodec.write(List.of(first, second), out);
+        }
+        long parquetSize = Files.size(probeParquet);
+        long frameSize = Files.size(probeFrame);
+        Files.delete(probeParquet);
+        Files.delete(probeFrame);
+        org.junit.jupiter.api.Assumptions.assumeTrue(parquetSize > frameSize + 1,
+                "the 2-row Parquet snapshot must be larger than the gzipped frame");
+        return frameSize + (parquetSize - frameSize) / 2;
+    }
+
+    private void recordFrameUploads() {
+        when(checkpointStorage.uploadFrame(eq(SITE), anyLong(), any(Path.class)))
+                .thenAnswer(invocation -> {
+                    Path file = invocation.getArgument(2);
+                    uploadedFrames.add(new UploadedSnapshot(file, Files.size(file), snapshotsOnDisk().size()));
+                    return "checkpoints/frame-key";
                 });
     }
 
