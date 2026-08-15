@@ -243,6 +243,13 @@ delta:
     # table) multiplies past a 2-3 Gi pod. Lowering it further costs compression and, on a multi-GB
     # batch artifact, multiplies the footer metadata every reader parses up front.
     row-group-bytes: ${DELTA_PARQUET_ROW_GROUP_BYTES:16777216}
+    # Orphan sweep for file-backed scratch left behind when a process dies between createTempFile
+    # and finally (issue #127). Age is the only safe filter: a sibling replica may be writing into
+    # the same volume, and the batch-parquet lease is renewed for the life of a live build, so it
+    # is not a bound on file age. Default 4 h must exceed the longest create-to-delete interval
+    # (completed-batch files are created before replay starts). Raise it if a build can run longer.
+    scratch-orphan-age-seconds: ${DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS:14400}
+    scratch-orphan-sweep-ms: ${DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS:3600000}
   egress:
     # Concurrent delta-Parquet egress workers per instance (Task 8)
     max-concurrent: ${DELTA_EGRESS_MAX_CONCURRENT:2}

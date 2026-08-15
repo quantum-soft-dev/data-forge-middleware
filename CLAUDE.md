@@ -454,6 +454,19 @@ pages/{feature}/            # Route pages
 - Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
 
 ## Recent Changes
+- parquet-scratch-orphan-sweep: File-backed Parquet scratch left behind when a process dies between
+  `createTempFile` and `finally` is swept by prefix and age (issue #127).
+  `ParquetScratchOrphanSweeper` lists `delta.checkpoint.temp-dir` and
+  `delta.batch-parquet.temp-dir` (deduplicated; they default to the same `java.io.tmpdir`),
+  deletes regular files named `checkpoint-*` / `batch-parquet-*` whose last-modified time is
+  strictly older than `delta.parquet.scratch-orphan-age-seconds`
+  (`DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS`, default **4 hours**), and runs at startup then
+  every `delta.parquet.scratch-orphan-sweep-ms` (`DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS`, default
+  1 hour). Age is the only safe filter: a sibling replica may be writing into the same volume,
+  and the batch-parquet lease is renewed for the life of a live build, so it is not a bound on
+  file age. The writers still delete their own files on the happy path; this is the recovery
+  for a persistent scratch volume. No REST, gRPC, DTO, metric, migration, or frontend change.
+  See `docs/delta-client-v2-guide.md`, `docs/cr-unified-batch-parquet.md`.
 - checkpoint-parquet-on-disk: The V2 checkpoint build materializes its snapshots on disk, one table
   at a time, and every V2 Parquet writer takes an explicit row-group budget (issue #112, which
   absorbed #114). `ParquetCheckpointWriter.toParquet` used to copy a table's folded rows into a
