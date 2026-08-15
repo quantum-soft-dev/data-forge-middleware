@@ -746,7 +746,8 @@ batch_peak      = delta.batch-parquet.max-concurrent (2)
 orphan_residue  = whatever a container restart left behind, until the next sweep tick
                     # bounded by DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS (1 h) on this
                     # deployment, not by the 4 h age window — see "Orphans outlive a
-                    # container restart" below
+                    # container restart" below, and "One sweep interval means the tick
+                    # runs when it is due" for the scheduler that bound assumes
 ```
 
 There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
@@ -767,6 +768,24 @@ drops it on its first sweep tick and the residue term shrinks to at most one swe
 **not** shorten `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` to chase the same effect — a live
 build's files are exactly as old as the build, so a lower age deletes live work. And if the two
 `*_TEMP_DIR` keys are ever moved off the pod-private volume, the flag has to move with them.
+
+**"One sweep interval" means the tick runs when it is due.** That is a statement about the
+scheduler, so the scheduler is pinned rather than inherited (issue **#146**).
+`SchedulingConfiguration` declares the application's `TaskScheduler` — a `ThreadPoolTaskScheduler`
+of `spring.task.scheduling.pool.size` (**6**, overridable with `SPRING_TASK_SCHEDULING_POOL_SIZE`)
+— so the nightly checkpoint build, which can hold its thread for hours, leaves threads for the
+scratch sweep, the batch timeout sweep and the monthly partition creation. Without the bean the
+choice followed `spring.threads.virtual.enabled`: with it on, Spring Boot builds a
+`SimpleAsyncTaskScheduler` that runs **every fixed-delay task on one internal thread** (the scratch
+sweep among them) and ignores the pool-size key entirely; with it off, a pool of one. Two
+consequences for an operator:
+
+- **Setting `SPRING_TASK_SCHEDULING_POOL_SIZE` to 1 restores the bug.** The residue term above then
+  has no bound anyone can quote, because a sweep tick can sit behind a whole checkpoint build.
+- **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Nearly every
+  scheduled task opens a connection; a pool as wide as Hikari's lets a burst of ticks take the
+  connections request threads need. `ScheduledTaskInventoryTest` fails on both mistakes, and on a
+  new `@Scheduled` method landing without the audit behind that number being redone.
 
 **6 GiB is an assumption, not a measurement**: we have no observed maximum for
 a checkpoint frame or a batch artifact on test/prod. The only sized artifact on record is the 439k-row
