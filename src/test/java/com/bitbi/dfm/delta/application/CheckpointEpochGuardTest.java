@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.application;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
@@ -85,14 +86,18 @@ class CheckpointEpochGuardTest {
     }
 
     @Test
-    void guardsTheWriteInsideOneTransaction() throws NoSuchMethodException {
+    void guardsTheWriteInsideItsOwnShortTransaction() throws NoSuchMethodException {
         // Without a transaction the pessimistic lock is released the moment it is taken, so the
-        // check and the write it protects would no longer be serialized against the wipe.
+        // check and the write it protects would no longer be serialized against the wipe. And
+        // joining an ambient one would hold that lock across the build's S3 round-trips and make a
+        // refusal poison the caller's transaction instead of discarding the build.
         Method inEpoch = CheckpointEpochGuard.class.getMethod("inEpoch", UUID.class, long.class, Runnable.class);
         Transactional transactional = inEpoch.getAnnotation(Transactional.class);
 
         assertNotNull(transactional, "the epoch check and the write it guards must share a transaction");
         assertFalse(transactional.readOnly(), "the guarded write mutates rows");
+        assertEquals(Propagation.REQUIRES_NEW, transactional.propagation(),
+                "the row lock must never outlive the single write it protects");
     }
 
     @Test

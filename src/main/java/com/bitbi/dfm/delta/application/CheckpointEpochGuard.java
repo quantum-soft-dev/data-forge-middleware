@@ -3,6 +3,7 @@ package com.bitbi.dfm.delta.application;
 import com.bitbi.dfm.delta.domain.SiteSyncState;
 import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
@@ -50,13 +51,22 @@ public class CheckpointEpochGuard {
      * <p>A site with no {@code site_sync_state} row counts as generation 0: it has never synced, so
      * a wipe of it would destroy nothing, and the row is created by the pointer write itself.</p>
      *
+     * <p>{@link Propagation#REQUIRES_NEW} makes "short transaction" structural rather than a
+     * property of today's callers. Joining an ambient transaction would hold the row lock for
+     * everything that transaction does next — every S3 download and upload of the build, the exact
+     * connection-pinning this design exists to avoid — and a refusal caught by
+     * {@code CheckpointService} would leave that transaction marked rollback-only, turning a
+     * discarded build into an {@code UnexpectedRollbackException} for its caller. The other side of
+     * that choice: a caller that already holds this row's lock would block on itself, which is why
+     * the build stays non-transactional (pinned by a test on {@code buildCheckpoint}).</p>
+     *
      * @param siteId     site whose epoch the build started from
      * @param generation the {@code generation} that build read
      * @param write      the write to perform under the row lock
      * @throws EpochChangedException when the site was wiped since the build started; the caller must
      *                               discard the whole build rather than retry the write
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void inEpoch(UUID siteId, long generation, Runnable write) {
         long current = syncStateRepository.findBySiteIdForUpdate(siteId)
                 .map(SiteSyncState::getGeneration)

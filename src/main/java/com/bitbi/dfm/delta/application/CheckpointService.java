@@ -295,13 +295,15 @@ public class CheckpointService {
                 // table simply has nothing to download until a schema arrives. The client is
                 // required to SubmitSchema before its first session, so this means the site is
                 // misconfigured — count it so the hole is visible rather than silent.
-                if (abandonStaleSnapshot(checkpoint, pass)) {
-                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
-                }
+                // Report before writing: the guarded save throws rather than returns when the
+                // site was wiped mid-build, and this table's hole would then go unrecorded.
                 metrics.checkpointTableUnmaterialized("no_schema");
                 log.warn("No declared schema for table {} of site {} — checkpoint row recorded "
                         + "without a downloadable artifact (the client must SubmitSchema)",
                         tableName, siteId);
+                if (abandonStaleSnapshot(checkpoint, pass)) {
+                    epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
+                }
                 return;
             }
 
@@ -328,17 +330,20 @@ public class CheckpointService {
                 // published, so it must escape the per-table skip below and end the whole build.
                 throw e;
             } catch (RuntimeException e) {
+                // Report the cause first: the detach below goes through the epoch guard, which
+                // throws rather than returns when the site was wiped mid-build, and this table's
+                // actual failure (schema drift, an oversized table) would leave no trace at all.
+                metrics.checkpointTableUnmaterialized("parquet_failed");
+                log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
+                        + "artifact this build (check the declared schema against the data, or "
+                        + "delta.checkpoint.max-temp-bytes against the table's size)",
+                        tableName, siteId, e);
                 // When seq advanced, the previous key would sit beside a newer seq and be served
                 // as its snapshot — detach it. On a same-seq rematerialize the last-good object
                 // is still at that key; keep the row pointing at it.
                 if (abandonStaleSnapshot(checkpoint, pass)) {
                     epochGuard.inEpoch(siteId, generation, () -> checkpointRepository.save(checkpoint));
                 }
-                metrics.checkpointTableUnmaterialized("parquet_failed");
-                log.warn("Checkpoint Parquet failed for table {} of site {} — the table has no "
-                        + "artifact this build (check the declared schema against the data, or "
-                        + "delta.checkpoint.max-temp-bytes against the table's size)",
-                        tableName, siteId, e);
             } finally {
                 // The scratch file is this build's litter whichever way the table ended: kept,
                 // it would fill the node one checkpoint cycle at a time.
