@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -32,7 +33,9 @@ import java.util.UUID;
  * folds only the segments with {@code first_seq > M}, then materializes a Parquet snapshot per
  * table, records one {@link Checkpoint} row per table, persists a new frame@now, and advances the site's
  * checkpoint pointer. Because the frame is a self-contained seed, segments at or below the checkpoint
- * can be pruned (T3.5b) without breaking the next build.</p>
+ * can be pruned (T3.5b) without breaking the next build. A later build with no new segments still
+ * rematerializes any table whose snapshot is missing (issue #128); a forced rebuild rematerializes
+ * every table from the frame without moving the pointer.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -95,6 +98,18 @@ public class CheckpointService {
      * @return folded state: table → row-identity → folded row (empty if no segments)
      */
     public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId) {
+        return buildCheckpoint(siteId, false);
+    }
+
+    /**
+     * Build (or refresh) the checkpoint for a site.
+     *
+     * @param siteId site identifier
+     * @param force  when {@code true}, rematerialize from the existing frame even if there are no
+     *               new segments and every table already has a snapshot (forced rebuild)
+     * @return folded state: table → row-identity → folded row (empty if no segments)
+     */
+    public Map<String, Map<String, FoldedRow>> buildCheckpoint(UUID siteId, boolean force) {
         List<ChangelogSegment> segments = segmentRepository.findBySiteIdOrderByFirstSeq(siteId);
         if (segments.isEmpty()) {
             return Map.of();
@@ -129,6 +144,13 @@ public class CheckpointService {
                     .filter(segment -> segment.getFirstSeq() > foldFrom)
                     .toList();
             if (newSegments.isEmpty()) {
+                // The pointer already covers every surviving segment. A scheduled idle tick
+                // stays a no-op unless a previous build left a table without an artifact
+                // (issue #128); a forced rebuild always rematerializes from the frame.
+                if (!haveFrame || (!force && !hasUnmaterializedTables(siteId))) {
+                    return seed;
+                }
+                writeSnapshots(siteId, seed, checkpointSeq, !force);
                 return seed;
             }
             return materialize(siteId, seed, newSegments);
@@ -146,7 +168,38 @@ public class CheckpointService {
             return ChangelogFold.fold(seed, newRecords);
         });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
+        writeSnapshots(siteId, state, seq, false);
 
+        // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
+        metrics.timeCheckpointPhase("upload", () ->
+                checkpointStorage.uploadFrame(siteId, seq,
+                        ChangelogCodec.serialize(CheckpointFrame.toRecords(state))));
+        syncStateService.recordCheckpoint(siteId, seq);
+        // The single choke point every checkpoint build passes through, scheduled or forced. The
+        // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
+        // first moment post-wipe at which there are checkpoint seqs to freeze as SQL baselines.
+        // The checkpoint is already durable by now, so a listener's failure must not be allowed to
+        // fail the build behind it — that would freeze the pointer and stop retention.
+        try {
+            eventPublisher.publishEvent(new CheckpointRecordedEvent(siteId, seq));
+        } catch (RuntimeException e) {
+            log.error("A checkpoint listener failed for site {} at seq {}; the checkpoint itself "
+                    + "is committed", siteId, seq, e);
+        }
+        return state;
+    }
+
+    /**
+     * Write (or retry) each table's Parquet snapshot at {@code seq}.
+     *
+     * <p>A rematerialize of an already-recorded pointer ({@code onlyUnmaterialized == true})
+     * rewrites only the rows that still have no artifact and does not move the pointer, re-upload
+     * the frame, or publish {@link CheckpointRecordedEvent} — the fold has not changed.</p>
+     */
+    private void writeSnapshots(UUID siteId,
+                                Map<String, Map<String, FoldedRow>> state,
+                                long seq,
+                                boolean onlyUnmaterialized) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
 
         // Every table's snapshot goes through the same scratch directory, one at a time. Creating
@@ -163,6 +216,13 @@ public class CheckpointService {
         // additionally materializes the full per-table load as typed Parquet (the only format V2
         // produces since issue #113) plus the frame seed.
         state.forEach((tableName, rows) -> {
+            if (onlyUnmaterialized) {
+                Optional<Checkpoint> existing =
+                        checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
+                if (existing.isPresent() && existing.get().getS3KeyParquet() != null) {
+                    return;
+                }
+            }
             Checkpoint checkpoint = findOrCreate(siteId, tableName, seq, rows.size());
 
             TableSchema tableSchema = schemas.get(tableName);
@@ -214,24 +274,11 @@ public class CheckpointService {
 
             checkpointRepository.save(checkpoint);
         });
+    }
 
-        // Persist the new all-INSERT frame so the next build seeds from it and earlier segments can be pruned.
-        metrics.timeCheckpointPhase("upload", () ->
-                checkpointStorage.uploadFrame(siteId, seq,
-                        ChangelogCodec.serialize(CheckpointFrame.toRecords(state))));
-        syncStateService.recordCheckpoint(siteId, seq);
-        // The single choke point every checkpoint build passes through, scheduled or forced. The
-        // Bit BI auto-reinit after a history wipe (issue #89) hangs off it, because this is the
-        // first moment post-wipe at which there are checkpoint seqs to freeze as SQL baselines.
-        // The checkpoint is already durable by now, so a listener's failure must not be allowed to
-        // fail the build behind it — that would freeze the pointer and stop retention.
-        try {
-            eventPublisher.publishEvent(new CheckpointRecordedEvent(siteId, seq));
-        } catch (RuntimeException e) {
-            log.error("A checkpoint listener failed for site {} at seq {}; the checkpoint itself "
-                    + "is committed", siteId, seq, e);
-        }
-        return state;
+    private boolean hasUnmaterializedTables(UUID siteId) {
+        return checkpointRepository.findBySiteId(siteId).stream()
+                .anyMatch(checkpoint -> checkpoint.getS3KeyParquet() == null);
     }
 
     /**
@@ -245,11 +292,12 @@ public class CheckpointService {
     /**
      * Create this table's scratch file. A failure here says the scratch directory itself is
      * unusable (gone, read-only, out of inodes) — it is not a fact about this table and it would
-     * hit every table of every site alike. Skipping per table would detach every snapshot key while
-     * {@code recordCheckpoint} still advanced the pointer, and nothing could put them back: the
-     * next build sees no new segments and returns early, so even a forced rebuild is a no-op.
-     * Fail the build instead, leaving the pointer where it was so the next run redoes everything;
-     * {@code CheckpointScheduler} catches per site, so one site's failure does not stop the sweep.
+     * hit every table of every site alike. Skipping per table would detach every last-good
+     * snapshot while the pointer still advanced. A later rematerialize (issue #128) can restore
+     * a per-table hole, but a systemic scratch failure must not throw away the last downloadable
+     * snapshots first. Fail the build instead, leaving the pointer and keys where they were so the
+     * next run redoes everything; {@code CheckpointScheduler} catches per site, so one site's
+     * failure does not stop the sweep.
      *
      * <p>A failure <em>during</em> the write stays a per-table skip (the general catch above), so a
      * single oversized or unrenderable table cannot freeze the pointer and stop retention.</p>
