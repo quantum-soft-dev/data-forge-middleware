@@ -582,7 +582,13 @@ You don't write these — they're how downstream tools read your data:
   a missing snapshot from the frame** without waiting for new segments (issue #128): the pointer,
   the frame and retention stay where they were, and only tables whose `s3_key_parquet` is still
   null are rewritten (a forced rebuild rewrites every table). After a full prune the frame is
-  still enough — leftover changelog rows are not required. A same-seq rematerialize that fails
+  still enough — leftover changelog rows are not required, and since issue #137 the nightly tick
+  still *finds* such a site: it visits the union of the sites named by `changelog_segments` and the
+  sites with a checkpoint row whose `s3_key_parquet` is null. Before that it walked the segment
+  table alone, so a site pruned to nothing — `DELTA_RETENTION_AUDIT_WINDOW_SEGMENTS=0`, or simply a
+  table detached for longer than the window — was never revisited and only a forced rebuild could
+  restore it. Having checkpoints at all is deliberately *not* a reason to visit: a site whose tables
+  are all materialized and whose segments are gone stays untouched. A same-seq rematerialize that fails
   leaves a still-valid last-good key in place; detach is only for an advancing seq. An **unusable scratch directory**
   (missing, read-only, out of inodes) is the one failure that is not a table-level skip: it would
   hit every table alike, and detaching every last-good snapshot while the pointer advanced would

@@ -453,6 +453,24 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-tick-work-list: The nightly checkpoint tick no longer walks past a site whose changelog
+  was pruned to nothing (issue #137). `CheckpointScheduler.buildCheckpoints` iterated
+  `changelog_segments.findDistinctSiteIds()` alone, which is the list of sites with *ingestion* work
+  — but since #128 a build can also **rematerialize a detached snapshot from the frame with no
+  segments at all**, and that is exactly the state retention leaves behind: with
+  `delta.retention.audit-window-segments=0` (or a table detached for longer than the default window
+  of 20) the site keeps no segment row, so the retry the rematerialize path exists for never ran and
+  only `POST .../delta/checkpoints/rebuild` could restore the table. The tick now visits the union of
+  that list and new `CheckpointRepository.findSiteIdsWithUnmaterializedCheckpoints()`
+  (`SELECT DISTINCT c.siteId … WHERE c.s3KeyParquet IS NULL`, served per row by the existing
+  `checkpoints` scan). The predicate is the point: **having checkpoints is not a reason to visit** —
+  a site with every table materialized and no leftover segments is still skipped, so the union does
+  not degrade into "sweep every site that ever checkpointed". Segment sites keep their position and
+  the set de-duplicates, so a site on both lists is built once. Nothing else moves: a visit is the
+  ordinary `buildCheckpoint` + `prune` pair, an idle `RETRY_MISSING` pass does not touch the pointer
+  or the frame, and a build discarded by `CheckpointEpochGuard` (#136/#142) stays a normal outcome
+  rather than an error. `CheckpointService` is untouched. No REST, gRPC, DTO, migration,
+  configuration-key, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`.
 - checkpoint-baseline-epoch: The checkpoint epoch guard now covers a **re-baseline** as well as a
   wipe, and the event published after a build can no longer act on a history that is already gone
   (issue #142, consolidating #143). `DeltaRebaselineService.reset` deletes every `checkpoints` row of

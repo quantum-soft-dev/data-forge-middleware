@@ -28,6 +28,10 @@ public interface JpaCheckpointRepository extends JpaRepository<Checkpoint, UUID>
     List<Checkpoint> findBySiteId(UUID siteId);
 
     @Override
+    @Query("SELECT DISTINCT c.siteId FROM Checkpoint c WHERE c.s3KeyParquet IS NULL")
+    List<UUID> findSiteIdsWithUnmaterializedCheckpoints();
+
+    @Override
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
     @org.springframework.transaction.annotation.Transactional
     @Query("DELETE FROM Checkpoint c WHERE c.siteId = :siteId")
