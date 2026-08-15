@@ -11,6 +11,7 @@ import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,6 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Issue #127 — scratch files left behind when a pod dies between {@code createTempFile} and
  * {@code finally} must be swept by age and prefix, never by name. A sibling pod may be writing
  * into the same configured directory.
+ *
+ * <p>Issue #141 — on a directory declared pod-private the sweeper additionally deletes anything
+ * older than this JVM, so scratch left by a previous container of the same pod does not survive
+ * the whole age window on a volume with a {@code sizeLimit}.</p>
  */
 class ParquetScratchOrphanSweeperTest {
 
@@ -34,8 +39,7 @@ class ParquetScratchOrphanSweeperTest {
 
     @BeforeEach
     void setUp() {
-        sweeper = new ParquetScratchOrphanSweeper(
-                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS);
+        sweeper = sharedVolumeSweeper(checkpointDir, batchDir);
     }
 
     @Test
@@ -110,8 +114,7 @@ class ParquetScratchOrphanSweeperTest {
 
     @Test
     void sweepsBothPrefixesWhenTheyShareOneDirectory() throws IOException {
-        ParquetScratchOrphanSweeper shared = new ParquetScratchOrphanSweeper(
-                checkpointDir.toString(), checkpointDir.toString(), AGE_SECONDS);
+        ParquetScratchOrphanSweeper shared = sharedVolumeSweeper(checkpointDir, checkpointDir);
         Path checkpointOrphan = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX, ".parquet");
         Path batchOrphan = scratch(checkpointDir, ParquetScratch.BATCH_PARQUET_PREFIX, ".parquet");
         Path live = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX + "live-", ".parquet");
@@ -129,8 +132,7 @@ class ParquetScratchOrphanSweeperTest {
     @Test
     void skipsAMissingDirectoryWithoutThrowing() {
         Path missing = checkpointDir.resolve("does-not-exist");
-        ParquetScratchOrphanSweeper missingDir = new ParquetScratchOrphanSweeper(
-                missing.toString(), batchDir.toString(), AGE_SECONDS);
+        ParquetScratchOrphanSweeper missingDir = sharedVolumeSweeper(missing, batchDir);
 
         missingDir.sweep();
 
@@ -140,9 +142,89 @@ class ParquetScratchOrphanSweeperTest {
     @Test
     void rejectsANonPositiveAgeAtStartup() {
         assertThrows(IllegalArgumentException.class, () ->
-                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), 0L));
+                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), 0L, false));
         assertThrows(IllegalArgumentException.class, () ->
-                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), -1L));
+                new ParquetScratchOrphanSweeper(checkpointDir.toString(), batchDir.toString(), -1L, false));
+    }
+
+    // --- issue #141: a pod-private directory also sweeps by this JVM's start ------------------
+
+    @Test
+    void deletesScratchLeftByAPreviousContainerWhenTheDirectoryIsPodPrivate() throws IOException {
+        ParquetScratchOrphanSweeper podPrivate = podPrivateSweeper(checkpointDir, batchDir);
+        // Well inside the four-hour age window, so only the start-of-JVM rule can delete it.
+        Path previousContainer = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX, ".parquet");
+        Path previousBatch = scratch(batchDir, ParquetScratch.BATCH_PARQUET_PREFIX, ".parquet");
+        age(previousContainer, 60);
+        age(previousBatch, 60);
+
+        podPrivate.sweep();
+
+        assertFalse(Files.exists(previousContainer));
+        assertFalse(Files.exists(previousBatch));
+    }
+
+    @Test
+    void keepsScratchThisJvmCreatedWhenTheDirectoryIsPodPrivate() throws IOException {
+        ParquetScratchOrphanSweeper podPrivate = podPrivateSweeper(checkpointDir, batchDir);
+        // Created after the sweeper was built — a rebuild resumed at startup races the first
+        // tick, so "ignore the age at startup" must not mean "delete everything present".
+        Path live = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX + "live-", ".parquet");
+
+        podPrivate.sweep();
+        podPrivate.sweep();
+
+        assertTrue(Files.exists(live));
+    }
+
+    @Test
+    void keepsAPreviousContainersScratchWhenTheDirectoryIsNotDeclaredPodPrivate() throws IOException {
+        // The #127 reasoning: on a shared volume a file older than this JVM may belong to a live
+        // sibling replica, so only the age filter may delete it.
+        Path siblingLive = scratch(checkpointDir, ParquetScratch.CHECKPOINT_PREFIX, ".parquet");
+        age(siblingLive, 60);
+
+        sweeper.sweep();
+
+        assertTrue(Files.exists(siblingLive));
+    }
+
+    @Test
+    void doesNotTouchForeignNamesOlderThanThisJvmWhenTheDirectoryIsPodPrivate() throws IOException {
+        ParquetScratchOrphanSweeper podPrivate = podPrivateSweeper(checkpointDir, batchDir);
+        Path foreign = scratch(checkpointDir, "hsperfdata-", ".tmp");
+        age(foreign, 60);
+
+        podPrivate.sweep();
+
+        assertTrue(Files.exists(foreign));
+    }
+
+    @Test
+    void aPodPrivateCutoffStartsAtThisJvmAndFallsBackToTheAgeOnceItIsOlder() {
+        ParquetScratchOrphanSweeper podPrivate = podPrivateSweeper(checkpointDir, batchDir);
+        Instant now = Instant.now();
+
+        Instant atStartup = podPrivate.cutoff(now);
+        // Whole seconds: file mtime can be second-resolution, so a file written in the same
+        // second as startup must round to "not before" the cutoff and survive.
+        assertEquals(0, atStartup.getNano());
+        assertTrue(atStartup.isAfter(now.minusSeconds(AGE_SECONDS)),
+                "a freshly started JVM must sweep by its own start, not by the age window");
+
+        Instant muchLater = now.plusSeconds(AGE_SECONDS * 2);
+        assertEquals(muchLater.minusSeconds(AGE_SECONDS), podPrivate.cutoff(muchLater),
+                "once the process is older than the age window the age filter is the harsher one");
+    }
+
+    @Test
+    void aSharedVolumeCutoffIsAlwaysTheAgeWindow() {
+        Instant now = Instant.now();
+
+        Instant muchLater = now.plusSeconds(AGE_SECONDS * 2);
+
+        assertEquals(now.minusSeconds(AGE_SECONDS), sweeper.cutoff(now));
+        assertEquals(muchLater.minusSeconds(AGE_SECONDS), sweeper.cutoff(muchLater));
     }
 
     @Test
@@ -154,6 +236,25 @@ class ParquetScratchOrphanSweeperTest {
         assertTrue(yaml.contains("scratch-orphan-sweep-ms: ${DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS:"
                         + ParquetScratchOrphanSweeper.DEFAULT_SWEEP_MS + "}"),
                 "application.yml must declare delta.parquet.scratch-orphan-sweep-ms");
+        assertTrue(yaml.contains("scratch-private-to-pod: ${DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD:"
+                        + ParquetScratchOrphanSweeper.DEFAULT_PRIVATE_TO_POD + "}"),
+                "application.yml must declare delta.parquet.scratch-private-to-pod, defaulting to the "
+                        + "safe shared-volume behaviour");
+    }
+
+    @Test
+    void theDeployedEmptyDirIsDeclaredPodPrivate() throws IOException {
+        // The flag is a claim about the mount, and the mount is two files away. Whoever moves the
+        // scratch off the pod-private emptyDir has to move the claim in the same commit.
+        Path configMap = Path.of("k8s/base/configmap.yaml");
+        String manifest = Files.readString(configMap);
+        boolean mountedOnTheScratchVolume = manifest.contains("DELTA_CHECKPOINT_TEMP_DIR: \"/scratch/parquet\"")
+                || manifest.contains("DELTA_BATCH_PARQUET_TEMP_DIR: \"/scratch/parquet\"");
+
+        assertEquals(mountedOnTheScratchVolume,
+                manifest.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: \"true\""),
+                "k8s/base/configmap.yaml must declare the scratch pod-private exactly while it points "
+                        + "the temp dirs at the parquet-scratch emptyDir");
     }
 
     @Test
@@ -168,6 +269,16 @@ class ParquetScratchOrphanSweeperTest {
         assertTrue(batch.contains("ParquetScratch.BATCH_PARQUET_PREFIX"));
         assertFalse(checkpoint.contains("\"checkpoint-\""));
         assertFalse(batch.contains("\"batch-parquet-\""));
+    }
+
+    private static ParquetScratchOrphanSweeper sharedVolumeSweeper(Path checkpointDir, Path batchDir) {
+        return new ParquetScratchOrphanSweeper(
+                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, false);
+    }
+
+    private static ParquetScratchOrphanSweeper podPrivateSweeper(Path checkpointDir, Path batchDir) {
+        return new ParquetScratchOrphanSweeper(
+                checkpointDir.toString(), batchDir.toString(), AGE_SECONDS, true);
     }
 
     private static Path scratch(Path directory, String prefix, String suffix) throws IOException {
