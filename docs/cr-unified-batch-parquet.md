@@ -114,6 +114,13 @@ than `delta.parquet.scratch-orphan-age-seconds` (default 4 hours). The age is no
 replay starts, so a live file can legitimately outlive the lease. Foreign names and younger files
 are left alone so a sibling replica writing into the same volume is not disturbed.
 
+`max-temp-bytes` bounds one file, and a batch build opens one per claimed table at once with
+`max-concurrent` builds in flight, so the *directory* is bounded by the deployment rather than by
+this key: on GKE `temp-dir` points at a `parquet-scratch` `emptyDir` whose `sizeLimit` sits inside
+the container's `ephemeral-storage` request/limit (issue #131). Crossing that is a kubelet eviction,
+not an `ABANDONED` artifact. The budget, its worst case and how to recompute it live in
+`docs/delta-client-v2-guide.md` ("Sizing note") — one place, so the numbers cannot drift.
+
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.
 

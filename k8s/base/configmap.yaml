@@ -21,5 +21,13 @@ data:
   AUTH0_CLAIMS_NAMESPACE: "https://api.dataforge.com"
   # --- App URLs (internal-only deployment) --------------------------------------------
   APP_API_BASE_URL: "http://forge-backend.forge.svc.cluster.local:8080"
+  # --- Delta v2 file-backed Parquet scratch --------------------------------------------
+  # Both writers default to java.io.tmpdir, i.e. the container's writable layer, which
+  # nothing bounds. Point them at the `parquet-scratch` emptyDir mounted by
+  # deployment-backend.yaml so one declared sizeLimit covers the directory they share.
+  # The two prefixes (`checkpoint-*`, `batch-parquet-*`) keep them apart inside it, and
+  # ParquetScratchOrphanSweeper deduplicates the two paths before sweeping.
+  DELTA_CHECKPOINT_TEMP_DIR: "/scratch/parquet"
+  DELTA_BATCH_PARQUET_TEMP_DIR: "/scratch/parquet"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"
