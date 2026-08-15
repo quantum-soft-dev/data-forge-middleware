@@ -318,6 +318,12 @@ public class CheckpointService {
             // text, and the per-table one is reported by its own counter — say which guard this
             // was and name the key, or the operator has only a byte count to go on. Rethrown
             // unchanged: an oversized frame still ends the build.
+            //
+            // Counted as well as logged (issue #153). The failure is deterministic for a given
+            // fold, so it recurs on every tick with the pointer — and therefore retention — frozen
+            // in place; a log line is not something an alert can be built on, and the symptom an
+            // operator would otherwise notice first is an unbounded segment table.
+            metrics.checkpointBuildAborted("frame_too_large");
             log.error("The checkpoint reload frame for site {} at seq {} crossed "
                     + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned "
                     + "before any snapshot was written, so nothing durable changed: the per-table "

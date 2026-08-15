@@ -23,6 +23,8 @@ import java.util.function.Supplier;
  *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint;
  *       {@code phase=total} is the cycle, {@code download_frame|fold|parquet|upload} are
  *       the inner steps (042)</li>
+ *   <li>{@code delta.checkpoint.builds.aborted} — checkpoint builds abandoned whole, tagged
+ *       {@code reason=frame_too_large}; the pointer does not move, so retention freezes with it</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -62,6 +64,7 @@ public class DeltaMetrics {
     private final Counter egressSegments;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
+    private final Counter checkpointFrameTooLarge;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -94,6 +97,7 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
+        this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -127,6 +131,12 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
     }
 
+    private static Counter checkpointBuildAborted(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.checkpoint.builds.aborted")
+                .description("Checkpoint builds abandoned whole, leaving the pointer where it was, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
     private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
         return Counter.builder("delta.batch-parquet.artifacts")
                 .description("Completed-batch Parquet artifacts settled, by outcome")
@@ -148,6 +158,25 @@ public class DeltaMetrics {
             case "parquet_failed" -> checkpointParquetFailed.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
+    }
+
+    /**
+     * A whole checkpoint build was abandoned (issue #153).
+     *
+     * <p>Unlike {@link #checkpointTableUnmaterialized(String)} this is not a hole in one table:
+     * {@code last_checkpoint_seq} does not move, so {@code ChangelogRetentionService} prunes
+     * nothing and the site's segment table grows until the cause is fixed. {@code frame_too_large}
+     * is deterministic for a given fold — the next tick repeats it — so a non-zero rate is a page,
+     * not a blip, and {@code delta.seq.lag} is the companion series showing how far behind the site
+     * has fallen while it lasted.</p>
+     *
+     * @param reason currently only {@code frame_too_large}
+     */
+    public void checkpointBuildAborted(String reason) {
+        if (!"frame_too_large".equals(reason)) {
+            throw new IllegalArgumentException("Unknown reason: " + reason);
+        }
+        checkpointFrameTooLarge.increment();
     }
 
     /** One table's completed-batch artifact is published and downloadable. */

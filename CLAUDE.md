@@ -453,6 +453,37 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- frame-first-checkpoint: The checkpoint reload frame is written before the per-table snapshots it
+  gates, and a frame that cannot fit its ceiling is counted (issue #153, reachable in production
+  since #138 lowered the deployed ceilings onto the volume). `CheckpointService.materialize`
+  serialized the frame *after* every table's Parquet had been written, uploaded and saved at the new
+  seq — yet the frame is the one artifact that cannot be skipped, so crossing
+  `delta.checkpoint.max-frame-temp-bytes` ends the build. Crossing it is **deterministic for the
+  same fold**, so the 02:00 tick repeated the abort every night, and each repeat had already paid
+  for a full set of per-table uploads the pointer then never adopted: a `checkpoints` row is one per
+  `(site, table)` and carries a single key, so the previous seq's objects were unreferenced the
+  moment the next build wrote its own, and nothing but a site wipe sweeps `checkpoints/{siteId}/`
+  (#118) — one orphaned generation per night, indefinitely. The frame now goes first, so an abort
+  costs nothing durable (no snapshot object, no row, pointer untouched as before). It is uploaded
+  and **deleted before the snapshot loop**, not held open across it: the deployed budget is
+  `2 x max(table, frame)`, one file per build path and not one per artifact (#131/#138), so holding
+  both would silently double the checkpoint term — `stillKeepsOneCheckpointScratchFileOnDiskAtATime`
+  pins that. New counter `delta.checkpoint.builds.aborted{reason=frame_too_large}`, registered at
+  zero from startup so an alert predates the first occurrence; `delta.seq.lag` stays the companion
+  series (the counter says why, the lag says how bad). The existing per-table
+  `delta.checkpoint.tables.unmaterialized` is untouched and the two must not be confused: this one
+  is the whole site's pointer, and with it retention. **Deliberately no backoff and no UI surface** —
+  the retry is now free in storage terms, and suppressing it (or flagging the site in Delta Sync)
+  needs per-site state the abort by design does not write; that is the same state #149 will have to
+  decide on for its per-table twin. `CheckpointEpochGuard` is unaffected — it speaks at the first
+  row write, which still precedes the pointer write, and the frame upload was never inside it — but
+  a build discarded by a mid-flight wipe now leaves its frame object as well as the snapshots it had
+  already uploaded: the same already-accepted litter, spared by the wipe's own cut-off (#122) and
+  swept by re-running it, and unreadable by the new epoch whose pointer is 0. `Files.createDirectories`
+  moved out of `writeSnapshots` into `prepareScratchDirectory()`, called by both paths, so an
+  unusable scratch directory still aborts the build (#112) rather than failing as a scratch-file
+  error. No REST, gRPC, DTO, migration, configuration-key, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("A frame that does not fit", Metrics).
 - split-scratch-ceilings: The checkpoint scratch ceiling is two keys, and the deployed values sit
   below the volume so the application refuses before kubelet evicts (issue #138). Since #126 one key
   governed two files with opposite failure semantics — an oversized per-table snapshot is skipped
@@ -489,8 +520,8 @@ pages/{feature}/            # Route pages
   itself** when the artifact is deterministically oversized. A checkpoint table is skipped *and*
   has `s3_key_parquet` detached on a seq-advancing build, so it 404s for Bit BI / Parquet Export
   and the nightly rematerialize fails identically (#149); the **frame** aborts the build, freezing
-  the pointer and retention while every following build re-uploads a full generation of snapshots
-  (#153, filed from this review); a completed-batch artifact is `ABANDONED` on the first attempt and
+  the pointer and retention (#153, filed from this review, since fixed the orphaning half and added
+  `delta.checkpoint.builds.aborted` — the freeze itself still needs the key raised); a completed-batch artifact is `ABANDONED` on the first attempt and
   404s until the key is raised and the row requeued (039's admin route). In each case the records
   themselves stay in the segments — what is lost is the derived artifact. Raise the frame ceiling
   first, and remember it costs two GiB of volume per GiB. No REST, gRPC,

@@ -369,6 +369,33 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void countsTheAbortSoTheFrozenPointerIsVisibleWithoutTheLogs() {
+        // Issue #153. A per-table skip has had a counter since #113; the frame abort — which costs
+        // the whole site its pointer, and with it retention — had only an ERROR line.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, 8L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        assertThrows(ArtifactSizeLimitExceededException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("frame_too_large");
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+    }
+
+    @Test
+    void doesNotCountAnAbortWhenTheFrameFailsForAnyOtherReason() {
+        // The counter names one cause and must keep naming it: an S3 refusal is transient and the
+        // next tick fixes it, while a deterministic over-ceiling frame is the thing an operator is
+        // meant to be paged for.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+        when(checkpointStorage.uploadFrame(eq(SITE), anyLong(), any(Path.class)))
+                .thenThrow(new IllegalStateException("S3 refused the frame"));
+
+        assertThrows(IllegalStateException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    @Test
     void writesTheFrameBeforeAnySnapshotOfTheSameBuild() {
         // The ordering is the fix, so it is asserted directly rather than only through its
         // consequence above: whatever ends the frame — the ceiling, an S3 refusal, an
