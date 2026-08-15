@@ -1141,10 +1141,10 @@ only ever older-or-equal to the data, which is the direction the guard refuses.
 deletes anything: loading the row last left a window between the checkpoint deletes and the epoch
 bump in which a guarded write could still land. With the lock taken first the two orderings above are
 again the only ones, and the old frame stays a harmless orphan because the pointer that would name it
-can no longer come back. One consequence to know about: `reset` runs as the first statement of the
-FULL_SNAPSHOT commit, so that row lock is now held for the rest of that transaction — including the
-tail segment's S3 upload. What waits on it is short and, for a checkpoint build, about to be refused
-anyway; taking S3 out of the ingestion commit transaction is tracked as issue #147.
+can no longer come back. `reset` runs as the first statement of the FULL_SNAPSHOT commit, so that row
+lock is held for the rest of that transaction — but everything that follows it is a statement: the
+tail segment's `PutObject` happens **before** the transaction opens (issue #147, below), so the
+per-site mutex is never held across a network call.
 
 **The event published after the build carries that epoch too (issue #142).**
 `CheckpointRecordedEvent` is published one statement *after* the guarded pointer write commits, so a
@@ -1169,6 +1169,27 @@ nothing. A full rebuild queue answers 503 (flag cleared); rebuild flags orphaned
 re-driven on startup, so the "Rebuild queued" chip can no longer stick forever. The queued build
 calls `rebuildFromFrame`: it rematerializes every table from the existing frame even
 when there are no new segments, and it does not move the checkpoint pointer.
+
+### No S3 inside the ingestion commit (issue #147)
+
+The commit of a session — the tail segment's row, the watermark advance, the batch completion, and
+on a FULL_SNAPSHOT the baseline reset — is one transaction, and every step in it is a statement. The
+segment's `PutObject` happens **before** that transaction is opened:
+`ChangelogSegmentService.prepare` serializes, uploads and returns a `PreparedSegment`;
+`DeltaSessionCommitTransaction` then opens the transaction and writes the row from it. The
+non-transactional `DeltaSessionCommitService` is what enforces the order, and `prepare` throws if a
+transaction is already active, so the hold cannot be reintroduced silently.
+
+This is the same invariant `CheckpointEpochGuard` states for the checkpoint build ("no S3 traffic
+inside the lock") and the reason it matters here is the row lock above: since #142 `reset` takes the
+`site_sync_state` row lock as the commit's first statement, and a multi-second upload of a large
+snapshot tail used to sit inside that hold, pinning a HikariCP connection with it.
+
+What it costs: an upload whose transaction then rolls back leaves an object nobody references. That
+is not new — nothing deleted the object on rollback when the upload sat inside the transaction
+either — and the key carries a freshly minted segment id (`delta/{siteId}/segments/{segmentId}.pb.gz`),
+so the bytes are unreachable without the row. A site history wipe's `egress/` and `checkpoints/`
+walks do not cover this prefix; segment objects are removed by key from their rows, as before.
 
 ---
 
