@@ -503,7 +503,8 @@ pages/{feature}/            # Route pages
   `leavesAnOrphanFrameWhenTheWipeCommitsAfterThePreCheck`: a wipe committing after the check leaves
   the frame object as well as the snapshots a discarded build has always left — the same
   already-accepted litter, spared by the wipe's own cut-off (#122) so a
-  second wipe collects it. It is harmless **not** because the new epoch never reaches that seq (a
+  second wipe collects it (giving that prefix a sweeper of its own, rather than only the wipe, is
+  **#160**, filed from this review as the sibling of #158). It is harmless **not** because the new epoch never reaches that seq (a
   wipe resets the client's counters, so the site re-traverses the same range and a later build may
   legitimately end there and overwrite it) but because a build only ever seeds from the frame at
   `last_checkpoint_seq`, and `uploadFrame(N)` always precedes the `recordCheckpoint(N)` that names

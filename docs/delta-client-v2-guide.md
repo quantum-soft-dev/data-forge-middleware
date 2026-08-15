@@ -674,11 +674,16 @@ long as the abort lasts, and none of them is new damage — they are the freeze 
 - **Retention is stopped.** `last_checkpoint_seq` is what `ChangelogRetentionService.prune` keys
   off, so `changelog_segments` and their S3 objects accumulate for the whole site.
 - **The checkpoint snapshots stop refreshing.** `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet`
-  stays at the last successful build's seq while ingestion continues, so Bit BI, Parquet Export and
-  the Delta Sync download serve data that is increasingly stale but never wrong (the per-segment
-  egress and completed-batch Parquet are unaffected — they do not go through the checkpoint). Before
-  #153 those objects *were* rewritten each night, at a seq the pointer never adopted; that is
-  precisely the write that orphaned the previous generation.
+  stays at the last successful build's seq while ingestion continues, so Bit BI, Parquet Export
+  (`type=checkpoint`) and the Delta Sync download serve data that is increasingly stale but never
+  wrong (the per-segment egress and completed-batch Parquet are unaffected — they do not go through
+  the checkpoint). Before #153 those objects *were* rewritten each night, at a seq the pointer never
+  adopted; that is precisely the write that orphaned the previous generation, so the refresh and the
+  orphaning were the same act and could not be kept apart. **The consequence to watch is a Bit BI
+  re-initialization**: it captures its baseline from the current checkpoint once, so re-initializing
+  a site whose builds are aborting freezes that plugin on however old the last successful build is.
+  Check `delta.checkpoint.builds.aborted` for the site before re-initializing it, and raise the
+  ceiling first.
 - **A detached table is not repaired while it lasts.** The rematerialize of #128 runs on the idle
   `RETRY_MISSING` pass, which is only reached when there are no new segments — and a site whose
   frame is over the ceiling is not idle. A table whose `s3_key_parquet` was nulled therefore stays
@@ -692,15 +697,20 @@ rather than waiting it out: raise the ceiling (each GiB of frame costs two GiB o
 below), and remember the counter will keep rising until a build succeeds.
 
 **A failure after the frame is uploaded leaves the frame object behind.** An epoch discard (#136,
-#142) or any throw in the snapshot loop now happens with `_frame/seq=N/frame.pb.gz` already in the
-bucket and the pointer still at the previous seq. That is unreferenced but harmless, and the
+#142) or any throw in the snapshot loop — a scratch file that cannot be created because the volume
+ran out of inodes or was remounted read-only, `getTableSchemas` failing — now happens with
+`_frame/seq=N/frame.pb.gz` already in the bucket and the pointer still at the previous seq. Where
+the old ordering orphaned nothing on those paths, this one orphans one frame; it accumulates only as
+fast as `seq` advances, since a repeat at the same seq overwrites the same key. That is unreferenced
+but harmless, and the
 invariant that makes it harmless is worth stating exactly: **a build only ever reads the frame at
 `last_checkpoint_seq`, and `uploadFrame(N)` always precedes the `recordCheckpoint(N)` that names
 it** — so the frame a build seeds from is always the one written by the build that moved the pointer
 there. A later build that legitimately ends at seq N overwrites the orphan; one that ends elsewhere
 never looks at it. Only a site wipe sweeps `checkpoints/{siteId}/` (#118), and its cut-off (#122)
 spares objects newer than its own start, so a frame orphaned *by* a wipe needs a second wipe to
-collect — the same as the snapshot objects a discarded build has always left.
+collect — the same as the snapshot objects a discarded build has always left. Giving that prefix a
+sweeper of its own is **#160**.
 
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
