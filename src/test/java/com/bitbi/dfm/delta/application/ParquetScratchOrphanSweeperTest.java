@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,6 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ParquetScratchOrphanSweeperTest {
 
     private static final long AGE_SECONDS = 3_600L;
+
+    /** The deployed scratch mount and the volume behind it (k8s/base, issue #131). */
+    private static final String SCRATCH_MOUNT_PATH = "/scratch/parquet";
+    private static final String SCRATCH_VOLUME = "parquet-scratch";
 
     @TempDir
     Path checkpointDir;
@@ -244,37 +249,58 @@ class ParquetScratchOrphanSweeperTest {
     }
 
     @Test
-    void theDeployedEmptyDirIsDeclaredPodPrivate() throws IOException {
-        // The flag is a claim about the mount, and the mount is two files away. Whoever moves the
-        // scratch off the pod-private emptyDir has to move the claim in the same commit.
-        String manifest = Files.readString(Path.of("k8s/base/configmap.yaml"));
+    void theDeployedScratchIsDeclaredPodPrivateExactlyWhenItIsOne() throws IOException {
+        // The flag is a claim about the mount, and the mount is two files away. It is only true
+        // while all three agree: both temp dirs name the mount path, and the volume behind that
+        // path is an emptyDir. Swap the volume for an RWX PersistentVolumeClaim at the same
+        // mountPath and the claim becomes false without a single env value changing.
+        String configMap = Files.readString(Path.of("k8s/base/configmap.yaml"));
+        String deployment = Files.readString(Path.of("k8s/base/deployment-backend.yaml"));
+
         // BOTH directories, because the flag is per process and the sweeper walks both: one key
         // left on a shared volume is enough to start deleting a sibling replica's live scratch.
-        boolean everyTempDirIsTheScratchVolume =
-                manifest.contains("DELTA_CHECKPOINT_TEMP_DIR: \"/scratch/parquet\"")
-                        && manifest.contains("DELTA_BATCH_PARQUET_TEMP_DIR: \"/scratch/parquet\"");
+        boolean everyTempDirIsTheMount =
+                configMap.contains("DELTA_CHECKPOINT_TEMP_DIR: \"" + SCRATCH_MOUNT_PATH + "\"")
+                        && configMap.contains("DELTA_BATCH_PARQUET_TEMP_DIR: \"" + SCRATCH_MOUNT_PATH + "\"");
+        boolean mountedFromAPodPrivateVolume =
+                Pattern.compile("-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*\\n\\s+mountPath:\\s+"
+                        + SCRATCH_MOUNT_PATH).matcher(deployment).find()
+                        && Pattern.compile("-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*\\n\\s+emptyDir:")
+                        .matcher(deployment).find();
 
-        assertEquals(everyTempDirIsTheScratchVolume,
-                manifest.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: \"true\""),
-                "k8s/base/configmap.yaml must declare the scratch pod-private exactly while both "
-                        + "temp-dir keys point at the parquet-scratch emptyDir");
+        assertEquals(everyTempDirIsTheMount && mountedFromAPodPrivateVolume,
+                configMap.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: \"true\""),
+                "the scratch may be declared pod-private exactly while both temp-dir keys name "
+                        + SCRATCH_MOUNT_PATH + " and the " + SCRATCH_VOLUME + " volume behind it is "
+                        + "an emptyDir");
     }
 
     @Test
     void noOverlayRedirectsTheScratchBehindThatGuard() throws IOException {
-        // The guard above reads the base manifest, so it is only the whole truth while no overlay
-        // redefines these keys. An overlay that needs to must extend the guard, not slip past it.
+        // The guard above reads the base manifests, so it is only the whole truth while no overlay
+        // redefines them. An overlay that needs to must widen the guard, not slip past it. Only
+        // YAML, and only an actual key assignment or volume entry — a prose mention in a comment
+        // is not an override, and a binary blob under an overlay is not this test's business.
+        Pattern envOverride = Pattern.compile(
+                "^\\s*(DELTA_CHECKPOINT_TEMP_DIR|DELTA_BATCH_PARQUET_TEMP_DIR"
+                        + "|DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD)\\s*:",
+                Pattern.MULTILINE);
+        Pattern volumeOverride = Pattern.compile(
+                "^\\s*-\\s+name:\\s+" + SCRATCH_VOLUME + "\\s*$", Pattern.MULTILINE);
         try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {
-            for (Path file : overlays.filter(Files::isRegularFile).toList()) {
+            for (Path file : overlays.filter(ParquetScratchOrphanSweeperTest::isYaml).toList()) {
                 String body = Files.readString(file);
-                assertFalse(body.contains("DELTA_CHECKPOINT_TEMP_DIR")
-                                || body.contains("DELTA_BATCH_PARQUET_TEMP_DIR")
-                                || body.contains("DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD"),
+                assertFalse(envOverride.matcher(body).find() || volumeOverride.matcher(body).find(),
                         file + " overrides the scratch mount or its pod-private claim; "
-                                + "theDeployedEmptyDirIsDeclaredPodPrivate no longer covers the "
-                                + "rendered configuration and must be widened to this overlay");
+                                + "theDeployedScratchIsDeclaredPodPrivateExactlyWhenItIsOne no longer "
+                                + "covers the rendered configuration and must be widened to this overlay");
             }
         }
+    }
+
+    private static boolean isYaml(Path path) {
+        String name = path.getFileName().toString();
+        return Files.isRegularFile(path) && (name.endsWith(".yaml") || name.endsWith(".yml"));
     }
 
     @Test

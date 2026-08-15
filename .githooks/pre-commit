@@ -5,7 +5,8 @@
 #
 #   - Backend changes  -> ./gradlew test -PexcludeIntegration  (unit + contract, no Docker)
 #   - Frontend changes -> tsc --noEmit + eslint + npm --prefix frontend test
-#   - Docs/config-only -> skipped, except the focused migration-documentation guard
+#   - Docs/config-only -> skipped, except the focused migration-documentation and
+#                         scratch-mount guards
 #
 # Integration (Testcontainers) tests are NOT run here — they are the before-PR gate
 # (`./gradlew integrationTest`) and the CI required check on PRs to develop.
@@ -28,6 +29,7 @@ staged="$(git diff --cached --name-status --diff-filter=ACMDR | awk '{ for (i = 
 backend_changed=false
 frontend_changed=false
 migration_guidance_changed=false
+scratch_manifest_changed=false
 
 while IFS= read -r f; do
   case "$f" in
@@ -35,6 +37,10 @@ while IFS= read -r f; do
       frontend_changed=true ;;
     AGENTS.md|CLAUDE.md|src/main/resources/db/migration/*)
       migration_guidance_changed=true ;;
+    k8s/*)
+      # The pod-private scratch claim lives in the manifests and is asserted from a test
+      # (issue #141). A k8s-only commit is exactly the one that can break it.
+      scratch_manifest_changed=true ;;
     *.java|build.gradle.kts|settings.gradle.kts|gradle.properties|gradle/*|gradlew*)
       backend_changed=true ;;
   esac
@@ -48,6 +54,16 @@ if [ "$migration_guidance_changed" = true ] && [ "$backend_changed" = false ]; t
       --tests com.bitbi.dfm.documentation.MigrationDocumentationConsistencyTest \
       --no-daemon --console=plain; then
     echo "✖ Migration documentation drift detected — commit blocked."
+    status=1
+  fi
+fi
+
+if [ "$scratch_manifest_changed" = true ] && [ "$backend_changed" = false ]; then
+  echo "▶ pre-commit: parquet scratch mount consistency"
+  if ! ./gradlew test -PexcludeIntegration \
+      --tests com.bitbi.dfm.delta.application.ParquetScratchOrphanSweeperTest \
+      --no-daemon --console=plain; then
+    echo "✖ The scratch manifests and the pod-private claim disagree — commit blocked."
     status=1
   fi
 fi
@@ -83,7 +99,7 @@ if [ "$frontend_changed" = true ]; then
 fi
 
 if [ "$backend_changed" = false ] && [ "$frontend_changed" = false ] \
-    && [ "$migration_guidance_changed" = false ]; then
+    && [ "$migration_guidance_changed" = false ] && [ "$scratch_manifest_changed" = false ]; then
   echo "▶ pre-commit: no backend/frontend changes staged — test gate skipped."
 fi
 
