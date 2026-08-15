@@ -240,6 +240,10 @@ class CheckpointServiceTest {
 
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        // The other permanent freeze, and it must reach the same meter as the frame ceiling
+        // (issue #153): the pointer is stuck, retention stops with it, and no amount of waiting
+        // repairs either — an alert written on this counter would otherwise miss half of them.
+        verify(metrics).checkpointBuildAborted("lossy_refold");
     }
 
     @Test
@@ -758,9 +762,14 @@ class CheckpointServiceTest {
         // the guard only speaks at the first row write. That is the same litter the discard has
         // always left — the snapshots this build had already uploaded (see
         // doesNotMistakeAWipeForAPerTableParquetFailure) — and the wipe's own cut-off (#122)
-        // deliberately spares objects newer than its start, so re-running the wipe sweeps it. What
-        // must not survive is anything that makes the *new* epoch read it: the pointer is 0 after a
-        // wipe, so no later build looks for frame@2.
+        // deliberately spares objects newer than its start, so a second wipe is what collects it.
+        //
+        // It is harmless for a reason that is *not* "the new epoch never reaches seq 2": a wipe
+        // resets the client's counters, so the site re-traverses the same seq range and a later
+        // build may well end at 2 — at which point it overwrites this object with its own. The
+        // real invariant is that a build only ever seeds from the frame at last_checkpoint_seq,
+        // and uploadFrame(N) always precedes the recordCheckpoint(N) that names it, so the frame
+        // read is always the one written by the build that moved the pointer there.
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
     }
 
@@ -821,6 +830,9 @@ class CheckpointServiceTest {
 
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        // And it must not reach the abort counter either: a build discarded because the operator
+        // replaced the site's history is a normal outcome, not a frozen pointer to page on.
+        verify(metrics, never()).checkpointBuildAborted(any());
     }
 
     @Test

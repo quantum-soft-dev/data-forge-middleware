@@ -468,18 +468,32 @@ pages/{feature}/            # Route pages
   and **deleted before the snapshot loop**, not held open across it: the deployed budget is
   `2 x max(table, frame)`, one file per build path and not one per artifact (#131/#138), so holding
   both would silently double the checkpoint term — `stillKeepsOneCheckpointScratchFileOnDiskAtATime`
-  pins that. New counter `delta.checkpoint.builds.aborted{reason=frame_too_large}`, registered at
-  zero from startup so an alert predates the first occurrence; `delta.seq.lag` stays the companion
-  series (the counter says why, the lag says how bad). The existing per-table
+  pins that. New counter `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold}`,
+  registered at zero from startup so an alert predates the first occurrence; `delta.seq.lag` stays
+  the companion series (the counter says why, the lag says how bad). The tag values are the two
+  aborts that **do not repair themselves** — the second is the pre-existing "refusing lossy refold",
+  equally permanent and equally invisible until now, so an alert written on this meter cannot miss
+  half the population; an unreadable scratch directory and an S3 refusal cost one tick and are
+  deliberately absent, as is a build discarded because the site's history was replaced (#136/#142),
+  which is a normal outcome. The existing per-table
   `delta.checkpoint.tables.unmaterialized` is untouched and the two must not be confused: this one
   is the whole site's pointer, and with it retention. **Deliberately no backoff and no UI surface** —
   the retry is now free in storage terms, and suppressing it (or flagging the site in Delta Sync)
   needs per-site state the abort by design does not write; that is the same state #149 will have to
-  decide on for its per-table twin. `CheckpointEpochGuard` is unaffected — it speaks at the first
+  decide on for its per-table twin. What a repeat still costs, and what the guide now says out loud:
+  retention stopped, the checkpoint snapshots frozen at the last successful seq for Bit BI / Parquet
+  Export / the UI (stale, never wrong — before #153 they were rewritten nightly at a seq the pointer
+  never adopted, which *is* the write that orphaned the previous generation), and a table detached
+  by #128/#149 left unrepaired, since the rematerialize runs on the idle `RETRY_MISSING` pass and a
+  site whose frame is oversized is never idle. `CheckpointEpochGuard` is unaffected — it speaks at the first
   row write, which still precedes the pointer write, and the frame upload was never inside it — but
   a build discarded by a mid-flight wipe now leaves its frame object as well as the snapshots it had
-  already uploaded: the same already-accepted litter, spared by the wipe's own cut-off (#122) and
-  swept by re-running it, and unreadable by the new epoch whose pointer is 0. `Files.createDirectories`
+  already uploaded: the same already-accepted litter, spared by the wipe's own cut-off (#122) so a
+  second wipe collects it. It is harmless **not** because the new epoch never reaches that seq (a
+  wipe resets the client's counters, so the site re-traverses the same range and a later build may
+  legitimately end there and overwrite it) but because a build only ever seeds from the frame at
+  `last_checkpoint_seq`, and `uploadFrame(N)` always precedes the `recordCheckpoint(N)` that names
+  it. `Files.createDirectories`
   moved out of `writeSnapshots` into `prepareScratchDirectory()`, called by both paths, so an
   unusable scratch directory still aborts the build (#112) rather than failing as a scratch-file
   error. No REST, gRPC, DTO, migration, configuration-key, S3-key or frontend change. See

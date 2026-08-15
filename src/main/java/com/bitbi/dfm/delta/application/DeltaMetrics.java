@@ -24,7 +24,8 @@ import java.util.function.Supplier;
  *       {@code phase=total} is the cycle, {@code download_frame|fold|parquet|upload} are
  *       the inner steps (042)</li>
  *   <li>{@code delta.checkpoint.builds.aborted} — checkpoint builds abandoned whole, tagged
- *       {@code reason=frame_too_large}; the pointer does not move, so retention freezes with it</li>
+ *       {@code reason=frame_too_large|lossy_refold}; the pointer does not move, so retention
+ *       freezes with it, and neither cause repairs itself</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -65,6 +66,7 @@ public class DeltaMetrics {
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
     private final Counter checkpointFrameTooLarge;
+    private final Counter checkpointLossyRefold;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -98,6 +100,7 @@ public class DeltaMetrics {
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
+        this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -165,18 +168,26 @@ public class DeltaMetrics {
      *
      * <p>Unlike {@link #checkpointTableUnmaterialized(String)} this is not a hole in one table:
      * {@code last_checkpoint_seq} does not move, so {@code ChangelogRetentionService} prunes
-     * nothing and the site's segment table grows until the cause is fixed. {@code frame_too_large}
-     * is deterministic for a given fold — the next tick repeats it — so a non-zero rate is a page,
-     * not a blip, and {@code delta.seq.lag} is the companion series showing how far behind the site
-     * has fallen while it lasted.</p>
+     * nothing and the site's segment table grows until the cause is fixed. {@code delta.seq.lag}
+     * is the companion series showing how far behind the site has fallen while it lasted.</p>
      *
-     * @param reason currently only {@code frame_too_large}
+     * <p>The tag values are the aborts that <b>do not repair themselves</b>, which is what makes a
+     * non-zero rate a page rather than a blip: {@code frame_too_large} is deterministic for a given
+     * fold, and {@code lossy_refold} is a missing seed frame over a pruned history. Three other
+     * ways a build can end are deliberately absent — an unreadable scratch directory and an S3
+     * refusal are transient and cost only that tick (the first would also hit every site at once,
+     * so it is an infrastructure alarm rather than a site's), and a build discarded because the
+     * site's history was replaced under it (issues #136, #142) is a normal outcome of an operator
+     * action, not a frozen pointer.</p>
+     *
+     * @param reason {@code frame_too_large} or {@code lossy_refold}
      */
     public void checkpointBuildAborted(String reason) {
-        if (!"frame_too_large".equals(reason)) {
-            throw new IllegalArgumentException("Unknown reason: " + reason);
+        switch (reason) {
+            case "frame_too_large" -> checkpointFrameTooLarge.increment();
+            case "lossy_refold" -> checkpointLossyRefold.increment();
+            default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
-        checkpointFrameTooLarge.increment();
     }
 
     /** One table's completed-batch artifact is published and downloadable. */

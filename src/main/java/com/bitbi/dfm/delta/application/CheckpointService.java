@@ -186,6 +186,11 @@ public class CheckpointService {
                         + "while the build was reading, taking frame@{} with it", siteId, checkpointSeq);
                 return Map.of();
             }
+            // Counted with the frame ceiling (issue #153) and for the same reason: the pointer
+            // stays where it is, retention stops with it, and nothing about waiting repairs
+            // either. Counting only one of the two permanent freezes would make the alert the
+            // operator guide asks for silently miss half of them.
+            metrics.checkpointBuildAborted("lossy_refold");
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Checkpoint frame@" + checkpointSeq + " for site " + siteId
                             + " is unreadable and earlier segments are pruned — refusing lossy refold",
@@ -323,7 +328,11 @@ public class CheckpointService {
             // fold, so it recurs on every tick with the pointer — and therefore retention — frozen
             // in place; a log line is not something an alert can be built on, and the symptom an
             // operator would otherwise notice first is an unbounded segment table.
-            metrics.checkpointBuildAborted("frame_too_large");
+            //
+            // Logged before it is counted: the counter validates its reason and throws on an
+            // unknown one (the same contract as checkpointTableUnmaterialized, and a programming
+            // error either way), which would otherwise replace this exception *and* swallow the
+            // only line naming the site and the key.
             log.error("The checkpoint reload frame for site {} at seq {} crossed "
                     + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned "
                     + "before any snapshot was written, so nothing durable changed: the per-table "
@@ -332,6 +341,7 @@ public class CheckpointService {
                     + "not changed. Raise that key (and the scratch volume behind it) rather than "
                     + "the per-table ceiling",
                     siteId, seq, maxFrameTempBytes);
+            metrics.checkpointBuildAborted("frame_too_large");
             throw e;
         } finally {
             deleteQuietly(frame, "_frame", siteId);
