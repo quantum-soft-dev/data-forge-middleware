@@ -148,7 +148,7 @@ Merging to `develop` does **not** deploy. Dev (GKE) is deployed explicitly with 
 ### Conventions
 - **Spec-driven**: each feature → `specs/NNN-name/` (spec → plan → tasks). Skills: `/specify`, `/plan`, `/tasks`, `/implement`, `/analyze`, `/clarify`. Larger design changes → `docs/cr-*.md`.
 - **Conventional Commits**: `feat(scope):`, `fix(scope):`, `chore:`, `ci:`, `docs:`.
-- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V51**, next is **V52**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
+- **Migrations (Flyway)**: forward-only, sequential `V{N}__description.sql`; never edit an applied migration; backward-compatible defaults for new NOT NULL columns. Current at **V52**, next is **V53**. `MigrationDocumentationConsistencyTest` derives these values from the migration filenames and guards both agent instruction files against drift; Gradle tracks the docs and migration directory as test inputs, and the pre-commit hook runs the focused guard for agent-doc-only or migration-only changes.
 - **API evolution (strangler)**: add a versioned surface alongside the old one, reusing the same application services; deprecate the old with a sunset, migrate clients, then remove it. Do **not** fork a separate service or duplicate the domain/persistence layer.
 
 ### «The current PR» — one resolution rule for every command
@@ -450,9 +450,50 @@ pages/{feature}/            # Route pages
 - gRPC + Protobuf (Delta Client v2 ingestion, port 9090) (022-delta-client-v2)
 - PostgreSQL 16 (partitioned `error_logs` table), Flyway 11 (016-global-error-handling)
 - PostgreSQL 16: `site_schemas` (JSONB), `device_authorizations`, `app_settings` tables (019, Auth V2)
-- Migrations current at **V51**; next migration is **V52** (do not reuse numbers)
+- Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- checkpoint-baseline-epoch: The checkpoint epoch guard now covers a **re-baseline** as well as a
+  wipe, and the event published after a build can no longer act on a history that is already gone
+  (issue #142, consolidating #143). `DeltaRebaselineService.reset` deletes every `checkpoints` row of
+  the site and zeroes `last_checkpoint_seq` inside the FULL_SNAPSHOT `SessionEnd` commit, yet must
+  leave `generation` alone — that is the wire epoch (035) and moving it would tell the shipped Windows
+  client to drop its journal and reset its counters. `CheckpointEpochGuard` (#136) keyed on
+  `generation`, so a build overlapping a re-baseline passed the check and restored the pre-re-baseline
+  pointer; unlike the wipe case it was **silent**, because `reset` leaves the checkpoint
+  `_frame/seq=N/frame.pb.gz` in place and the next build then seeded the fold from the **discarded**
+  baseline's frame — rows deleted at the source reappearing in every checkpoint Parquet, no pruning
+  alarm, no "refusing lossy refold". V52 adds `site_sync_state.baseline_epoch` (`BIGINT NOT NULL
+  DEFAULT 0`), a **second monotonic counter moved by both** a wipe and a re-baseline and **never sent
+  to the client**; `generation` keeps its wire meaning. The guard compares the **pair** (`SiteEpoch`)
+  rather than the apparently-stronger `baseline_epoch` alone, because neither subsumes the other
+  across a rolling deployment: a pod that predates V52 bumps `generation` only, so a wipe issued from
+  one mid-rollout would be invisible to a new pod watching the baseline epoch — #136's hole re-opened
+  through #142's fix. `CheckpointService.run` also reads the sync state **before** the segment list;
+  the other order let a reset committing in between pair the pre-reset segments with the *new* epoch,
+  so every guarded write compared equal, was approved, and the build folded the discarded baseline at
+  the new epoch — the same resurrection arrived at through the guard. A per-site `baseline_id` (UUID)
+  was the alternative and was rejected: it
+  carries no ordering, so a discard log line could not say "moved from 3 to 4", and it would have to
+  be generated where an increment does. `reset` also takes the `site_sync_state` row lock **before**
+  it deletes anything (as the wipe already did) — loading the row last left a window between the
+  checkpoint deletes and the epoch bump in which a guarded write could still land. Second half:
+  `CheckpointRecordedEvent` gains the epoch pair and `DeltaWipeReinitListener` takes the flag through
+  `clearWipePending(siteId, generation, baselineEpoch)`. The event is published one statement **after** the
+  guarded pointer write commits and cannot move inside that transaction — the listener is a
+  synchronous `@EventListener` with `@Transactional(REQUIRES_NEW)` and its `wipe_pending` UPDATE would
+  block on the row lock the suspended guard transaction holds (self-deadlock) — so a wipe committing
+  in the gap used to have its `wipe_pending` spent by the stale event, `recaptureForSite` froze zero
+  baselines from the just-emptied `checkpoints` table, and the automatic Bit BI re-init of #89 was
+  lost until a manual reinit. The epoch predicate makes that take a no-op instead, leaving the flag
+  for the first genuine post-wipe checkpoint. `EpochChangedException.getExpectedGeneration/
+  getActualGeneration` → `getExpectedEpoch/getActualEpoch` (introduced in #136, never published);
+  `SyncStateView` gains `baselineEpoch` + a derived `epoch()` (application-layer record, not a wire
+  DTO). Follow-up from review: **#147** — `reset` runs first inside `DeltaSessionCommitService.commit`,
+  so its row lock is now held across the tail segment's S3 upload; the lock ordering is the fix for a
+  real hole and the waiters are short, but S3 inside the ingestion commit transaction is worth
+  removing. No REST, gRPC, proto, configuration-key, metric, S3-key or frontend change.
+  See `docs/delta-client-v2-guide.md` ("Site history wipe and the generation epoch").
 - checkpoint-wipe-serialization: A checkpoint build that overlaps a site history wipe is discarded
   instead of resurrecting the epoch it was built for (issue #136, the row-side half of #122).
   `CheckpointService.buildCheckpoint` is non-transactional by design — frame download, one download

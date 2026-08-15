@@ -28,7 +28,11 @@ import java.util.UUID;
  * merge the snapshot on top of the old state (CR §8.D).</p>
  *
  * <p>Old S3 checkpoint snapshot/frame objects are left as harmless orphans: serving is driven by the
- * checkpoint rows (removed here) and the next build writes fresh seq-keyed objects.</p>
+ * checkpoint rows (removed here) and the next build writes fresh seq-keyed objects. That the old
+ * <em>frame</em> also survives is only harmless because the checkpoint pointer cannot come back —
+ * {@code CheckpointEpochGuard} refuses a build that overlapped this reset, keyed on the baseline
+ * epoch bumped here (issue #142). Without that, a restored pointer would name the discarded
+ * baseline's frame and the next fold would seed from it.</p>
  *
  * @author Data Forge Team
  * @version 1.0.0
@@ -62,6 +66,28 @@ public class DeltaRebaselineService {
      */
     @Transactional
     public void reset(UUID siteId, long firstSeq) {
+        // Per-site mutex first, before anything is destroyed (issue #142). It is the same row lock a
+        // history wipe holds for its whole transaction and the one CheckpointEpochGuard blocks on,
+        // so a concurrent checkpoint build has only two possible orderings: its writes commit before
+        // this reset begins (and the deletes below take them with the rest of the old baseline), or
+        // it waits here and is then refused because resetForRebaseline moved the baseline epoch.
+        // Loading the row last, as a plain read, left a window between the checkpoint deletes and
+        // the epoch bump in which a guarded write could land and outlive the reset.
+        //
+        // A site that has never synced has no row to lock, so the mutex is vacuous there (as it is
+        // in DeltaSiteWipeService, which documents the same caveat): the row is created here, and
+        // two operations racing on a fresh site collide on the primary key instead. There is also no
+        // checkpoint history for a build to resurrect on such a site.
+        //
+        // The reset runs first inside DeltaSessionCommitService.commit, so this lock is now held for
+        // the rest of that transaction — including the tail segment's S3 upload. That is a longer
+        // hold than the flush-time lock it replaces, and it is deliberate: the alternative is the
+        // window above. What waits on it (a guarded checkpoint write, clearWipePending, a wipe) is
+        // short and, in the guard's case, about to be refused anyway. Getting S3 out of the
+        // ingestion commit transaction altogether is the real fix and is tracked as issue #147.
+        SiteSyncState state = syncStateRepository.findBySiteIdForUpdate(siteId)
+                .orElseGet(() -> SiteSyncState.initial(siteId));
+
         // 033: findBySiteIdOrderByFirstSeq returns committed segments only. A large re-baseline seals
         // its own segments as provisional before SessionEnd gets here, so they are excluded by
         // construction — this deletes the baseline being replaced, never the snapshot replacing it.
@@ -83,15 +109,14 @@ public class DeltaRebaselineService {
             checkpoints++;
         }
 
-        SiteSyncState state = syncStateRepository.findBySiteId(siteId)
-                .orElseGet(() -> SiteSyncState.initial(siteId));
         state.resetForRebaseline(firstSeq - 1);
         syncStateRepository.save(state);
 
         deleteOldObjectsAfterCommit(s3Keys);
 
-        log.info("Re-baselined site {}: cleared {} segment(s), {} checkpoint(s); watermark reset to {}",
-                siteId, segments, checkpoints, firstSeq - 1);
+        log.info("Re-baselined site {}: cleared {} segment(s), {} checkpoint(s); watermark reset to "
+                        + "{}, baseline epoch now {}",
+                siteId, segments, checkpoints, firstSeq - 1, state.getBaselineEpoch());
     }
 
     /**

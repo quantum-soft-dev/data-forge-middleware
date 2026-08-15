@@ -99,6 +99,44 @@ class SiteSyncStateTest {
     }
 
     @Test
+    @DisplayName("an ordinary re-baseline bumps the baseline epoch the checkpoint guard keys on")
+    void shouldBumpBaselineEpochOnRebaseline() {
+        // The re-baseline deletes every checkpoint and zeroes the pointer exactly as a wipe does, so
+        // a build that overlaps it must be refused too (issue #142). The generation cannot carry
+        // that: it is the wire signal (035) and telling the client to reset its counters on an
+        // ordinary re-baseline would be a protocol change.
+        SiteSyncState state = synced();
+
+        state.resetForRebaseline(499L);
+
+        assertThat(state.getBaselineEpoch()).isEqualTo(1L);
+        assertThat(state.getGeneration()).isZero();
+    }
+
+    @Test
+    @DisplayName("a wipe moves both epochs, so the guard's epoch is never the weaker signal")
+    void shouldBumpBothEpochsOnWipe() {
+        SiteSyncState state = synced();
+
+        state.resetForWipe();
+
+        assertThat(state.getGeneration()).isEqualTo(1L);
+        assertThat(state.getBaselineEpoch()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("the baseline epoch is monotonic across mixed wipes and re-baselines")
+    void shouldKeepBaselineEpochMonotonic() {
+        SiteSyncState state = synced();
+
+        state.resetForRebaseline(10L);
+        state.resetForWipe();
+        state.resetForRebaseline(0L);
+
+        assertThat(state.getBaselineEpoch()).isEqualTo(3L);
+    }
+
+    @Test
     @DisplayName("an ordinary re-baseline keeps the schema version, unlike a wipe")
     void shouldKeepSchemaVersionOnRebaseline() {
         SiteSyncState state = synced();

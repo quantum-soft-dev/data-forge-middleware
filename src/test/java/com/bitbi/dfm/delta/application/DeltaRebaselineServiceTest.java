@@ -9,6 +9,7 @@ import com.bitbi.dfm.delta.domain.SiteSyncStateRepository;
 import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.util.List;
 import java.util.Optional;
@@ -50,7 +51,7 @@ class DeltaRebaselineServiceTest {
         state.advanceWatermark(120L);
         state.recordCheckpoint(100L);
         state.recordSchemaVersion(3);
-        when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(state));
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(state));
 
         service.reset(SITE, 200L);
 
@@ -63,6 +64,32 @@ class DeltaRebaselineServiceTest {
         assertEquals(199L, saved.getValue().getLastAppliedSeq(), "watermark reset to firstSeq-1");
         assertEquals(0L, saved.getValue().getLastCheckpointSeq(), "checkpoint pointer cleared");
         assertEquals(3, saved.getValue().getSchemaVersion(), "schema version preserved");
+        assertEquals(1L, saved.getValue().getBaselineEpoch(),
+                "the baseline epoch is what refuses a checkpoint build that overlapped this reset");
+        assertEquals(0L, saved.getValue().getGeneration(),
+                "the wire epoch stays put: an ordinary re-baseline never tells the client to reset");
+    }
+
+    @Test
+    void resetTakesTheSyncStateRowLockBeforeItDestroysAnything() {
+        // Issue #142. The lock is the same per-site mutex the wipe holds for its whole transaction
+        // and the one CheckpointEpochGuard blocks on. Taken first, the two orderings that survive
+        // are "the build's write commits before the reset starts" (the reset's own deletes remove
+        // it) and "the build waits, then sees the new baseline epoch and is refused". Taken last —
+        // as a plain read leaves it — a guarded write can slip between the checkpoint deletes and
+        // the epoch bump and outlive the reset.
+        InOrder order = inOrder(syncStateRepository, checkpointRepository, segmentRepository);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
+        when(syncStateRepository.findBySiteIdForUpdate(SITE))
+                .thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+
+        service.reset(SITE, 10L);
+
+        order.verify(syncStateRepository).findBySiteIdForUpdate(SITE);
+        order.verify(segmentRepository).findBySiteIdOrderByFirstSeq(SITE);
+        order.verify(checkpointRepository).findBySiteId(SITE);
+        verify(syncStateRepository, never()).findBySiteId(SITE);
     }
 
     @Test
@@ -72,7 +99,7 @@ class DeltaRebaselineServiceTest {
         // them too would destroy the very snapshot that is replacing the baseline.
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
-        when(syncStateRepository.findBySiteId(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(SiteSyncState.initial(SITE)));
 
         service.reset(SITE, 10L);
 

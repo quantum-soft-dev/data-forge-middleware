@@ -76,6 +76,21 @@ public class SiteSyncState {
     private long generation = 0L;
 
     /**
+     * Epoch of the site's server-side <em>baseline</em>, bumped by everything that discards the
+     * site's checkpoints and zeroes {@link #lastCheckpointSeq} — a history wipe and an ordinary
+     * FULL_SNAPSHOT re-baseline alike (issue #142). Server-internal and never sent to the client.
+     *
+     * <p>{@code CheckpointEpochGuard} keys on this rather than on {@link #generation}, because a
+     * re-baseline is just as fatal to a checkpoint build in flight and yet must leave the wire epoch
+     * alone: bumping {@code generation} would tell the client to drop its journal and reset its seq
+     * counter, which a re-baseline never means (035). Monotonic for the life of the site — the row is
+     * reset, never deleted — so the two epochs are independent counters and are never compared with
+     * each other.</p>
+     */
+    @Column(name = "baseline_epoch", nullable = false)
+    private long baselineEpoch = 0L;
+
+    /**
      * Set by a wipe, consumed by the first checkpoint built afterwards (issue #89). It is what makes
      * the Bit BI baseline recapture automatic — and it is deliberately not consumed at the
      * FULL_SNAPSHOT commit, because at that moment every checkpoint of the site has just been
@@ -125,6 +140,10 @@ public class SiteSyncState {
      * the applied watermark drops to {@code lastAppliedSeq} (the seq just before the snapshot's first
      * record) and the checkpoint pointer is cleared. The schema version is preserved.
      *
+     * <p>{@link #baselineEpoch} is incremented and {@link #generation} deliberately is not: the
+     * checkpoints this discards are gone as surely as a wipe's, so a build folding them must be
+     * refused (issue #142), but the client is not being told to reset anything (035).</p>
+     *
      * @param lastAppliedSeq the seq the snapshot starts from minus one
      */
     public void resetForRebaseline(long lastAppliedSeq) {
@@ -133,6 +152,7 @@ public class SiteSyncState {
         this.lastCheckpointAt = null;
         this.rebaselineRequested = false;
         this.rebaselineNotifiedAt = null;
+        this.baselineEpoch++;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
@@ -148,6 +168,10 @@ public class SiteSyncState {
      * retry-until-the-snapshot-commits semantics as an ordinary re-baseline. And the
      * {@link #generation} is incremented — the signal that tells the client to reset its own
      * counters, which a re-baseline must never send.</p>
+     *
+     * <p>{@link #baselineEpoch} moves too, so the guard's epoch is never the weaker of the two: a
+     * wipe is a superset of a re-baseline, and a build refused by one must be refused by the other
+     * (issue #142).</p>
      */
     public void resetForWipe() {
         this.lastAppliedSeq = 0L;
@@ -159,6 +183,7 @@ public class SiteSyncState {
         this.rebaselineNotifiedAt = null;
         this.rebuildRequested = false;
         this.generation++;
+        this.baselineEpoch++;
         this.wipePending = true;
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }

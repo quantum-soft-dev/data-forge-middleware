@@ -890,7 +890,9 @@ object deleted while the row that names it survives.
 
 **What the client sees.** `NEED_REBASELINE` alone cannot express a wipe: it means "send a full
 snapshot", not "your counters are meaningless now". So `site_sync_state.generation` (V48) is an epoch
-that a wipe bumps and **nothing else does** — an ordinary re-baseline never moves it. It is emitted
+that a wipe bumps and **nothing else does** — an ordinary re-baseline never moves it. (The
+server-internal `baseline_epoch` of V52 is the counter a re-baseline *does* move; it never reaches
+the client — see "The guard's epoch is not `generation`" below.) It is emitted
 on every surface the client reads before deciding what to send:
 
 - `optional uint64 SyncStateResponse.generation` (field 5)
@@ -1002,19 +1004,72 @@ stuck until someone intervened.
 
 Each database write of a build therefore runs in its own short transaction that first takes the
 `site_sync_state` row lock the wipe holds for the whole of its transaction, then compares the site's
-`generation` with the one the build read when it started (`CheckpointEpochGuard`). Only two orderings
-remain: the write commits before the wipe takes the lock, so the wipe's own deletes remove it, or it
-waits for the wipe and is then refused. A refused write ends the whole build — it is not a per-table
-skip — and the build logs `Discarding the checkpoint build for site …` and returns an empty fold; the
-pointer, the rows and the frame are all left to the new epoch. No S3 traffic happens inside the lock,
-so the build still holds a database connection only for the length of a single statement. Snapshot
-objects the discarded build had already uploaded stay behind as orphans (the cut-off deliberately
-spares them from the walk); re-running the wipe sweeps them, as it does for every other orphan on
-this path.
+**epoch pair** with the one the build read when it started (`CheckpointEpochGuard`). Only two
+orderings remain: the write commits before the wipe takes the lock, so the wipe's own deletes remove
+it, or it waits for the wipe and is then refused. A refused write ends the whole build — it is not a
+per-table skip — and the build logs `Discarding the checkpoint build for site …` and returns an empty
+fold; the pointer, the rows and the frame are all left to the new epoch. No S3 traffic happens inside
+the lock, so the build still holds a database connection only for the length of a single statement.
+Snapshot objects the discarded build had already uploaded stay behind as orphans (the cut-off
+deliberately spares them from the walk); re-running the wipe sweeps them, as it does for every other
+orphan on this path.
 
-**Still a non-goal**: an ordinary **re-baseline** leaves superseded checkpoint objects behind. They
-are addressed by key from the live `checkpoints` rows, so no stale read is possible through them
-while the site keeps its epoch.
+**The guard's epoch is not `generation` (issue #142).** A **re-baseline** does the same damage to a
+build in flight — `DeltaRebaselineService.reset` deletes every `checkpoints` row of the site and
+zeroes `last_checkpoint_seq` inside the FULL_SNAPSHOT `SessionEnd` commit — and yet it must leave
+`generation` exactly where it is, because that field is the wire epoch and moving it would tell the
+client to drop its journal and reset its counters. Keyed on `generation` the guard saw nothing and
+the build restored the pre-re-baseline pointer, and unlike the wipe case this was **silent**: `reset`
+deletes the segment objects but not the checkpoint `_frame/seq=N/frame.pb.gz`, so the next build
+found `frameExists(N)` true, seeded the fold from the **discarded** baseline's frame and folded the
+new snapshot on top — rows deleted at the source reappearing in every checkpoint Parquet served to
+Bit BI and Parquet Export, with no pruning alarm and no "refusing lossy refold".
+
+So there are two epochs on `site_sync_state`:
+
+| Column | Moved by | Travels to the client | Read by |
+|---|---|---|---|
+| `generation` (V48) | a history wipe, and nothing else | yes — `SyncStateResponse` / `SessionOpened` / `SessionStart` | the client's counter-reset guard |
+| `baseline_epoch` (V52) | a history wipe **and** a re-baseline | never | `CheckpointEpochGuard`, `CheckpointRecordedEvent` |
+
+The guard carries and compares **both** (`SiteEpoch`), and never compares one against the other.
+`baseline_epoch` looks like the strictly stronger signal, but only within one version: a pod that
+predates V52 bumps `generation` alone, so during a rolling deployment a wipe issued from an old pod
+would be invisible to a new pod watching only the baseline epoch — #136's hole, re-opened through
+#142's fix. A move of either counter, from either version, refuses the write.
+
+**Read the epoch no later than the data it guards.** `CheckpointService.run` reads the sync state
+*before* the segment list. The other way round, a reset committing between the two hands the build
+the pre-reset segments together with the **new** epoch: every guarded write then compares equal and
+is approved, and the build folds the discarded baseline, uploads a frame at its last seq and moves
+the pointer there — the same resurrection, arrived at through the guard. This order makes the epoch
+only ever older-or-equal to the data, which is the direction the guard refuses.
+
+`reset` now takes the same `site_sync_state` row lock the wipe holds, and takes it **before** it
+deletes anything: loading the row last left a window between the checkpoint deletes and the epoch
+bump in which a guarded write could still land. With the lock taken first the two orderings above are
+again the only ones, and the old frame stays a harmless orphan because the pointer that would name it
+can no longer come back. One consequence to know about: `reset` runs as the first statement of the
+FULL_SNAPSHOT commit, so that row lock is now held for the rest of that transaction — including the
+tail segment's S3 upload. What waits on it is short and, for a checkpoint build, about to be refused
+anyway; taking S3 out of the ingestion commit transaction is tracked as issue #147.
+
+**The event published after the build carries that epoch too (issue #142).**
+`CheckpointRecordedEvent` is published one statement *after* the guarded pointer write commits, so a
+wipe can commit in the gap and the event then describes a history that no longer exists. Publishing
+it inside the guard's transaction is not an option: `DeltaWipeReinitListener` is a synchronous
+`@EventListener` in its own `REQUIRES_NEW` transaction and its `wipe_pending` update would block on
+the row lock the suspended guard transaction still holds — a self-deadlock. The event therefore
+carries the epoch pair, and the flag is taken by a conditional statement scoped to it
+(`clearWipePending(siteId, generation, baselineEpoch)` — both counters, for the rolling-deployment
+reason above). Without that predicate a pre-wipe event consumed the new
+wipe's `wipe_pending`, `recaptureForSite` froze baselines from a `checkpoints` table the wipe had just
+emptied — zero baselines — and the automatic Bit BI re-initialization below was lost until someone
+ran a manual reinit.
+
+**Still a non-goal**: an ordinary **re-baseline** leaves superseded checkpoint objects behind,
+including the old reload frame. They are addressed by key from the live `checkpoints` rows and the
+checkpoint pointer, both of which the reset clears, so no stale read is possible through them.
 
 **Forced rebuild semantics (review r3, issue #128)**: `POST .../checkpoints/rebuild` is idempotent
 — a second request while one is pending answers `202 {"status": "already-queued"}` and queues

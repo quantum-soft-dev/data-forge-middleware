@@ -42,13 +42,19 @@ public interface JpaSiteSyncStateRepository
 
     /**
      * Conditional single-statement take of the pending-wipe flag (issue #89): exactly one caller
-     * gets the 1, so exactly one runs the Bit BI baseline recapture.
+     * gets the 1, so exactly one runs the Bit BI baseline recapture. The epoch predicate (issue
+     * #142) additionally rejects a caller whose checkpoint belongs to a baseline that has since been
+     * replaced — it would recapture from an emptied {@code checkpoints} table and spend the flag the
+     * first genuine post-wipe checkpoint needs.
      */
     @Override
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE SiteSyncState s SET s.wipePending = false "
-            + "WHERE s.siteId = :siteId AND s.wipePending = true")
-    int clearWipePending(@Param("siteId") UUID siteId);
+            + "WHERE s.siteId = :siteId AND s.wipePending = true "
+            + "AND s.generation = :generation AND s.baselineEpoch = :baselineEpoch")
+    int clearWipePending(@Param("siteId") UUID siteId,
+                         @Param("generation") long generation,
+                         @Param("baselineEpoch") long baselineEpoch);
 
     /**
      * Conditional single-statement stamp (issue #84): no entity load, no lost update against a
