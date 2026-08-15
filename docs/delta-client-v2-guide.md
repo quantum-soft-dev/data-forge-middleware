@@ -664,19 +664,35 @@ ingest stream dies with it.
 checkpoint key was not possible while it governed two files at once: an oversized *table* is
 skipped and rematerialized by a later build, while an oversized *frame* ends the build, because it
 is the next incremental seed. The frame now answers to its own
-`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`, and `k8s/base/configmap.yaml` sets all three ceilings to
-**2Gi** beside the `*_TEMP_DIR` keys that put the writers on the volume — the application defaults
-stay at 10 GiB, because nothing in the application knows how large the directory it was handed is.
+`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`, and `k8s/base/configmap.yaml` sets the three ceilings
+beside the `*_TEMP_DIR` keys that put the writers on the volume — the application defaults stay at
+10 GiB, because nothing in the application knows how large the directory it was handed is.
 
-2Gi is **a third of the `sizeLimit`**, three concurrent files being the smallest realistic peak:
-two checkpoint builds (see the `2 x` in the formula below) plus one completed-batch artifact. A
-test (`ParquetScratchCeilingBudgetTest`) fails if a deployed ceiling rises above that third or the
-`sizeLimit` drops below three of them, so the two numbers cannot drift apart. It is a floor on the
-guarantee, not the budget: a batch build opens one file **per claimed table**, which no per-file
-key can bound — only a directory-wide reservation can, and that is **#150**. For scale, the largest
-artifact on record is in the low hundreds of MiB, so 2Gi is about an order of magnitude of headroom;
-if a site outgrows it, raise the frame ceiling first, since a skipped table is visible and repairs
-itself while an aborted build stops the pointer and retention behind it.
+The deployed values are the formula below solved for 6Gi:
+
+```
+2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact  <=  sizeLimit
+2 x max(1Gi,              2Gi)              + 2              x 1Gi             =   6Gi
+```
+
+`ParquetScratchCeilingBudgetTest` recomputes exactly that from the manifests — including the batch
+concurrency, taken from the ConfigMap or from the `application.yml` default — so raising a ceiling,
+raising `max-concurrent`, or shrinking the `sizeLimit` on its own fails the build rather than
+quietly restoring the eviction. It also requires the **frame** ceiling to be the wider of the two,
+because that is the one whose failure is expensive.
+
+It remains a floor on the guarantee, not the whole budget: the batch term is really
+`x tables claimed per batch`, a multiplier no per-file key can bound — only a directory-wide
+reservation can, and that is **#150**. Orphan residue is outside it too (bounded by one sweep
+interval since #141). For scale, the largest artifact on record is in the low hundreds of MiB, so
+these are 3–5x headroom. If a site outgrows them, raise the frame ceiling first — a skipped table is
+visible and repairs itself, while an aborted build stops the pointer and retention behind it — and
+note that each extra GiB of frame costs **two** GiB of volume, so `sizeLimit` and
+`ephemeral-storage` move in the same commit. A completed-batch artifact above its ceiling is
+`ABANDONED` on the first attempt and answers `404` from then on (the failure is deterministic):
+raise `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` and requeue the row through
+`POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{artifactId}/requeue` — the
+records themselves are still in the changelog segments and their per-segment Parquet.
 
 **Recomputing the budget.** The peak is a checkpoint build and completed-batch builds running at
 once:
@@ -730,7 +746,7 @@ roughly an order of magnitude of headroom over the largest thing we know about. 
 measurement when one exists: read the object sizes under `checkpoints/{siteId}/_frame/` and
 `egress/{siteId}/batches/`, feed the largest into the formula above, and move the `sizeLimit`, the
 `ephemeral-storage` pair and the three per-file ceilings together — keeping the ~2 GiB gap between
-`sizeLimit` and `ephemeral-storage`, and each ceiling at or below a third of the new `sizeLimit`.
+`sizeLimit` and `ephemeral-storage`, and the ceilings inside the peak formula above.
 
 The overlays do **not** repeat any of this. `dev` and `stage` patch `resources` with cpu/memory
 only, and because those are strategic merge patches over maps, the base `ephemeral-storage` entries

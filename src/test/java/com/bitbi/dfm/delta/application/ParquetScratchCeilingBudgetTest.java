@@ -6,9 +6,11 @@ import org.yaml.snakeyaml.Yaml;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -26,14 +28,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code k8s/base/configmap.yaml} next to the {@code *_TEMP_DIR} keys that put the writers on it —
  * the same split #141 used for {@code DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD}.</p>
  *
- * <p>The deployed property asserted here is deliberately weak and mechanical: <b>no single file may
- * be allowed to take more than a third of the volume</b>. Three concurrent files is the smallest
- * realistic peak (two checkpoint builds — the cron sweep plus a forced rebuild on its own executor —
- * and at least one completed-batch artifact), so a ceiling above a third cannot refuse before
- * kubelet evicts. It is a floor on the guarantee, not the budget: a batch build opens one file per
- * claimed table, so the real peak scales with the table count and only a directory-wide reservation
- * can bound it. The worst-case formula lives in the "Sizing note" of
- * {@code docs/delta-client-v2-guide.md}.</p>
+ * <p>What is asserted about the deployed values is the worst case the "Sizing note" of
+ * {@code docs/delta-client-v2-guide.md} already writes down, recomputed from the manifests:</p>
+ *
+ * <pre>
+ * 2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact &lt;= sizeLimit
+ * </pre>
+ *
+ * <p>It is a <b>floor on the guarantee, not the budget</b>: the batch term is really
+ * {@code x tables claimed per batch}, a multiplier no per-file key can bound — only a
+ * directory-wide reservation can, which is issue #150. Orphan residue (#127, #141) is outside it
+ * too. What the guard does buy is that the three numbers, the concurrency they assume and the
+ * volume behind them can no longer drift apart silently.</p>
  */
 class ParquetScratchCeilingBudgetTest {
 
@@ -45,27 +51,29 @@ class ParquetScratchCeilingBudgetTest {
 
     private static final String SCRATCH_MOUNT_PATH = "/scratch/parquet";
 
-    /** The per-file ceilings the deployment has to keep under the volume it declares. */
-    private static final List<String> DEPLOYED_CEILING_KEYS = List.of(
-            "DELTA_CHECKPOINT_MAX_TEMP_BYTES",
-            "DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES",
-            "DELTA_BATCH_PARQUET_MAX_TEMP_BYTES");
+    /** Both checkpoint build paths can hold one scratch file each at the same time. */
+    private static final int CONCURRENT_CHECKPOINT_BUILDS = 2;
+
+    private static final String SNAPSHOT_CEILING_KEY = "DELTA_CHECKPOINT_MAX_TEMP_BYTES";
+    private static final String FRAME_CEILING_KEY = "DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES";
+    private static final String BATCH_CEILING_KEY = "DELTA_BATCH_PARQUET_MAX_TEMP_BYTES";
+    private static final String BATCH_CONCURRENCY_KEY = "DELTA_BATCH_PARQUET_MAX_CONCURRENT";
 
     @Test
     void theFrameCeilingIsItsOwnKeyAndUpgradesToTheHistoricValue() throws IOException {
-        String yaml = Files.readString(Path.of("src/main/resources/application.yml"));
+        String yaml = applicationYaml();
 
-        assertTrue(yaml.contains("max-temp-bytes: ${DELTA_CHECKPOINT_MAX_TEMP_BYTES:"
+        assertTrue(yaml.contains("max-temp-bytes: ${" + SNAPSHOT_CEILING_KEY + ":"
                         + HISTORIC_DEFAULT_BYTES + "}"),
                 "delta.checkpoint.max-temp-bytes stays the per-table snapshot ceiling at its "
                         + "historic default");
-        assertTrue(yaml.contains("max-frame-temp-bytes: ${DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES:"
+        assertTrue(yaml.contains("max-frame-temp-bytes: ${" + FRAME_CEILING_KEY + ":"
                         + HISTORIC_DEFAULT_BYTES + "}"),
                 "delta.checkpoint.max-frame-temp-bytes must default to the value the frame was "
                         + "governed by before the split, so an unset key behaves as today");
-        assertTrue(yaml.contains("max-temp-bytes: ${DELTA_BATCH_PARQUET_MAX_TEMP_BYTES:"
+        assertTrue(yaml.contains("max-temp-bytes: ${" + BATCH_CEILING_KEY + ":"
                         + HISTORIC_DEFAULT_BYTES + "}"),
-                "the completed-batch ceiling is untouched by this split");
+                "the completed-batch default is untouched by this split");
     }
 
     @Test
@@ -78,55 +86,116 @@ class ParquetScratchCeilingBudgetTest {
             return;
         }
 
+        long snapshotCeiling = deployedBytes(data, SNAPSHOT_CEILING_KEY);
+        long frameCeiling = deployedBytes(data, FRAME_CEILING_KEY);
+        long batchCeiling = deployedBytes(data, BATCH_CEILING_KEY);
+        long batchConcurrency = data.containsKey(BATCH_CONCURRENCY_KEY)
+                ? Long.parseLong(String.valueOf(data.get(BATCH_CONCURRENCY_KEY)).trim())
+                : applicationDefault(BATCH_CONCURRENCY_KEY);
+
+        assertTrue(frameCeiling >= snapshotCeiling,
+                "the frame ceiling must be the wider of the two: crossing it aborts the build and "
+                        + "freezes the pointer, while a table skip is visible and rematerialized by "
+                        + "a later build — " + FRAME_CEILING_KEY + "=" + frameCeiling + " B is below "
+                        + SNAPSHOT_CEILING_KEY + "=" + snapshotCeiling + " B");
+
         long sizeLimit = scratchVolumeSizeLimitBytes();
-        long perFileCeiling = sizeLimit / 3;
-        for (String key : DEPLOYED_CEILING_KEYS) {
-            Object declared = data.get(key);
-            assertNotNull(declared,
-                    key + " must be set beside the temp dirs: the application default (10 GiB) is "
-                            + "above the volume, so without it the pod is evicted before the app refuses");
-            long bytes = Long.parseLong(String.valueOf(declared).trim());
-            assertTrue(bytes > 0, key + " must be a positive byte count, was " + declared);
-            assertTrue(bytes <= perFileCeiling,
-                    key + " is " + bytes + " B, above a third of the " + sizeLimit + " B scratch "
-                            + "volume — two checkpoint builds and one batch artifact of that size "
-                            + "fill it, and kubelet evicts the pod instead of the app skipping a table");
-        }
+        long peak = CONCURRENT_CHECKPOINT_BUILDS * Math.max(snapshotCeiling, frameCeiling)
+                + batchConcurrency * batchCeiling;
+        assertTrue(peak <= sizeLimit,
+                "the worst case allowed by these ceilings is " + peak + " B on a " + sizeLimit
+                        + " B volume, so kubelet evicts the pod before the application refuses: "
+                        + CONCURRENT_CHECKPOINT_BUILDS + " x max(" + snapshotCeiling + ", "
+                        + frameCeiling + ") + " + batchConcurrency + " x " + batchCeiling
+                        + ". Move the ceilings and the volume together — see the sizing note in "
+                        + "docs/delta-client-v2-guide.md");
     }
 
     @Test
-    void noOverlayRaisesTheDeployedCeilingsOrShrinksTheVolume() throws IOException {
+    void noOverlayRedefinesEitherSideOfThatBudget() throws IOException {
         // Same reasoning as ParquetScratchOrphanSweeperTest#noOverlayRedirectsTheScratchBehindThatGuard:
-        // the guard above reads the base manifests, so an overlay that redefines either side of the
-        // comparison must widen it rather than slip past it.
-        Pattern override = Pattern.compile(
-                "^\\s*(" + String.join("|", DEPLOYED_CEILING_KEYS) + "|sizeLimit)\\s*:",
+        // the guard above reads the base manifests, so an overlay that redefines either side must
+        // widen it rather than slip past it. Both ConfigMap forms count — a `KEY: value` entry and
+        // a `- KEY=value` configMapGenerator literal.
+        Pattern ceilingOverride = Pattern.compile(
+                "(^|\\s|-\\s)(" + SNAPSHOT_CEILING_KEY + "|" + FRAME_CEILING_KEY + "|"
+                        + BATCH_CEILING_KEY + "|" + BATCH_CONCURRENCY_KEY + ")\\s*[:=]",
                 Pattern.MULTILINE);
+        // A sizeLimit belonging to some other volume (dev's Redis, say) is none of this test's
+        // business; one in a file that also names the scratch volume or its mount is.
+        Pattern sizeLimitOverride = Pattern.compile("^\\s*sizeLimit\\s*:", Pattern.MULTILINE);
         try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {
             for (Path file : overlays.filter(ParquetScratchCeilingBudgetTest::isYaml).toList()) {
-                assertFalse(override.matcher(Files.readString(file)).find(),
-                        file + " redefines a scratch ceiling or the volume sizeLimit; "
-                                + "theDeployedCeilingsRefuseBeforeTheScratchVolumeFills no longer "
-                                + "covers the rendered configuration and must be widened to it");
+                String body = Files.readString(file);
+                boolean touchesScratch = body.contains("parquet-scratch")
+                        || body.contains(SCRATCH_MOUNT_PATH);
+                assertFalse(ceilingOverride.matcher(body).find()
+                                || (touchesScratch && sizeLimitOverride.matcher(body).find()),
+                        file + " redefines a scratch ceiling, the batch concurrency it assumes, or "
+                                + "the volume sizeLimit; theDeployedCeilingsRefuseBeforeTheScratchVolumeFills "
+                                + "no longer covers the rendered configuration and must be widened to it");
             }
         }
     }
 
+    /**
+     * A deployed ceiling is read by Spring into a {@code long}, so it must be a plain byte count:
+     * {@code "2Gi"} would fail the context, not merely this parse.
+     */
+    private static long deployedBytes(Map<String, Object> data, String key) {
+        Object declared = data.get(key);
+        assertNotNull(declared,
+                key + " must be set beside the temp dirs: the application default (10 GiB) is "
+                        + "above the volume, so without it the pod is evicted before the app refuses");
+        String raw = String.valueOf(declared).trim();
+        assertTrue(raw.matches("\\d+"),
+                key + " must be a plain byte count — Spring binds it to a long, so a Kubernetes "
+                        + "quantity like \"2Gi\" crashes the context on startup. Was: " + raw);
+        long bytes = Long.parseLong(raw);
+        assertTrue(bytes > 0, key + " must be positive, was " + bytes);
+        return bytes;
+    }
+
+    /** The default in {@code application.yml}, for a key the deployment does not override. */
+    private static long applicationDefault(String environmentVariable) throws IOException {
+        Matcher matcher = Pattern.compile(Pattern.quote("${" + environmentVariable + ":") + "(\\d+)}")
+                .matcher(applicationYaml());
+        assertTrue(matcher.find(),
+                "application.yml must declare a numeric default for " + environmentVariable);
+        return Long.parseLong(matcher.group(1));
+    }
+
+    /**
+     * The volume actually mounted at the scratch path, not merely the first bounded {@code
+     * emptyDir} in the pod: a second one would otherwise be measured instead.
+     */
     private static long scratchVolumeSizeLimitBytes() throws IOException {
         Map<String, Object> deployment = loadManifest("k8s/base/deployment-backend.yaml");
         Map<String, Object> podSpec = child(child(child(deployment, "spec"), "template"), "spec");
+
+        Map<String, Map<String, Object>> volumesByName = new HashMap<>();
         for (Map<String, Object> volume : children(podSpec, "volumes")) {
-            Object emptyDir = volume.get("emptyDir");
-            if (!(emptyDir instanceof Map<?, ?> settings)) {
-                continue;
-            }
-            Object sizeLimit = settings.get("sizeLimit");
-            if (sizeLimit != null) {
+            volumesByName.put(String.valueOf(volume.get("name")), volume);
+        }
+        for (Map<String, Object> container : children(podSpec, "containers")) {
+            for (Map<String, Object> mount : children(container, "volumeMounts")) {
+                if (!SCRATCH_MOUNT_PATH.equals(mount.get("mountPath"))) {
+                    continue;
+                }
+                Map<String, Object> volume = volumesByName.get(String.valueOf(mount.get("name")));
+                assertNotNull(volume, "no volume named " + mount.get("name") + " backs "
+                        + SCRATCH_MOUNT_PATH);
+                Object emptyDir = volume.get("emptyDir");
+                assertTrue(emptyDir instanceof Map<?, ?>,
+                        SCRATCH_MOUNT_PATH + " must be backed by an emptyDir, was " + volume);
+                Object sizeLimit = ((Map<?, ?>) emptyDir).get("sizeLimit");
+                assertNotNull(sizeLimit, "the scratch volume declares no sizeLimit — the deployed "
+                        + "ceilings have nothing to sit below");
                 return quantityToBytes(String.valueOf(sizeLimit));
             }
         }
-        throw new AssertionError("the backend pod declares no sizeLimit for its scratch volume — "
-                + "the deployed ceilings have nothing to sit below");
+        throw new AssertionError("nothing mounts " + SCRATCH_MOUNT_PATH + ", yet the ConfigMap "
+                + "points the writers at it — they would land on the unbounded writable layer");
     }
 
     /** Kubernetes binary/decimal suffixes, enough of them for a volume budget. */
@@ -146,6 +215,10 @@ class ParquetScratchCeilingBudgetTest {
             }
         }
         return Long.parseLong(quantity.trim());
+    }
+
+    private static String applicationYaml() throws IOException {
+        return Files.readString(Path.of("src/main/resources/application.yml"));
     }
 
     @SuppressWarnings("unchecked")

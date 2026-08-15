@@ -265,6 +265,17 @@ public class CheckpointService {
                 }
                 checkpointStorage.uploadFrame(siteId, seq, frame);
             });
+        } catch (ArtifactSizeLimitExceededException e) {
+            // Both ceilings raise the same exception with the same "temp-file limit of N bytes"
+            // text, and the per-table one is reported by its own counter — say which guard this
+            // was and name the key, or the operator has only a byte count to go on. Rethrown
+            // unchanged: an oversized frame still ends the build.
+            log.error("The checkpoint reload frame for site {} at seq {} crossed "
+                    + "delta.checkpoint.max-frame-temp-bytes ({} bytes) — the build is abandoned "
+                    + "and the pointer stays at its previous seq. Raise that key (and the scratch "
+                    + "volume behind it) rather than the per-table ceiling",
+                    siteId, seq, maxFrameTempBytes);
+            throw e;
         } finally {
             deleteQuietly(frame, "_frame", siteId);
         }

@@ -465,21 +465,27 @@ pages/{feature}/            # Route pages
   `delta.checkpoint.max-frame-temp-bytes` (`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`) bounds the frame
   alone and defaults to the **same 10 GiB** the shared key carried, so an unset key behaves as
   before; `delta.checkpoint.max-temp-bytes` keeps its name and its per-table, graceful meaning, and
-  `delta.batch-parquet.max-temp-bytes` is untouched. **The application defaults did not move** — the
+  `delta.batch-parquet.max-temp-bytes` keeps its name, its default and its per-file scope.
+  **The application defaults did not move** — the
   process cannot know how large the directory it was handed is, so the values that must sit below
   the volume are declared beside it, in `k8s/base/configmap.yaml` next to the `*_TEMP_DIR` keys
-  (the split #141 used for `scratch-private-to-pod`): all three at **2Gi**, a third of the
-  `sizeLimit`, three concurrent files being the smallest realistic peak (two checkpoint builds — the
-  cron sweep and a forced rebuild on `deltaRebuildExecutor` are not mutually excluded — plus one
-  completed-batch artifact). `ParquetScratchCeilingBudgetTest` enforces that ratio in both
-  directions and that no overlay redefines either side, so the manifest and the ceilings cannot
-  drift apart. A third of the volume is a **floor on the guarantee, not the budget**: a batch build
+  (the split #141 used for `scratch-private-to-pod`). They are the sizing note's own worst case
+  solved for the 6Gi volume — `2 x max(table 1Gi, frame 2Gi) + max-concurrent 2 x batch 1Gi = 6Gi`,
+  the `2 x` being the two checkpoint build paths (the cron sweep and a forced rebuild on
+  `deltaRebuildExecutor` are not mutually excluded), each holding one file at a time.
+  `ParquetScratchCeilingBudgetTest` recomputes that from the manifests — reading the batch
+  concurrency from the ConfigMap or the `application.yml` default — requires the **frame** ceiling
+  to be the wider of the two, and fails if an overlay redefines any side, so the volume and the
+  ceilings cannot drift apart. It is a **floor on the guarantee, not the budget**: a batch build
   opens one file per claimed table, a multiplier no per-file key can bound — the directory-wide
   reservation (`delta.parquet.max-scratch-bytes`) is filed as **#150** rather than folded in here.
-  Raise the frame ceiling first if a site outgrows 2Gi: a skipped table is visible and self-healing,
-  an aborted build stops the pointer and retention behind it. No REST, gRPC, DTO, migration, metric,
-  S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("Sizing note"),
-  `docs/cr-unified-batch-parquet.md`.
+  Two consequences worth knowing before an upgrade of the deployment: a checkpoint table above 1Gi
+  is skipped (visible, self-healing) while the **frame** above 2Gi aborts the build, so raise the
+  frame first and remember it costs two GiB of volume per GiB; and a completed-batch artifact above
+  1Gi is `ABANDONED` on its first attempt and answers 404 until an operator raises the key and
+  requeues the row (039's admin route) — the records themselves stay in the segments. No REST, gRPC,
+  DTO, migration, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`
+  ("Sizing note"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-tick-work-list: The nightly checkpoint tick no longer walks past a site whose changelog
   was pruned to nothing (issue #137). `CheckpointScheduler.buildCheckpoints` iterated
   `changelog_segments.findDistinctSiteIds()` alone, which is the list of sites with *ingestion* work

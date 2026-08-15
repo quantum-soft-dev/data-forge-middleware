@@ -125,8 +125,10 @@ spec:
         # sizeLimit is enforced by kubelet: crossing it EVICTS the pod. It is not a
         # graceful, per-table skip like delta.*.max-temp-bytes — see the sizing note in
         # docs/delta-client-v2-guide.md. Since issue #138 the per-file ceilings in
-        # configmap.yaml are set to a third of this number each, so the application refuses
-        # first; changing this value means revisiting them (a test enforces the ratio).
+        # configmap.yaml are set so that the sizing note's worst case fits inside this number
+        # (2 x max(1Gi table, 2Gi frame) + 2 x 1Gi batch = 6Gi), which is what lets the
+        # application refuse first. Changing this value means recomputing them in the same
+        # commit — ParquetScratchCeilingBudgetTest fails otherwise.
         # Directory permissions: emptyDir is created 0777, so the non-root `dfm` user
         # from the image can write to it without an fsGroup.
         - name: parquet-scratch

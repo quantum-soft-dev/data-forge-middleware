@@ -41,15 +41,29 @@ data:
   # The volume size is declared in deployment-backend.yaml, so the ceilings that must sit below
   # it are declared here, beside the temp dirs that put the writers on it — the application has
   # no way to know how large the directory it was handed is.
-  # 2Gi each = a third of the volume, the smallest realistic peak being three concurrent files:
-  # two checkpoint builds (the 02:00 sweep plus a forced rebuild on its own executor) and one
-  # completed-batch artifact. It is a floor on the guarantee, not the budget — a batch build
-  # opens one file per claimed table, which no per-file key can bound (issue #150). For scale:
-  # the largest artifact on record is in the low hundreds of MiB, so 2Gi is ~10x headroom.
-  # Raise MAX_FRAME first if a site outgrows this: a table skip is visible and self-healing
-  # (rematerialized by a later build), while the frame aborts the whole build.
-  DELTA_CHECKPOINT_MAX_TEMP_BYTES: "2147483648"
+  #
+  # The three values are the sizing note's own worst case solved for 6Gi, and
+  # ParquetScratchCeilingBudgetTest recomputes it from these manifests:
+  #     2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch artifact <= sizeLimit
+  #     2 x max(1Gi, 2Gi)                           + 2              x 1Gi            =  6Gi
+  # The 2x is the two checkpoint build paths (the 02:00 sweep and a forced rebuild on
+  # deltaRebuildExecutor are not mutually excluded), each holding one file at a time.
+  # The frame is deliberately the widest: crossing it ABORTS the build and freezes the pointer,
+  # while a table simply skips and is rematerialized by a later build. Raising it costs 2 GiB of
+  # volume per GiB, so grow sizeLimit and ephemeral-storage in the same commit.
+  #
+  # This is a floor on the guarantee, not the whole budget: a batch build opens one file PER
+  # CLAIMED TABLE, so the batch term is really `x tables`, which no per-file key can bound —
+  # that is issue #150. Orphan residue after a container restart is bounded by one sweep
+  # interval (#141), not counted here.
+  #
+  # For scale, the largest artifact on record is in the low hundreds of MiB, so these are 3-5x
+  # headroom. An artifact above the batch ceiling is ABANDONED on its first attempt and stays
+  # 404 (the failure is deterministic): recovery is to raise this key and requeue the row through
+  # POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{id}/requeue — the data
+  # itself is still in the changelog segments and their per-segment Parquet.
+  DELTA_CHECKPOINT_MAX_TEMP_BYTES: "1073741824"
   DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES: "2147483648"
-  DELTA_BATCH_PARQUET_MAX_TEMP_BYTES: "2147483648"
+  DELTA_BATCH_PARQUET_MAX_TEMP_BYTES: "1073741824"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"
