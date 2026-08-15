@@ -453,6 +453,49 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- split-scratch-ceilings: The checkpoint scratch ceiling is two keys, and the deployed values sit
+  below the volume so the application refuses before kubelet evicts (issue #138). Since #126 one key
+  governed two files with opposite failure semantics — an oversized per-table snapshot is skipped
+  (`delta.checkpoint.tables.unmaterialized{reason=parquet_failed}`) and repaired by a later
+  rematerialize (#128), while an oversized **reload frame ends the build**, because the frame is the
+  next incremental seed. The single key therefore had to be set for the harsher of the two, which is
+  why #131 left all the ceilings at 10 GiB above the 6Gi `parquet-scratch` `emptyDir` it declared:
+  the volume was the binding constraint and its failure mode is a **kubelet eviction of the pod** —
+  no skip, no metric, in-flight ingest dies with it. New
+  `delta.checkpoint.max-frame-temp-bytes` (`DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES`) bounds the frame
+  alone and defaults to the **same 10 GiB** the shared key carried, so an unset key behaves as
+  before — and unset it inherits `delta.checkpoint.max-temp-bytes` rather than a literal, so an
+  operator who had lowered the single key for a small disk does not silently lose the frame bound;
+  `delta.checkpoint.max-temp-bytes` keeps its name and its per-table, graceful meaning, and
+  `delta.batch-parquet.max-temp-bytes` keeps its name, its default and its per-file scope.
+  **The application defaults did not move** — the
+  process cannot know how large the directory it was handed is, so the values that must sit below
+  the volume are declared beside it, in `k8s/base/configmap.yaml` next to the `*_TEMP_DIR` keys
+  (the split #141 used for `scratch-private-to-pod`). They are the sizing note's own worst case
+  solved for the 6Gi volume with a gigabyte kept free for restart residue and for the fact that
+  kubelet acts on *exceeding* the limit —
+  `2 x max(table 1Gi, frame 1.5Gi) + max-concurrent 2 x batch 1Gi = 5Gi <= 6Gi - 1Gi`,
+  the `2 x` being the two checkpoint build paths (the cron sweep and a forced rebuild on
+  `deltaRebuildExecutor` are not mutually excluded), each holding one file at a time.
+  `ParquetScratchCeilingBudgetTest` recomputes that from the manifests — reading the batch
+  concurrency from the ConfigMap or the `application.yml` default — requires the **frame** ceiling
+  to be the wider of the two, fails if an overlay redefines any side, and fails *closed* if the
+  temp dirs and the mount drift apart, so the volume and the ceilings cannot separate silently.
+  The batch term assumes **one claimed table per build**, which makes this a
+  **floor on the guarantee, not the budget**: a real build opens one file per claimed table, a
+  count no per-file key can bound — the directory-wide reservation
+  (`delta.parquet.max-scratch-bytes`) is filed as **#150** rather than folded in here.
+  What an operator must know before this deployment change: **none of the three refusals repairs
+  itself** when the artifact is deterministically oversized. A checkpoint table is skipped *and*
+  has `s3_key_parquet` detached on a seq-advancing build, so it 404s for Bit BI / Parquet Export
+  and the nightly rematerialize fails identically (#149); the **frame** aborts the build, freezing
+  the pointer and retention while every following build re-uploads a full generation of snapshots
+  (#153, filed from this review); a completed-batch artifact is `ABANDONED` on the first attempt and
+  404s until the key is raised and the row requeued (039's admin route). In each case the records
+  themselves stay in the segments — what is lost is the derived artifact. Raise the frame ceiling
+  first, and remember it costs two GiB of volume per GiB. No REST, gRPC,
+  DTO, migration, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`
+  ("Sizing note"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-tick-work-list: The nightly checkpoint tick no longer walks past a site whose changelog
   was pruned to nothing (issue #137). `CheckpointScheduler.buildCheckpoints` iterated
   `changelog_segments.findDistinctSiteIds()` alone, which is the list of sites with *ingestion* work

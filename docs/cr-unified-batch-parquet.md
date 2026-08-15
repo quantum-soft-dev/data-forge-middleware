@@ -122,8 +122,16 @@ volume for the whole age window.
 `max-concurrent` builds in flight, so the *directory* is bounded by the deployment rather than by
 this key: on GKE `temp-dir` points at a `parquet-scratch` `emptyDir` whose `sizeLimit` sits inside
 the container's `ephemeral-storage` request/limit (issue #131). Crossing that is a kubelet eviction,
-not an `ABANDONED` artifact. The budget, its worst case and how to recompute it live in
-`docs/delta-client-v2-guide.md` ("Sizing note") — one place, so the numbers cannot drift.
+not an `ABANDONED` artifact. Since issue #138 the deployment sets this key (and the two checkpoint
+ceilings) in `k8s/base/configmap.yaml` so that the sizing note's worst case fits inside that
+`sizeLimit` — 1Gi here — and a single runaway artifact is abandoned before the volume fills; the
+application default stays at 10 GiB. Note the consequence: an artifact above the ceiling is
+abandoned on its **first** attempt, because the failure is deterministic, and answers `404` until
+an operator raises the key and requeues the row (the admin requeue route from 039). Lowering the key
+shrinks the peak roughly in proportion but never bounds it — one file per claimed table is a
+multiplier no per-file key can cap, which is issue **#150**. The budget, its worst case and how to
+recompute it live in `docs/delta-client-v2-guide.md` ("Sizing note") — one place, so the numbers
+cannot drift.
 
 `ABANDONED` is a distinct status precisely because `FAILED` is not terminal: a row still holding
 attempts is work in progress, and the download must say so rather than claim the file is missing.

@@ -82,11 +82,7 @@ class CheckpointServiceTest {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        service = new CheckpointService(
-                segmentRepository, changelogSegmentService, checkpointRepository,
-                syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                tempDirectory.toString(), Long.MAX_VALUE);
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE);
         when(metrics.timeCheckpoint(any())).thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(0)).get());
         when(metrics.timeCheckpointPhase(any(), any(Supplier.class)))
                 .thenAnswer(inv -> ((Supplier<Object>) inv.getArgument(1)).get());
@@ -109,6 +105,19 @@ class CheckpointServiceTest {
                     lastFrameBytes = Files.readAllBytes(file);
                     return "checkpoints/frame-key";
                 });
+    }
+
+    /**
+     * The two scratch ceilings are separate keys because they fail differently (issue #138):
+     * {@code maxTempBytes} bounds one table's snapshot and skips that table, while
+     * {@code maxFrameTempBytes} bounds the all-tables reload frame and aborts the build.
+     */
+    private CheckpointService newService(String scratchDirectory, long maxTempBytes, long maxFrameTempBytes) {
+        return new CheckpointService(
+                segmentRepository, changelogSegmentService, checkpointRepository,
+                syncStateService, checkpointStorage, siteSchemaService, metrics,
+                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
+                scratchDirectory, maxTempBytes, maxFrameTempBytes);
     }
 
     @Test
@@ -322,14 +331,12 @@ class CheckpointServiceTest {
     }
 
     @Test
-    void abortsTheBuildWhenTheFrameWouldCrossTheLocalFileCeiling() throws IOException {
+    void abortsTheBuildWhenTheFrameWouldCrossItsOwnCeiling() throws IOException {
         // The frame is the next build's seed: unlike a single oversized table it cannot be
-        // skipped. Abort so the pointer stays put and the next run rewrites it.
-        service = new CheckpointService(
-                segmentRepository, changelogSegmentService, checkpointRepository,
-                syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                tempDirectory.toString(), 8L);
+        // skipped. Abort so the pointer stays put and the next run rewrites it. Since issue #138
+        // the frame answers to max-frame-temp-bytes alone — a per-table ceiling wide enough for
+        // every snapshot does not make the frame unbounded.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, 8L);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
 
         assertThrows(ArtifactSizeLimitExceededException.class, () -> service.buildCheckpoint(SITE));
@@ -396,11 +403,7 @@ class CheckpointServiceTest {
         org.junit.jupiter.api.Assumptions.assumeTrue(
                 readOnly.toFile().setWritable(false) && !Files.isWritable(readOnly),
                 "the filesystem must honour a read-only directory");
-        service = new CheckpointService(
-                segmentRepository, changelogSegmentService, checkpointRepository,
-                syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                readOnly.toString(), Long.MAX_VALUE);
+        service = newService(readOnly.toString(), Long.MAX_VALUE, Long.MAX_VALUE);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
 
         assertThrows(UncheckedIOException.class, () -> service.buildCheckpoint(SITE));
@@ -411,17 +414,13 @@ class CheckpointServiceTest {
     }
 
     @Test
-    void skipsOnlyTheTableThatCrossesTheLocalFileCeiling() throws IOException {
+    void skipsOnlyTheTableThatCrossesTheSnapshotCeilingAndStillWritesTheFrame() throws IOException {
         // A table too big for the configured ceiling is a fact about that table, so it keeps the
         // per-table skip — the build completes and the pointer advances, as with unrenderable data.
-        // The ceiling is shared with the frame (issue #126), so it has to sit between the two
-        // artifacts of this fixture: below the Parquet snapshot, above the gzipped 2-record frame.
-        long ceiling = ceilingBetweenFrameAndParquet();
-        service = new CheckpointService(
-                segmentRepository, changelogSegmentService, checkpointRepository,
-                syncStateService, checkpointStorage, siteSchemaService, metrics,
-                new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                tempDirectory.toString(), ceiling);
+        // Since issue #138 the snapshot ceiling is the table's alone: crossing it must not take the
+        // frame down with it, which is what lets an operator set this key below the scratch volume
+        // so the application refuses before kubelet evicts the pod.
+        service = newService(tempDirectory.toString(), 8L, Long.MAX_VALUE);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordFrameUploads();
 
@@ -430,6 +429,7 @@ class CheckpointServiceTest {
         verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
         verify(metrics).checkpointTableUnmaterialized("parquet_failed");
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+        assertEquals(1, uploadedFrames.size(), "the frame is bounded by its own, wider ceiling");
         verify(syncStateService).recordCheckpoint(SITE, 2L);
         assertEquals(List.of(), snapshotsOnDisk(), "the half-written file must not be left behind");
     }
@@ -848,30 +848,6 @@ class CheckpointServiceTest {
                     uploaded.add(new UploadedSnapshot(file, Files.size(file), snapshotsOnDisk().size()));
                     return s3Key;
                 });
-    }
-
-    /**
-     * A ceiling that this fixture's Parquet snapshot will cross and its gzipped frame will not,
-     * so the shared {@code max-temp-bytes} can still express a per-table skip.
-     */
-    private long ceilingBetweenFrameAndParquet() throws IOException {
-        Path probeParquet = tempDirectory.resolve("probe.parquet");
-        Path probeFrame = tempDirectory.resolve("probe.pb.gz");
-        ChangeRecord first = record("customers", 1L, 1, "Ann");
-        ChangeRecord second = record("customers", 2L, 2, "Bob");
-        ParquetCheckpointWriter.writeParquet(probeParquet, "customers", customersSchema(),
-                List.of(first.getDataMap(), second.getDataMap()),
-                Long.MAX_VALUE, 8L * 1024 * 1024);
-        try (java.io.OutputStream out = Files.newOutputStream(probeFrame)) {
-            ChangelogCodec.write(List.of(first, second), out);
-        }
-        long parquetSize = Files.size(probeParquet);
-        long frameSize = Files.size(probeFrame);
-        Files.delete(probeParquet);
-        Files.delete(probeFrame);
-        org.junit.jupiter.api.Assumptions.assumeTrue(parquetSize > frameSize + 1,
-                "the 2-row Parquet snapshot must be larger than the gzipped frame");
-        return frameSize + (parquetSize - frameSize) / 2;
     }
 
     private void recordFrameUploads() {

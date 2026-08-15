@@ -35,5 +35,51 @@ data:
   # on a volume with a sizeLimit (issue #141). This is a claim about the mount above: move the
   # temp dirs off the emptyDir and this has to go with them.
   DELTA_PARQUET_SCRATCH_PRIVATE_TO_POD: "true"
+  # Per-file ceilings for that volume (issue #138). The application defaults are 10 GiB — above
+  # the 6Gi sizeLimit — so without these the binding constraint is the volume, and its failure
+  # mode is a kubelet EVICTION of the pod rather than a skipped table or an abandoned artifact.
+  # The volume size is declared in deployment-backend.yaml, so the ceilings that must sit below
+  # it are declared here, beside the temp dirs that put the writers on it — the application has
+  # no way to know how large the directory it was handed is.
+  #
+  # The three values are the sizing note's own worst case solved for 6Gi with a gigabyte kept
+  # free, and ParquetScratchCeilingBudgetTest recomputes it from these manifests:
+  #     2 x max(checkpoint table, checkpoint frame) + max-concurrent x batch <= sizeLimit - 1Gi
+  #     2 x max(1Gi, 1.5Gi)                         + 2              x 1Gi   =  5Gi   <= 5Gi
+  # The reserved gigabyte is for scratch a dead container left behind (it survives on the
+  # pod-private volume until the next sweep tick, #141) and for the fact that kubelet acts on
+  # usage EXCEEDING the limit, not on reaching it. Solving to exact equality with sizeLimit would
+  # mean the modelled peak is itself an eviction.
+  # The 2x is the two checkpoint build paths (the 02:00 sweep and a forced rebuild on
+  # deltaRebuildExecutor are not mutually excluded), each holding one file at a time. The batch
+  # term assumes ONE claimed table per build — a real build opens one file per claimed table, so
+  # this is the single-table worst case, not the whole budget; bounding a *count* needs the
+  # directory-wide reservation of issue #150. Orphan residue after a container restart (#141) sits
+  # outside it too.
+  #
+  # The frame is deliberately the widest ceiling, because its failure is the expensive one, and
+  # raising it costs 2 GiB of volume per GiB — grow sizeLimit and ephemeral-storage in the same
+  # commit.
+  #
+  # For scale, the largest artifact on record is in the low hundreds of MiB, so these are 3-5x
+  # headroom. NONE of the three refusals repairs itself if the artifact is deterministically too
+  # big — each needs the ceiling raised:
+  #   * table  -> skipped, and on a seq-advancing build s3_key_parquet is DETACHED, so the table
+  #               404s for Bit BI / Parquet Export and the nightly retry fails the same way (#149)
+  #   * frame  -> the build aborts, the pointer and retention freeze, and every following build
+  #               re-uploads a full set of snapshots at a new seq, orphaning the previous ones (#153)
+  #   * batch  -> ABANDONED on the first attempt and 404 thereafter; raise the key and requeue via
+  #               POST /api/v1/sites/{siteId}/delta/batches/{batchId}/parquet-artifacts/{id}/requeue
+  # In all three the records themselves are still in the changelog segments and their per-segment
+  # Parquet; what is lost is the derived artifact.
+  # Before rolling this out to a site that has been running a while, check the assumption against
+  # reality — it takes one listing:
+  #   gsutil du -h gs://<bucket>/checkpoints/<siteId>/_frame/   # largest frame
+  #   gsutil du -h gs://<bucket>/egress/<siteId>/batches/       # largest batch artifact
+  # A frame already larger than the frame ceiling below would go from "works" to "the build aborts
+  # every night" (see #153), which is the one regression these values can cause.
+  DELTA_CHECKPOINT_MAX_TEMP_BYTES: "1073741824"
+  DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES: "1610612736"
+  DELTA_BATCH_PARQUET_MAX_TEMP_BYTES: "1073741824"
   # --- Plugin (Bit BI) ----------------------------------------------------------------
   PLUGIN_BITBI_ENABLED: "true"
