@@ -1,6 +1,7 @@
 package com.bitbi.dfm.shared.storage;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 
 /**
@@ -19,9 +20,16 @@ public record S3ListedObject(String key, Instant lastModified) {
 
     /**
      * @param cutoff the instant the wipe (or other caller) started
-     * @return true when the object is known to have been written after {@code cutoff}
+     * @return true when the object might have been written at or after {@code cutoff}.
+     *         S3 {@code LastModified} is second-resolution, so anything in the same
+     *         second as {@code cutoff} is treated as newer. A missing timestamp is
+     *         treated as newer — the safe direction for a concurrent PutObject.
      */
     public boolean lastModifiedAfter(Instant cutoff) {
-        return lastModified != null && lastModified.isAfter(cutoff);
+        if (lastModified == null || cutoff == null) {
+            return true;
+        }
+        Instant cutoffSecond = cutoff.truncatedTo(ChronoUnit.SECONDS);
+        return !lastModified.isBefore(cutoffSecond);
     }
 }

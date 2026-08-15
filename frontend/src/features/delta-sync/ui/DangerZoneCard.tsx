@@ -33,9 +33,7 @@ export function DangerZoneCard({ siteId, siteName, scope }: DangerZoneCardProps)
             `The client will re-upload a full snapshot on its next connect.`,
         );
         if (result.prefixesNotSwept > 0) {
-          // A skipped prefix is not an object count — quoting s3DeleteErrors here would hide that
-          // the whole prefix (including every _frame/ reload frame) survived. Repeating the wipe
-          // is safe and is how the leftover objects get swept (issue #122).
+          // A skipped prefix is not an object count.
           toast.warning(
             'Some storage prefixes could not be swept completely. Repeat the wipe — it is safe and will finish the cleanup.',
           );

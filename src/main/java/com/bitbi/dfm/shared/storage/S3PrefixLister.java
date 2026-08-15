@@ -15,9 +15,8 @@ import java.util.List;
 /**
  * Shared incremental {@code ListObjectsV2} walk (issue #122).
  *
- * <p>Both S3 storage services used to materialise the paginator in one terminal
- * {@code stream().toList()}. An {@code S3Exception} on page 40 of 50 discarded the ~39 000 keys
- * already read. Collecting page by page keeps them.</p>
+ * <p>Walks pages one by one. On {@code S3Exception} or {@code SdkClientException} returns the
+ * objects already read with {@code truncated=true} instead of throwing the walk away.</p>
  */
 public final class S3PrefixLister {
 
