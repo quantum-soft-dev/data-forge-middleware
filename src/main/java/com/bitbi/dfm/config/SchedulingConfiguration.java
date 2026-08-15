@@ -54,7 +54,26 @@ public class SchedulingConfiguration {
 
     /**
      * The application's {@code TaskScheduler}, built from Boot's builder so every
-     * {@code spring.task.scheduling.*} property keeps its documented meaning.
+     * {@code spring.task.scheduling.*} property keeps its documented meaning, with two shutdown
+     * settings fixed in code because they are properties of <em>these tasks</em> rather than of a
+     * deployment — and because both of them silently changed when the scheduler did.
+     *
+     * <p><b>No interrupt on shutdown.</b> Boot defaults
+     * {@code spring.task.scheduling.shutdown.await-termination} to false, which makes
+     * {@code ExecutorConfigurationSupport} call {@code shutdownNow()} and interrupt whatever is
+     * running. The scheduler this replaces never did: cron and fixed-rate bodies ran on virtual
+     * threads that its {@code close()} does not touch. The difference is not academic — a rollout
+     * during the 02:00 build would interrupt {@code CheckpointService} mid-table, and its per-table
+     * {@code catch} turns any {@code RuntimeException} into a recorded failure that detaches the
+     * table's snapshot key on an advancing seq, so a table would 404 for Bit BI and Parquet Export
+     * until a later rematerialize. A doomed build should die with the process, not write a
+     * conclusion on the way out. Only the boolean is fixed;
+     * {@code spring.task.scheduling.shutdown.await-termination-period} still applies if a
+     * deployment wants shutdown to wait.</p>
+     *
+     * <p><b>Daemon threads.</b> The corollary: without the interrupt, non-daemon pool threads would
+     * hold the JVM open after the context closes until the grace period ran out and SIGKILL landed.
+     * Virtual threads are always daemon, so this restores what the previous scheduler gave.</p>
      *
      * @param builder Boot's scheduler builder, pre-populated from {@code spring.task.scheduling.*}
      * @return the scheduler backing every {@code @Scheduled} method and
@@ -62,6 +81,9 @@ public class SchedulingConfiguration {
      */
     @Bean
     public ThreadPoolTaskScheduler taskScheduler(ThreadPoolTaskSchedulerBuilder builder) {
-        return builder.build();
+        ThreadPoolTaskScheduler scheduler = builder.build();
+        scheduler.setWaitForTasksToCompleteOnShutdown(true);
+        scheduler.setDaemon(true);
+        return scheduler;
     }
 }

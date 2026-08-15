@@ -485,9 +485,15 @@ pages/{feature}/            # Route pages
   task unsafe beside the others: each owns its rows or its files, the ones that could collide
   already carry their own guard (`ReentrantLock`, `AtomicBoolean`, `FOR UPDATE SKIP LOCKED` claims
   with leases), and the only genuinely new pairing — the two provisional-segment deletes — is one
-  the base deployment's two replicas could already produce. A pool also gives something the
-  hand-off scheduler did not: `ScheduledThreadPoolExecutor` never runs two executions of the same
-  periodic task at once, so a slow fixed-rate tick can no longer overlap itself. Virtual threads stay
+  the base deployment's two replicas could already produce. A pool also stops a periodic task
+  overlapping itself — and changes what a rollout does to a running one, so two shutdown settings are
+  fixed in code rather than left to Boot's defaults: the threads are **daemon** and are **not
+  interrupted** on context close, which is what they were as virtual threads. `shutdownNow()` would
+  not merely stop the 02:00 build — `CheckpointService` catches the interrupt per table and detaches
+  that table's snapshot key, so a deployment at the wrong minute would leave a 404 behind until the
+  nightly rematerialize; a doomed build should die with the process instead
+  (`spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants to
+  wait). Virtual threads stay
   on for the web layer; they never reached `@Async`, whose sites all name an `Executor` bean that
   made Boot's virtual-thread `applicationTaskExecutor` back off. Only scheduling is pinned. No REST, gRPC, DTO, migration,
   metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md` ("One sweep interval means

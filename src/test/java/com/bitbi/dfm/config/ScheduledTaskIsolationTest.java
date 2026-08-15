@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -119,6 +120,33 @@ class ScheduledTaskIsolationTest {
                 .withUserConfiguration(SchedulingConfiguration.class, CronHogConfiguration.class)
                 .run(context -> assertNeighbourKeepsTicking(
                         context.getBean(Hog.class), context.getBean(Neighbour.class)));
+    }
+
+    /**
+     * A running task must survive the context closing under it, exactly as it did on the virtual
+     * threads this pool replaces. Interrupting it would be worse than letting it die with the
+     * process: {@code CheckpointService} catches the resulting exception per table and detaches
+     * that table's snapshot key, so an interrupted build leaves a 404 behind it.
+     */
+    @Test
+    @DisplayName("closing the context neither interrupts a running task nor waits on its thread")
+    void shouldNotInterruptARunningTaskOnShutdown() throws InterruptedException {
+        ShutdownWitness witness = new ShutdownWitness();
+
+        runner()
+                .withUserConfiguration(SchedulingConfiguration.class)
+                .withBean(ShutdownWitness.class, () -> witness)
+                .withUserConfiguration(ShutdownWitnessConfiguration.class)
+                .run(context -> witness.awaitStarted());
+
+        assertTrue(witness.awaitFinished(), "the task never finished after the context closed");
+        assertFalse(witness.wasInterrupted(),
+                "shutdown interrupted a running scheduled task. Boot's await-termination default is "
+                        + "false, which means shutdownNow(); SchedulingConfiguration overrides it because "
+                        + "an interrupted checkpoint build detaches the table it was writing");
+        assertTrue(witness.ranOnDaemonThread(),
+                "without the interrupt, a non-daemon pool thread would hold the JVM open after the "
+                        + "context closed until the pod's grace period expired");
     }
 
     private static void assertNeighbourKeepsTicking(Hog hog, Neighbour neighbour) throws InterruptedException {
@@ -236,6 +264,55 @@ class ScheduledTaskIsolationTest {
         Neighbour neighbour() {
             return new FixedDelayNeighbour();
         }
+    }
+
+    /** Records how a task fared while the context was being closed around it. */
+    static class ShutdownWitness {
+
+        /** Long enough that the context is closing while the task is still inside its sleep. */
+        private static final long WORK_MS = 1_500L;
+
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch finished = new CountDownLatch(1);
+        private volatile boolean interrupted;
+        private volatile boolean daemon;
+
+        @Scheduled(fixedDelay = TICK_MS)
+        void work() {
+            if (started.getCount() == 0) {
+                return;
+            }
+            daemon = Thread.currentThread().isDaemon();
+            started.countDown();
+            try {
+                Thread.sleep(WORK_MS);
+            } catch (InterruptedException e) {
+                interrupted = true;
+                Thread.currentThread().interrupt();
+            }
+            finished.countDown();
+        }
+
+        void awaitStarted() throws InterruptedException {
+            assertTrue(started.await(PROGRESS_WINDOW.toSeconds(), TimeUnit.SECONDS), "the task never started");
+        }
+
+        boolean awaitFinished() throws InterruptedException {
+            return finished.await(PROGRESS_WINDOW.toSeconds(), TimeUnit.SECONDS);
+        }
+
+        boolean wasInterrupted() {
+            return interrupted;
+        }
+
+        boolean ranOnDaemonThread() {
+            return daemon;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableScheduling
+    static class ShutdownWitnessConfiguration {
     }
 
     @Configuration(proxyBeanMethods = false)

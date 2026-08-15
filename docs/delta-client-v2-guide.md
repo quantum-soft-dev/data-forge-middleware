@@ -786,6 +786,15 @@ consequences for an operator:
   scheduled task opens a connection; a pool as wide as Hikari's lets a burst of ticks take the
   connections request threads need.
 
+The bean also fixes two shutdown settings in code, because a pool changes what a rollout does to a
+running task: the threads are **daemon** and are **not interrupted** on context close, as they were
+when they were virtual threads. Boot's default would have called `shutdownNow()`, and an interrupted
+checkpoint build does not merely stop — `CheckpointService` catches the exception per table and
+detaches that table's snapshot key, so a 02:00 deployment would leave a table answering `404` until
+the nightly rematerialize. A doomed build should die with the process instead.
+`spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants
+shutdown to wait for the tasks.
+
 `ScheduledTaskInventoryTest` guards both numbers **as they are declared in the YAML** — every
 profile, so one that resizes the connection pool has to resize this one too — and fails when a new
 `@Scheduled` method lands without the audit behind the size being redone. An environment override is

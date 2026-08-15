@@ -7,10 +7,9 @@ import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.type.filter.AnnotationTypeFilter;
+import org.springframework.core.type.filter.AssignableTypeFilter;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
@@ -70,8 +69,9 @@ class ScheduledTaskInventoryTest {
 
     private static final String BASE_PACKAGE = "com.bitbi.dfm";
 
-    /** Where Gradle puts the production classes; keeps test fixtures out of the scan. */
-    private static final String MAIN_OUTPUT = "classes/java/main";
+    /** Where this test's own classes live; everything else on the classpath is production. */
+    private static final java.net.URL TEST_OUTPUT_ROOT =
+            ScheduledTaskInventoryTest.class.getProtectionDomain().getCodeSource().getLocation();
 
     /**
      * The task that is scheduled programmatically rather than by annotation:
@@ -258,7 +258,10 @@ class ScheduledTaskInventoryTest {
     private static Set<String> scanScheduledMethods() {
         ClassPathScanningCandidateComponentProvider scanner =
                 new ClassPathScanningCandidateComponentProvider(false);
-        scanner.addIncludeFilter(new AnnotationTypeFilter(Component.class));
+        // Everything, not only @Component: a @Scheduled method on a class registered through a
+        // @Bean method would otherwise be invisible — the same shape of hole as the grep that
+        // missed the two fully-qualified annotations on DeltaIngestionService.
+        scanner.addIncludeFilter(new AssignableTypeFilter(Object.class));
 
         Set<String> found = new TreeSet<>();
         for (BeanDefinition definition : scanner.findCandidateComponents(BASE_PACKAGE)) {
@@ -285,10 +288,17 @@ class ScheduledTaskInventoryTest {
         return found;
     }
 
-    /** Keeps this test's own scheduled fixtures, which live in the same package, out of the scan. */
+    /**
+     * Keeps this test's own scheduled fixtures, which live in the same package, out of the scan.
+     *
+     * <p>Excluding the <em>test</em> output root rather than requiring a production one: the
+     * production root is named differently by Gradle and by an IDE, and getting that name wrong
+     * empties the scan and reports it as "the scan is broken". Where this test's own classes live is
+     * something it can always ask.</p>
+     */
     private static boolean isProductionClass(Class<?> type) {
         CodeSource source = type.getProtectionDomain().getCodeSource();
         return source != null && source.getLocation() != null
-                && source.getLocation().getPath().contains(MAIN_OUTPUT);
+                && !source.getLocation().equals(TEST_OUTPUT_ROOT);
     }
 }
