@@ -125,21 +125,31 @@ public class CheckpointService {
     }
 
     /**
-     * Resolve the fold's heap budget: anything non-positive (the shipped default) means auto — a
-     * quarter of the max heap.
+     * Resolve the fold's heap budget: anything non-positive (the shipped default) means auto — half
+     * the max heap.
      *
      * <p>Derived rather than declared beside the deployment, which is where the scratch ceilings had
      * to go (#138): the process cannot see how large the directory it was handed is, but it can
-     * always see its own {@code -Xmx}. A quarter, not a half, because two checkpoint builds can be
-     * in flight in one JVM — the nightly sweep and a forced rebuild on {@code deltaRebuildExecutor}
-     * are not mutually excluded, the same {@code 2 x} that makes the scratch budget what it is
-     * (#131) — and the pod is still serving ingest while they fold.</p>
+     * always see its own {@code -Xmx}.</p>
+     *
+     * <p><b>Half rather than a quarter</b>, and the difference is what this ceiling is <em>for</em>
+     * (raised in review). A quarter is the capacity-planning number — it leaves room for the second
+     * concurrent build path, the same {@code 2 x} behind the scratch budget (#131), plus the ingest
+     * the pod serves while it folds. But this guard is not a capacity plan; it is the last line
+     * before an {@code OOMKill}, and a build refused here is refused <b>permanently</b>, taking
+     * retention with it. Set at the capacity-planning value it would refuse folds that genuinely
+     * fit: before this ticket the seed path held two to three full-site copies at once, so a site
+     * building successfully today can have a fold near half the heap — and would have been refused
+     * on the first nightly tick after the deployment that made its build cheaper. Half keeps that
+     * regression out while still firing well before the heap does, since the fold is now the only
+     * full-site copy. An operator who wants the concurrency headroom sets
+     * {@code delta.checkpoint.max-fold-bytes} explicitly.</p>
      *
      * @param configured the configured value, or {@code 0} for auto
      * @return the budget in estimated retained bytes
      */
     static long resolveMaxFoldBytes(long configured) {
-        return configured > 0 ? configured : Runtime.getRuntime().maxMemory() / 4;
+        return configured > 0 ? configured : Runtime.getRuntime().maxMemory() / 2;
     }
 
     /**
@@ -461,7 +471,7 @@ public class CheckpointService {
                 foldFrame(siteId, checkpointSeq, fold, frameReadNanos);
             }
             for (ChangelogSegment segment : newSegments) {
-                changelogSegmentService.forEachRecord(segment.getS3Key(), fold::apply);
+                foldSegment(siteId, segment, fold);
             }
         } finally {
             // Recorded even when the fold ended in an abort: a build that ran out of budget is
@@ -508,26 +518,62 @@ public class CheckpointService {
      *
      * <p>{@code readNanos} is filled in whichever way this ends — it is the caller's
      * {@code phase=download_frame} sample, and an abort mid-frame is when the split between
-     * transfer and fold is most worth having.</p>
+     * transfer and fold is most worth having. The {@code GetObject} itself is timed separately from
+     * the body, and timed <em>even when it throws</em>: during a read outage every site of the tick
+     * would otherwise contribute a zero-nanosecond sample, and the timer would read as though frame
+     * downloads had got faster exactly while they were failing.</p>
      *
-     * <p>Both {@code IOException} and {@code UncheckedIOException} are caught, and the second is
-     * the one that actually fires: every read and parse failure is wrapped by
-     * {@code ChangelogCodec.forEach} into an {@code UncheckedIOException} whose message mentions
-     * neither the site nor the key, while the checked one can only come from the close. Before
-     * streaming, {@code download} named the object in a {@code CheckpointStorageException} — so
-     * that is what this throws, rather than leaving a mid-transfer S3 failure anonymous.</p>
+     * <p>Every failure of the body is renamed. The one that actually fires is
+     * {@code UncheckedIOException}: {@code ChangelogCodec.forEach} wraps each read and parse failure
+     * into one whose message mentions neither the site nor the key, while the checked
+     * {@code IOException} can only come from the close. {@code RuntimeException} is caught with them
+     * because the AWS SDK raises {@code SdkClientException} — not an {@code IOException} — for a
+     * body that ends short of its content length. Before streaming, {@code download} named the
+     * object in a {@code CheckpointStorageException}; that is what this restores. The one exception
+     * that must keep its own type is the fold's own abort, which is re-thrown untouched.</p>
      */
     private void foldFrame(UUID siteId, long checkpointSeq, BudgetedFold fold, long[] readNanos) {
-        try (InputStream frame = checkpointStorage.openFrame(siteId, checkpointSeq)) {
+        long openedAt = System.nanoTime();
+        InputStream opened;
+        try {
+            // Outside the body's try: openFrame already names the key it could not read, and a
+            // failure here must not be re-wrapped as if the frame had been read and rejected.
+            opened = checkpointStorage.openFrame(siteId, checkpointSeq);
+        } finally {
+            readNanos[0] = System.nanoTime() - openedAt;
+        }
+        try (InputStream frame = opened) {
             TimingInputStream timed = new TimingInputStream(frame);
             try {
                 ChangelogCodec.forEach(timed, fold::apply);
             } finally {
-                readNanos[0] = timed.readNanos();
+                readNanos[0] += timed.readNanos();
             }
-        } catch (IOException | UncheckedIOException e) {
+        } catch (FoldTooLargeException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
             throw new S3CheckpointStorage.CheckpointStorageException(
                     "Failed to read the checkpoint frame of site " + siteId + " at seq " + checkpointSeq, e);
+        }
+    }
+
+    /**
+     * Stream one segment into the fold, naming it if it cannot be read.
+     *
+     * <p>The same renaming the frame gets, and for the same regression: {@code readRecords} used to
+     * surface a mid-transfer failure as a {@code SegmentStorageException} carrying the segment key,
+     * while the streaming path raises {@code UncheckedIOException("Failed to stream change
+     * records")}. {@code CheckpointScheduler} logs only {@code e.getMessage()}, so without this the
+     * failing segment is not in the logs at all.</p>
+     */
+    private void foldSegment(UUID siteId, ChangelogSegment segment, BudgetedFold fold) {
+        try {
+            changelogSegmentService.forEachRecord(segment.getS3Key(), fold::apply);
+        } catch (FoldTooLargeException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new S3CheckpointStorage.CheckpointStorageException(
+                    "Failed to read changelog segment " + segment.getS3Key() + " of site " + siteId, e);
         }
     }
 
@@ -536,7 +582,8 @@ public class CheckpointService {
      *
      * <p>The running total is kept by {@link ChangelogFold#apply}, which returns what each record
      * did to the state's size, so the budget costs one addition per record rather than a walk over
-     * the fold. It is an estimate — see
+     * the fold — the weighing itself is proportional to the width of the row that record touches,
+     * no wider than the map copy the fold does for it anyway. It is an estimate — see
      * {@link ChangelogFold#estimatedRetainedBytes(String, ChangelogFold.FoldedRow)} — and it is
      * compared against a budget expressed in the same units, so the two are wrong together or not
      * at all.</p>

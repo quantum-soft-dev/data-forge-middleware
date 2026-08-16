@@ -372,15 +372,21 @@ delta:
     # {reason=fold_too_large}) with the pointer, the per-table keys and the frame untouched, which
     # is the point: without it the pod is OOMKilled instead, taking in-flight ingest with it and
     # leaving nothing to attribute the failure to.
-    # 0 = auto: a QUARTER of the max heap, not a half, because two checkpoint builds can be in
-    # flight in one JVM (the nightly sweep and a forced rebuild on deltaRebuildExecutor, the same
-    # 2x behind the scratch budget) and the pod is still serving ingest while they fold. Unlike the
-    # scratch ceilings above, this one is derived rather than declared beside the deployment: the
-    # process cannot see how big its scratch volume is, but it can always see its own -Xmx.
+    # 0 = auto: HALF the max heap. Capacity planning would say a quarter — two checkpoint builds
+    # can be in flight in one JVM (the nightly sweep and a forced rebuild on deltaRebuildExecutor,
+    # the same 2x behind the scratch budget) and the pod is still serving ingest — but this is not
+    # a capacity plan: it is the last line before an OOMKill, and refusing a build is permanent.
+    # Before issue #152 the seed path held two to three full-site copies at once, so a site that
+    # builds successfully today can have a fold near half the heap; a quarter would have refused it
+    # on the first tick after the deployment that made its build cheaper. Set the key explicitly to
+    # a quarter if you want the concurrency headroom. Unlike the scratch ceilings above, this one is
+    # derived rather than declared beside the deployment: the process cannot see how big its scratch
+    # volume is, but it can always see its own -Xmx.
     # Counted in ESTIMATED RETAINED BYTES — a coarse object-graph estimate per row, not the wire
     # size of the records, since the fold keeps a Java object graph an order of magnitude larger
     # than its protobuf encoding. Compare it to -Xmx, not to segment sizes; a build logs its own
-    # estimate at DEBUG, and WARNs once a site passes 75% of this.
+    # PEAK estimate at DEBUG, and WARNs once a site passes 75% of this. One night at DEBUG on
+    # CheckpointService is how to size this key before lowering it.
     max-fold-bytes: ${DELTA_CHECKPOINT_MAX_FOLD_BYTES:0}
     # How many nights the tick keeps retrying a table that came out of a build with no snapshot
     # (issue #149). Since #128 such a row is retried by every scheduled build, and since #137 it

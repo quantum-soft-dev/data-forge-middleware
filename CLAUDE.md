@@ -471,7 +471,7 @@ pages/{feature}/            # Route pages
   (tests, and nothing in production). Peak: ~4 full-site copies → 1. **What remains is the fold
   itself**, still one entry per surviving row for the length of the build, which is why the second
   half is a ceiling and not more streaming: `delta.checkpoint.max-fold-bytes`
-  (`DELTA_CHECKPOINT_MAX_FOLD_BYTES`, **0 = auto = a quarter of the max heap**) aborts the build
+  (`DELTA_CHECKPOINT_MAX_FOLD_BYTES`, **0 = auto = half the max heap**) aborts the build
   with `FoldTooLargeException`, an ERROR naming site and key, and
   `delta.checkpoint.builds.aborted{reason=fold_too_large}` — a fourth value on #153's meter,
   deliberately, because it is a **permanent** abort by that meter's contract: a site's history does
@@ -486,9 +486,15 @@ pages/{feature}/            # Route pages
   and useful; **the budget is derived, not declared beside the deployment** (the opposite of #138's
   scratch ceilings, and for a stated reason — a process cannot see how large its scratch volume is,
   but it can always see its own `-Xmx`), so no ConfigMap change and
-  `ParquetScratchCeilingBudgetTest` is untouched; and **a quarter rather than a half**, the same
-  `2 x` as the scratch budget, since the cron sweep and a forced rebuild on `deltaRebuildExecutor`
-  are not mutually excluded and the pod serves ingest while they fold. The running total costs one
+  `ParquetScratchCeilingBudgetTest` is untouched; and **half rather than the quarter capacity
+  planning asks for** — the second review round's main finding, and the correction matters: the
+  `2 x` of the scratch budget plus live ingest says a quarter, but this ceiling is not a capacity
+  plan, it is the last line before an OOMKill and its refusal is permanent (retention freezes with
+  the pointer). Since the seed path used to hold two to three full-site copies, a site building
+  successfully **today** can have a fold near half the heap — a quarter would have refused it on
+  the first tick after the deployment that made its build cheaper, which is the one regression this
+  ticket could introduce. A quarter is available explicitly for whoever wants the headroom, and
+  one night at DEBUG on `CheckpointService` sizes the key against real folds before it is lowered. The running total costs one
   addition per record, not a walk: `apply` returns what each record did to the state's size. A build
   logs its **peak** estimate at DEBUG and **WARNs at 75%** of the budget, so a site approaching the
   cliff is visible before the first abort — the peak and not the final size, raised in review: the

@@ -875,7 +875,7 @@ Two things now stand between a large site and that:
   new segments are folded as they stream rather than collected into a second list and folded in one
   call that copied the seed as well. That took the peak from roughly four full-site copies to one.
 - **The one that remains has a ceiling.** `DELTA_CHECKPOINT_MAX_FOLD_BYTES`
-  (`delta.checkpoint.max-fold-bytes`, **0 = auto = a quarter of the max heap**) bounds the fold in
+  (`delta.checkpoint.max-fold-bytes`, **0 = auto = half the max heap**) bounds the fold in
   *estimated retained bytes*, and a build that crosses it is refused —
   `delta.checkpoint.builds.aborted{reason=fold_too_large}`, an ERROR line naming the site and the
   key, and nothing written: the abort happens before the frame upload, so the pointer, the per-table
@@ -891,9 +891,20 @@ a character is charged one byte, which is what compact strings give for Latin-1 
 whose string data is Cyrillic or CJK is held as UTF-16 and under-counted by roughly its string
 payload. It is **derived rather than declared beside the deployment**, unlike the
 scratch ceilings in the note below, because a process cannot see how big its scratch volume is but can always
-see its own heap. And it is **a quarter, not a half**, for the same `2 x` reason the scratch budget
-has: the nightly sweep and a forced rebuild on `deltaRebuildExecutor` are not mutually excluded, and
-the pod is serving ingest while they fold.
+see its own heap. And it is **half, not the quarter capacity planning would ask for** — the `2 x`
+that shapes the scratch budget (the nightly sweep and a forced rebuild on `deltaRebuildExecutor` are
+not mutually excluded) plus the ingest the pod serves would put the number at a quarter, but this
+ceiling is not a capacity plan: it is the last line before an `OOMKill`, and what it does to a
+build it refuses is permanent. Before this change the seed path held two to three full-site copies
+at once, so a site that builds successfully today can have a fold near half the heap — sizing the
+guard at the planning value would have refused, on the first tick after the deployment that made
+its build cheaper, a build that fits. Set the key explicitly to a quarter if you want the
+concurrency headroom.
+
+**Size it before you trust it.** A build logs its own estimate, so one night of
+`logging.level.com.bitbi.dfm.delta.application.CheckpointService=DEBUG` tells you what every site's
+fold actually weighs on this deployment — worth doing before lowering the key from the default, and
+the only way to know whether a site is near the edge without waiting for the WARN.
 
 Like `frame_too_large`, this abort **does not repair itself** — a site's history does not shrink on
 its own, so every following tick ends the same way with retention frozen at the pointer. The fixes

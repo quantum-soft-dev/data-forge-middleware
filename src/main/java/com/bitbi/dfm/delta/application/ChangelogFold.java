@@ -68,7 +68,9 @@ public final class ChangelogFold {
      *         grew or arrived, negative for one that shrank or was deleted, zero when nothing about
      *         the state's size changed. See {@link #estimatedRetainedBytes} for what "estimated"
      *         is worth; summing these is how a build knows how big its fold has become
-     *         (issue #152) without walking it.
+     *         (issue #152) without walking it. The cost is proportional to the width of the row
+     *         this record touches — never to the size of the fold — and no wider than the map copy
+     *         the fold is doing for that record anyway.
      */
     public static long apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record) {
         Map<String, FoldedRow> table = state.computeIfAbsent(record.getTable(), k -> new LinkedHashMap<>());
@@ -78,7 +80,11 @@ public final class ChangelogFold {
                 FoldedRow row = new FoldedRow(
                         new LinkedHashMap<>(record.getKeyMap()),
                         new LinkedHashMap<>(record.getDataMap()));
-                return weightDelta(identity, table.put(identity, row), row);
+                FoldedRow replaced = table.put(identity, row);
+                // The replaced row is weighed only when there was one: on a first INSERT — every
+                // record of a seed frame — this is a single pass over the new row.
+                return estimatedRetainedBytes(identity, row)
+                        - (replaced == null ? 0L : estimatedRetainedBytes(identity, replaced));
             }
             case UPDATE -> {
                 FoldedRow existing = table.get(identity);
@@ -92,21 +98,22 @@ public final class ChangelogFold {
                 Map<String, Value> key = existing != null ? existing.key() : new LinkedHashMap<>(record.getKeyMap());
                 FoldedRow row = new FoldedRow(key, mergedData);
                 table.put(identity, row);
-                return weightDelta(identity, existing, row);
+                if (existing == null) {
+                    return estimatedRetainedBytes(identity, row);
+                }
+                // The row was already there and keeps the *same* key map object, so identity, row
+                // and key all cancel: only the data map can have changed. Weighing the whole row
+                // twice here would double the accounting's cost on the commonest record of all.
+                return mapBytes(mergedData) - mapBytes(existing.data());
             }
             case DELETE -> {
-                return weightDelta(identity, table.remove(identity), null);
+                FoldedRow removed = table.remove(identity);
+                return removed == null ? 0L : -estimatedRetainedBytes(identity, removed);
             }
             default -> {
                 return 0L;
             }
         }
-    }
-
-    /** What replacing {@code before} (may be absent) with {@code after} (may be absent) costs. */
-    private static long weightDelta(String identity, FoldedRow before, FoldedRow after) {
-        return (after == null ? 0L : estimatedRetainedBytes(identity, after))
-                - (before == null ? 0L : estimatedRetainedBytes(identity, before));
     }
 
     /**

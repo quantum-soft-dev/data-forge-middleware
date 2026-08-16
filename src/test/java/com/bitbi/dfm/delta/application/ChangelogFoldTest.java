@@ -172,6 +172,38 @@ class ChangelogFoldTest {
     }
 
     @Test
+    void applyNetsToZeroAcrossInsertUpdateAndDelete() {
+        // The UPDATE branch charges only the difference between the two data maps, because the row
+        // keeps the same key map object — a shortcut that is only safe if the total still returns to
+        // where it started when the row goes.
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+
+        long total = ChangelogFold.apply(state,
+                rec("u", Op.INSERT, key("id", 1L), data("id", 1L, "city", "NY")));
+        total += ChangelogFold.apply(state,
+                rec("u", Op.UPDATE, key("id", 1L), data("city", "San Francisco")));
+        total += ChangelogFold.apply(state,
+                rec("u", Op.UPDATE, key("id", 1L), data("city", "LA")));
+        total += ChangelogFold.apply(state, rec("u", Op.DELETE, key("id", 1L), Map.of()));
+
+        assertEquals(0, total, "the running total must come back to zero when the row is gone");
+    }
+
+    @Test
+    void applyChargesAnUpdateOfARowItHasNotSeen() {
+        // An UPDATE whose row is absent materializes a new row (key columns included), so it is an
+        // arrival and must be charged as one — the difference-only shortcut applies to the other case.
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+
+        long charged = ChangelogFold.apply(state,
+                rec("u", Op.UPDATE, key("id", 7L), data("city", "Berlin")));
+
+        assertTrue(charged > 0, "a row that was not there costs its whole weight: " + charged);
+        assertEquals(-charged, ChangelogFold.apply(state, rec("u", Op.DELETE, key("id", 7L), Map.of())),
+                "and removing it gives back exactly that");
+    }
+
+    @Test
     void applyChargesNothingForADeleteThatMatchesNoRow() {
         Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
 

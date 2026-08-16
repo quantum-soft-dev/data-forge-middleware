@@ -562,12 +562,73 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void doesNotRecordAZeroFrameDownloadWhenTheObjectCannotEvenBeOpened() {
+        // A GetObject that fails took time and must be sampled as such. Recording a zero would make
+        // delta.checkpoint.duration{phase=download_frame} read as though frame downloads had got
+        // faster during a read outage — and the outage puts every site of the tick in that bucket.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        when(checkpointStorage.openFrame(SITE, 2L)).thenThrow(
+                new S3CheckpointStorage.CheckpointStorageException("GetObject failed", null));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
+                () -> service.buildCheckpoint(SITE));
+
+        ArgumentCaptor<Long> frameNanos = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointPhase(eq("download_frame"), frameNanos.capture());
+        assertTrue(frameNanos.getValue() > 0,
+                "the failed GetObject must be sampled, not recorded as zero: " + frameNanos.getValue());
+    }
+
+    @Test
+    void namesTheFrameWhenItsBodyCannotBeRead() {
+        // Streaming moved the failure from S3CheckpointStorage.download — which named the object —
+        // to ChangelogCodec.forEach, whose UncheckedIOException names neither the site nor the seq,
+        // and CheckpointScheduler logs only the message.
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        when(checkpointStorage.openFrame(SITE, 2L)).thenAnswer(invocation -> new java.io.InputStream() {
+            @Override
+            public int read() throws IOException {
+                throw new IOException("connection reset mid-body");
+            }
+        });
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        S3CheckpointStorage.CheckpointStorageException thrown = assertThrows(
+                S3CheckpointStorage.CheckpointStorageException.class, () -> service.buildCheckpoint(SITE));
+
+        assertTrue(thrown.getMessage().contains(SITE.toString()) && thrown.getMessage().contains("seq 2"),
+                "the failure must name the frame it could not read: " + thrown.getMessage());
+    }
+
+    @Test
+    void namesTheSegmentWhenOneCannotBeRead() {
+        // Same regression on the other half of the fold: readRecords used to fail as a
+        // SegmentStorageException carrying the key, the streaming path as "Failed to stream change
+        // records" carrying nothing.
+        doThrow(new UncheckedIOException("Failed to stream change records", new IOException("reset")))
+                .when(changelogSegmentService).forEachRecord(eq("s3/segment"), any());
+
+        S3CheckpointStorage.CheckpointStorageException thrown = assertThrows(
+                S3CheckpointStorage.CheckpointStorageException.class, () -> service.buildCheckpoint(SITE));
+
+        assertTrue(thrown.getMessage().contains("s3/segment") && thrown.getMessage().contains(SITE.toString()),
+                "the failure must name the segment and the site: " + thrown.getMessage());
+    }
+
+    @Test
     void resolvesAnUnsetFoldBudgetAgainstTheHeapTheProcessWasGiven() {
         // The budget has to arrive by itself on a pod nobody tuned — unlike the scratch ceilings,
         // whose disk the process cannot see, the heap is right there. A quarter leaves room for the
         // second concurrent build path (a forced rebuild during the nightly sweep) and for
         // everything else the pod is doing while a checkpoint folds.
-        assertEquals(Runtime.getRuntime().maxMemory() / 4, CheckpointService.resolveMaxFoldBytes(0L),
+        assertEquals(Runtime.getRuntime().maxMemory() / 2, CheckpointService.resolveMaxFoldBytes(0L),
                 "an unset budget must derive from the max heap");
         assertEquals(123L, CheckpointService.resolveMaxFoldBytes(123L), "an explicit budget wins");
     }
