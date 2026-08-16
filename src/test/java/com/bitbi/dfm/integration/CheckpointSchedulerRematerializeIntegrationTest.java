@@ -73,6 +73,10 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
     @BeforeEach
     void purgeCheckpointObjects() {
         purgeCheckpointPrefix(SITE);
+        // Both methods persist (store-01, first_seq=1). @Sql is per-class, so a leftover
+        // from the sibling method — or from another class sharing the Testcontainers DB —
+        // trips uk_segment_site_first_seq. Wipe the site's segments per method.
+        jdbc.update("DELETE FROM changelog_segments WHERE site_id = ?", SITE);
     }
 
     @Test
