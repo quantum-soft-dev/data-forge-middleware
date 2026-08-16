@@ -46,7 +46,7 @@ class ParquetExportFileServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ParquetExportFileService(catalogDao, checkpointStorage);
+        service = new ParquetExportFileService(new ParquetExportCatalogQuery(catalogDao), checkpointStorage);
     }
 
     private static final UUID BATCH_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
