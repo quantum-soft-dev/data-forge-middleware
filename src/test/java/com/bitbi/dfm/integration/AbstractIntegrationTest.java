@@ -2,8 +2,10 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.config.Auth0TestConfig;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -191,5 +193,36 @@ public abstract class AbstractIntegrationTest {
      */
     protected String getS3Endpoint() {
         return containersManager.getS3Endpoint();
+    }
+
+    @Autowired
+    private JdbcTemplate sharedStateCleanupJdbc;
+
+    /**
+     * Delete every row in {@code app_settings}. The PostgreSQL database is shared across the whole
+     * suite, so any test that asserts the CONFIG fallback ({@code source=CONFIG}, empty
+     * {@code updatedAt}) must clear in {@code @BeforeEach} — otherwise those assertions pass or
+     * fail depending on what other test methods or classes persisted (issue #119).
+     */
+    protected void clearAppSettings() {
+        sharedStateCleanupJdbc.update("DELETE FROM app_settings");
+    }
+
+    /**
+     * Delete every row in {@code plugin_sql_generations}. {@code test-data.sql} never names this
+     * table: it is emptied only as a side effect of the {@code ON DELETE CASCADE} on
+     * {@code account_plugin_id} / {@code site_id} / {@code source_batch_id}, which fires just for
+     * the accounts and sites that script deletes, and only at the instant it runs. A generation
+     * written <em>after</em> that instant — by an {@code @Async} plugin dispatch or by
+     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} draining in another cached
+     * Spring context — survives into the method that follows and is counted by any assertion
+     * shaped {@code findBySiteId(...)} + {@code hasSize(n)} (issue #159, folding #163).
+     *
+     * <p>Clearing is the leftover half of the fix; the concurrent half is that assertions name the
+     * generation they produced ({@code findBySourceBatchId}) and wait for it instead of sampling
+     * the site. Same reasoning and same shape as {@link #clearAppSettings()} (issue #119).</p>
+     */
+    protected void clearPluginSqlGenerations() {
+        sharedStateCleanupJdbc.update("DELETE FROM plugin_sql_generations");
     }
 }

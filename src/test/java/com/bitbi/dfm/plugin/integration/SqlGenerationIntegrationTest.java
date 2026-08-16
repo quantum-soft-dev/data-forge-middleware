@@ -12,6 +12,7 @@ import com.bitbi.dfm.shared.domain.events.BatchCompletedEvent;
 import com.bitbi.dfm.upload.domain.FileChecksum;
 import com.bitbi.dfm.upload.domain.UploadedFile;
 import com.bitbi.dfm.upload.domain.UploadedFileRepository;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -21,8 +22,9 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
+import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,6 +82,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // test-data.sql empties plugin_sql_generations only through the cascades of the rows it
+        // deletes, and only at the instant it runs; a generation written afterwards by an async
+        // dispatch or by the delta-SQL sweep of another cached context outlives it (issue #159).
+        clearPluginSqlGenerations();
+
         // Activate Bit BI plugin for test account
         accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi",
                 Map.of("tenantId", "test-tenant"));
@@ -95,6 +102,45 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
     private void setBaselineBatch(UUID baselineBatchId) {
         accountPlugin.setBaselineBatchId(baselineBatchId);
         accountPlugin = accountPluginRepository.save(accountPlugin);
+    }
+
+    /**
+     * The generation this test produced, named by its source batch and waited for.
+     *
+     * <p>Both halves matter (issue #159). <b>Named</b>: {@code source_batch_id} is unique, so this
+     * cannot see a generation another test method, another cached Spring context's sweep worker or
+     * an in-flight {@code @Async} dispatch wrote for the same site — which is what
+     * {@code findBySiteId(...)} + {@code hasSize(1)} + {@code get(0)} counted, and why the same
+     * assertion was seen failing with "was 2". <b>Waited for</b>: a narrower query on its own would
+     * still return empty if the row is not committed yet, which is how the same line was also seen
+     * failing with "was 0"; polling turns that into a pass rather than a coin flip.</p>
+     *
+     * @param sourceBatchId the batch whose generation is expected
+     * @return the generation for that batch
+     */
+    private PluginSqlGeneration awaitGenerationFor(UUID sourceBatchId) {
+        return Awaitility.await("SQL generation for batch " + sourceBatchId)
+                .atMost(Duration.ofSeconds(15))
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> pluginSqlGenerationRepository.findBySourceBatchId(sourceBatchId),
+                        Optional::isPresent)
+                .orElseThrow();
+    }
+
+    /**
+     * Assert that a batch produced no generation, and keep asserting it for half a second so a
+     * late writer is caught rather than missed. Scoped by source batch for the same reason as
+     * {@link #awaitGenerationFor(UUID)}: whether the <em>site</em> has generations is not this
+     * test's business and is not isolated from the rest of the suite.
+     *
+     * @param sourceBatchId the batch expected to produce nothing
+     */
+    private void assertNoGenerationFor(UUID sourceBatchId) {
+        Awaitility.await("no SQL generation for batch " + sourceBatchId)
+                .during(Duration.ofMillis(500))
+                .atMost(Duration.ofSeconds(5))
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> pluginSqlGenerationRepository.findBySourceBatchId(sourceBatchId).isEmpty());
     }
 
     @Nested
@@ -117,14 +163,15 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then - Verify SQL generation record was created
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            assertThat(generations).isNotEmpty();
-
-            PluginSqlGeneration generation = generations.get(0);
-            assertThat(generation.getSourceBatchId()).isEqualTo(secondBatch.getId());
+            PluginSqlGeneration generation = awaitGenerationFor(secondBatch.getId());
+            assertThat(generation.getSiteId()).isEqualTo(TEST_SITE_ID);
             assertThat(generation.getComparisonBatchId()).isEqualTo(firstBatch.getId());
             assertThat(generation.getS3Key()).isNotBlank();
             assertThat(generation.getInsertCount()).isGreaterThan(0);
+
+            // ...and that the baseline batch produced none — the scoped form of what the old
+            // site-wide hasSize(1) was really claiming (issue #159).
+            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
@@ -143,10 +190,8 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
 
             // Then - Verify all rows become INSERT statements (fresh site has no previous batch)
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(FRESH_SITE_ID);
-            assertThat(generations).isNotEmpty();
-
-            PluginSqlGeneration generation = generations.get(0);
+            PluginSqlGeneration generation = awaitGenerationFor(batch.getId());
+            assertThat(generation.getSiteId()).isEqualTo(FRESH_SITE_ID);
             assertThat(generation.getComparisonBatchId()).isNull(); // No previous batch for this site
             assertThat(generation.getInsertCount()).isEqualTo(2); // 2 rows
             assertThat(generation.getUpdateCount()).isEqualTo(0);
@@ -166,12 +211,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             );
             eventPublisher.publishEvent(event);
 
-            // Wait for async processing
-            Thread.sleep(500);
-
-            // Then - No SQL generation records
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findAll();
-            assertThat(generations).isEmpty();
+            // Then - the dispatch produces no generation for this batch, and keeps producing none
+            // for long enough that a late async write is caught. Scoped to the batch: findAll() was
+            // asserting that the whole shared database held no generation at all, which no test
+            // owns (issue #159).
+            assertNoGenerationFor(batchId);
         }
     }
 
@@ -195,13 +239,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            assertThat(generations).hasSize(1);
-
-            PluginSqlGeneration generation = generations.get(0);
+            PluginSqlGeneration generation = awaitGenerationFor(secondBatch.getId());
             assertThat(generation.getUpdateCount()).isEqualTo(1); // Bob was modified
             assertThat(generation.getInsertCount()).isEqualTo(0);
             assertThat(generation.getDeleteCount()).isEqualTo(0);
+            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
@@ -220,13 +262,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            assertThat(generations).hasSize(1);
-
-            PluginSqlGeneration generation = generations.get(0);
+            PluginSqlGeneration generation = awaitGenerationFor(secondBatch.getId());
             assertThat(generation.getDeleteCount()).isEqualTo(1); // Item3 was deleted
             assertThat(generation.getInsertCount()).isEqualTo(0);
             assertThat(generation.getUpdateCount()).isEqualTo(0);
+            assertNoGenerationFor(firstBatch.getId());
         }
 
         @Test
@@ -245,13 +285,43 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(secondBatch.getId(), accountPlugin.getId());
 
             // Then
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            assertThat(generations).hasSize(1);
-
-            PluginSqlGeneration generation = generations.get(0);
+            PluginSqlGeneration generation = awaitGenerationFor(secondBatch.getId());
             assertThat(generation.getInsertCount()).isEqualTo(1); // 4,D added
             assertThat(generation.getUpdateCount()).isEqualTo(1); // 1,A→A-UPDATED
             assertThat(generation.getDeleteCount()).isEqualTo(1); // 3,C deleted
+            assertNoGenerationFor(firstBatch.getId());
+        }
+
+        @Test
+        @DisplayName("Should read its own generation past a leftover one, and clear leftovers between methods")
+        void shouldIsolateItsOwnGenerationFromLeftovers() {
+            // Given - a first delta on the site, standing in for the generation another test
+            // method, an async dispatch or another context's sweep worker leaves behind
+            Batch baselineBatch = createBatchWithCsvFile(null, "stock.csv", "id,qty\n1,1\n2,2");
+            setBaselineBatch(baselineBatch.getId());
+            Batch leftoverBatch = createBatchWithCsvFile(null, "stock.csv", "id,qty\n1,1\n2,9");
+            sqlGenerationService.generateSqlForBatch(leftoverBatch.getId(), accountPlugin.getId());
+            assertThat(awaitGenerationFor(leftoverBatch.getId()).getUpdateCount()).isEqualTo(1);
+
+            // When - this test produces its own generation while that one is still on the site
+            Batch ownBatch = createBatchWithCsvFile(null, "stock.csv", "id,qty\n1,1\n2,9\n3,3");
+            sqlGenerationService.generateSqlForBatch(ownBatch.getId(), accountPlugin.getId());
+
+            // Then - naming the source batch reads the right one; the site now carries two, which
+            // is exactly what the retired findBySiteId(...).hasSize(1).get(0) shape could not
+            // survive (issue #159)
+            PluginSqlGeneration own = awaitGenerationFor(ownBatch.getId());
+            assertThat(own.getInsertCount()).isEqualTo(1); // 3,3 added
+            assertThat(own.getUpdateCount()).isEqualTo(0);
+            assertThat(own.getComparisonBatchId()).isEqualTo(leftoverBatch.getId());
+            assertThat(pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID)).hasSize(2);
+
+            // And the @BeforeEach clear is what stops those two reaching the next method without
+            // depending on test-data.sql's cascades — which only fire for accounts and sites its
+            // LIKE '%@example.com' / '%.example.com' filters happen to match, and only at the
+            // instant the script runs
+            clearPluginSqlGenerations();
+            assertThat(pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID)).isEmpty();
         }
     }
 
@@ -274,10 +344,8 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
 
             // Then - SQL generation should succeed (table name prefixed with _)
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(FRESH_SITE_ID);
-            assertThat(generations).hasSize(1);
-
-            PluginSqlGeneration generation = generations.get(0);
+            PluginSqlGeneration generation = awaitGenerationFor(batch.getId());
+            assertThat(generation.getSiteId()).isEqualTo(FRESH_SITE_ID);
             assertThat(generation.getInsertCount()).isEqualTo(2);
             assertThat(generation.getS3Key()).isNotBlank();
         }
@@ -303,10 +371,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             sqlGenerationService.generateSqlForBatch(batch.getId(), accountPlugin.getId());
 
             // Then - Verify S3 key follows expected pattern
-            List<PluginSqlGeneration> generations = pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID);
-            assertThat(generations).hasSize(1);
-
-            String s3Key = generations.get(0).getS3Key();
+            String s3Key = awaitGenerationFor(batch.getId()).getS3Key();
             // Path format: plugins/bit-bi/{accountId}/{siteName}/{datetime}.sql
             assertThat(s3Key).startsWith("plugins/bit-bi/");
             assertThat(s3Key).contains(TEST_ACCOUNT_ID.toString());

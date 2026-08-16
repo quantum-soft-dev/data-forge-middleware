@@ -453,6 +453,39 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- sql-generation-test-isolation: The two plugin SQL-generation integration classes assert on the
+  generation they produced instead of sampling every generation a site has (issue #159, folding
+  #163). `plugin_sql_generations` is never named by `test-data.sql` — it is emptied only as a side
+  effect of three `ON DELETE CASCADE`s, for the accounts and sites whose
+  `LIKE '%@example.com'` / `'%.example.com'` filters match, and only at the instant the script
+  runs — so `findBySiteId(SITE)` + `hasSize(n)` + `get(0)` counted rows no test method owns. The
+  same line was seen failing **both ways**, which is why narrowing the query alone is not the fix:
+  "was 2" when something else wrote a generation for the site during the method, "was 0" when the
+  test's own row was not visible yet. Assertions now name the source batch
+  (`findBySourceBatchId`, unique) **and** wait for it with awaitility; where `hasSize(1)` was
+  standing in for "the baseline batch produced none", that is now said directly and scoped
+  (`assertNoGenerationFor`), and the negative assertions hold for half a second rather than
+  sampling once, so a late writer fails the test instead of slipping past.
+  `BitBiDeltaSqlIntegrationTest` keeps the day-wide `findBySiteIdAndCreatedAtAfter` call the
+  `/sql-changes` ordering assertions are about, and filters it to the batches the method seeded.
+  `SqlGenerationIntegrationTest`'s `findAll()).isEmpty()` — an assertion that the whole shared
+  database held no generation at all — is scoped to its own batch. **The load-bearing change is
+  one line of `application-test.yml`**: `plugin.sql-generation.delta-sweep-ms: 3600000`, the
+  slow-sweep treatment `delta.egress.sweep-ms` and `delta.batch-parquet.sweep-ms` already had and
+  026 never gave this queue. At the shipped 60s the tick fired in **every cached Spring context**,
+  and `DeltaSqlQueueService.processNextPending()` renders inside its transaction, S3 included — so
+  a context whose test class had finished long ago could hold row locks on `changelog_segments`
+  while the next class's `@Sql("/test-data.sql")` tried to delete those rows, which is the
+  `ScriptStatementFailedException` that took `BitBiDeltaSqlIntegrationTest`'s two follow-on methods
+  down with the first. The explicit wake (`DeltaSqlSweepWorker.wake()` from `BitBiPlugin` on
+  BATCH_COMPLETED and from `PluginDeltaBaselineService` on reinit) is untouched, so the paths the
+  tests exercise still run. `clearAppSettings()` moves from `BaseIntegrationTest` to
+  `AbstractIntegrationTest` — `SqlGenerationIntegrationTest` extends the latter — and is joined
+  there by `clearPluginSqlGenerations()`, called in both classes' `@BeforeEach` and pinned in the
+  #119 shape by a leftover-then-clear test. Audit of the same assertion shape elsewhere: the eight
+  occurrences in `PluginHistoryIntegrationTest` all sit inside `@Disabled` nested classes and were
+  left alone. Test-only — no production code, REST, gRPC, DTO, migration, production
+  configuration-key, metric, S3-key or frontend change.
 - scheduler-pool: `@Scheduled` runs on a pool this application declares instead of on whatever
   Spring Boot's auto-configuration happened to pick (issue #146). `SchedulingConfiguration` builds
   the `taskScheduler` bean from Boot's own `ThreadPoolTaskSchedulerBuilder`, and

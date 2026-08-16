@@ -14,6 +14,7 @@ import com.bitbi.dfm.plugin.domain.PluginSqlGeneration;
 import com.bitbi.dfm.plugin.domain.PluginSqlGenerationRepository;
 import com.bitbi.dfm.shared.api.ApiRoutes;
 import com.google.protobuf.ByteString;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,8 +76,16 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
 
     private AccountPlugin activation;
 
+    /** Batches seeded by the running test method — the scope of every generation assertion below. */
+    private final List<UUID> seededBatchIds = new ArrayList<>();
+
     @BeforeEach
     void setUp() {
+        // test-data.sql empties plugin_sql_generations only through the cascades of the rows it
+        // deletes, and only at the instant it runs; a generation written afterwards by an async
+        // dispatch or by the delta-SQL sweep of another cached context outlives it (issue #159).
+        clearPluginSqlGenerations();
+        seededBatchIds.clear();
         jdbc.update("UPDATE sites SET client_api_version = 'V2' WHERE id = ?", SITE_ID);
         declareCustomersSchema();
 
@@ -112,6 +123,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
                         + "total_size, has_errors, started_at, created_at, completed_at) "
                         + "VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now(), now(), now())",
                 batchId, ACCOUNT_ID, SITE_ID, "delta/" + batchId + "/");
+        seededBatchIds.add(batchId);
         return batchId;
     }
 
@@ -121,9 +133,25 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         }
     }
 
+    /**
+     * The generations this test produced, in the order {@code /sql-changes} serves them.
+     *
+     * <p>The repository call is the one the endpoint makes — a day-wide window on the site, which
+     * is what the ordering assertions are about and must not change. What is added is the scope:
+     * only the batches this method seeded count, so a generation written for the same site by
+     * another test method, by an in-flight {@code @Async} dispatch or by
+     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} draining in another cached
+     * Spring context cannot be counted into a {@code hasSize(n)} here (issue #159, folding
+     * #163).</p>
+     *
+     * @return this method's generations, oldest first
+     */
     private List<PluginSqlGeneration> generationsInSqlChangesOrder() {
         return sqlGenerationRepository.findBySiteIdAndCreatedAtAfter(
-                SITE_ID, LocalDateTime.now().minusDays(1));
+                        SITE_ID, LocalDateTime.now().minusDays(1))
+                .stream()
+                .filter(generation -> seededBatchIds.contains(generation.getSourceBatchId()))
+                .toList();
     }
 
     @Test
@@ -139,7 +167,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
 
         drainQueue();
 
-        List<PluginSqlGeneration> generations = generationsInSqlChangesOrder();
+        List<PluginSqlGeneration> generations = awaitGenerations(2);
         assertThat(generations).hasSize(2);
         assertThat(generations.get(0).getFirstSeq()).isEqualTo(1L);
         assertThat(generations.get(0).getLastSeq()).isEqualTo(2L);
@@ -170,14 +198,13 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 1L, List.of(
                 rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
         drainQueue();
-        assertThat(generationsInSqlChangesOrder()).hasSize(1);
+        assertThat(awaitGenerations(1)).hasSize(1);
 
         pluginHistoryService.reinit("bit-bi", ACCOUNT_ID);
 
         // old generations gone, segments re-enqueued (no checkpoints → baseline 0 → regenerate)
         drainQueue();
-        awaitGenerations(1);
-        List<PluginSqlGeneration> regenerated = generationsInSqlChangesOrder();
+        List<PluginSqlGeneration> regenerated = awaitGenerations(1);
         assertThat(regenerated).hasSize(1);
         assertThat(regenerated.get(0).getFirstSeq()).isEqualTo(1L);
     }
@@ -189,7 +216,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
                 rec("customers", Op.INSERT, 1L, key(1L), data("name", str("Ann")))));
         drainQueue();
 
-        assertThat(generationsInSqlChangesOrder()).isEmpty();
+        assertNoGenerationsAppear();
         assertThat(baselineRepository.baselineSeqsBySiteId(SITE_ID))
                 .containsEntry("customers", Long.MAX_VALUE);
 
@@ -197,7 +224,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         changelogSegmentService.persist(SITE_ID, seedBatch(), "DELTA", 2L, List.of(
                 rec("customers", Op.UPDATE, 2L, key(1L), data("name", str("Bob")))));
         drainQueue();
-        assertThat(generationsInSqlChangesOrder()).isEmpty();
+        assertNoGenerationsAppear();
 
         // queue fully drained — nothing left pending
         Integer pending = jdbc.queryForObject(
@@ -207,22 +234,34 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
     }
 
     /**
-     * Reinit wakes the async sweep worker; alongside the manual drain both may race (SKIP LOCKED
-     * keeps that safe). Poll briefly until the expected generation count is visible.
+     * Wait until this method's generations are all visible, then return them.
+     *
+     * <p>The manual {@link #drainQueue()} is not the only writer: a reinit wakes the async sweep
+     * pool, and the pool of another cached Spring context can claim the same segments (SKIP LOCKED
+     * keeps that safe but not synchronous). Sampling right after the drain is therefore a coin
+     * flip — the "Expected size: 1 but was: 0" half of issue #159. Every count assertion in this
+     * class goes through here.</p>
+     *
+     * @param expected number of generations this method should end up with
+     * @return the generations, oldest first
      */
-    private void awaitGenerations(int expected) {
-        long deadline = System.currentTimeMillis() + 15_000;
-        while (System.currentTimeMillis() < deadline) {
-            if (generationsInSqlChangesOrder().size() >= expected) {
-                return;
-            }
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
+    private List<PluginSqlGeneration> awaitGenerations(int expected) {
+        return Awaitility.await(expected + " delta SQL generation(s) for site " + SITE_ID)
+                .atMost(Duration.ofSeconds(15))
+                .pollInterval(Duration.ofMillis(200))
+                .until(this::generationsInSqlChangesOrder, found -> found.size() >= expected);
+    }
+
+    /**
+     * Assert this method produced no generation, and keep asserting it long enough that a late
+     * writer fails the test instead of slipping past a single sample.
+     */
+    private void assertNoGenerationsAppear() {
+        Awaitility.await("no delta SQL generation for site " + SITE_ID)
+                .during(Duration.ofMillis(500))
+                .atMost(Duration.ofSeconds(5))
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> generationsInSqlChangesOrder().isEmpty());
     }
 
     // --- proto helpers ---
