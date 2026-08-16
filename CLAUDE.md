@@ -483,7 +483,10 @@ pages/{feature}/            # Route pages
   the build that notices, through the epoch guard like every other write — **after** that build has
   written its own tables and **never all of them** (both raised in review): an empty fold would take
   every row, and `CheckpointFileQueryService` reads "no checkpoint rows" as "not a Delta site yet"
-  and would serve pre-Delta uploaded CSVs as the current baseline. The object it named joins the
+  and would serve pre-Delta uploaded CSVs as the current baseline. Sparing them re-opened the hole
+  one round later (the per-table settle lives inside the snapshot loop, which an empty fold never
+  enters), so a site whose whole fold is empty is now **settled site-wide** — one attempt per
+  retryable row, a re-arm on a forced rebuild — and drains like every other unfixable state. The object it named joins the
   superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118, sweeper is #160). The third unfixable state, found in round 2 of #148's review, is a site whose frame is
   unreadable with **no segments behind it**: `historyPruned` is unconditionally true there, so it
   raised "refusing lossy refold" every night — wrong in kind, since with no frame and no changelog
@@ -509,7 +512,11 @@ pages/{feature}/            # Route pages
   the build ends with last-good keys, pointer and attempt counters untouched, and
   `CheckpointScheduler` stops walking sites for the same reason. Deliberately **not** on
   `delta.checkpoint.builds.aborted`: that meter's contract is aborts that never repair themselves,
-  and this one is repaired by the process that replaces it. It makes #146's "do not interrupt the
+  and this one is repaired by the process that replaces it — **except on the forced path**, raised
+  in review: a scheduled tick is found again by the nightly work list, while
+  `POST .../delta/checkpoints/rebuild` has only its durable `rebuild_requested` flag, so
+  `DeltaCheckpointRebuildService` now leaves that flag set (and does not log "completed") when the
+  build ended on the shutdown, and `resumePendingRebuilds()` re-drives it after the restart. It makes #146's "do not interrupt the
   pool" belt-and-braces rather than the single load-bearing setting. **Fourth**, the "is there
   anything to rematerialize?" probe moved *before* the frame download and the fold (raised in #148's
   review, deferred here), so an idle visit costs one query against `checkpoints` instead of a

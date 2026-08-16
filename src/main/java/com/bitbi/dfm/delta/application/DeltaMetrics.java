@@ -24,8 +24,11 @@ import java.util.function.Supplier;
  *       {@code phase=total} is the cycle, {@code download_frame|fold|parquet|upload} are
  *       the inner steps (042)</li>
  *   <li>{@code delta.checkpoint.builds.aborted} — checkpoint builds abandoned whole, tagged
- *       {@code reason=frame_too_large|lossy_refold}; the pointer does not move, so retention
- *       freezes with it, and neither cause repairs itself</li>
+ *       {@code reason=frame_too_large|lossy_refold|history_gone}; the pointer does not move, so
+ *       retention freezes with it, and no cause repairs itself unaided. <b>Alert on the meter, not
+ *       on one tag</b> — that promise is the reason every permanent abort is registered here</li>
+ *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
+ *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus

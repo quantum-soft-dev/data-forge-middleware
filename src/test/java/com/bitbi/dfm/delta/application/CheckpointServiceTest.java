@@ -922,11 +922,11 @@ class CheckpointServiceTest {
 
     @Test
     void neverReapsEveryCheckpointRowOfASite() {
-        // Review of PR #169. If every table were emptied at the source the fold would be empty and
-        // the reap would delete the site's whole `checkpoints` set — and "this site has no
-        // checkpoint rows" is load-bearing elsewhere: CheckpointFileQueryService reads it as "not a
-        // Delta site yet" and answers a Bit BI client with the pre-Delta uploaded CSVs, as its own
-        // comment says it must never do.
+        // Review of PR #169, round 1. If every table were emptied at the source the fold would be
+        // empty and the reap would delete the site's whole `checkpoints` set — and "this site has
+        // no checkpoint rows" is load-bearing elsewhere: CheckpointFileQueryService reads it as
+        // "not a Delta site yet" and answers a Bit BI client with the pre-Delta uploaded CSVs, as
+        // its own comment says it must never do.
         Checkpoint customers = Checkpoint.create(SITE, "customers", 2L, 0L);
         Checkpoint orders = Checkpoint.create(SITE, "orders", 2L, 0L);
         parkAtPointer(2L, frameOf(), customers, orders);
@@ -935,6 +935,41 @@ class CheckpointServiceTest {
         service.buildCheckpoint(SITE);
 
         verify(checkpointRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void settlesASiteWhoseWholeFoldIsEmptyInsteadOfVisitingItForever() {
+        // Review of PR #169, round 2 — the hole the fix above opened. Sparing the rows is right,
+        // but the per-table settle lives inside the snapshot loop and an empty fold never enters
+        // it, so the site would be named, folded and abandoned every night without ever spending
+        // an attempt: the unbounded retry this ticket removes, minus even the visibility.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 0L);
+        parkAtPointer(2L, frameOf(), owing);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        for (int attempt = 1; attempt <= MAX_MATERIALIZE_ATTEMPTS; attempt++) {
+            service.buildCheckpoint(SITE);
+            assertEquals(attempt, owing.materializeAttempts());
+        }
+
+        assertTrue(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS),
+                "an empty fold must drain the same way every other unfixable state does");
+        verify(checkpointRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void aForcedRebuildRearmsASiteWhoseWholeFoldIsEmpty() {
+        Checkpoint givenUp = Checkpoint.create(SITE, "customers", 2L, 0L);
+        for (int i = 0; i < MAX_MATERIALIZE_ATTEMPTS; i++) {
+            givenUp.recordFailedMaterialization();
+        }
+        parkAtPointer(2L, frameOf(), givenUp);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        service.rebuildFromFrame(SITE);
+
+        assertEquals(0, givenUp.materializeAttempts(),
+                "the documented recovery re-arms on this path too");
     }
 
     @Test

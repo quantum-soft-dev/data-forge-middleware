@@ -251,14 +251,7 @@ public class CheckpointService {
         }
         if (segments.isEmpty()) {
             metrics.checkpointBuildAborted("history_gone");
-            // A forced rebuild re-arms the rows here as it does per table, and must not be the one
-            // thing that pushes them towards giving up: it is the operator saying the cause has
-            // been dealt with, and it is the documented recovery from this very state.
-            if (pass == SnapshotPass.FORCE) {
-                rearmEveryUnmaterializedTable(siteId, epoch);
-            } else {
-                spendAnAttemptOnEveryRetryableTable(siteId, epoch);
-            }
+            settleSiteWide(siteId, epoch, pass);
             log.error("Checkpoint frame@{} for site {} is unreadable and the changelog is empty — "
                     + "there is no history left to rebuild this site's checkpoints from. Recovery "
                     + "is a re-baseline or a history wipe; a forced rebuild re-arms the retry but "
@@ -632,7 +625,34 @@ public class CheckpointService {
         // its pre-Delta fallback on the site having no checkpoint rows at all, and would hand a
         // Bit BI client historical uploaded CSVs as if they were its current baseline.
         stopIfShuttingDown(siteId);
+        if (state.isEmpty()) {
+            // Every row would be reaped, and the reap must never empty a site (see below) — so
+            // without this the site would be folded every night forever and never spend an
+            // attempt, because the per-table settle lives inside the loop above and an empty fold
+            // never enters it. That is the unbounded retry this ticket removes, minus even the
+            // visibility. Settle it site-wide instead, exactly as a history_gone abort does: the
+            // rows drain to the cap, the site stops naming itself, and
+            // delta.checkpoint.tables.given-up carries it from then on.
+            settleSiteWide(siteId, epoch, pass);
+            return;
+        }
         reapTablesAbsentFromTheFold(siteId, state, epoch);
+    }
+
+    /**
+     * Charge (or re-arm) every unmaterialized row of a site for an outcome that belongs to the
+     * whole build rather than to any one table.
+     *
+     * <p>A forced rebuild re-arms where a scheduled one spends: it is the operator asserting the
+     * cause has been dealt with, and it is the documented recovery from both states that reach
+     * here, so it must not be the fastest way to exhaust the retry it is meant to restore.</p>
+     */
+    private void settleSiteWide(UUID siteId, SiteEpoch epoch, SnapshotPass pass) {
+        if (pass == SnapshotPass.FORCE) {
+            rearmEveryUnmaterializedTable(siteId, epoch);
+        } else {
+            spendAnAttemptOnEveryRetryableTable(siteId, epoch);
+        }
     }
 
     /**
@@ -669,18 +689,16 @@ public class CheckpointService {
      * <p>Deletes run through the epoch guard like every other write of a build, so a wipe or a
      * re-baseline committing mid-build ends the build instead of deleting rows of a baseline it
      * knows nothing about.</p>
+     *
+     * <p><b>Never called with an empty fold.</b> Every row would go, and "this site has no
+     * checkpoint rows" is a load-bearing state elsewhere: {@code CheckpointFileQueryService} reads
+     * it as "not a Delta site yet" and falls back to the pre-Delta uploaded CSVs, which is exactly
+     * what it must not hand a Bit BI client as a current baseline. A site whose every table was
+     * emptied is settled site-wide by the caller instead — see {@link #settleSiteWide}.</p>
      */
     private void reapTablesAbsentFromTheFold(UUID siteId,
                                              Map<String, Map<String, FoldedRow>> state,
                                              SiteEpoch epoch) {
-        if (state.isEmpty()) {
-            // Every row would go, and "this site has no checkpoint rows" is a load-bearing state
-            // elsewhere: CheckpointFileQueryService reads it as "not a Delta site yet" and falls
-            // back to the pre-Delta uploaded CSVs. A site whose every table was emptied is not the
-            // state this reap exists for — that one loses tables while others survive — so leave
-            // the rows and let the attempt cap retire the unmaterialized ones instead.
-            return;
-        }
         for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
             if (state.containsKey(checkpoint.getTableName())) {
                 continue;

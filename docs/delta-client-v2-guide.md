@@ -750,7 +750,9 @@ answers pull in opposite directions.
   as a current baseline. And it runs **inside a build that has work**, so a dropped table whose row
   kept a live key survives on a completely idle site until the next build with anything to do, or a
   forced rebuild; making the reap its own reason to fold a site nightly would put back the cost this
-  ticket removed, for a stale listing entry rather than a missing artifact.
+  ticket removed, for a stale listing entry rather than a missing artifact. A site whose fold is
+  empty is instead **settled site-wide** — one attempt per still-retryable row, or a re-arm on a
+  forced rebuild — so sparing its rows does not hand it back the unbounded nightly visit.
 - **A frame that is gone with no segments behind it is not a lossy refold.** That state used to raise
   the "refusing lossy refold" alarm every night, which is wrong in kind — with no frame *and* no
   changelog there is no history to refold, lossily or otherwise — and had no exit but manual SQL. It
@@ -782,6 +784,12 @@ answers pull in opposite directions.
   pointer and the attempt counters untouched, and `CheckpointScheduler` stops walking sites for the
   same reason. It is deliberately **not** on `delta.checkpoint.builds.aborted` — that meter is for
   aborts that never repair themselves, and this one is repaired by the process that replaces it.
+  **The forced path is the exception to that last clause**: a scheduled tick is found again by the
+  nightly work list, but `POST .../delta/checkpoints/rebuild` has only its durable
+  `rebuild_requested` flag, so a rebuild cut short by a rollout leaves the flag set (and does not
+  log "completed") and `resumePendingRebuilds()` re-drives it on the next start. Without that, an
+  operator's click during a deployment would disappear silently — on the very action that is the
+  documented recovery from a row that has given up.
 - **An idle visit is cheap.** The "is there anything to rematerialize here?" probe now runs *before*
   the frame download and the fold, so a site named by the tick that turns out to have no retryable
   row costs one query against `checkpoints`. #137's invariant is unchanged: a site with every table
