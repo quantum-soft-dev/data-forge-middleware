@@ -113,10 +113,9 @@ class SqlGenerationServiceTest {
                 csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, meterRegistry);
 
         service = new SqlGenerationService(
-                batchRepository,
-                siteRepository,
                 accountPluginRepository,
-                sqlGenerationRepository,
+                new SqlGenerationPersistence(batchRepository, siteRepository,
+                        sqlGenerationRepository, changelogSegmentRepository),
                 s3SqlFileStorageService,
                 meterRegistry,
                 pluginAuditService,
@@ -124,7 +123,6 @@ class SqlGenerationServiceTest {
                 cdcStrategy,
                 siteSchemaService,
                 deltaStrategy,
-                changelogSegmentRepository,
                 pluginDeltaBaselineRepository,
                 2,
                 120,
@@ -243,10 +241,9 @@ class SqlGenerationServiceTest {
             DbfSqlGenerationStrategy realDbfStrategy = new DbfSqlGenerationStrategy(
                     csvDiffService, sqlStatementGenerator, s3Client, BUCKET_NAME, realRegistry);
             SqlGenerationService serviceWithRealMetrics = new SqlGenerationService(
-                    batchRepository,
-                    siteRepository,
                     accountPluginRepository,
-                    sqlGenerationRepository,
+                    new SqlGenerationPersistence(batchRepository, siteRepository,
+                            sqlGenerationRepository, changelogSegmentRepository),
                     s3SqlFileStorageService,
                     realRegistry,
                     pluginAuditService,
@@ -254,7 +251,6 @@ class SqlGenerationServiceTest {
                     cdcStrategy,
                     siteSchemaService,
                     deltaStrategy,
-                    changelogSegmentRepository,
                     pluginDeltaBaselineRepository,
                     2,
                     120,
@@ -366,10 +362,9 @@ class SqlGenerationServiceTest {
         @BeforeEach
         void setUpDelta() {
             deltaService = new SqlGenerationService(
-                    batchRepository,
-                    siteRepository,
                     accountPluginRepository,
-                    sqlGenerationRepository,
+                    new SqlGenerationPersistence(batchRepository, siteRepository,
+                            sqlGenerationRepository, changelogSegmentRepository),
                     s3SqlFileStorageService,
                     new SimpleMeterRegistry(),
                     pluginAuditService,
@@ -377,7 +372,6 @@ class SqlGenerationServiceTest {
                     cdcStrategy,
                     siteSchemaService,
                     deltaStrategy,
-                    changelogSegmentRepository,
                     pluginDeltaBaselineRepository,
                     2,
                     120,
