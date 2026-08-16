@@ -490,8 +490,24 @@ pages/{feature}/            # Route pages
   `2 x` as the scratch budget, since the cron sweep and a forced rebuild on `deltaRebuildExecutor`
   are not mutually excluded and the pod serves ingest while they fold. The running total costs one
   addition per record, not a walk: `apply` returns what each record did to the state's size. A build
-  logs its estimate at DEBUG and **WARNs at 75%** of the budget, so a site approaching the cliff is
-  visible before the first abort. **Off-heap or spillable folding is deliberately not attempted** —
+  logs its **peak** estimate at DEBUG and **WARNs at 75%** of the budget, so a site approaching the
+  cliff is visible before the first abort — the peak and not the final size, raised in review: the
+  ceiling is enforced on the running total, so a fold that rises and falls back (a night's inserts
+  followed by the deletes retiring them) would otherwise stay silent until the tick whose peak
+  crosses. Three more review findings, all in the same
+  region: an abort mid-frame recorded `download_frame=0` and charged the transfer to `fold` (the
+  counter is now written by `foldFrame` whichever way it ends); `foldFrame`'s `IOException` catch
+  was unreachable for the failure it named, since `ChangelogCodec.forEach` wraps every read and
+  parse failure into an `UncheckedIOException` mentioning neither site nor key — both are caught now
+  and re-thrown as the `CheckpointStorageException` the removed `download` used to produce; and
+  `ChangelogSegmentService.forEachRecord`'s `finally` **replaced** an in-flight exception when
+  closing a partially consumed S3 stream failed, which is exactly what an aborted fold produces —
+  the abort would have reached `CheckpointService` as an `UncheckedIOException`, missing its counter
+  and its ERROR line, so the close failure is now suppressed onto the primary. `VALUE_BYTES` also
+  went 24 → 40 (a generated protobuf message carries `memoizedSize`, an `unknownFields` reference
+  and the oneof case), and the estimate's one blind spot is documented rather than papered over: a
+  character is charged one byte, true for compact Latin-1 strings, so a site whose string data is
+  Cyrillic or CJK is under-counted by roughly its string payload and wants a lower key. **Off-heap or spillable folding is deliberately not attempted** —
   the ticket's middle option, and the one that would have made this a rewrite; this is its stated
   interim, and the guide says so where the "later ticket" has been named since #112. Two meter
   notes: `phase=download_frame` keeps its meaning through `TimingInputStream` (the transfer now

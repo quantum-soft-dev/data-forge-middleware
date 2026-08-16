@@ -886,7 +886,10 @@ Three things to know before tuning it. The unit is an **estimate** — a coarse 
 figure (map entries, column-name strings, the values, the row's identity string), not the records'
 wire size, because the fold retains a Java object graph an order of magnitude larger than its
 protobuf encoding; it is within a small factor of the truth, which is what a budget expressed as a
-fraction of `-Xmx` needs. It is **derived rather than declared beside the deployment**, unlike the
+fraction of `-Xmx` needs. It has one known blind spot, and it is worth a lower key where it applies:
+a character is charged one byte, which is what compact strings give for Latin-1 text, so a site
+whose string data is Cyrillic or CJK is held as UTF-16 and under-counted by roughly its string
+payload. It is **derived rather than declared beside the deployment**, unlike the
 scratch ceilings in the note below, because a process cannot see how big its scratch volume is but can always
 see its own heap. And it is **a quarter, not a half**, for the same `2 x` reason the scratch budget
 has: the nightly sweep and a forced rebuild on `deltaRebuildExecutor` are not mutually excluded, and
@@ -896,8 +899,9 @@ Like `frame_too_large`, this abort **does not repair itself** — a site's histo
 its own, so every following tick ends the same way with retention frozen at the pointer. The fixes
 are to raise the key together with the pod's heap, or to re-baseline the site so its fold starts
 from what the source still holds. A build that has not crossed the ceiling still says where it
-stands: its estimate is logged at DEBUG, and at WARN once a site passes **75%** of the budget, so
-the first word about a site approaching the cliff is not the abort. What is *not* bounded is the
+stands: its **peak** estimate — the same running total the ceiling is enforced against, not the size
+the fold happened to end at — is logged at DEBUG, and at WARN once a site passes **75%** of the
+budget, so the first word about a site approaching the cliff is not the abort. What is *not* bounded is the
 number of rows a fold may hold before the estimate is wrong — off-heap or spillable folding remains
 the open question here, and this ceiling is the honest interim: it turns an unattributable pod
 death into a named, counted refusal.

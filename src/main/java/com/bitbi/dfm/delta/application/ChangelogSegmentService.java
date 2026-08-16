@@ -223,6 +223,20 @@ public class ChangelogSegmentService {
             if (clock != null && content == null) {
                 clock.addDownload(System.nanoTime() - openedAt);
             }
+            // Close it here, and let a close failure only be *suppressed*: the reason the caller is
+            // unwinding is the fact that matters, and the finally below would have replaced it.
+            // Closing a partially consumed S3 stream is exactly the case that fails, and it is
+            // exactly what an abandoned replay produces — a checkpoint fold that ran out of its
+            // heap budget (issue #152) would otherwise reach CheckpointService as an
+            // UncheckedIOException, missing its counter and the ERROR that names the site.
+            if (content != null) {
+                try {
+                    content.close();
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
+                content = null;
+            }
             throw e;
         } finally {
             if (content != null) {

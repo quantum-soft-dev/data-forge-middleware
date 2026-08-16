@@ -17,6 +17,8 @@ import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.TableSchema;
+import com.bitbi.dfm.util.LogCapture;
+import ch.qos.logback.classic.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -485,6 +487,78 @@ class CheckpointServiceTest {
         assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
 
         verify(metrics).checkpointBuildAborted("fold_too_large");
+    }
+
+    @Test
+    void stillAttributesTheFrameTransferWhenTheFoldAbortsWhileReadingIt() {
+        // The phases are recorded in a finally so an aborted build can be read at all; recording
+        // download_frame=0 and charging the whole transfer to fold would make that reading wrong
+        // on the one build worth reading.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(
+                record("customers", 1L, 1, "Ann"), record("customers", 2L, 2, "Bob"))));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        ArgumentCaptor<Long> frameNanos = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointPhase(eq("download_frame"), frameNanos.capture());
+        assertTrue(frameNanos.getValue() > 0,
+                "the transfer that did happen must not be charged to the fold: " + frameNanos.getValue());
+    }
+
+    @Test
+    void warnsOnTheFoldsPeakRatherThanTheSizeItHappenedToEndAt() {
+        // The ceiling is enforced on the running total, so the warning has to watch the same number.
+        // A fold that rises and falls back — a night's inserts followed by the deletes that retire
+        // them — would otherwise stay silent at DEBUG until the tick whose peak crosses the budget,
+        // which is exactly the tick this warning exists to precede.
+        List<ChangeRecord> records = List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("customers", 2L, 2, "Bob"),
+                record("customers", 3L, 3, "Cara"),
+                deletion("customers", 4L, 2),
+                deletion("customers", 5L, 3));
+        // A budget the fold's peak fills past 75% and its final size does not.
+        long peak = foldedBytes(records.subList(0, 3));
+        long ending = foldedBytes(List.of(records.get(0)));
+        long budget = peak + ending;
+        assertTrue(peak * 100 >= budget * 75 && ending * 100 < budget * 75,
+                "fixture: peak " + peak + " must be over and the ending " + ending
+                        + " under 75% of " + budget);
+
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, budget);
+        ChangelogSegment segment = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 1L, 5L, 5L, "hash", "s3/segment", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
+        stubSegmentRecords("s3/segment", records);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        List<String> warnings;
+        try (LogCapture log = LogCapture.attachTo(CheckpointService.class)) {
+            Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+            assertEquals(1, state.get("customers").size(), "the deletes did shrink the fold back");
+            warnings = log.messagesContaining(Level.WARN, "delta.checkpoint.max-fold-bytes");
+        }
+
+        assertEquals(1, warnings.size(),
+                "a fold that peaked over the threshold must say so, whatever it shrank back to: "
+                        + warnings);
+    }
+
+    /** What those records fold to, measured the same way the budget measures it. */
+    private static long foldedBytes(List<ChangeRecord> records) {
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = new java.util.LinkedHashMap<>();
+        long bytes = 0;
+        for (ChangeRecord record : records) {
+            bytes += ChangelogFold.apply(state, record);
+        }
+        return bytes;
     }
 
     @Test

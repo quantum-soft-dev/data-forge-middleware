@@ -452,10 +452,13 @@ public class CheckpointService {
                                                          List<ChangelogSegment> newSegments) {
         BudgetedFold fold = new BudgetedFold(siteId, maxFoldBytes);
         long startedAt = System.nanoTime();
-        long frameReadNanos = 0L;
+        // Written by foldFrame even when it throws — an abort halfway through the frame would
+        // otherwise report download_frame=0 and charge the whole transfer to fold, on exactly the
+        // build whose phases are worth looking at.
+        long[] frameReadNanos = {0L};
         try {
             if (haveFrame) {
-                frameReadNanos = foldFrame(siteId, checkpointSeq, fold);
+                foldFrame(siteId, checkpointSeq, fold, frameReadNanos);
             }
             for (ChangelogSegment segment : newSegments) {
                 changelogSegmentService.forEachRecord(segment.getS3Key(), fold::apply);
@@ -464,9 +467,9 @@ public class CheckpointService {
             // Recorded even when the fold ended in an abort: a build that ran out of budget is
             // exactly the one whose phases an operator wants to see.
             if (haveFrame) {
-                metrics.recordCheckpointPhase("download_frame", frameReadNanos);
+                metrics.recordCheckpointPhase("download_frame", frameReadNanos[0]);
             }
-            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos);
+            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos[0]);
         }
         reportFoldSize(siteId, fold);
         return fold.state();
@@ -478,9 +481,14 @@ public class CheckpointService {
      * <p>Without this the first word an operator gets is the abort itself, and the fold is the one
      * term of the checkpoint budget that nothing else makes visible: the scratch ceilings show up as
      * files on a volume, while the fold exists only while the build runs.</p>
+     *
+     * <p>Against the <b>peak</b>, not the size the fold happened to end at — the ceiling is enforced
+     * on the running total, so a site whose fold rises and then falls back (a night's segments
+     * inserting before they bulk-delete) would otherwise stay quiet at DEBUG right up to the tick
+     * whose peak crosses the budget, which is precisely the warning this exists to give.</p>
      */
     private void reportFoldSize(UUID siteId, BudgetedFold fold) {
-        long bytes = fold.estimatedBytes();
+        long bytes = fold.peakEstimatedBytes();
         if (bytes * 100 >= maxFoldBytes * FOLD_BUDGET_WARN_PERCENT) {
             log.warn("The checkpoint fold for site {} holds an estimated {} bytes of heap, {}% of "
                     + "delta.checkpoint.max-fold-bytes ({}). The build is refused outright once it "
@@ -498,15 +506,27 @@ public class CheckpointService {
     /**
      * Stream the seed frame into the fold.
      *
-     * @return nanos spent reading the object off the network, for {@code phase=download_frame}
+     * <p>{@code readNanos} is filled in whichever way this ends — it is the caller's
+     * {@code phase=download_frame} sample, and an abort mid-frame is when the split between
+     * transfer and fold is most worth having.</p>
+     *
+     * <p>Both {@code IOException} and {@code UncheckedIOException} are caught, and the second is
+     * the one that actually fires: every read and parse failure is wrapped by
+     * {@code ChangelogCodec.forEach} into an {@code UncheckedIOException} whose message mentions
+     * neither the site nor the key, while the checked one can only come from the close. Before
+     * streaming, {@code download} named the object in a {@code CheckpointStorageException} — so
+     * that is what this throws, rather than leaving a mid-transfer S3 failure anonymous.</p>
      */
-    private long foldFrame(UUID siteId, long checkpointSeq, BudgetedFold fold) {
+    private void foldFrame(UUID siteId, long checkpointSeq, BudgetedFold fold, long[] readNanos) {
         try (InputStream frame = checkpointStorage.openFrame(siteId, checkpointSeq)) {
             TimingInputStream timed = new TimingInputStream(frame);
-            ChangelogCodec.forEach(timed, fold::apply);
-            return timed.readNanos();
-        } catch (IOException e) {
-            throw new UncheckedIOException(
+            try {
+                ChangelogCodec.forEach(timed, fold::apply);
+            } finally {
+                readNanos[0] = timed.readNanos();
+            }
+        } catch (IOException | UncheckedIOException e) {
+            throw new S3CheckpointStorage.CheckpointStorageException(
                     "Failed to read the checkpoint frame of site " + siteId + " at seq " + checkpointSeq, e);
         }
     }
@@ -527,6 +547,7 @@ public class CheckpointService {
         private final UUID siteId;
         private final long maxBytes;
         private long bytes;
+        private long peakBytes;
 
         private BudgetedFold(UUID siteId, long maxBytes) {
             this.siteId = siteId;
@@ -542,6 +563,7 @@ public class CheckpointService {
          */
         private void apply(ChangeRecord record) {
             bytes += ChangelogFold.apply(state, record);
+            peakBytes = Math.max(peakBytes, bytes);
             if (bytes > maxBytes) {
                 throw new FoldTooLargeException(siteId, bytes, maxBytes);
             }
@@ -551,8 +573,9 @@ public class CheckpointService {
             return state;
         }
 
-        private long estimatedBytes() {
-            return bytes;
+        /** The largest the fold ever was — what the ceiling is enforced against, record by record. */
+        private long peakEstimatedBytes() {
+            return peakBytes;
         }
     }
 

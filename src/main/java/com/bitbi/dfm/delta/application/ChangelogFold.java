@@ -126,6 +126,12 @@ public final class ChangelogFold {
      * value carries its own payload, while an int, double, boolean or NULL lives inside the wrapper.
      * The key columns are counted twice on purpose: {@code key} and {@code data} each hold them.</p>
      *
+     * <p><b>Where it under-counts</b>, so a deployment that matches can lower its budget rather than
+     * be surprised: a character costs one byte here, which is what compact strings give for Latin-1
+     * text — string data outside it (Cyrillic, CJK) is held as UTF-16 and costs twice that. The
+     * per-table maps are not counted either, but there are tens of those against millions of rows.
+     * Everything else errs the other way: the per-object costs below are rounded up.</p>
+     *
      * @param identity the row's identity string, as used for the map key
      * @param row      the folded row
      * @return estimated retained bytes
@@ -143,8 +149,11 @@ public final class ChangelogFold {
     /** A {@link String} header plus its (compact, one byte per Latin-1 character) array header. */
     private static final long STRING_BYTES = 48L;
 
-    /** A protobuf {@code Value}: object header, the oneof case, and one inline field or reference. */
-    private static final long VALUE_BYTES = 24L;
+    /**
+     * A protobuf {@code Value}: object header, the generated message's {@code memoizedSize} and
+     * {@code unknownFields} reference, the oneof case, and the oneof's own field or reference.
+     */
+    private static final long VALUE_BYTES = 40L;
 
     /** The header of the {@code byte[]} behind a bytes value. */
     private static final long ARRAY_BYTES = 16L;
