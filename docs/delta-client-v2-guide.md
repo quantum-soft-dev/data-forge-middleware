@@ -822,7 +822,13 @@ does not come back when the permission does.
   rather than hopeful: site wipe walks `egress/{siteId}/` and `checkpoints/{siteId}/` (#118, #122)
   and the nightly batch retention lists the batch prefix (#100). A deployment that lacks it cannot
   run those paths at all — and could not distinguish absence from denial by any means, because
-  hiding one behind the other is precisely what the missing permission does.
+  hiding one behind the other is precisely what the missing permission does. **That premise is
+  checked at startup**, not assumed: one `ListObjectsV2` against the bucket on
+  `ApplicationReadyEvent` logs `S3 list permission confirmed`, or an **ERROR** naming the grant to
+  add. It does not fail the context — a briefly unreachable S3 must not stop a pod from serving,
+  and the permission can equally be fixed while it runs. Without that line the failure would be
+  quiet: every absent object would answer `UNKNOWN`, the sites owning them would be skipped, and
+  `delta.s3.read-denied` would climb by one per missing key instead of marking an incident.
 - Only when the listing is denied too is the answer `UNKNOWN`, and that is a real read outage rather
   than a guess about one. It increments **`delta.s3.read-denied`** and logs a WARN naming the key.
 - The checkpoint build **skips a site whose frame presence is unknown**: nothing is folded,
@@ -831,9 +837,13 @@ does not come back when the permission does.
   this one repairs itself the moment the permission is restored. The skip is **thrown**
   (`CheckpointService.FramePresenceUnknownException`) rather than returned as an empty fold, for the
   reason #162 made the shutdown case distinguishable: `CheckpointScheduler` logs it and moves to the
-  next site, while a **forced rebuild** keeps its durable `rebuild_requested` flag instead of
-  reporting a rebuild that never ran — the UI keeps saying "Rebuild queued", which is true, and the
-  next start re-drives it.
+  next site, while a **forced rebuild** logs an ERROR saying it did not run instead of reporting a
+  rebuild that never happened. Its durable `rebuild_requested` flag is still **released**, unlike
+  the shutdown case: a shutdown implies the restart that re-drives the flag, a bucket-policy
+  incident does not, the nightly tick runs `buildCheckpoint` rather than `rebuildFromFrame`, and
+  `POST .../delta/checkpoints/rebuild` answers "already queued" while the flag is set — so holding
+  it would leave the operator unable to ask again once the permission returned. Click Rebuild again
+  after the fix.
 - Parquet Export's file listing drops a delta row only on a **known** absence, so a denial no longer
   hides a download that is there (`GET /api/v1/plugins/parquet-export/files?type=delta`).
 

@@ -194,6 +194,36 @@ class S3CheckpointStoragePresenceTest {
     }
 
     @Test
+    @DisplayName("the startup check confirms the list permission the probe depends on")
+    void shouldConfirmTheListPermissionAtStartup() {
+        probeLists();
+
+        assertEquals(S3CheckpointStorage.ListPermission.GRANTED, storage().verifyListPermission());
+    }
+
+    @Test
+    @DisplayName("the startup check reports a denied list permission — the premise, checked")
+    void shouldReportADeniedListPermissionAtStartup() {
+        // Without s3:ListBucket the probe cannot decide anything: S3 hides existence behind the
+        // same 403 for HEAD and for GET alike, so every absent object would answer UNKNOWN. That
+        // deployment cannot run site wipe or batch retention either, and the operator should learn
+        // it at startup rather than from a counter that never stops climbing.
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class))).thenThrow(s3Exception(403));
+
+        assertEquals(S3CheckpointStorage.ListPermission.DENIED, storage().verifyListPermission());
+        assertEquals(0.0, readDenied(), "a startup check is not an object whose presence we wanted");
+    }
+
+    @Test
+    @DisplayName("the startup check concludes nothing when S3 is merely unreachable")
+    void shouldNotClaimADenialWhenS3IsUnreachable() {
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class)))
+                .thenThrow(SdkClientException.create("connection refused"));
+
+        assertEquals(S3CheckpointStorage.ListPermission.UNDETERMINED, storage().verifyListPermission());
+    }
+
+    @Test
     @DisplayName("the counter is registered at zero before the first denial")
     void shouldRegisterTheCounterAtStartup() {
         storage();

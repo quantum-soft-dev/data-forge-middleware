@@ -486,10 +486,18 @@ pages/{feature}/            # Route pages
   correction and the same reasoning #162 used for the shutdown case: `DeltaCheckpointRebuildService`
   cannot tell an empty fold from a finished build, so a forced rebuild would have logged "completed"
   and spent the durable `rebuild_requested` flag on a build that never ran — on the very action the
-  `history_gone` message names as the recovery. It now keeps the flag and re-drives at the next
-  start; `CheckpointScheduler` logs the skip apart from a build failure, since during an outage it
-  fires for every site and "build/retention failed" would send an operator to the sites rather than
-  to the bucket policy. New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
+  `history_gone` message names as the recovery. **Round 2 then corrected the other half**: it logs
+  an ERROR rather than "completed", but it still **releases** the flag, because the shutdown
+  analogy does not carry — a shutdown implies the restart that re-drives it, an incident does not,
+  the nightly tick calls `buildCheckpoint` and never `rebuildFromFrame`, and `requestRebuild`
+  short-circuits while the flag is set, so holding it would leave the operator unable to ask again
+  once the permission returned. `CheckpointScheduler` logs the skip apart from a build failure,
+  since during an outage it fires for every site and "build/retention failed" would send an operator
+  to the sites rather than to the bucket policy. **The `s3:ListBucket` premise is checked, not
+  assumed** (also round 2): one `ListObjectsV2` on `ApplicationReadyEvent` logs it confirmed or
+  raises an ERROR naming the grant to add, without failing the context — otherwise a deployment
+  lacking it would degrade quietly, every absence answering `UNKNOWN` and the new counter climbing
+  by one per missing key. New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
   over the injected `MeterRegistry`, the `CheckpointGivenUpMetrics` shape — infrastructure must not
   depend on `delta.application`, and `DeltaMetrics` documents it without owning it) counts the
   **unresolved** denial only, which is also why the ticket's suggested `delta.s3.head-denied` name

@@ -88,17 +88,21 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
-    void keepsTheFlagWhenS3WouldNotSayWhetherTheFrameIsThere() {
-        // Issue #157, raised in review. A rebuild skipped because the seed frame's presence could
-        // not be read did not run at all — reporting it as completed and spending the flag would
-        // lose the operator's click on the action the history_gone message names as the recovery.
+    void clearsTheFlagWhenS3WouldNotSayWhetherTheFrameIsThere() {
+        // Issue #157, rounds 1 and 2 of review together. The rebuild did not run, so it must not be
+        // logged as completed (round 1) — but the flag must still be released (round 2). Keeping it
+        // would strand the request: only a restart re-drives it, and requestRebuild short-circuits
+        // while it is set, so the operator could neither wait for it nor ask again once the
+        // permission came back. The shutdown sibling can keep the flag because a restart is
+        // imminent by definition; a bucket-policy incident carries no such promise. So this is
+        // settled like any other failed attempt — released, and loudly enough to re-request.
         when(syncStateService.requestRebuild(SITE)).thenReturn(true);
         when(checkpointService.rebuildFromFrame(SITE))
                 .thenThrow(new CheckpointService.FramePresenceUnknownException(SITE, 7L));
 
         assertTrue(service.requestRebuild(SITE));
 
-        verify(syncStateService, never()).clearRebuildRequested(SITE);
+        verify(syncStateService).clearRebuildRequested(SITE);
     }
 
     @Test

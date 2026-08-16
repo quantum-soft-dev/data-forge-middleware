@@ -5,6 +5,8 @@ import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,9 +59,67 @@ public class S3CheckpointStorage {
         // CheckpointGivenUpMetrics, which DeltaMetrics documents without owning.
         this.readDenied = Counter.builder("delta.s3.read-denied")
                 .description("Objects whose presence could not be determined because S3 denied "
-                        + "both the HEAD and the ranged read probe")
+                        + "both the HEAD and the one-key listing probe")
                 .tag("application", "data-forge-middleware")
                 .register(registry);
+    }
+
+    /** What a startup listing of the bucket said about {@code s3:ListBucket}. */
+    public enum ListPermission {
+        /** The bucket can be listed, so {@link #presence} can resolve a denied HEAD. */
+        GRANTED,
+        /** Listing is denied: absence and denial are indistinguishable for this principal. */
+        DENIED,
+        /** S3 could not be reached; nothing may be concluded about the permission. */
+        UNDETERMINED
+    }
+
+    /**
+     * Check at startup that this application may list its bucket (issue #157, raised in review).
+     *
+     * <p>{@link #presence} resolves a denied HEAD by listing, which only works while
+     * {@code s3:ListBucket} is granted. That is not a new requirement — site wipe walks two
+     * prefixes (#118, #122) and the nightly batch retention lists the batch prefix (#100), so a
+     * deployment without it is already broken — but it was an assumption nothing verified, and the
+     * way it fails is quiet: every absent object answers {@code UNKNOWN}, the checkpoint build
+     * skips those sites for as long as it lasts, and {@code delta.s3.read-denied} climbs by one per
+     * missing key instead of marking an incident. One listing at startup turns that into a line an
+     * operator can act on.</p>
+     *
+     * <p>It does not fail the context: an S3 that is briefly unreachable at startup must not stop a
+     * pod from serving, and the permission may equally be fixed while the pod runs.</p>
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void logListPermission() {
+        switch (verifyListPermission()) {
+            case GRANTED -> log.info("S3 list permission confirmed for bucket {} — a denied HEAD "
+                    + "can be resolved into present/absent", bucketName);
+            case DENIED -> log.error("s3:ListBucket is DENIED for bucket {}. This application needs "
+                    + "it for site history wipe and batch retention, and without it S3 cannot tell "
+                    + "a missing object from a denied one: every absent object reads as unknown, "
+                    + "checkpoint builds skip those sites, and delta.s3.read-denied counts one per "
+                    + "missing key rather than marking an incident. Grant s3:ListBucket on the "
+                    + "bucket", bucketName);
+            case UNDETERMINED -> log.warn("Could not verify the S3 list permission for bucket {} at "
+                    + "startup; if delta.s3.read-denied climbs steadily, check it by hand", bucketName);
+        }
+    }
+
+    /**
+     * One listing of the bucket, reduced to what it says about the permission.
+     *
+     * @return {@code GRANTED}, {@code DENIED} (403) or {@code UNDETERMINED} (anything else)
+     */
+    public ListPermission verifyListPermission() {
+        try {
+            s3Client.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucketName).maxKeys(1).build());
+            return ListPermission.GRANTED;
+        } catch (S3Exception e) {
+            return e.statusCode() == 403 ? ListPermission.DENIED : ListPermission.UNDETERMINED;
+        } catch (SdkClientException e) {
+            return ListPermission.UNDETERMINED;
+        }
     }
 
     /**
