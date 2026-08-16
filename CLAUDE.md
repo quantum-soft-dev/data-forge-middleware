@@ -597,6 +597,59 @@ pages/{feature}/            # Route pages
   given-up state is deliberately not on `DeltaCheckpointResponseDto`, since adding a field there is
   a Zod/API contract change the gauge and the guide cover without one. See
   `docs/delta-client-v2-guide.md` ("When is a per-table failure the table's verdict?", Metrics).
+- sql-generation-test-isolation: The two plugin SQL-generation integration classes assert on the
+  generation they produced instead of sampling every generation a site has (issue #159, folding
+  #163). `plugin_sql_generations` is never named by `test-data.sql` — it is emptied only as a side
+  effect of three `ON DELETE CASCADE`s, for the accounts and sites whose
+  `LIKE '%@example.com'` / `'%.example.com'` filters match, and only at the instant the script
+  runs — so `findBySiteId(SITE)` + `hasSize(n)` + `get(0)` counted rows no test method owns. The
+  same line was seen failing **both ways**, which is why narrowing the query alone is not the fix:
+  "was 2" when something else wrote a generation for the site during the method, "was 0" when the
+  test's own row was not visible yet. Assertions now name the source batch
+  (`findBySourceBatchId`, unique) **and** wait for it with awaitility; where `hasSize(1)` was
+  standing in for "the baseline batch produced none", that is now said directly and scoped
+  (`assertNoGenerationFor`), and the negative assertions hold for half a second rather than
+  sampling once, so a late writer fails the test instead of slipping past.
+  `BitBiDeltaSqlIntegrationTest` keeps the day-wide `findBySiteIdAndCreatedAtAfter` call the
+  `/sql-changes` ordering assertions are about, and filters it to the batches the method seeded.
+  `SqlGenerationIntegrationTest`'s `findAll()).isEmpty()` — an assertion that the whole shared
+  database held no generation at all — became a test of the guard that actually exists. Two rounds
+  of review were spent on it and the second correction was the interesting one: since 026
+  `BitBiPlugin.execute` only calls `DeltaSqlSweepWorker.wake()` on BATCH_COMPLETED, so **no**
+  assertion about a generation can pin `PluginEventDispatcher`'s early return — the generation
+  comes from `DeltaSqlQueueService` draining segments, and a site with no segments produces none
+  whatever the dispatcher does. The observable that does carry it is `last_used_at`, stamped by
+  `PluginUsageService` only after a dispatch executed the plugin: the test gives the second account
+  a **deactivated** activation and asserts the stamp stays null, which fails if the `isActive`
+  predicate is removed. The queue's own inactive-activation branch stays untested and is **#175**. The widest single change is one line of
+  `application-test.yml`: `plugin.sql-generation.delta-sweep-ms: 3600000`, the slow-sweep treatment
+  `delta.egress.sweep-ms` and `delta.batch-parquet.sweep-ms` already had and 026 never gave this
+  queue. At the shipped 60s the tick fired in **every cached Spring context for the whole run**,
+  and `DeltaSqlQueueService.processNextPending()` renders inside its transaction, S3 included — so
+  a context whose test class had finished long ago could hold row locks on `changelog_segments`
+  while the next class's `@Sql("/test-data.sql")` tried to delete those rows, which is the
+  `ScriptStatementFailedException` that took `BitBiDeltaSqlIntegrationTest`'s two follow-on methods
+  down with the first. The explicit wake (`DeltaSqlSweepWorker.wake()` from `BitBiPlugin` on
+  BATCH_COMPLETED and from `PluginDeltaBaselineService` on reinit) is untouched, so the paths the
+  tests exercise still run. **It does not close the window entirely** and the key says so:
+  `@Scheduled(fixedDelayString=…)` carries no initial delay, so every context still drains once
+  when it is created — one drain per cached context instead of one per context per minute, with
+  the annotation-level fix and the guard that would have caught the missing key tracked in #167.
+  `clearAppSettings()` moves from `BaseIntegrationTest` to `AbstractIntegrationTest` —
+  `SqlGenerationIntegrationTest` extends the latter — and is joined there by
+  `clearPluginSqlGenerations(UUID...)`, which deletes **by site** rather than table-wide: an
+  unqualified `DELETE` would take exactly the locks whose collision with `@Sql` this ticket is
+  about, which is the one way `clearAppSettings`'s single-row precedent does not carry over. It is
+  called in both classes' `@BeforeEach` and pinned in the #119 shape by a leftover-then-clear test,
+  whose own assertions on the site are by content rather than by count — a guard test must not
+  re-introduce the shape it retires. Audit of the same assertion shape elsewhere: the eight
+  occurrences in `PluginHistoryIntegrationTest` all sit inside `@Disabled` nested classes and were
+  left alone, and its live `Should not audit a regeneration that rolled back` — which went red on a
+  PR touching no plugin code while this one was open — is a **different** defect kept out of this
+  window: `plugin_audit_logs` counted by account, where the interesting hypothesis is not isolation
+  at all but an audit surviving the caller's rollback through the listener's
+  `AFTER_COMMIT` + `fallbackExecution` + `REQUIRES_NEW` (**#172**). Test-only — no production code,
+  REST, gRPC, DTO, migration, production configuration-key, metric, S3-key or frontend change.
 - hikari-pool-sizing: `spring.datasource.hikari.maximum-pool-size` **stays 10**, and now says why
   (issue #161). What the ticket was missing was never the number — it was the derivation and a guard
   that keeps it true, which is `BackgroundConnectionDemandTest`, a **wider** audit than #146's, where
