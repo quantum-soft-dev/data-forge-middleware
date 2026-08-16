@@ -137,8 +137,12 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
 
         assertFalse(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(cap).contains(SITE),
                 "a row with no attempts left must stop naming its site");
-        assertEquals(1, checkpointRepository.countGivenUpMaterializing(cap),
+        assertTrue(checkpointRepository.findBySiteIdAndTableName(SITE, "customers")
+                        .orElseThrow().hasGivenUpMaterializing(cap),
                 "and must be counted instead, so giving up is visible rather than silent");
+        // The gauge is a whole-database level and the tick visits every seeded site, so this asserts
+        // that the row reached it, not that it is alone there.
+        assertTrue(checkpointRepository.countGivenUpMaterializing(cap) >= 1);
 
         scheduler.buildCheckpoints();
 
@@ -154,7 +158,7 @@ class CheckpointSchedulerRematerializeIntegrationTest extends BaseIntegrationTes
         Checkpoint recovered = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertNotNull(recovered.getS3KeyParquet(), "the forced rebuild materializes from the frame");
         assertEquals(0, recovered.materializeAttempts(), "a snapshot clears the attempt count");
-        assertEquals(0, checkpointRepository.countGivenUpMaterializing(cap));
+        assertFalse(recovered.hasGivenUpMaterializing(cap), "and puts the row back in the population");
     }
 
     private void awaitMaterialized() {

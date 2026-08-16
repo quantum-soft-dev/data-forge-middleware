@@ -127,6 +127,12 @@ public class CheckpointService {
      * segments recorded since the checkpoint pointer. An idle site (no new segments) retries only
      * tables whose snapshot is missing.
      *
+     * <p>An idle site with nothing to rematerialize answers <b>without folding</b> and returns an
+     * empty map (issue #149) — the probe that decides reads only the {@code checkpoints} table, so
+     * the frame is not downloaded. The returned fold is therefore "what this build produced", never
+     * "what the site currently looks like"; a caller that wants the latter must ask for a rebuild.
+     * No production caller reads the value at all.</p>
+     *
      * <p>No {@code @Transactional}: the build spans frame + per-segment S3 downloads and per-table
      * S3 uploads — holding a HikariCP connection across those network calls would pin it for the
      * whole build (the pattern removed from the read path in 025-T3). Repository calls run in their
@@ -193,8 +199,8 @@ public class CheckpointService {
             // writing (issue #162): the process is going away, so nothing it could still learn is
             // worth recording. Rows keep their last-good keys, the pointer stays, and the next
             // tick of the next process redoes the work from the same seed. Deliberately not
-            // counted as delta.checkpoint.builds.aborted — that meter's contract is the two aborts
-            // that never repair themselves, and this one repairs itself on the next deployment.
+            // counted as delta.checkpoint.builds.aborted — that meter's contract is the aborts that
+            // never repair themselves, and this one is repaired by the process that replaces us.
             log.info("Ending the checkpoint build for site {}: the application is shutting down, "
                     + "so no table verdict was recorded", siteId);
             return Map.of();
