@@ -214,11 +214,14 @@ public abstract class AbstractIntegrationTest {
      * Delete a site's rows in {@code plugin_sql_generations}. {@code test-data.sql} never names
      * this table: it is emptied only as a side effect of the {@code ON DELETE CASCADE} on
      * {@code account_plugin_id} / {@code site_id} / {@code source_batch_id}, which fires just for
-     * the accounts and sites that script deletes, and only at the instant it runs. A generation
-     * written <em>after</em> that instant — by an {@code @Async} plugin dispatch or by
+     * the accounts and sites that script deletes, and only at the instant it runs. For the sites
+     * these tests use the cascade does fire, so what this adds is the <em>gap</em>: a generation
+     * written after that instant — by an {@code @Async} plugin dispatch or by
      * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} draining in another cached
      * Spring context — survives into the method that follows and is counted by any assertion
-     * shaped {@code findBySiteId(...)} + {@code hasSize(n)} (issue #159, folding #163).
+     * shaped {@code findBySiteId(...)} + {@code hasSize(n)} (issue #159, folding #163). It also
+     * makes the invariant something the test class states, instead of one it inherits from three
+     * cascades and two {@code LIKE} patterns in a script it does not own.
      *
      * <p>Clearing is the leftover half of the fix; the concurrent half is that assertions name the
      * generation they produced ({@code findBySourceBatchId}) and wait for it instead of sampling

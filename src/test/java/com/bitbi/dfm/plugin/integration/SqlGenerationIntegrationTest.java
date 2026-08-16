@@ -206,12 +206,23 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should not trigger SQL generation for accounts without Bit BI plugin")
+        @DisplayName("Should not trigger SQL generation for an account whose Bit BI activation is inactive")
         void shouldNotTriggerSqlGenerationForAccountsWithoutPlugin() {
-            // Given - a real, completed, file-backed batch on a real account this class never
-            // activates bit-bi for. It has to be real on both counts: a random batch id could
-            // never gain a generation anyway (source_batch_id is NOT NULL with an FK to batches),
-            // so asserting on one would assert nothing about the dispatcher.
+            // Given - a real, completed, file-backed batch on a second account, whose bit-bi
+            // activation exists but is deactivated. Every part of that is load-bearing:
+            // PluginEventDispatcher skips on `accountPlugin == null || !accountPlugin.isActive()`,
+            // and only the second half can be tested at all — plugin_sql_generations.
+            // account_plugin_id is NOT NULL with an FK to account_plugins (V11), so an account with
+            // no activation row could never gain a generation whatever the dispatcher did, and
+            // asserting on one asserts nothing. With the row present and inactive, deleting the
+            // isActive predicate makes this test fail.
+            AccountPlugin inactive = AccountPlugin.activate(OTHER_ACCOUNT_ID, "bit-bi",
+                    Map.of("tenantId", "other-tenant"));
+            inactive.deactivate();
+            accountPluginRepository.save(inactive);
+
+            Batch baseline = createBatchWithCsvFile(OTHER_ACCOUNT_ID, OTHER_SITE_ID, "orders.csv",
+                    "id,total\n1,10.00");
             Batch batch = createBatchWithCsvFile(OTHER_ACCOUNT_ID, OTHER_SITE_ID, "orders.csv",
                     "id,total\n1,10.00\n2,20.00");
 
@@ -219,11 +230,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
             eventPublisher.publishEvent(new BatchCompletedEvent(
                     batch.getId(), OTHER_ACCOUNT_ID, 1, 512L));
 
-            // Then - a dispatcher that stopped filtering on an active activation would have had
-            // everything it needs to render this batch. Scoped to the batch: the retired
+            // Then - the dispatcher had an activation, a completed batch and a previous batch to
+            // diff against, and still must produce nothing. Scoped to the batch: the retired
             // findAll() was asserting the whole shared database held no generation at all, which
             // no test owns (issue #159).
             assertNoGenerationFor(batch.getId());
+            assertNoGenerationFor(baseline.getId());
         }
     }
 
@@ -325,10 +337,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
                     .extracting(PluginSqlGeneration::getSourceBatchId)
                     .contains(leftoverBatch.getId(), ownBatch.getId());
 
-            // And the @BeforeEach clear is what stops those two reaching the next method without
-            // depending on test-data.sql's cascades — which only fire for accounts and sites its
-            // LIKE '%@example.com' / '%.example.com' filters happen to match, and only at the
-            // instant the script runs
+            // And the @BeforeEach clear removes them. To be precise about what that buys: these
+            // sites do match test-data.sql's LIKE filters, so its cascades already empty them —
+            // at the instant the script runs. The clear covers the gap after that instant, which
+            // is the only window a generation can survive into the next method through, and it
+            // makes the invariant something this class states rather than inherits from three
+            // cascades and two LIKE patterns in a script it does not own.
             clearPluginSqlGenerations(TEST_SITE_ID);
             assertThat(pluginSqlGenerationRepository.findBySourceBatchId(leftoverBatch.getId())).isEmpty();
             assertThat(pluginSqlGenerationRepository.findBySourceBatchId(ownBatch.getId())).isEmpty();

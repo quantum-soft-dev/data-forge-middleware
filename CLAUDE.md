@@ -494,8 +494,12 @@ pages/{feature}/            # Route pages
   whose own assertions on the site are by content rather than by count — a guard test must not
   re-introduce the shape it retires. Audit of the same assertion shape elsewhere: the eight
   occurrences in `PluginHistoryIntegrationTest` all sit inside `@Disabled` nested classes and were
-  left alone. Test-only — no production code, REST, gRPC, DTO, migration, production
-  configuration-key, metric, S3-key or frontend change.
+  left alone, and its live `Should not audit a regeneration that rolled back` — which went red on a
+  PR touching no plugin code while this one was open — is a **different** defect kept out of this
+  window: `plugin_audit_logs` counted by account, where the interesting hypothesis is not isolation
+  at all but an audit surviving the caller's rollback through the listener's
+  `AFTER_COMMIT` + `fallbackExecution` + `REQUIRES_NEW` (**#172**). Test-only — no production code,
+  REST, gRPC, DTO, migration, production configuration-key, metric, S3-key or frontend change.
 - hikari-pool-sizing: `spring.datasource.hikari.maximum-pool-size` **stays 10**, and now says why
   (issue #161). What the ticket was missing was never the number — it was the derivation and a guard
   that keeps it true, which is `BackgroundConnectionDemandTest`, a **wider** audit than #146's, where

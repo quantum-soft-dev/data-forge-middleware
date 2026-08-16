@@ -24,6 +24,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -174,9 +175,16 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         assertThat(generations.get(1).getFirstSeq()).isEqualTo(3L);
         assertThat(generations.get(0).getComparisonBatchId()).isNull();
 
+        // `since` is derived from this method's own oldest generation rather than left at an
+        // epoch-wide 2020 date: the endpoint concatenates every generation the site has after that
+        // instant, so the body assertions below would otherwise be exposed to exactly the leftover
+        // the counts above were scoped against (issue #159). One second of slack, and the same
+        // LocalDateTime/UTC conversion SqlChangesQueryService applies, so the bound does not move
+        // with the machine's zone.
+        String since = generations.get(0).getCreatedAt().minusSeconds(1).toInstant(ZoneOffset.UTC).toString();
         String sql = mockMvc.perform(get(ApiRoutes.BITBI_PLUGIN_API + "/sql-changes")
                         .param("siteId", SITE_ID.toString())
-                        .param("since", "2020-01-01T00:00:00Z")
+                        .param("since", since)
                         .header(API_KEY_HEADER, VALID_API_KEY))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
