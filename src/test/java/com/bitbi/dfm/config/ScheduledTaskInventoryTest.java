@@ -154,11 +154,25 @@ class ScheduledTaskInventoryTest {
      * constraints make the two rules unsatisfiable together — {@code test} shrinks the connection
      * pool to four, and four scheduler threads would not be below four connections.
      */
+    /**
+     * Scheduled tasks that can hold their thread for minutes or longer.
+     *
+     * <p>Package-private because {@code BackgroundConnectionDemandTest} (#161) needs the same count
+     * for a different bound: these are also the ticks that can hold a <em>connection</em> long
+     * enough to matter, so adding one tightens the connection-pool floor as well as this one, and
+     * neither derivation should be able to move without the other noticing.</p>
+     *
+     * @return how many of the audited tasks are {@link Cost#LONG}
+     */
+    static int longRunningTaskCount() {
+        return (int) ANNOTATED_TASKS.values().stream().filter(Cost.LONG::equals).count()
+                + (PROGRAMMATIC_TASK_COST == Cost.LONG ? 1 : 0);
+    }
+
     @Test
     @DisplayName("the pool leaves a thread free for a short tick while every long task runs")
     void shouldSizeThePoolAboveTheLongRunningTasks() {
-        long longRunning = ANNOTATED_TASKS.values().stream().filter(Cost.LONG::equals).count()
-                + (PROGRAMMATIC_TASK_COST == Cost.LONG ? 1 : 0);
+        long longRunning = longRunningTaskCount();
         int poolSize = shippedPoolSize();
 
         assertTrue(poolSize > longRunning,

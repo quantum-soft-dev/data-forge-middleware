@@ -20,7 +20,7 @@ spring:
         # timeout sweep once a backlog makes its unbounded query and single transaction long. So the
         # floor is FIVE, for a short tick never to queue behind them; six is that floor plus one for
         # the burst of short ticks that fall on the same second, and
-        # stays below spring.datasource.hikari.maximum-pool-size (12). Adding a scheduled task that
+        # stays below spring.datasource.hikari.maximum-pool-size (10). Adding a scheduled task that
         # blocks means revisiting this — ScheduledTaskInventoryTest fails until the audit is redone.
         #
         # Read that last bound for exactly what it is: the scheduler on its own cannot empty the
@@ -31,9 +31,9 @@ spring:
         #
         # Five of the fifteen tasks never open a connection at all (the three queue-worker sweeps,
         # which only wake their own pool, the scratch sweep, which touches the filesystem, and the
-        # Auth0 token refresh, which is an HTTP call). The other ten can, so this pool's whole
-        # ceiling counts as connection demand: which ten of the fifteen are running is not something
-        # the pool size controls.
+        # Auth0 token refresh, which is an HTTP call). Ten can — but only the four classified
+        # Cost.LONG hold one long enough for the connection pool to have to reserve for them, which
+        # is the term the derivation below actually uses. The rest release between statements.
         #
         # The key is the standard Spring Boot one, so SPRING_TASK_SCHEDULING_POOL_SIZE overrides it
         # without a placeholder of our own. It only takes effect because SchedulingConfiguration
@@ -71,36 +71,49 @@ spring:
       # AFTER_COMMIT and async, CheckpointRecordedEvent is published outside the guard's
       # transaction). Introducing a nested one changes this reasoning, not just this number.
       #
-      # So the size is fixed by two bounds rather than by the peak, and at 12 they meet exactly:
+      # So the size is fixed by two bounds rather than by the peak, and ten satisfies both:
       #
       #   floor    long-holding background threads + a request reserve <= pool
       #            A "long" holder pins the connection across S3 I/O or a bounded wait instead of
-      #            releasing it between statements, so queueing would stall it rather than slow it:
-      #            the scheduler pool (6 — the batch timeout sweep and the retention cleanup each
-      #            run one transaction over an unbounded row set), delta.egress.max-concurrent (2 —
-      #            the transaction spans the download, the render and one upload per table) and
-      #            plugin.sql-generation.delta-max-concurrent (2 — the transaction spans a wait of
-      #            up to semaphore-timeout-seconds on the generation semaphore, then S3 I/O).
-      #            Both of those last two are worth shortening rather than budgeting for: #164.
-      #                6 + 2 + 2 + 2 reserved for requests = 12 <= 12
-      #            Everything else is short (one INSERT, a claim, a publish) and may queue.
+      #            releasing it between statements, so queueing would stall it rather than slow it.
+      #            NOTE WHICH THREADS THOSE ARE — for the scheduler it is the four ticks
+      #            ScheduledTaskInventoryTest classifies Cost.LONG, NOT its six threads: a short
+      #            tick that waits for a connection simply runs on its next wake, so counting the
+      #            whole pool here would be the same conflation of "holds a thread" with "holds a
+      #            connection" that this derivation exists to undo.
+      #                4 long scheduled ticks
+      #              + 2 delta.egress.max-concurrent  (transaction spans download, render, uploads)
+      #              + 2 plugin.sql-generation.delta-max-concurrent  (transaction spans a wait of
+      #                  up to semaphore-timeout-seconds on the generation semaphore, then S3 I/O)
+      #              + 2 reserved for request threads
+      #              = 10 <= 10
+      #            Everything else is short (one INSERT, a claim, a publish) and may queue. Those
+      #            two workers are worth shortening rather than budgeting for — issue #164 — and
+      #            doing so returns four slots without touching anything here.
       #
       #   ceiling  (maxReplicas + maxSurge) x pool + operator reserve <= max_connections
       #            The pool is per replica but max_connections is not, and every cron tick fires on
       #            every replica at the same instant, so the cluster peak is the real one:
-      #                (6 from k8s/base/hpa.yaml + 1 surging during a rollout) x 12 = 84
-      #                84 + 10 for superuser_reserved_connections, psql, migrations, exporters = 94
+      #                (6 from k8s/base/hpa.yaml + 1 surging during a rollout) x 10 = 70
+      #                70 + 10 for superuser_reserved_connections, psql, migrations, exporters = 80
       #            against PostgreSQL's default max_connections of 100.
       #
       # THE 100 IS AN ASSUMPTION, NOT A MEASUREMENT — this repository never names the database
       # (DB_URL arrives from a secret), so the pessimistic default is the only number that can be
-      # reasoned about here. Twelve is likewise DERIVED, not observed: no load measurement of
-      # hikari_connections_pending / hikari_connections_acquire_seconds exists, and until one does,
-      # it is the largest pool a server left at its defaults can serve at this replica ceiling.
-      # To go higher: read `SHOW max_connections` on the actual server, record it here, and raise
-      # DEFAULT_MAX_CONNECTIONS in the test with it. To go higher without touching the database,
-      # lower a long holder instead — each -1 on an egress or delta-sql worker frees a pool slot.
-      maximum-pool-size: 12
+      # reasoned about here, and it further assumes this cluster is alone on that server. THE TEN
+      # IS THEREFORE UNCHANGED ON PURPOSE: no load measurement of hikari_connections_pending or
+      # hikari_connections_acquire_seconds exists, the derivation shows ten already covers what
+      # must be covered, and raising a pool against an unverified max_connections is the one move
+      # here whose failure is FATAL: sorry, too many clients already on every replica rather than a
+      # slow query. What was missing was never the number — it was this derivation and the guard
+      # that keeps it true.
+      #
+      # To raise it later: read `SHOW max_connections` on the actual server (and check nothing else
+      # shares it — dev and stage reach (3+1) x pool each), record it here, and raise
+      # DEFAULT_MAX_CONNECTIONS in BackgroundConnectionDemandTest with it; the ceiling above then
+      # allows up to 12 even at PostgreSQL's default. To gain slots without touching the database,
+      # shorten or lower a long holder instead.
+      maximum-pool-size: 10
       minimum-idle: 5
       connection-timeout: 30000
       idle-timeout: 600000

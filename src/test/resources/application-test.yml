@@ -18,7 +18,7 @@ spring:
   datasource:
     hikari:
       # A run keeps every distinct Spring context in the context cache, and each context holds
-      # its own pool. The production defaults (max 12, min-idle 5) reserve about five connections
+      # its own pool. The production defaults (max 10, min-idle 5) reserve about five connections
       # per cached context even while it sits idle, so roughly twenty contexts exhaust
       # PostgreSQL's default max_connections=100. The next context then fails to boot, Flyway
       # reports it as a connection error, and it surfaces as an ApplicationContext failure in

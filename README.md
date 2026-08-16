@@ -456,11 +456,11 @@ spring:
     hikari:
       # Do not raise this without redoing the derivation beside the key in application.yml
       # (issue #161). The pool is per replica and the database's max_connections is not, so the
-      # bound is (maxReplicas + maxSurge) x pool + an operator reserve <= max_connections; the
-      # shipped 12 is the largest value a server left at PostgreSQL's default 100 can serve at the
-      # replica ceiling this deployment declares. Raising it needs `SHOW max_connections` on the
-      # actual server first — BackgroundConnectionDemandTest fails until that number is recorded.
-      maximum-pool-size: 12
+      # bound is (maxReplicas + maxSurge) x pool + an operator reserve <= max_connections, and at
+      # the replica ceiling this deployment declares a server left at PostgreSQL's default 100
+      # allows at most 12. Raising it needs `SHOW max_connections` on the actual server first —
+      # BackgroundConnectionDemandTest fails until that number is recorded there.
+      maximum-pool-size: 10
       minimum-idle: 5
 
 s3:

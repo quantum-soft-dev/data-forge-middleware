@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -117,12 +118,15 @@ class BackgroundConnectionDemandTest {
 
     private static Map<String, Consumer> executorBeans() {
         Map<String, Consumer> beans = new LinkedHashMap<>();
-        // Every @Scheduled method plus BatchRetentionScheduler's programmatic cron. Ten of the
-        // fifteen tasks open a connection, and two of those hold it for one transaction over an
-        // unbounded row set — the batch timeout sweep under a backlog and the retention cleanup —
-        // so the whole ceiling counts as LONG. ScheduledTaskInventoryTest has the per-task audit.
+        // Every @Scheduled method plus BatchRetentionScheduler's programmatic cron. Its whole
+        // ceiling is background demand, but only the tasks ScheduledTaskInventoryTest classifies
+        // Cost.LONG are demand the pool has to *cover* — see longHoldingThreads(), which counts
+        // them rather than the six threads. A short tick that waits for a connection simply runs
+        // again on its next wake, and conflating "holds a thread" with "holds a connection" here
+        // would be the same mistake this class exists to correct elsewhere.
         beans.put("com.bitbi.dfm.config.SchedulingConfiguration#taskScheduler",
-                new Consumer(6, Hold.LONG, "sized by " + POOL_KEY + ", audited in #146"));
+                new Consumer(6, Hold.SHORT, "sized by " + POOL_KEY + "; its long ticks counted"
+                        + " separately from ScheduledTaskInventoryTest"));
         // Plugin audit writes and the async SQL-generation entry point: one INSERT each, and
         // @Transactional (REQUIRED), so even the CallerRunsPolicy overflow path joins the caller's
         // transaction rather than opening a second connection on the caller's thread.
@@ -206,14 +210,23 @@ class BackgroundConnectionDemandTest {
             new Consumer(1, Hold.SHORT, "one advisory-locked UPDATE every lease-seconds/3");
 
     /**
-     * Kept free for request threads at the modelled background peak.
+     * Slots the modelled background peak is required to leave for request threads.
      *
-     * <p>A floor, not a target. The request layer is unbounded on both sides — Tomcat runs
-     * virtual-thread-per-request ({@code spring.threads.virtual.enabled}) and the gRPC server takes
-     * grpc-java's default cached pool — so no reserve can be <em>sized</em> for it without the
-     * {@code hikari_connections_pending} observation issue #161 asks for. Two is what the cluster
-     * ceiling leaves once the long holders are covered, and it is enough for the liveness and
-     * readiness probes to answer while every background drain is busy.</p>
+     * <p><b>Nothing enforces this at runtime, and it is not meant to.</b> HikariCP has no notion of
+     * a reserved partition, so the twenty-one {@link Hold#SHORT} background threads may certainly
+     * occupy these two for a moment — that is acceptable exactly because their holds are
+     * milliseconds, which is the same reason they are not in the floor. What the reserve buys is
+     * that the consumers which <em>cannot</em> give a slot back quickly are never budgeted to fill
+     * the pool completely, so a request arriving during a background peak queues behind
+     * milliseconds rather than behind an S3 round trip.</p>
+     *
+     * <p>It is a modelling allowance rather than a derived quantity: the request layer is unbounded
+     * on both sides — Tomcat runs virtual-thread-per-request
+     * ({@code spring.threads.virtual.enabled}) and the gRPC server takes grpc-java's default cached
+     * pool — so no reserve can be <em>sized</em> for it without the
+     * {@code hikari_connections_pending} observation issue #161 asks for. (It is deliberately not
+     * justified by the health probes: {@code /actuator/health/liveness} and {@code readiness} carry
+     * only the state indicators and never open a connection.)</p>
      */
     private static final int REQUEST_RESERVE = 2;
 
@@ -222,9 +235,14 @@ class BackgroundConnectionDemandTest {
      *
      * <p>An assumption, deliberately the pessimistic one: this repository does not declare the
      * database — there is no {@code DB_URL} in {@code k8s/}, it arrives from the secret — so the
-     * only number that can be reasoned about here is the one an unconfigured server has. Going past
-     * this budget is safe only after reading {@code SHOW max_connections} on the actual server, and
-     * that check has to come first, because the cost of getting it wrong is
+     * only number that can be reasoned about here is the one an unconfigured server has. It is also
+     * <b>optimistic about topology</b>, in the one way worth naming: it assumes this cluster is the
+     * only thing on that server. Dev and stage each reach {@code (3 + 1) x pool} of their own, so
+     * if two environments share a database the real budget is the sum, and this constant is wrong
+     * by a factor of two.</p>
+     *
+     * <p>Going past this budget is safe only after reading {@code SHOW max_connections} on the
+     * actual server, and that check has to come first, because the cost of getting it wrong is
      * {@code FATAL: sorry, too many clients already} on every replica rather than a slow query.</p>
      */
     private static final int DEFAULT_MAX_CONNECTIONS = 100;
@@ -247,10 +265,22 @@ class BackgroundConnectionDemandTest {
     // The two bounds
     // ---------------------------------------------------------------------------------------
 
+    /**
+     * Background threads that can hold a connection across S3 I/O or a bounded wait.
+     *
+     * <p>The scheduler contributes the tasks {@code ScheduledTaskInventoryTest} classifies as long,
+     * not its six threads: a short tick that has to wait for a connection runs again on its next
+     * wake, so it belongs with the queueing consumers however many threads exist to dispatch it.
+     * Adding a {@code Cost.LONG} scheduled task therefore tightens this floor automatically.</p>
+     */
+    private static int longHoldingThreads() {
+        return ScheduledTaskInventoryTest.longRunningTaskCount() + totalThreads(Hold.LONG);
+    }
+
     @Test
     @DisplayName("the pool covers every long-holding background consumer and still leaves room for requests")
     void thePoolCoversEveryLongHoldingBackgroundConsumer() {
-        int longHolders = totalThreads(Hold.LONG);
+        int longHolders = longHoldingThreads();
         int poolSize = hikariPoolSize();
 
         assertTrue(longHolders + REQUEST_RESERVE <= poolSize,
@@ -410,36 +440,92 @@ class BackgroundConnectionDemandTest {
         return properties;
     }
 
-    /** Highest {@code maxReplicas} any HPA manifest declares; an overlay may lower it, never raise it. */
+    /**
+     * Highest {@code maxReplicas} the backend's HPAs declare, across the base and every overlay.
+     *
+     * <p>Selection is by content rather than by filename: a document is only counted when it is a
+     * {@code HorizontalPodAutoscaler} whose {@code scaleTargetRef} names the backend deployment. A
+     * name-based filter would both miss a renamed patch and, worse, count the frontend's HPA as
+     * this application's replica ceiling.</p>
+     */
     private static int maxReplicas() throws IOException {
-        int highest = readMaxReplicas(Path.of("k8s/base/hpa.yaml"));
-        try (Stream<Path> overlays = Files.walk(Path.of("k8s/overlays"))) {
-            List<Path> patches = overlays
-                    .filter(path -> path.getFileName().toString().contains("hpa"))
-                    .toList();
-            for (Path patch : patches) {
-                highest = Math.max(highest, readMaxReplicas(patch));
+        int highest = 0;
+        for (Path manifest : manifests()) {
+            Integer declared = backendHpaMaxReplicas(manifest);
+            if (declared != null) {
+                highest = Math.max(highest, declared);
             }
         }
+        assertTrue(highest > 0,
+                "no HorizontalPodAutoscaler targeting " + BACKEND_DEPLOYMENT + " declares maxReplicas; "
+                        + "without a replica ceiling the cluster connection budget cannot be computed");
         return highest;
     }
 
-    private static int readMaxReplicas(Path manifest) throws IOException {
-        Map<?, ?> document = new Yaml().loadAs(Files.readString(manifest), Map.class);
-        Object spec = document == null ? null : document.get("spec");
-        Object value = spec instanceof Map<?, ?> map ? map.get("maxReplicas") : null;
-        assertNotNull(value, manifest + " must declare spec.maxReplicas");
-        return ((Number) value).intValue();
+    private static final String BACKEND_DEPLOYMENT = "forge-backend";
+
+    /** {@code spec.maxReplicas} when this document is the backend's HPA, otherwise {@code null}. */
+    private static Integer backendHpaMaxReplicas(Path manifest) throws IOException {
+        for (Object document : documents(manifest)) {
+            if (!(document instanceof Map<?, ?> root)) {
+                continue;
+            }
+            if (!"HorizontalPodAutoscaler".equals(root.get("kind"))) {
+                continue;
+            }
+            if (!(root.get("spec") instanceof Map<?, ?> spec)) {
+                continue;
+            }
+            // An overlay patch carries only the fields it changes, so a target-less patch is still
+            // the backend's as long as its metadata.name matches the base HPA's.
+            boolean targetsBackend = spec.get("scaleTargetRef") instanceof Map<?, ?> target
+                    ? BACKEND_DEPLOYMENT.equals(target.get("name"))
+                    : root.get("metadata") instanceof Map<?, ?> metadata
+                            && String.valueOf(metadata.get("name")).startsWith(BACKEND_DEPLOYMENT);
+            if (targetsBackend && spec.get("maxReplicas") instanceof Number maxReplicas) {
+                return maxReplicas.intValue();
+            }
+        }
+        return null;
     }
 
-    /** Extra pods a rolling update may add on top of the replica ceiling. */
+    /**
+     * Extra pods a rolling update may add on top of the replica ceiling, across the base and every
+     * overlay — an overlay that raises the surge raises the real peak just as an overlay that
+     * raises {@code maxReplicas} does.
+     */
     private static int maxSurge() throws IOException {
-        Matcher surge = Pattern.compile("maxSurge:\\s*(\\d+)\\s*$", Pattern.MULTILINE)
-                .matcher(Files.readString(Path.of("k8s/base/deployment-backend.yaml")));
-        assertTrue(surge.find(),
-                "k8s/base/deployment-backend.yaml must declare a numeric rollingUpdate.maxSurge — a "
-                        + "percentage would make the peak pod count depend on the current replica count");
-        return Integer.parseInt(surge.group(1));
+        Pattern numeric = Pattern.compile("maxSurge:\\s*(\\d+)\\s*$", Pattern.MULTILINE);
+        Pattern any = Pattern.compile("maxSurge:\\s*(\\S+)");
+        int highest = -1;
+        for (Path manifest : manifests()) {
+            Matcher declared = any.matcher(Files.readString(manifest));
+            while (declared.find()) {
+                assertTrue(numeric.matcher(declared.group()).find(),
+                        manifest + " declares maxSurge: " + declared.group(1) + ". Only a plain "
+                                + "integer can be budgeted for — a percentage makes the peak pod count "
+                                + "depend on the current replica count");
+                highest = Math.max(highest, Integer.parseInt(declared.group(1)));
+            }
+        }
+        assertTrue(highest >= 0,
+                "no manifest declares rollingUpdate.maxSurge, so the pod count during a rollout is "
+                        + "Kubernetes' default of 25% rather than something this budget can compute");
+        return highest;
+    }
+
+    private static List<Path> manifests() throws IOException {
+        try (Stream<Path> tree = Files.walk(Path.of("k8s"))) {
+            return tree.filter(path -> path.toString().endsWith(".yaml")
+                    || path.toString().endsWith(".yml")).toList();
+        }
+    }
+
+    /** Every document of a manifest, tolerating multi-document files and JSON-6902 patch lists. */
+    private static Iterable<Object> documents(Path manifest) throws IOException {
+        List<Object> documents = new java.util.ArrayList<>();
+        new Yaml().loadAll(Files.readString(manifest)).forEach(documents::add);
+        return documents;
     }
 
     /** Every {@code Class#method} annotated {@code @Bean} whose product is an {@link Executor}. */
@@ -476,30 +562,58 @@ class BackgroundConnectionDemandTest {
     }
 
     /**
-     * The {@code maxPoolSize} an executor bean declares, or {@code null} when it cannot be built
-     * without the container — a {@code @Bean} method with arguments, or a product that is not a
-     * {@link ThreadPoolTaskExecutor}.
+     * The {@code maxPoolSize} an executor bean declares, or {@code null} for the <em>one</em> case
+     * this check cannot cover: a {@code @Bean} method that takes arguments, and is therefore sized
+     * by what the container hands it rather than by anything in its own body.
+     *
+     * <p>Everything else fails rather than returning {@code null}. A silent skip here would be the
+     * worst of both worlds — the test would keep reading like a guard while passing vacuously for
+     * exactly the pool kinds most likely to be added next (a {@code @Configuration} with
+     * constructor injection, or a factory returning a bare {@code ExecutorService}).</p>
      */
     private static Integer declaredMaxPoolSize(String bean) {
         String className = bean.substring(0, bean.indexOf('#'));
         String methodName = bean.substring(bean.indexOf('#') + 1);
+        Class<?> type;
+        Method factory;
         try {
-            Class<?> type = Class.forName(className);
-            Method factory = type.getDeclaredMethod(methodName);
-            Object product = factory.invoke(type.getDeclaredConstructor().newInstance());
-            if (!(product instanceof ThreadPoolTaskExecutor executor)) {
-                return null;
-            }
+            type = Class.forName(className);
+            factory = Stream.of(type.getDeclaredMethods())
+                    .filter(candidate -> candidate.getName().equals(methodName))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(bean + " no longer declares that method"));
+        } catch (ClassNotFoundException e) {
+            throw new AssertionError("could not load " + className, e);
+        }
+        if (factory.getParameterCount() > 0) {
+            return null;
+        }
+        Object product;
+        try {
+            product = factory.invoke(type.getDeclaredConstructor().newInstance());
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(bean + " could not be built without the container. If it now "
+                    + "takes constructor injection, its thread ceiling has to be asserted some other "
+                    + "way rather than left unchecked", e);
+        }
+        if (product instanceof ThreadPoolTaskExecutor executor) {
             try {
                 return executor.getMaxPoolSize();
             } finally {
                 executor.shutdown();
             }
-        } catch (NoSuchMethodException e) {
-            return null;
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError("could not read the declared pool size of " + bean, e);
         }
+        if (product instanceof ThreadPoolExecutor executor) {
+            try {
+                return executor.getMaximumPoolSize();
+            } finally {
+                executor.shutdown();
+            }
+        }
+        throw new AssertionError(bean + " produces a " + product.getClass().getName()
+                + ", whose thread ceiling this check cannot read. Teach it that type — an executor "
+                + "whose size cannot be asserted is one whose size can drift under the derivation "
+                + "beside " + HIKARI_KEY);
     }
 
     private static final Pattern POOL_CONSTRUCTION = Pattern.compile(

@@ -453,47 +453,57 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
-- hikari-pool-sizing: `spring.datasource.hikari.maximum-pool-size` is **12**, derived against total
-  background thread demand rather than against request threads alone (issue #161).
-  `BackgroundConnectionDemandTest` is the audit, and it is a **wider** guard than #146's — the
-  scheduler pool was only one term. The audit's first result was that the ticket's own list was an
+- hikari-pool-sizing: `spring.datasource.hikari.maximum-pool-size` **stays 10**, and now says why
+  (issue #161). What the ticket was missing was never the number — it was the derivation and a guard
+  that keeps it true, which is `BackgroundConnectionDemandTest`, a **wider** audit than #146's, where
+  the scheduler pool is only one term. Its first result was that the ticket's own list was an
   undercount: not `6 + 2 + 2 + 2` but **32** threads, because `pluginExecutor` (max 10),
   `pluginExecutionExecutor` (max 8), `deltaRebuildExecutor` (1) and the `batch-parquet-lease`
-  renewal thread (1, an `Executors.newSingleThreadScheduledExecutor` that nobody counts because it
-  is neither a bean nor a config key) hold connections too — and both request layers are
-  **unbounded** on top of that (virtual-thread-per-request, plus grpc-java's default cached pool,
-  since `GrpcServerConfig` never calls `.executor(...)`). **So "cover the peak" was never available
-  and is not what 12 means**: 32 per replica times seven pods is a quarter of a thousand
-  connections. What makes a pool smaller than its callers *safe* rather than reckless is that **no
-  unit of background work needs two connections at once** — every `REQUIRES_NEW` that could nest is
-  deliberately arranged not to (`CheckpointEpochGuard` under a non-transactional build,
-  `PluginAuditEventListener` `AFTER_COMMIT` + `@Async`, `CheckpointRecordedEvent` published outside
-  the guard's transaction) — so a shortage can only make a thread **wait** 30 s and retry on its
-  next tick, never deadlock. The size therefore comes from two bounds that meet exactly at 12:
-  a **floor** of the consumers that cannot absorb a wait because they pin a connection across S3 I/O
-  instead of releasing it between statements (scheduler 6 + egress 2 + delta-sql 2, plus 2 kept for
-  requests), and a **ceiling** from the cluster — the pool is per replica, `max_connections` is not,
-  and a cron tick fires on every replica in the same second, so `(maxReplicas 6 + maxSurge 1) x 12
-  = 84`, plus 10 for `superuser_reserved_connections`/psql/migrations/exporters, against
-  PostgreSQL's default 100. **Both the 100 and the 12 are stated as derived, not measured**: this
-  repository never names the database (`DB_URL` comes from a secret) and no load observation of
-  `hikari_connections_pending` exists, so the pessimistic default is the only number that can be
-  reasoned about — and the runbook to move it (read `SHOW max_connections`, record it, raise
-  `DEFAULT_MAX_CONNECTIONS` in the test) is written beside the key. Raising blind was rejected as
-  the one genuinely dangerous option: the failure of overshooting `max_connections` is `FATAL: sorry,
-  too many clients already` on every replica, not a slow query. The test discovers the inventory
-  **three ways** so a new pool fails the build instead of the pool: every `@Bean` returning an
-  `Executor` (and it re-invokes each zero-arg factory to read the `maxPoolSize` actually declared,
-  so a `setMaxPoolSize` edit is caught too), every `max-concurrent` property, and every pool
-  constructed directly in `src/main/java`. Two findings were filed rather than folded in: **#164** —
+  renewal thread (1, an `Executors.newSingleThreadScheduledExecutor` that no inventory would surface
+  because it is neither a bean nor a config key) hold connections too — and **both request layers are
+  unbounded** on top of that (virtual-thread-per-request; grpc-java's default cached pool, since
+  `GrpcServerConfig` never calls `.executor(...)`). **So "cover the peak" was never available**: 32
+  per replica times seven pods is a quarter of a thousand connections. What makes a pool smaller than
+  its callers *safe* rather than reckless is that **no unit of background work needs two connections
+  at once** — every `REQUIRES_NEW` that could nest is deliberately arranged not to
+  (`CheckpointEpochGuard` under a non-transactional build, `PluginAuditEventListener` `AFTER_COMMIT`
+  + `@Async`, `CheckpointRecordedEvent` published outside the guard's transaction; the plugin audit
+  methods are `REQUIRED`, so even the `CallerRunsPolicy` overflow path joins the caller's transaction
+  instead of opening a second connection) — so a shortage can only make a thread **wait** 30 s and
+  retry on its next tick, never deadlock. The size therefore comes from two bounds: a **floor** over
+  the consumers that cannot absorb a wait because they pin a connection across S3 I/O instead of
+  releasing it between statements, and a **ceiling** from the cluster, since the pool is per replica,
+  `max_connections` is not, and a cron tick fires on every replica in the same second —
+  `(maxReplicas 6 + maxSurge 1) x 10 = 70`, plus 10 for
+  `superuser_reserved_connections`/psql/migrations/exporters, against PostgreSQL's default 100.
+  **The floor's scheduler term is four, not six**, and that correction is the whole reason the number
+  did not move: the pool has to reserve for the four ticks `ScheduledTaskInventoryTest` already
+  classifies `Cost.LONG` (the test now exports that count, so adding one tightens both derivations at
+  once), not for six threads — counting the whole pool would repeat exactly the conflation of "holds a
+  thread" with "holds a connection" that this audit exists to undo, and it is what first pushed the
+  answer to 12. `4 + 2 (egress) + 2 (delta-sql) + 2 for requests = 10`. **Raising it was rejected as
+  the one genuinely dangerous option**: the 100 is an assumption (`DB_URL` comes from a secret, and
+  the budget also assumes nothing else shares that server, though dev and stage reach `(3+1) x pool`
+  each), no observation of `hikari_connections_pending` exists, and overshooting `max_connections`
+  fails as `FATAL: sorry, too many clients already` on every replica rather than as a slow query.
+  The ceiling does allow up to **12** at the default, so the two bounds leave a window rather than
+  pinning one value; the runbook to use it (read `SHOW max_connections`, record it, raise
+  `DEFAULT_MAX_CONNECTIONS` in the test) is beside the key. The test discovers the inventory **three
+  ways** so a new pool fails the build instead of the connection pool: every `@Bean` returning an
+  `Executor` (re-invoking each zero-arg factory to read the `maxPoolSize` actually declared, and
+  *failing* rather than skipping on a shape it cannot read, so the check cannot pass vacuously),
+  every `max-concurrent` property, and every pool constructed directly in `src/main/java`. The
+  cluster inputs are read from every manifest, base and overlays, selecting HPAs by `kind` and
+  `scaleTargetRef` rather than by filename, and a percentage `maxSurge` fails outright because it
+  cannot be budgeted for. Two findings were filed rather than folded in: **#164** —
   `DeltaEgressService.egressNextPending` and `DeltaSqlQueueService.processNextPending` are both
   `@Transactional` around S3 round trips, the second around a **120 s** wait on the SQL-generation
-  semaphore as well, which is the whole reason four of the twelve slots are reserved (and
+  semaphore as well, which is why four of the ten slots are spoken for (and
   `SqlGenerationService.loadBatchData`/`saveGenerationRecord` are `protected` and self-invoked, so
   their `@Transactional` is inert); **#165** — `comparisonExecutor` is a dead bean, five threads with
-  no `@Async` site and no injection. No REST, gRPC, DTO, migration, metric, S3-key or frontend
-  change; the only value that moved is the pool. See `docs/delta-client-v2-guide.md` ("The
-  connection pool is smaller than the threads that can ask it for a connection"), `README.md`.
+  no `@Async` site and no injection. **No value changed anywhere**: documentation, one new test and
+  two shared helpers on the old one. See `docs/delta-client-v2-guide.md` ("The connection pool is
+  smaller than the threads that can ask it for a connection"), `README.md`.
 - scheduler-pool: `@Scheduled` runs on a pool this application declares instead of on whatever
   Spring Boot's auto-configuration happened to pick (issue #146). `SchedulingConfiguration` builds
   the `taskScheduler` bean from Boot's own `ThreadPoolTaskSchedulerBuilder`, and
@@ -513,7 +523,7 @@ pages/{feature}/            # Route pages
   chosen: **above** the four tasks that can hold a thread for minutes (checkpoint build, retention
   cleanup, the orphaned-provisional sweep in its 500-segment worst case, and the batch timeout sweep
   once a backlog makes its unbounded query long) so a short tick always finds a thread, and **below**
-  `spring.datasource.hikari.maximum-pool-size` (now 12) — which says the scheduler alone cannot empty
+  `spring.datasource.hikari.maximum-pool-size` (10) — which says the scheduler alone cannot empty
   the connection pool, not that total background demand fits, since the queue workers and the plugin
   executors hold connections too; that wider audit is **#161** above. Two tests carry it:
   `ScheduledTaskIsolationTest` runs the shipped property set and proves a blocking fixed-delay tick
