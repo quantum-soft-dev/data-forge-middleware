@@ -712,6 +712,89 @@ spares objects newer than its own start, so a frame orphaned *by* a wipe needs a
 collect — the same as the snapshot objects a discarded build has always left. Giving that prefix a
 sweeper of its own is **#160**.
 
+**When is a per-table failure the table's verdict? (issues #149, #162)** The rematerialize of #128
+and the work list of #137 together gave every unmaterialized `checkpoints` row a nightly retry with
+nothing bounding it, while the per-table catch recorded a verdict for *any* failure, including one
+that was not about the table at all. Both halves are answered in `CheckpointService`, and the
+answers pull in opposite directions.
+
+- **A retry is bounded by attempts, not by time.** A row that ends a build without a snapshot spends
+  one attempt (`checkpoints.materialize_attempts`, `last_materialize_failure_at`, V53). At
+  `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` (`delta.checkpoint.max-materialize-attempts`, default
+  **5**) the nightly rematerialize stops trying and the row stops naming its site, so the frame
+  download and whole-site fold that discovering as much used to cost stop with it. Attempts rather
+  than seconds because the retry runs from a once-a-night cron: a delay would only ever express
+  itself as skipped nights, and a counter survives a restart without a clock. What is bounded is the
+  **dedicated** retry — a site with new segments is visited for its segments, and the incremental
+  build there writes every table in its fold whatever the counter says, because that work is
+  happening regardless.
+- **Giving up is visible, not silent.** `delta.checkpoint.tables.given-up` gauges the rows that have
+  spent their attempts. A non-zero value is usually a site whose client streams a table it never
+  submitted a schema for; it becomes an incident when it climbs, because each of those rows is a
+  table permanently missing from the Bit BI files listing, Parquet Export (`type=checkpoint`) and the
+  Delta Sync download.
+- **Giving up is not a dead end.** Four things put a row back: submitting the schema and letting the
+  next incremental build write it, `POST .../delta/checkpoints/rebuild` (which re-arms the row
+  deliberately, whether or not that attempt succeeds), a re-baseline, and a history wipe — the last
+  two by deleting the rows outright. None of them is manual SQL.
+- **A table that no longer exists loses its row.** The fold is the whole of a site's state, so a
+  `checkpoints` row for a table absent from it describes a table whose last row was `DELETE`d at the
+  source: `CheckpointFrame` emits nothing for an empty table, so the next frame never mentions it and
+  no later build — not even a forced rebuild — could ever reach it again. Such a row is now deleted
+  by the build that notices, after that build has written its own tables. The snapshot object it
+  named joins the superseded snapshots already unreferenced under `checkpoints/{siteId}/` (#118,
+  #160). Two limits are deliberate. The reap **never empties a site**: if every table were emptied at
+  the source the fold would be empty and every row would go, and "this site has no checkpoint rows"
+  is load-bearing elsewhere — `CheckpointFileQueryService` reads it as "not a Delta site yet" and
+  falls back to the pre-Delta uploaded CSVs, which is exactly what it must not hand a Bit BI client
+  as a current baseline. And it runs **inside a build that has work**, so a dropped table whose row
+  kept a live key survives on a completely idle site until the next build with anything to do, or a
+  forced rebuild; making the reap its own reason to fold a site nightly would put back the cost this
+  ticket removed, for a stale listing entry rather than a missing artifact. A site whose fold is
+  empty is instead **settled site-wide** — one attempt per still-retryable row, or a re-arm on a
+  forced rebuild — so sparing its rows does not hand it back the unbounded nightly visit.
+- **A frame that is gone with no segments behind it is not a lossy refold.** That state used to raise
+  the "refusing lossy refold" alarm every night, which is wrong in kind — with no frame *and* no
+  changelog there is no history to refold, lossily or otherwise — and had no exit but manual SQL. It
+  now has its own message and its own
+  `delta.checkpoint.builds.aborted{reason=history_gone}`, and a **scheduled** build spends an
+  attempt on every still-retryable row of the site, which is what ends the nightly alarm: such a
+  site is on the work list only because of those rows. A **forced** rebuild re-arms them instead —
+  it is the operator asserting the cause is dealt with, and the documented recovery must not be the
+  fastest way to exhaust the retry it restores. Recovery proper is a re-baseline or a history wipe.
+  `reason=lossy_refold` keeps its meaning for a site whose segments survive — data that still
+  exists, an alarm that must keep shouting, and a site that is visited for those segments anyway.
+
+  **Check for a 403 before reading this as data loss.** `S3CheckpointStorage.exists` treats an S3
+  HEAD denial as absence on purpose (least-privilege IAM has no `s3:ListBucket`), so a bucket-policy
+  or IAM read outage makes every segment-less site look `history_gone`. Unlike the pre-#149
+  behaviour — which repeated the alarm nightly and healed itself the moment the permission came
+  back — the drain is durable: after `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` such nights the
+  rows give up and, having no segments, the site is only reachable again through a forced rebuild.
+  That is an accepted trade (a read outage lasting that many nights has already broken every
+  checkpoint download on the deployment, and the ERROR line plus the `S3 HEAD denied (403)` warning
+  name it), but it is the reason to read this counter **per site**: many sites in one tick is a
+  permissions incident, one site alone is the real thing. Distinguishing the two at source is #157.
+- **A build that is only ending records nothing (#162).** Spring publishes `ContextClosedEvent` and
+  then destroys the singletons, so a build still running when a pod is replaced makes its next call
+  against a closed `S3Client` or `HikariDataSource` — a failure that reads exactly like a broken
+  table. Recording it detached a healthy `s3_key_parquet` on an advancing seq, and the table answered
+  404 until the next nightly rematerialize. `ApplicationShutdownSignal` is checked before the frame
+  upload, between tables and in the per-table catch: the build ends with the last-good keys, the
+  pointer and the attempt counters untouched, and `CheckpointScheduler` stops walking sites for the
+  same reason. It is deliberately **not** on `delta.checkpoint.builds.aborted` — that meter is for
+  aborts that never repair themselves, and this one is repaired by the process that replaces it.
+  **The forced path is the exception to that last clause**: a scheduled tick is found again by the
+  nightly work list, but `POST .../delta/checkpoints/rebuild` has only its durable
+  `rebuild_requested` flag, so a rebuild cut short by a rollout leaves the flag set (and does not
+  log "completed") and `resumePendingRebuilds()` re-drives it on the next start. Without that, an
+  operator's click during a deployment would disappear silently — on the very action that is the
+  documented recovery from a row that has given up.
+- **An idle visit is cheap.** The "is there anything to rematerialize here?" probe now runs *before*
+  the frame download and the fold, so a site named by the tick that turns out to have no retryable
+  row costs one query against `checkpoints`. #137's invariant is unchanged: a site with every table
+  materialized and no leftover segments is not visited at all.
+
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
 `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` (all 10 GiB by default)
@@ -788,8 +871,11 @@ headroom — but a *deterministically* oversized artifact fails the same way on 
 
 - **a checkpoint table** is skipped and, on a seq-advancing build, `s3_key_parquet` is **detached**
   (keeping it would serve an older snapshot under a newer seq), so the table disappears from the
-  Bit BI / Parquet Export listing and stays gone; the nightly rematerialize retries it and fails
-  identically (#149). Raise `DELTA_CHECKPOINT_MAX_TEMP_BYTES`.
+  Bit BI / Parquet Export listing and stays gone. The nightly rematerialize retries it and fails
+  identically, but no longer forever: since #149 the row spends one attempt per night and drops out
+  of the retry after `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS`, after which
+  `delta.checkpoint.tables.given-up` is the only thing still saying so. Raise
+  `DELTA_CHECKPOINT_MAX_TEMP_BYTES` and force a rebuild to re-arm the row.
 - **the frame** aborts the build: `last_checkpoint_seq` does not move, retention stays frozen, and
   every following build repeats the fold from scratch — but since #153 it repeats it for free, and
   the abort raises `delta.checkpoint.builds.aborted{reason=frame_too_large}` instead of only an
@@ -870,10 +956,13 @@ consequences for an operator:
 The bean also fixes three shutdown settings in code, because a pool changes what a rollout does to a
 running task: the threads are **daemon**, they are **not interrupted** on context close (as they were
 when they were virtual threads), and the queue of not-yet-due ticks is **dropped**. Boot's default
-would have called `shutdownNow()`, and an interrupted checkpoint build does not merely stop —
-`CheckpointService` catches the exception per table and detaches that table's snapshot key, so a
+would have called `shutdownNow()`, and an interrupted checkpoint build did not merely stop —
+`CheckpointService` caught the exception per table and detached that table's snapshot key, so a
 02:00 deployment would leave a table answering `404` until the nightly rematerialize. A doomed build
-should die with the process instead. Dropping the queue is what keeps that from costing anything: a
+should die with the process instead. Since #149/#162 the per-table catch also recognises the closing
+context and records nothing at all (see "When is a per-table failure the table's verdict?"), which
+makes the two guards belt and braces rather than one load-bearing setting: the interrupt is still
+not sent, and a failure that arrives anyway is no longer written down. Dropping the queue is what keeps that from costing anything: a
 plain shutdown still runs already-queued *delayed* tasks, and every cron tick is queued as one, so
 the pod would otherwise sit with parked threads until the monthly partition job came due. The
 scheduler also stops triggering the moment the context closes, rather than when its own bean is
@@ -1504,7 +1593,8 @@ every one of them.
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
-`delta.checkpoint.builds.aborted{reason=...}`,
+`delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone}`,
+`delta.checkpoint.tables.given-up`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.

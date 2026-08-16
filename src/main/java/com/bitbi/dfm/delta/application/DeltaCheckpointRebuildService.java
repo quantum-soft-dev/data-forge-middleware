@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.application;
 
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -39,13 +40,16 @@ public class DeltaCheckpointRebuildService {
 
     private final DeltaSyncStateService syncStateService;
     private final CheckpointService checkpointService;
+    private final ApplicationShutdownSignal shutdownSignal;
     private final Executor rebuildExecutor;
 
     public DeltaCheckpointRebuildService(DeltaSyncStateService syncStateService,
                                          CheckpointService checkpointService,
+                                         ApplicationShutdownSignal shutdownSignal,
                                          @Qualifier("deltaRebuildExecutor") Executor rebuildExecutor) {
         this.syncStateService = syncStateService;
         this.checkpointService = checkpointService;
+        this.shutdownSignal = shutdownSignal;
         this.rebuildExecutor = rebuildExecutor;
     }
 
@@ -91,14 +95,43 @@ public class DeltaCheckpointRebuildService {
         }
     }
 
+    /**
+     * Run one forced rebuild and settle its durable flag.
+     *
+     * <p>A build cut short because the application is shutting down is <b>neither</b> a success nor
+     * a failure (issues #149, #162): {@code CheckpointService} deliberately publishes nothing in
+     * that case and returns an empty fold, which here would otherwise read as "completed" — the log
+     * would say so and the {@code finally} would spend the very flag {@link #resumePendingRebuilds}
+     * exists to re-drive, so an operator's click during a rollout would vanish without trace. The
+     * scheduled tick can afford #162's "the next process redoes it" because the nightly work list
+     * finds the site again; this path has only the flag. So the flag is left set, and the new pod
+     * picks the rebuild up at startup.</p>
+     *
+     * <p>The check is deliberately after the call rather than only inside it: a shutdown starting
+     * just as a rebuild finished leaves the flag set and costs one redundant rebuild after the
+     * restart, which is the harmless direction to be wrong in.</p>
+     */
     private void runRebuild(UUID siteId) {
+        boolean endedByShutdown = false;
         try {
             checkpointService.rebuildFromFrame(siteId);
-            log.info("Forced checkpoint rebuild completed: siteId={}", siteId);
+            endedByShutdown = shutdownSignal.isShuttingDown();
+            if (!endedByShutdown) {
+                log.info("Forced checkpoint rebuild completed: siteId={}", siteId);
+            }
         } catch (Exception e) {
-            log.error("Forced checkpoint rebuild failed: siteId={}", siteId, e);
+            endedByShutdown = shutdownSignal.isShuttingDown();
+            if (!endedByShutdown) {
+                log.error("Forced checkpoint rebuild failed: siteId={}", siteId, e);
+            }
         } finally {
-            syncStateService.clearRebuildRequested(siteId);
+            if (endedByShutdown) {
+                log.info("Forced checkpoint rebuild for site {} did not run to completion: the "
+                        + "application is shutting down. Leaving rebuild_requested set so the "
+                        + "next process re-drives it at startup", siteId);
+            } else {
+                syncStateService.clearRebuildRequested(siteId);
+            }
         }
     }
 }

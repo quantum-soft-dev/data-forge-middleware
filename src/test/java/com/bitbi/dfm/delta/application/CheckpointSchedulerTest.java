@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
@@ -24,15 +25,24 @@ class CheckpointSchedulerTest {
     private final ChangelogRetentionService retentionService = mock(ChangelogRetentionService.class);
     private final ChangelogSegmentRepository segmentRepository = mock(ChangelogSegmentRepository.class);
     private final CheckpointRepository checkpointRepository = mock(CheckpointRepository.class);
+    private volatile boolean shuttingDown;
+    private final ApplicationShutdownSignal shutdownSignal = new ApplicationShutdownSignal() {
+        @Override
+        public boolean isShuttingDown() {
+            return shuttingDown;
+        }
+    };
+    private static final int MAX_MATERIALIZE_ATTEMPTS = 3;
     private final CheckpointScheduler scheduler = new CheckpointScheduler(
-            checkpointService, retentionService, segmentRepository, checkpointRepository);
+            checkpointService, retentionService, segmentRepository, checkpointRepository,
+            new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal);
 
     @Test
     void buildsAndPrunesEachSite() {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(a, b));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
 
         scheduler.buildCheckpoints();
 
@@ -47,7 +57,7 @@ class CheckpointSchedulerTest {
         UUID failing = UUID.randomUUID();
         UUID ok = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(failing, ok));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
         when(checkpointService.buildCheckpoint(failing)).thenThrow(new RuntimeException("boom"));
 
         scheduler.buildCheckpoints();
@@ -64,7 +74,7 @@ class CheckpointSchedulerTest {
         // rematerialize that table from the frame.
         UUID pruned = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of());
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of(pruned));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of(pruned));
 
         scheduler.buildCheckpoints();
 
@@ -76,7 +86,7 @@ class CheckpointSchedulerTest {
     void visitsASiteOnlyOnceWhenItHasBothSegmentsAndAnUnmaterializedCheckpoint() {
         UUID both = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(both));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of(both));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of(both));
 
         scheduler.buildCheckpoints();
 
@@ -90,7 +100,7 @@ class CheckpointSchedulerTest {
         UUID withSegments = UUID.randomUUID();
         UUID rematerializeOnly = UUID.randomUUID();
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(withSegments));
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints())
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
                 .thenReturn(List.of(rematerializeOnly));
 
         scheduler.buildCheckpoints();
@@ -101,11 +111,32 @@ class CheckpointSchedulerTest {
     }
 
     @Test
+    void stopsVisitingSitesOnceTheApplicationIsShuttingDown() {
+        // Issue #162. The remaining sites would each open a transaction and reach for an S3 client
+        // that is about to be destroyed, and every one of those failures is a chance to record a
+        // verdict about data from a fact about the process.
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(first, second));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(first)).thenAnswer(invocation -> {
+            shuttingDown = true;
+            return java.util.Map.of();
+        });
+
+        scheduler.buildCheckpoints();
+
+        verify(retentionService).prune(first);
+        verify(checkpointService, never()).buildCheckpoint(second);
+        verify(retentionService, never()).prune(second);
+    }
+
+    @Test
     void visitsNothingWhenNoSiteHasSegmentsOrAnUnmaterializedCheckpoint() {
         // A site whose tables are all materialized and whose segments are gone is not visited:
         // neither query names it, and the tick has no other source of sites.
         when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of());
-        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints()).thenReturn(List.of());
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS)).thenReturn(List.of());
 
         scheduler.buildCheckpoints();
 

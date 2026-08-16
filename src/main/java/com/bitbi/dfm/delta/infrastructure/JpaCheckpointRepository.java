@@ -28,8 +28,14 @@ public interface JpaCheckpointRepository extends JpaRepository<Checkpoint, UUID>
     List<Checkpoint> findBySiteId(UUID siteId);
 
     @Override
-    @Query("SELECT DISTINCT c.siteId FROM Checkpoint c WHERE c.s3KeyParquet IS NULL")
-    List<UUID> findSiteIdsWithUnmaterializedCheckpoints();
+    @Query("SELECT DISTINCT c.siteId FROM Checkpoint c "
+            + "WHERE c.s3KeyParquet IS NULL AND c.materializeAttempts < :maxAttempts")
+    List<UUID> findSiteIdsWithUnmaterializedCheckpoints(int maxAttempts);
+
+    @Override
+    @Query("SELECT COUNT(c) FROM Checkpoint c "
+            + "WHERE c.s3KeyParquet IS NULL AND c.materializeAttempts >= :maxAttempts")
+    long countGivenUpMaterializing(int maxAttempts);
 
     @Override
     @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)

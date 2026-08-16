@@ -151,7 +151,10 @@ class SegmentedRebaselineIntegrationTest extends BaseIntegrationTest {
         assertFalse(segmentRepository.findProvisionalBySiteId(SITE).isEmpty(),
                 "the half-streamed snapshot is retained, but invisible");
 
-        Map<String, Map<String, FoldedRow>> state = checkpointService.buildCheckpoint(SITE);
+        // A forced rebuild rather than the scheduled build, because since issue #149 an idle visit
+        // with nothing to rematerialize answers without folding at all — the assertion here is
+        // about what a fold *sees*, so it has to ask for one.
+        Map<String, Map<String, FoldedRow>> state = checkpointService.rebuildFromFrame(SITE);
         assertEquals(1, state.get("customers").size(),
                 "the fold still returns the old baseline, not a half-replaced one");
     }
