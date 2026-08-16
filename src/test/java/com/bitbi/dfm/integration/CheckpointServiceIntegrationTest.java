@@ -66,7 +66,7 @@ class CheckpointServiceIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void streamsALargeTableFrameThatTheExistingParseCanRead() {
+    void streamsALargeTableFrameThatTheExistingParseCanRead() throws java.io.IOException {
         // Issue #126: a site big enough that collecting the frame used to blow the heap must
         // still complete, and the file-backed bytes must be the same form parse() already reads.
         final int rows = 3_000;
@@ -83,7 +83,7 @@ class CheckpointServiceIntegrationTest extends BaseIntegrationTest {
         assertEquals(rows, checkpoint.getRowCount());
         assertEquals(rows, checkpoint.getSeq());
 
-        List<ChangeRecord> frame = ChangelogCodec.parse(checkpointStorage.downloadFrame(SITE, rows));
+        List<ChangeRecord> frame = readFrame(rows);
         assertEquals(rows, frame.size(), "the streamed frame must contain every surviving row");
         assertTrue(frame.stream().allMatch(r -> r.getOp() == Op.INSERT), "frame is all-INSERT");
 
@@ -95,6 +95,15 @@ class CheckpointServiceIntegrationTest extends BaseIntegrationTest {
         Checkpoint after = checkpointRepository.findBySiteIdAndTableName(SITE, "customers").orElseThrow();
         assertEquals(rows + 1L, after.getRowCount(), "the next build must seed from the streamed frame");
         assertEquals(rows + 1L, after.getSeq());
+    }
+
+    /** Read a frame back the way the build now does: streamed, never as one byte[] (issue #152). */
+    private List<ChangeRecord> readFrame(long seq) throws java.io.IOException {
+        List<ChangeRecord> records = new java.util.ArrayList<>();
+        try (java.io.InputStream frame = checkpointStorage.openFrame(SITE, seq)) {
+            ChangelogCodec.forEach(frame, records::add);
+        }
+        return records;
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {

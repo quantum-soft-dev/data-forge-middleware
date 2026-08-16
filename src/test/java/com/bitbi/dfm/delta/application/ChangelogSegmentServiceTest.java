@@ -9,11 +9,14 @@ import com.bitbi.dfm.delta.infrastructure.S3ChangelogSegmentStorage;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -185,6 +188,38 @@ class ChangelogSegmentServiceTest {
                 () -> service.forEachRecord("delta/seg", ignored -> { }, clock));
         assertTrue(clock.hasSamples());
         assertTrue(clock.downloadNanos() >= 0L);
+    }
+
+    @Test
+    void forEachRecordKeepsTheConsumersFailureWhenClosingTheStreamAlsoFails() throws Exception {
+        // A consumer that stops the replay leaves a partially consumed S3 stream, which is exactly
+        // the stream that fails to close — and the close failure used to replace the reason for
+        // stopping. It has to be suppressed instead: a checkpoint fold that ran out of its heap
+        // budget (issue #152) is recognised by its type, counted and logged with the site's id,
+        // and none of that happens if it arrives as an UncheckedIOException about a close.
+        java.io.InputStream failsToClose = new java.io.FilterInputStream(
+                new java.io.ByteArrayInputStream(ChangelogCodec.serialize(
+                        List.of(rec("customers", Op.INSERT, 1L))))) {
+            @Override
+            public void close() throws IOException {
+                throw new IOException("connection already gone");
+            }
+        };
+        when(storage.open("delta/seg")).thenReturn(new software.amazon.awssdk.core.ResponseInputStream<>(
+                software.amazon.awssdk.services.s3.model.GetObjectResponse.builder().build(),
+                failsToClose));
+        IllegalStateException stoppedTheReplay = new IllegalStateException("the fold is full");
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> service.forEachRecord("delta/seg", ignored -> {
+                    throw stoppedTheReplay;
+                }));
+
+        assertSame(stoppedTheReplay, thrown, "the reason the replay stopped must be what propagates");
+        // Two of them: the codec's own try-with-resources closes the gzip wrapper (which closes
+        // this stream) and the catch closes it again. Both are suppressed, neither replaces.
+        assertTrue(thrown.getSuppressed().length >= 1, "the close failure is kept, not lost");
+        assertInstanceOf(IOException.class, thrown.getSuppressed()[0]);
     }
 
     private static ChangeRecord rec(String table, Op op, long seq) {
