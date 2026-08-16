@@ -223,6 +223,10 @@ public class SqlGenerationPersistence {
         return changelogSegmentRepository.existsByBatchId(batchId);
     }
 
+    Optional<PluginSqlGeneration> findBySourceBatchId(UUID sourceBatchId) {
+        return sqlGenerationRepository.findBySourceBatchId(sourceBatchId);
+    }
+
     private static List<UploadedFile> filterRelevantFiles(List<UploadedFile> files, boolean isCdc) {
         if (isCdc) {
             return files.stream()

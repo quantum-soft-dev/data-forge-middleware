@@ -83,7 +83,9 @@ class DeltaSqlQueueOutsideTransactionIntegrationTest extends BaseIntegrationTest
         jdbc.update("INSERT INTO site_schemas (id, site_id, schema_data, schema_version, created_at, updated_at) "
                         + "VALUES (?, ?, ?::jsonb, 1, now(), now())",
                 UUID.randomUUID(), SITE_ID, schemaJson);
-        accountPluginRepository.save(AccountPlugin.activate(ACCOUNT_ID, "bit-bi", Map.of("tenantId", "t1")));
+        if (accountPluginRepository.findByAccountIdAndPluginId(ACCOUNT_ID, "bit-bi").isEmpty()) {
+            accountPluginRepository.save(AccountPlugin.activate(ACCOUNT_ID, "bit-bi", Map.of("tenantId", "t1")));
+        }
     }
 
     @BeforeEach
@@ -107,8 +109,10 @@ class DeltaSqlQueueOutsideTransactionIntegrationTest extends BaseIntegrationTest
                         + "total_size, has_errors, started_at, created_at, completed_at) "
                         + "VALUES (?, ?, ?, 'COMPLETED', ?, 0, 0, false, now(), now(), now())",
                 batchId, ACCOUNT_ID, SITE_ID, "delta/" + batchId + "/");
-        changelogSegmentService.persist(SITE_ID, batchId, "DELTA", 1L, List.of(
-                ChangeRecord.newBuilder().setTable("customers").setOp(Op.INSERT).setSeq(1L)
+        // A high first_seq so this row cannot collide with store-01 fixtures that use seq 1
+        // (uk_segment_site_first_seq) when the full CI suite shares one database.
+        changelogSegmentService.persist(SITE_ID, batchId, "DELTA", 9_000_001L, List.of(
+                ChangeRecord.newBuilder().setTable("customers").setOp(Op.INSERT).setSeq(9_000_001L)
                         .putAllKey(Map.of("id", Value.newBuilder().setIntValue(1).build()))
                         .putAllData(data("id", Value.newBuilder().setIntValue(1).build(),
                                 "name", Value.newBuilder().setStringValue("Ann").build()))

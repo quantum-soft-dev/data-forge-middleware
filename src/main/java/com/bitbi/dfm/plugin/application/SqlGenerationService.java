@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -250,16 +251,12 @@ public class SqlGenerationService {
             );
             long fileSize = s3SqlFileStorageService.getFileSize(s3Key);
 
-            // Phase 3: Save generation record (separate transaction)
+            // Phase 3: Save generation record (separate transaction). Two workers can now
+            // race here (#164 dropped the queue TX that used to serialize them); the unique
+            // on source_batch_id is the durable claim.
             long durationMs = timer.stop(meterRegistry.timer("sql.generation.duration"));
-            PluginSqlGeneration generation = persistence.saveGenerationRecord(
-                    accountPluginId,
-                    batchData,
-                    s3Key,
-                    fileSize,
-                    result.stats(),
-                    durationMs
-            );
+            PluginSqlGeneration generation = persistOrAdoptExisting(
+                    accountPluginId, batchData, s3Key, fileSize, result.stats(), durationMs);
 
             log.info("SQL generation completed: batchId={}, statements={}, duration={}ms",
                     batchId, result.stats().total(), durationMs / 1_000_000);
@@ -581,6 +578,27 @@ public class SqlGenerationService {
             throw e;
         } finally {
             MDC.clear();
+        }
+    }
+
+    /**
+     * Persist the generation, or adopt the row another worker already wrote for this batch.
+     * The unique on {@code source_batch_id} is the durable claim now that the queue no longer
+     * holds {@code SKIP LOCKED} across S3 (issue #164).
+     */
+    private PluginSqlGeneration persistOrAdoptExisting(
+            Long accountPluginId,
+            SqlGenerationPersistence.BatchData batchData,
+            String s3Key,
+            long fileSize,
+            SqlGenerationStats stats,
+            long durationNanos) {
+        try {
+            return persistence.saveGenerationRecord(
+                    accountPluginId, batchData, s3Key, fileSize, stats, durationNanos);
+        } catch (DataIntegrityViolationException e) {
+            cleanupOrphanedS3File(s3Key);
+            return persistence.findBySourceBatchId(batchData.batch().getId()).orElseThrow(() -> e);
         }
     }
 

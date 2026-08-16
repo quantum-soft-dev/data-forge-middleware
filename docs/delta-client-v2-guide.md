@@ -1593,7 +1593,9 @@ transaction of their own. The pending-row claim (`FOR UPDATE SKIP LOCKED`) and t
 `egress_at` / `plugin_sql_at` write are the repository's short transactions; the S3 download,
 Parquet render, per-table uploads, semaphore wait and SQL `PutObject` run with nothing open. A
 crash between the two halves leaves the row pending and the sweep retries — the same keys are
-overwritten. `generateSqlForBatch` acquires the semaphore *before* any transaction and throws if
+overwritten. Two workers can now claim the same pending SQL segment; `uk_sql_gen_source_batch`
+is the durable claim (the loser adopts the winner's row and deletes its own orphaned SQL object).
+`generateSqlForBatch` acquires the semaphore *before* any transaction and throws if
 one is already open, so the hold cannot return silently. `loadBatchData` and
 `saveGenerationRecord` live on `SqlGenerationPersistence` so their `@Transactional` is a real
 proxy boundary (they were `protected` self-invocations). `ParquetExportFileService.listFiles`

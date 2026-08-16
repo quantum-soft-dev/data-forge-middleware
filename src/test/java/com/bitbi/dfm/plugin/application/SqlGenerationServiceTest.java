@@ -432,6 +432,25 @@ class SqlGenerationServiceTest {
         }
 
         @Test
+        @DisplayName("should adopt the existing row when another worker wins the unique claim")
+        void shouldAdoptExistingGenerationOnUniqueViolation() throws Exception {
+            when(deltaStrategy.generate(eq(batchId), eq(siteId), eq(List.of(segment)), any(), any()))
+                    .thenReturn(new SqlGenerationResult("INSERT INTO t (id) VALUES (1);\n",
+                            new SqlGenerationStats(1, 0, 0, 1)));
+            PluginSqlGeneration existing = PluginSqlGeneration.create(
+                    accountPluginId, siteId, batchId, null, "plugins/bit-bi/winner.sql", 10L,
+                    new SqlGenerationStats(1, 0, 0, 1), 1L);
+            when(sqlGenerationRepository.save(any())).thenThrow(
+                    new org.springframework.dao.DataIntegrityViolationException("uk_sql_gen_source_batch"));
+            when(sqlGenerationRepository.findBySourceBatchId(batchId)).thenReturn(Optional.of(existing));
+
+            Optional<PluginSqlGeneration> result = deltaService.generateSqlForBatch(batchId, accountPluginId);
+
+            assertThat(result).contains(existing);
+            verify(s3SqlFileStorageService).deleteFile("plugins/bit-bi/x.sql");
+        }
+
+        @Test
         @DisplayName("should keep the idempotency guard for V2 batches")
         void shouldKeepIdempotencyGuard() throws Exception {
             when(sqlGenerationRepository.existsBySourceBatchId(batchId)).thenReturn(true);

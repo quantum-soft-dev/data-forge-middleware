@@ -11,6 +11,7 @@ import com.bitbi.dfm.site.domain.SiteRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.util.HashSet;
@@ -143,7 +144,11 @@ public class DeltaSqlQueueService {
                 if (covered.add(tableName)) {
                     PluginDeltaBaseline suspended =
                             PluginDeltaBaseline.create(activation.getId(), site.getId(), tableName, Long.MAX_VALUE);
-                    baselineRepository.save(suspended);
+                    try {
+                        baselineRepository.save(suspended);
+                    } catch (DataIntegrityViolationException e) {
+                        // Another worker already inserted this table's suspension (#164).
+                    }
                     newlySuspended.add(tableName);
                 }
             }
