@@ -469,20 +469,30 @@ pages/{feature}/            # Route pages
   `BitBiDeltaSqlIntegrationTest` keeps the day-wide `findBySiteIdAndCreatedAtAfter` call the
   `/sql-changes` ordering assertions are about, and filters it to the batches the method seeded.
   `SqlGenerationIntegrationTest`'s `findAll()).isEmpty()` — an assertion that the whole shared
-  database held no generation at all — is scoped to its own batch. **The load-bearing change is
-  one line of `application-test.yml`**: `plugin.sql-generation.delta-sweep-ms: 3600000`, the
-  slow-sweep treatment `delta.egress.sweep-ms` and `delta.batch-parquet.sweep-ms` already had and
-  026 never gave this queue. At the shipped 60s the tick fired in **every cached Spring context**,
+  database held no generation at all — is scoped to a real batch on a real account that has no
+  bit-bi activation, so it can still fail (a random UUID could never gain a generation:
+  `source_batch_id` is NOT NULL with an FK to `batches`). The widest single change is one line of
+  `application-test.yml`: `plugin.sql-generation.delta-sweep-ms: 3600000`, the slow-sweep treatment
+  `delta.egress.sweep-ms` and `delta.batch-parquet.sweep-ms` already had and 026 never gave this
+  queue. At the shipped 60s the tick fired in **every cached Spring context for the whole run**,
   and `DeltaSqlQueueService.processNextPending()` renders inside its transaction, S3 included — so
   a context whose test class had finished long ago could hold row locks on `changelog_segments`
   while the next class's `@Sql("/test-data.sql")` tried to delete those rows, which is the
   `ScriptStatementFailedException` that took `BitBiDeltaSqlIntegrationTest`'s two follow-on methods
   down with the first. The explicit wake (`DeltaSqlSweepWorker.wake()` from `BitBiPlugin` on
   BATCH_COMPLETED and from `PluginDeltaBaselineService` on reinit) is untouched, so the paths the
-  tests exercise still run. `clearAppSettings()` moves from `BaseIntegrationTest` to
-  `AbstractIntegrationTest` — `SqlGenerationIntegrationTest` extends the latter — and is joined
-  there by `clearPluginSqlGenerations()`, called in both classes' `@BeforeEach` and pinned in the
-  #119 shape by a leftover-then-clear test. Audit of the same assertion shape elsewhere: the eight
+  tests exercise still run. **It does not close the window entirely** and the key says so:
+  `@Scheduled(fixedDelayString=…)` carries no initial delay, so every context still drains once
+  when it is created — one drain per cached context instead of one per context per minute, with
+  the annotation-level fix and the guard that would have caught the missing key tracked in #167.
+  `clearAppSettings()` moves from `BaseIntegrationTest` to `AbstractIntegrationTest` —
+  `SqlGenerationIntegrationTest` extends the latter — and is joined there by
+  `clearPluginSqlGenerations(UUID...)`, which deletes **by site** rather than table-wide: an
+  unqualified `DELETE` would take exactly the locks whose collision with `@Sql` this ticket is
+  about, which is the one way `clearAppSettings`'s single-row precedent does not carry over. It is
+  called in both classes' `@BeforeEach` and pinned in the #119 shape by a leftover-then-clear test,
+  whose own assertions on the site are by content rather than by count — a guard test must not
+  re-introduce the shape it retires. Audit of the same assertion shape elsewhere: the eight
   occurrences in `PluginHistoryIntegrationTest` all sit inside `@Disabled` nested classes and were
   left alone. Test-only — no production code, REST, gRPC, DTO, migration, production
   configuration-key, metric, S3-key or frontend change.

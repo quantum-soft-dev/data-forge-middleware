@@ -84,7 +84,7 @@ class BitBiDeltaSqlIntegrationTest extends BaseIntegrationTest {
         // test-data.sql empties plugin_sql_generations only through the cascades of the rows it
         // deletes, and only at the instant it runs; a generation written afterwards by an async
         // dispatch or by the delta-SQL sweep of another cached context outlives it (issue #159).
-        clearPluginSqlGenerations();
+        clearPluginSqlGenerations(SITE_ID);
         seededBatchIds.clear();
         jdbc.update("UPDATE sites SET client_api_version = 'V2' WHERE id = ?", SITE_ID);
         declareCustomersSchema();

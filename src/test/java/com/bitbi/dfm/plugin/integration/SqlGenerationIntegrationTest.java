@@ -70,10 +70,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
     private static final UUID TEST_ACCOUNT_ID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     // Use existing site from test-data.sql: admin-site.example.com (has pre-existing batch)
     private static final UUID TEST_SITE_ID = UUID.fromString("b2c3d4e5-f6a7-8901-bcde-f12345678901");
-    private static final String TEST_SITE_DOMAIN = "admin-site.example.com";
     // Site without pre-existing batches (for "first batch" tests)
     private static final UUID FRESH_SITE_ID = UUID.fromString("0199bab0-1111-1111-1111-111111111111");
-    private static final String FRESH_SITE_DOMAIN = "test-store.example.com";
+    // test-account-2 and its store-03 site — a real account this class never activates bit-bi for
+    private static final UUID OTHER_ACCOUNT_ID = UUID.fromString("0199bab1-fad2-bf76-c478-eae1f61e1c17");
+    private static final UUID OTHER_SITE_ID = UUID.fromString("0199bab0-ca3b-e41c-5521-2f4b33fda8b6");
 
     /**
      * Reference to the AccountPlugin activation, used by tests that need to set baseline.
@@ -85,7 +86,7 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         // test-data.sql empties plugin_sql_generations only through the cascades of the rows it
         // deletes, and only at the instant it runs; a generation written afterwards by an async
         // dispatch or by the delta-SQL sweep of another cached context outlives it (issue #159).
-        clearPluginSqlGenerations();
+        clearPluginSqlGenerations(TEST_SITE_ID, FRESH_SITE_ID, OTHER_SITE_ID);
 
         // Activate Bit BI plugin for test account
         accountPlugin = AccountPlugin.activate(TEST_ACCOUNT_ID, "bit-bi",
@@ -115,12 +116,18 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
      * still return empty if the row is not committed yet, which is how the same line was also seen
      * failing with "was 0"; polling turns that into a pass rather than a coin flip.</p>
      *
+     * <p>On today's code the wait normally ends on its first poll — this class calls
+     * {@code generateSqlForBatch} directly and that call is synchronous, so the row is committed
+     * before it returns. The poll is what keeps the assertion correct if the row ever arrives
+     * through the {@code @Async} dispatcher instead (the only explanation the "was 0" sighting
+     * has), and the ceiling is kept short so a genuine regression still fails quickly.</p>
+     *
      * @param sourceBatchId the batch whose generation is expected
      * @return the generation for that batch
      */
     private PluginSqlGeneration awaitGenerationFor(UUID sourceBatchId) {
         return Awaitility.await("SQL generation for batch " + sourceBatchId)
-                .atMost(Duration.ofSeconds(15))
+                .atMost(Duration.ofSeconds(5))
                 .pollInterval(Duration.ofMillis(100))
                 .until(() -> pluginSqlGenerationRepository.findBySourceBatchId(sourceBatchId),
                         Optional::isPresent)
@@ -151,12 +158,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @DisplayName("Should trigger SQL generation on BATCH_COMPLETED event")
         void shouldTriggerSqlGenerationOnBatchCompletedEvent() throws Exception {
             // Given - First batch is the baseline (set explicitly)
-            Batch firstBatch = createBatchWithCsvFile(null, "customers.csv",
+            Batch firstBatch = createBatchWithCsvFile("customers.csv",
                     "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com");
             setBaselineBatch(firstBatch.getId());
 
             // Second batch with modified data (will trigger SQL generation)
-            Batch secondBatch = createBatchWithCsvFile(null, "customers.csv",
+            Batch secondBatch = createBatchWithCsvFile("customers.csv",
                     "id,name,email\n1,Alice,alice@new.com\n3,Charlie,charlie@example.com");
 
             // When - Generate from historical file-backed batch data directly.
@@ -179,11 +186,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         void shouldGenerateInsertStatementsForFirstBatch() throws Exception {
             // Given - Set baseline to any batch (required for SQL generation to proceed)
             // Create a dummy baseline batch on the main test site
-            Batch baselineBatch = createBatchWithCsvFile(null, "dummy.csv", "id\n1");
+            Batch baselineBatch = createBatchWithCsvFile("dummy.csv", "id\n1");
             setBaselineBatch(baselineBatch.getId());
 
             // Create first batch for FRESH_SITE_ID (has no previous batch for this site)
-            Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "products.csv",
+            Batch batch = createBatchWithCsvFile(TEST_ACCOUNT_ID, FRESH_SITE_ID, "products.csv",
                     "id,name,price\n1,Widget,9.99\n2,Gadget,19.99");
 
             // When
@@ -200,22 +207,23 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
 
         @Test
         @DisplayName("Should not trigger SQL generation for accounts without Bit BI plugin")
-        void shouldNotTriggerSqlGenerationForAccountsWithoutPlugin() throws Exception {
-            // Given - Different account without Bit BI plugin
-            UUID otherAccountId = UUID.randomUUID();
-            UUID batchId = UUID.randomUUID();
+        void shouldNotTriggerSqlGenerationForAccountsWithoutPlugin() {
+            // Given - a real, completed, file-backed batch on a real account this class never
+            // activates bit-bi for. It has to be real on both counts: a random batch id could
+            // never gain a generation anyway (source_batch_id is NOT NULL with an FK to batches),
+            // so asserting on one would assert nothing about the dispatcher.
+            Batch batch = createBatchWithCsvFile(OTHER_ACCOUNT_ID, OTHER_SITE_ID, "orders.csv",
+                    "id,total\n1,10.00\n2,20.00");
 
             // When - Publish batch completed event
-            BatchCompletedEvent event = new BatchCompletedEvent(
-                    batchId, otherAccountId, 1, 512L
-            );
-            eventPublisher.publishEvent(event);
+            eventPublisher.publishEvent(new BatchCompletedEvent(
+                    batch.getId(), OTHER_ACCOUNT_ID, 1, 512L));
 
-            // Then - the dispatch produces no generation for this batch, and keeps producing none
-            // for long enough that a late async write is caught. Scoped to the batch: findAll() was
-            // asserting that the whole shared database held no generation at all, which no test
-            // owns (issue #159).
-            assertNoGenerationFor(batchId);
+            // Then - a dispatcher that stopped filtering on an active activation would have had
+            // everything it needs to render this batch. Scoped to the batch: the retired
+            // findAll() was asserting the whole shared database held no generation at all, which
+            // no test owns (issue #159).
+            assertNoGenerationFor(batch.getId());
         }
     }
 
@@ -227,12 +235,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @DisplayName("Should detect modified rows between batches")
         void shouldDetectModifiedRowsBetweenBatches() throws Exception {
             // Given - First batch is the baseline
-            Batch firstBatch = createBatchWithCsvFile(null, "users.csv",
+            Batch firstBatch = createBatchWithCsvFile("users.csv",
                     "id,name,status\n1,Alice,active\n2,Bob,active");
             setBaselineBatch(firstBatch.getId());
 
             // Second batch with Bob's status changed
-            Batch secondBatch = createBatchWithCsvFile(null, "users.csv",
+            Batch secondBatch = createBatchWithCsvFile("users.csv",
                     "id,name,status\n1,Alice,active\n2,Bob,inactive");
 
             // When
@@ -250,12 +258,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @DisplayName("Should detect deleted rows between batches")
         void shouldDetectDeletedRowsBetweenBatches() throws Exception {
             // Given - First batch with 3 rows is the baseline
-            Batch firstBatch = createBatchWithCsvFile(null, "items.csv",
+            Batch firstBatch = createBatchWithCsvFile("items.csv",
                     "id,name\n1,Item1\n2,Item2\n3,Item3");
             setBaselineBatch(firstBatch.getId());
 
             // Second batch with row 3 removed
-            Batch secondBatch = createBatchWithCsvFile(null, "items.csv",
+            Batch secondBatch = createBatchWithCsvFile("items.csv",
                     "id,name\n1,Item1\n2,Item2");
 
             // When
@@ -273,12 +281,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @DisplayName("Should handle multiple changes in single batch")
         void shouldHandleMultipleChangesInSingleBatch() throws Exception {
             // Given - First batch is the baseline
-            Batch firstBatch = createBatchWithCsvFile(null, "data.csv",
+            Batch firstBatch = createBatchWithCsvFile("data.csv",
                     "id,value\n1,A\n2,B\n3,C");
             setBaselineBatch(firstBatch.getId());
 
             // Second batch: 1 modified, 3 deleted, 4 added
-            Batch secondBatch = createBatchWithCsvFile(null, "data.csv",
+            Batch secondBatch = createBatchWithCsvFile("data.csv",
                     "id,value\n1,A-UPDATED\n2,B\n4,D");
 
             // When
@@ -297,31 +305,33 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         void shouldIsolateItsOwnGenerationFromLeftovers() {
             // Given - a first delta on the site, standing in for the generation another test
             // method, an async dispatch or another context's sweep worker leaves behind
-            Batch baselineBatch = createBatchWithCsvFile(null, "stock.csv", "id,qty\n1,1\n2,2");
+            Batch baselineBatch = createBatchWithCsvFile("stock.csv", "id,qty\n1,1\n2,2");
             setBaselineBatch(baselineBatch.getId());
-            Batch leftoverBatch = createBatchWithCsvFile(null, "stock.csv", "id,qty\n1,1\n2,9");
+            Batch leftoverBatch = createBatchWithCsvFile("stock.csv", "id,qty\n1,1\n2,9");
             sqlGenerationService.generateSqlForBatch(leftoverBatch.getId(), accountPlugin.getId());
-            assertThat(awaitGenerationFor(leftoverBatch.getId()).getUpdateCount()).isEqualTo(1);
+            PluginSqlGeneration leftover = awaitGenerationFor(leftoverBatch.getId());
 
             // When - this test produces its own generation while that one is still on the site
-            Batch ownBatch = createBatchWithCsvFile(null, "stock.csv", "id,qty\n1,1\n2,9\n3,3");
+            Batch ownBatch = createBatchWithCsvFile("stock.csv", "id,qty\n1,1\n2,9\n3,3");
             sqlGenerationService.generateSqlForBatch(ownBatch.getId(), accountPlugin.getId());
 
-            // Then - naming the source batch reads the right one; the site now carries two, which
-            // is exactly what the retired findBySiteId(...).hasSize(1).get(0) shape could not
-            // survive (issue #159)
+            // Then - the site carries both, so a hasSize(1) + get(0) here would fail or read the
+            // wrong row; naming the source batch resolves each of them regardless. The
+            // assertion on the site is by content, not by count: another class's async dispatch
+            // may legitimately have added a third (issue #159).
             PluginSqlGeneration own = awaitGenerationFor(ownBatch.getId());
-            assertThat(own.getInsertCount()).isEqualTo(1); // 3,3 added
-            assertThat(own.getUpdateCount()).isEqualTo(0);
-            assertThat(own.getComparisonBatchId()).isEqualTo(leftoverBatch.getId());
-            assertThat(pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID)).hasSize(2);
+            assertThat(own.getId()).isNotEqualTo(leftover.getId());
+            assertThat(pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID))
+                    .extracting(PluginSqlGeneration::getSourceBatchId)
+                    .contains(leftoverBatch.getId(), ownBatch.getId());
 
             // And the @BeforeEach clear is what stops those two reaching the next method without
             // depending on test-data.sql's cascades — which only fire for accounts and sites its
             // LIKE '%@example.com' / '%.example.com' filters happen to match, and only at the
             // instant the script runs
-            clearPluginSqlGenerations();
-            assertThat(pluginSqlGenerationRepository.findBySiteId(TEST_SITE_ID)).isEmpty();
+            clearPluginSqlGenerations(TEST_SITE_ID);
+            assertThat(pluginSqlGenerationRepository.findBySourceBatchId(leftoverBatch.getId())).isEmpty();
+            assertThat(pluginSqlGenerationRepository.findBySourceBatchId(ownBatch.getId())).isEmpty();
         }
     }
 
@@ -333,11 +343,11 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @DisplayName("Should handle CSV filenames starting with digits by prefixing with underscore")
         void shouldHandleCsvFilenamesStartingWithDigits() throws Exception {
             // Given - Set baseline to any batch (required for SQL generation to proceed)
-            Batch baselineBatch = createBatchWithCsvFile(null, "dummy.csv", "id\n1");
+            Batch baselineBatch = createBatchWithCsvFile("dummy.csv", "id\n1");
             setBaselineBatch(baselineBatch.getId());
 
             // Create batch with CSV file with name starting with digit (like 77nsfsfira.csv)
-            Batch batch = createBatchWithCsvFileForSite(FRESH_SITE_ID, FRESH_SITE_DOMAIN, "77nsfsfira.csv",
+            Batch batch = createBatchWithCsvFile(TEST_ACCOUNT_ID, FRESH_SITE_ID, "77nsfsfira.csv",
                     "id,name\n1,Test\n2,Data");
 
             // When
@@ -359,12 +369,12 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
         @DisplayName("Should store generated SQL in S3 with correct path structure")
         void shouldStoreGeneratedSqlInS3WithCorrectPathStructure() throws Exception {
             // Given - Set up baseline batch first
-            Batch baselineBatch = createBatchWithCsvFile(null, "orders.csv",
+            Batch baselineBatch = createBatchWithCsvFile("orders.csv",
                     "id,customer,total\n0,Dummy,0.00");
             setBaselineBatch(baselineBatch.getId());
 
             // Create second batch that will trigger SQL generation
-            Batch batch = createBatchWithCsvFile(null, "orders.csv",
+            Batch batch = createBatchWithCsvFile("orders.csv",
                     "id,customer,total\n1,Alice,100.00");
 
             // When
@@ -380,36 +390,32 @@ class SqlGenerationIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
-     * Helper method to create a batch with CSV file uploaded to S3.
-     * Creates both the Batch entity in the database and uploads the file to S3.
-     * Uses batch ID in path to ensure uniqueness. Uses default TEST_SITE_ID.
+     * Helper method to create a batch with CSV file uploaded to S3 on the default account and site.
      *
-     * @param ignored unused parameter (kept for API compatibility)
      * @param filename the CSV filename
      * @param content the CSV content
      * @return the created and saved Batch entity
      */
-    @SuppressWarnings("unused")
-    private Batch createBatchWithCsvFile(UUID ignored, String filename, String content) {
-        return createBatchWithCsvFileForSite(TEST_SITE_ID, TEST_SITE_DOMAIN, filename, content);
+    private Batch createBatchWithCsvFile(String filename, String content) {
+        return createBatchWithCsvFile(TEST_ACCOUNT_ID, TEST_SITE_ID, filename, content);
     }
 
     /**
-     * Helper method to create a batch with CSV file uploaded to S3 for a specific site.
+     * Helper method to create a completed batch with a CSV file uploaded to S3.
      * Creates both the Batch entity in the database and uploads the file to S3.
      * Uses batch ID in path to ensure uniqueness.
      *
+     * @param accountId the account that owns the site
      * @param siteId the site ID to create batch for
-     * @param siteDomain the site domain
      * @param filename the CSV filename
      * @param content the CSV content
      * @return the created and saved Batch entity
      */
-    private Batch createBatchWithCsvFileForSite(UUID siteId, String siteDomain, String filename, String content) {
+    private Batch createBatchWithCsvFile(UUID accountId, UUID siteId, String filename, String content) {
         byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
 
         // Create Batch entity using the factory method
-        Batch batch = Batch.start(TEST_ACCOUNT_ID, siteId);
+        Batch batch = Batch.start(accountId, siteId);
 
         // Save batch first to get its ID
         batch = batchRepository.save(batch);

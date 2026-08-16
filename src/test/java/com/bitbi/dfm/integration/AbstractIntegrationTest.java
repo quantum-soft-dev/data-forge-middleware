@@ -13,6 +13,8 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
 
+import java.util.UUID;
+
 import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
 /**
@@ -209,8 +211,8 @@ public abstract class AbstractIntegrationTest {
     }
 
     /**
-     * Delete every row in {@code plugin_sql_generations}. {@code test-data.sql} never names this
-     * table: it is emptied only as a side effect of the {@code ON DELETE CASCADE} on
+     * Delete a site's rows in {@code plugin_sql_generations}. {@code test-data.sql} never names
+     * this table: it is emptied only as a side effect of the {@code ON DELETE CASCADE} on
      * {@code account_plugin_id} / {@code site_id} / {@code source_batch_id}, which fires just for
      * the accounts and sites that script deletes, and only at the instant it runs. A generation
      * written <em>after</em> that instant — by an {@code @Async} plugin dispatch or by
@@ -220,9 +222,17 @@ public abstract class AbstractIntegrationTest {
      *
      * <p>Clearing is the leftover half of the fix; the concurrent half is that assertions name the
      * generation they produced ({@code findBySourceBatchId}) and wait for it instead of sampling
-     * the site. Same reasoning and same shape as {@link #clearAppSettings()} (issue #119).</p>
+     * the site. Same reasoning as {@link #clearAppSettings()} (issue #119), but deliberately
+     * <em>not</em> the same unqualified {@code DELETE}: {@code app_settings} holds one row, while
+     * this table accumulates across the suite, and a table-wide delete would take exactly the
+     * locks whose collision with {@code @Sql("/test-data.sql")} this ticket is about. The caller
+     * names the sites it asserts on.</p>
+     *
+     * @param siteIds sites whose generations to delete
      */
-    protected void clearPluginSqlGenerations() {
-        sharedStateCleanupJdbc.update("DELETE FROM plugin_sql_generations");
+    protected void clearPluginSqlGenerations(UUID... siteIds) {
+        for (UUID siteId : siteIds) {
+            sharedStateCleanupJdbc.update("DELETE FROM plugin_sql_generations WHERE site_id = ?", siteId);
+        }
     }
 }
