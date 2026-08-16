@@ -524,8 +524,9 @@ pages/{feature}/            # Route pages
   (30 s x 3) would have kept the pod out of the Service endpoints long enough to stall a rollout.
   The deployed task role does grant it (`deploy-script/template-1763397226530.yaml`), so on this
   deployment HEAD answers 404 for a missing key and the 403 path really is the rare one. Follow-up
-  filed from round 3: **#176** — the Parquet Export listing probes S3 inside its read-only
-  transaction, up to two round trips per row on the denial path, the sibling of #164. New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
+  filed from round 3: **#176** — the Parquet Export listing used to probe S3 inside its read-only
+  transaction, up to two round trips per row on the denial path, the sibling of #164 (folded
+  into #164 and closed). New counter **`delta.s3.read-denied`** (registered in `S3CheckpointStorage`
   over the injected `MeterRegistry`, the `CheckpointGivenUpMetrics` shape — infrastructure must not
   depend on `delta.application`, and `DeltaMetrics` documents it without owning it) counts the
   **unresolved** denial only, which is also why the ticket's suggested `delta.s3.head-denied` name

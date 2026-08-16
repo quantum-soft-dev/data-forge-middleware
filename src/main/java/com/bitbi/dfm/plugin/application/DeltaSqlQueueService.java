@@ -97,7 +97,7 @@ public class DeltaSqlQueueService {
         } else if (DeltaSqlGenerationStrategy.MODE_FULL_SNAPSHOT.equals(segment.getMode())) {
             suspendBaselines(segment, site, activation.get());
         } else {
-            // throws on failure → transaction rolls back → segment stays pending for the sweep
+            // throws on failure → mark is skipped → segment stays pending for the sweep
             sqlGenerationService.generateSqlForBatch(segment.getBatchId(), activation.get().getId());
         }
 
