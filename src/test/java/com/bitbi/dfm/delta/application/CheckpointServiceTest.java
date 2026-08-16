@@ -131,12 +131,18 @@ class CheckpointServiceTest {
      * {@code maxFrameTempBytes} bounds the all-tables reload frame and aborts the build.
      */
     private CheckpointService newService(String scratchDirectory, long maxTempBytes, long maxFrameTempBytes) {
+        return newService(scratchDirectory, maxTempBytes, maxFrameTempBytes, Long.MAX_VALUE);
+    }
+
+    /** As above, plus the ceiling on the fold's own heap (issue #152). */
+    private CheckpointService newService(String scratchDirectory, long maxTempBytes,
+                                         long maxFrameTempBytes, long maxFoldBytes) {
         return new CheckpointService(
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
-                scratchDirectory, maxTempBytes, maxFrameTempBytes);
+                scratchDirectory, maxTempBytes, maxFrameTempBytes, maxFoldBytes);
     }
 
     /**
@@ -424,6 +430,72 @@ class CheckpointServiceTest {
 
         assertEquals(2, state.get("customers").size(), "both streamed records must be folded");
         verify(changelogSegmentService).forEachRecord(eq("s3/segment"), any());
+    }
+
+    @Test
+    void abortsTheBuildWhenTheFoldOutgrowsItsHeapBudget() {
+        // The refusal this ticket exists for (issue #152): on a pod with a 2-3Gi limit the fold is
+        // what runs out first, and an OOMKill takes the whole process with it — in-flight ingest
+        // included — where an abort costs one site's build and says why.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+
+        CheckpointService.FoldTooLargeException thrown = assertThrows(
+                CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        assertTrue(thrown.getMessage().contains("delta.checkpoint.max-fold-bytes"),
+                "the message must name the key an operator would raise: " + thrown.getMessage());
+        // Counted with the other aborts that do not repair themselves (issue #153): the fold is
+        // deterministic for the same history, so every following tick ends the same way, with the
+        // pointer — and retention with it — frozen where it was.
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any(Path.class));
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(checkpointRepository, never()).save(any());
+    }
+
+    @Test
+    void buildsNormallyWhileTheFoldFitsItsHeapBudget() {
+        // The other side of the guard: a budget that the site fits under must not change anything
+        // about the build, or the ceiling would be a second way to lose a checkpoint.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 1024L * 1024L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(syncStateService).recordCheckpoint(SITE, 2L);
+        verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    @Test
+    void countsTheFoldOfTheSeedFrameAgainstTheSameBudget() {
+        // A site that is quiet still folds its whole history from the frame, so the budget has to
+        // cover the seed as well — otherwise the one build that reloads everything at once is the
+        // one build the guard does not watch.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("fold_too_large");
+    }
+
+    @Test
+    void resolvesAnUnsetFoldBudgetAgainstTheHeapTheProcessWasGiven() {
+        // The budget has to arrive by itself on a pod nobody tuned — unlike the scratch ceilings,
+        // whose disk the process cannot see, the heap is right there. A quarter leaves room for the
+        // second concurrent build path (a forced rebuild during the nightly sweep) and for
+        // everything else the pod is doing while a checkpoint folds.
+        assertEquals(Runtime.getRuntime().maxMemory() / 4, CheckpointService.resolveMaxFoldBytes(0L),
+                "an unset budget must derive from the max heap");
+        assertEquals(123L, CheckpointService.resolveMaxFoldBytes(123L), "an explicit budget wins");
     }
 
     @Test

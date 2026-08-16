@@ -75,6 +75,7 @@ public class DeltaMetrics {
     private final Counter checkpointFrameTooLarge;
     private final Counter checkpointLossyRefold;
     private final Counter checkpointHistoryGone;
+    private final Counter checkpointFoldTooLarge;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -110,6 +111,7 @@ public class DeltaMetrics {
         this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
+        this.checkpointFoldTooLarge = checkpointBuildAborted(registry, "fold_too_large");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -210,13 +212,23 @@ public class DeltaMetrics {
      * have spent {@code delta.checkpoint.max-materialize-attempts} —
      * {@code delta.checkpoint.tables.given-up} is where it is visible afterwards.</p>
      *
-     * @param reason {@code frame_too_large}, {@code lossy_refold} or {@code history_gone}
+     * <p>{@code fold_too_large} is the fourth, and it is about heap rather than disk or S3 (issue
+     * #152): the site's folded state grew past {@code delta.checkpoint.max-fold-bytes}, the ceiling
+     * that exists so a site too large to fold is refused instead of taking the whole pod down with
+     * an {@code OOMKill}. It repairs itself no more than {@code frame_too_large} does — a site's
+     * history does not shrink on its own — and the fix is the same shape: raise the key together
+     * with the pod's heap, or re-baseline the site so its fold starts from what the source still
+     * holds.</p>
+     *
+     * @param reason {@code frame_too_large}, {@code lossy_refold}, {@code history_gone} or
+     *               {@code fold_too_large}
      */
     public void checkpointBuildAborted(String reason) {
         switch (reason) {
             case "frame_too_large" -> checkpointFrameTooLarge.increment();
             case "lossy_refold" -> checkpointLossyRefold.increment();
             case "history_gone" -> checkpointHistoryGone.increment();
+            case "fold_too_large" -> checkpointFoldTooLarge.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
     }

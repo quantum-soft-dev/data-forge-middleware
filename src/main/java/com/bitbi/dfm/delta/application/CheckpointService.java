@@ -69,6 +69,11 @@ public class CheckpointService {
     private final long maxTempBytes;
     /** Reload-frame ceiling: crossing it aborts the build, so it is deliberately its own key. */
     private final long maxFrameTempBytes;
+    /**
+     * Heap ceiling on the fold itself (issue #152) — the one bound that is not about disk, and the
+     * one a growing site reaches first.
+     */
+    private final long maxFoldBytes;
 
     public CheckpointService(ChangelogSegmentRepository segmentRepository,
                              ChangelogSegmentService changelogSegmentService,
@@ -96,7 +101,11 @@ public class CheckpointService {
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.max-frame-temp-bytes:"
                                              + "${delta.checkpoint.max-temp-bytes:10737418240}}")
-                             long maxFrameTempBytes) {
+                             long maxFrameTempBytes,
+                             // Not a scratch ceiling: this one bounds heap, and 0 means "work it
+                             // out from the heap I was given" (see resolveMaxFoldBytes).
+                             @org.springframework.beans.factory.annotation.Value(
+                                     "${delta.checkpoint.max-fold-bytes:0}") long maxFoldBytes) {
         this.segmentRepository = segmentRepository;
         this.changelogSegmentService = changelogSegmentService;
         this.checkpointRepository = checkpointRepository;
@@ -112,6 +121,25 @@ public class CheckpointService {
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.maxFrameTempBytes = maxFrameTempBytes;
+        this.maxFoldBytes = resolveMaxFoldBytes(maxFoldBytes);
+    }
+
+    /**
+     * Resolve the fold's heap budget: anything non-positive (the shipped default) means auto — a
+     * quarter of the max heap.
+     *
+     * <p>Derived rather than declared beside the deployment, which is where the scratch ceilings had
+     * to go (#138): the process cannot see how large the directory it was handed is, but it can
+     * always see its own {@code -Xmx}. A quarter, not a half, because two checkpoint builds can be
+     * in flight in one JVM — the nightly sweep and a forced rebuild on {@code deltaRebuildExecutor}
+     * are not mutually excluded, the same {@code 2 x} that makes the scratch budget what it is
+     * (#131) — and the pod is still serving ingest while they fold.</p>
+     *
+     * @param configured the configured value, or {@code 0} for auto
+     * @return the budget in estimated retained bytes
+     */
+    static long resolveMaxFoldBytes(long configured) {
+        return configured > 0 ? configured : Runtime.getRuntime().maxMemory() / 4;
     }
 
     /**
@@ -218,6 +246,26 @@ public class CheckpointService {
                 return Map.of();
             }
             return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
+        } catch (FoldTooLargeException e) {
+            // The heap twin of the frame ceiling (issue #152), and it belongs on the same meter for
+            // the same reason (#153): the fold is deterministic for the same history and a site only
+            // grows, so every following tick ends here too, with the pointer — and retention with
+            // it — frozen. Nothing durable was written: the abort happens before the frame upload,
+            // which is the build's first side effect since #153.
+            //
+            // Logged before it is counted, as the frame ceiling is: the counter validates its
+            // reason and would otherwise replace this exception and swallow the only line naming
+            // the site.
+            log.error("The checkpoint fold for site {} outgrew delta.checkpoint.max-fold-bytes: an "
+                    + "estimated {} bytes of heap against a budget of {}. Nothing was written — the "
+                    + "pointer, the per-table keys and the frame stay where they were, and retention "
+                    + "is frozen with the pointer. The next tick will fail identically, because the "
+                    + "site's history has not shrunk. Raise the key together with the pod's heap "
+                    + "(the budget defaults to a quarter of the max heap), or give the site a "
+                    + "re-baseline so its fold starts from what the source still holds",
+                    siteId, e.estimatedBytes(), e.budgetBytes());
+            metrics.checkpointBuildAborted("fold_too_large");
+            throw e;
         } catch (BuildEndedByShutdownException e) {
             // Not a failure of this build either, and above all not a fact about any table it was
             // writing (issue #162): the process is going away, so nothing it could still learn is
@@ -392,20 +440,25 @@ public class CheckpointService {
      * interleaved with the fold rather than finished before it. {@code phase=fold} is everything
      * else — the segment downloads it always covered, and now also the seed frame's own fold, which
      * was untimed while it sat between the two phases.</p>
+     *
+     * <p>Streaming makes the peak smaller; it does not make it bounded. What is still proportional
+     * to the site's row count is the fold itself, so it is folded <b>against a budget</b>
+     * ({@link BudgetedFold}) and a site that outgrows the heap is refused rather than left to be
+     * {@code OOMKilled} halfway through.</p>
      */
     private Map<String, Map<String, FoldedRow>> foldSite(UUID siteId,
                                                          long checkpointSeq,
                                                          boolean haveFrame,
                                                          List<ChangelogSegment> newSegments) {
-        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        BudgetedFold fold = new BudgetedFold(siteId, maxFoldBytes);
         long startedAt = System.nanoTime();
         long frameReadNanos = 0L;
         try {
             if (haveFrame) {
-                frameReadNanos = foldFrame(siteId, checkpointSeq, state);
+                frameReadNanos = foldFrame(siteId, checkpointSeq, fold);
             }
             for (ChangelogSegment segment : newSegments) {
-                changelogSegmentService.forEachRecord(segment.getS3Key(), record -> apply(state, record));
+                changelogSegmentService.forEachRecord(segment.getS3Key(), fold::apply);
             }
         } finally {
             // Recorded even when the fold ended in an abort: a build that ran out of budget is
@@ -415,18 +468,42 @@ public class CheckpointService {
             }
             metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos);
         }
-        return state;
+        reportFoldSize(siteId, fold);
+        return fold.state();
     }
 
     /**
-     * Stream the seed frame into {@code state}.
+     * Say how close this site is to the ceiling <em>before</em> it reaches it.
+     *
+     * <p>Without this the first word an operator gets is the abort itself, and the fold is the one
+     * term of the checkpoint budget that nothing else makes visible: the scratch ceilings show up as
+     * files on a volume, while the fold exists only while the build runs.</p>
+     */
+    private void reportFoldSize(UUID siteId, BudgetedFold fold) {
+        long bytes = fold.estimatedBytes();
+        if (bytes * 100 >= maxFoldBytes * FOLD_BUDGET_WARN_PERCENT) {
+            log.warn("The checkpoint fold for site {} holds an estimated {} bytes of heap, {}% of "
+                    + "delta.checkpoint.max-fold-bytes ({}). The build is refused outright once it "
+                    + "crosses that, so raise the key (and the pod's heap with it) before this site "
+                    + "grows further", siteId, bytes, bytes * 100 / Math.max(1L, maxFoldBytes), maxFoldBytes);
+        } else {
+            log.debug("The checkpoint fold for site {} holds an estimated {} bytes of heap, against "
+                    + "delta.checkpoint.max-fold-bytes ({})", siteId, bytes, maxFoldBytes);
+        }
+    }
+
+    /** How full the fold budget may get before a build starts saying so. */
+    private static final int FOLD_BUDGET_WARN_PERCENT = 75;
+
+    /**
+     * Stream the seed frame into the fold.
      *
      * @return nanos spent reading the object off the network, for {@code phase=download_frame}
      */
-    private long foldFrame(UUID siteId, long checkpointSeq, Map<String, Map<String, FoldedRow>> state) {
+    private long foldFrame(UUID siteId, long checkpointSeq, BudgetedFold fold) {
         try (InputStream frame = checkpointStorage.openFrame(siteId, checkpointSeq)) {
             TimingInputStream timed = new TimingInputStream(frame);
-            ChangelogCodec.forEach(timed, record -> apply(state, record));
+            ChangelogCodec.forEach(timed, fold::apply);
             return timed.readNanos();
         } catch (IOException e) {
             throw new UncheckedIOException(
@@ -434,9 +511,49 @@ public class CheckpointService {
         }
     }
 
-    /** Apply one record to the fold. */
-    private void apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record) {
-        ChangelogFold.apply(state, record);
+    /**
+     * One site's fold, with a ceiling on how much heap it may hold (issue #152).
+     *
+     * <p>The running total is kept by {@link ChangelogFold#apply}, which returns what each record
+     * did to the state's size, so the budget costs one addition per record rather than a walk over
+     * the fold. It is an estimate — see
+     * {@link ChangelogFold#estimatedRetainedBytes(String, ChangelogFold.FoldedRow)} — and it is
+     * compared against a budget expressed in the same units, so the two are wrong together or not
+     * at all.</p>
+     */
+    private static final class BudgetedFold {
+
+        private final Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        private final UUID siteId;
+        private final long maxBytes;
+        private long bytes;
+
+        private BudgetedFold(UUID siteId, long maxBytes) {
+            this.siteId = siteId;
+            this.maxBytes = maxBytes;
+        }
+
+        /**
+         * Fold one record, then stop the build if the fold no longer fits.
+         *
+         * <p>Checked after applying rather than before, because the cost of one record is only
+         * known once it has been applied — and one record over the ceiling is not what runs a pod
+         * out of memory.</p>
+         */
+        private void apply(ChangeRecord record) {
+            bytes += ChangelogFold.apply(state, record);
+            if (bytes > maxBytes) {
+                throw new FoldTooLargeException(siteId, bytes, maxBytes);
+            }
+        }
+
+        private Map<String, Map<String, FoldedRow>> state() {
+            return state;
+        }
+
+        private long estimatedBytes() {
+            return bytes;
+        }
     }
 
     private Map<String, Map<String, FoldedRow>> materialize(UUID siteId,
@@ -828,6 +945,43 @@ public class CheckpointService {
             super("S3 would not say whether checkpoint frame@" + checkpointSeq + " of site "
                     + siteId + " exists (read denied); the build was skipped and nothing was "
                     + "recorded — see delta.s3.read-denied");
+        }
+    }
+
+    /**
+     * The site's folded state grew past {@code delta.checkpoint.max-fold-bytes} (issue #152).
+     *
+     * <p>Public, and thrown rather than swallowed into an empty fold, for the reason the two
+     * siblings above are: a caller must be able to tell "this build refused" from "this build had
+     * nothing to do". {@code CheckpointScheduler} logs it and moves to the next site;
+     * {@code DeltaCheckpointRebuildService} reports the forced rebuild as failed and releases its
+     * flag, so an operator can ask again once the budget (or the pod) has been raised.</p>
+     *
+     * <p>Nothing durable was written when this is thrown: it can only happen during the fold, which
+     * precedes the frame upload — the build's first side effect since #153.</p>
+     */
+    public static final class FoldTooLargeException extends RuntimeException {
+
+        private final long estimatedBytes;
+        private final long budgetBytes;
+
+        FoldTooLargeException(UUID siteId, long estimatedBytes, long budgetBytes) {
+            super("The checkpoint fold for site " + siteId + " reached an estimated " + estimatedBytes
+                    + " bytes of heap, past the " + budgetBytes
+                    + "-byte delta.checkpoint.max-fold-bytes budget; the build was abandoned before "
+                    + "anything was written");
+            this.estimatedBytes = estimatedBytes;
+            this.budgetBytes = budgetBytes;
+        }
+
+        /** Estimated retained heap of the fold when it was refused. */
+        public long estimatedBytes() {
+            return estimatedBytes;
+        }
+
+        /** The budget it crossed, as resolved from {@code delta.checkpoint.max-fold-bytes}. */
+        public long budgetBytes() {
+            return budgetBytes;
         }
     }
 
