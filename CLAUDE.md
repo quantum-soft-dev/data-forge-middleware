@@ -473,6 +473,26 @@ pages/{feature}/            # Route pages
   configuration-key, metric, S3-key or frontend change. See `docs/delta-client-v2-guide.md`
   ("No S3 inside a queue worker", "The connection pool is smaller than the threads that can
   ask it for a connection").
+- test-profile-sweep-cadence: A newly added queue-drain sweep can no longer keep production cadence
+  under the `test` profile unnoticed (issue #167, the hole #159 closed for one key).
+  `ScheduledTaskTestProfileCadenceTest` sits beside the #146 inventory: every `@Scheduled` interval
+  whose placeholder ends in `sweep-ms` must be **declared** in `application-test.yml` at ≥ 1 h
+  (inheriting a coincidentally-slow production default is not enough — that is how
+  `plugin.sql-generation.delta-sweep-ms` stayed at 60 s for the life of 026), every tick whose
+  effective test-profile period is shorter than that hour is on an explicit allowlist with a reason,
+  and every `*sweep-ms` task that still fires at context refresh (`initialDelay` 0 / unset) is on a
+  second allowlist. The two remaining sub-hour ticks are hardcoded and so cannot be slowed from YAML
+  — `BatchTimeoutScheduler` (`cron 0 */5 * * * *`) and `DeviceAuthorizationService` (`fixedRate`
+  300000) — and are allowlisted: the first only UPDATEs batches already past
+  `batch.timeout.minutes` (test-data seeds `IN_PROGRESS` at `CURRENT_TIMESTAMP`), the second is a
+  bulk UPDATE of expired `device_authorizations` that `test-data.sql` does not seed. Two
+  property-backed ticks that *could* be slowed were: `delta.ingestion.staged-sweep-millis` and
+  `provisional-sweep-millis` (5 min / 15 min) plus an explicit
+  `delta.parquet.scratch-orphan-sweep-ms: 3600000` so a later cut of the production default cannot
+  restore a fast tick. **No production default moved** — `plugin.sql-generation.delta-sweep-ms`
+  stays 60000; an `initialDelayString` on the three queue workers would delay the crash-recovery
+  pass by 60 s and is deliberately not added. The residual is still one drain per cached context at
+  refresh. No REST, gRPC, DTO, migration, S3-key or frontend change.
 - checkpoint-fold-heap-bound: The checkpoint path's first bound is heap, and it is now a refusal
   rather than an `OOMKilled` (issue #152, raised reviewing #151). #112 and #126 put the per-table
   snapshot and the reload frame on disk, and #138 set the deployed ceilings below the volume — but
