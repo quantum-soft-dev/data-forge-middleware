@@ -2,6 +2,7 @@ package com.bitbi.dfm.delta.application;
 
 import com.bitbi.dfm.delta.domain.ChangelogSegmentRepository;
 import com.bitbi.dfm.delta.domain.CheckpointRepository;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -31,16 +32,19 @@ public class CheckpointScheduler {
     private final ChangelogRetentionService retentionService;
     private final ChangelogSegmentRepository segmentRepository;
     private final CheckpointRepository checkpointRepository;
+    private final ApplicationShutdownSignal shutdownSignal;
     private final ReentrantLock buildLock = new ReentrantLock();
 
     public CheckpointScheduler(CheckpointService checkpointService,
                                ChangelogRetentionService retentionService,
                                ChangelogSegmentRepository segmentRepository,
-                               CheckpointRepository checkpointRepository) {
+                               CheckpointRepository checkpointRepository,
+                               ApplicationShutdownSignal shutdownSignal) {
         this.checkpointService = checkpointService;
         this.retentionService = retentionService;
         this.segmentRepository = segmentRepository;
         this.checkpointRepository = checkpointRepository;
+        this.shutdownSignal = shutdownSignal;
     }
 
     @Scheduled(cron = "${delta.checkpoint.cron:0 0 2 * * *}")
@@ -51,6 +55,14 @@ public class CheckpointScheduler {
         }
         try {
             for (UUID siteId : sitesToVisit()) {
+                // The sweep is the outer half of the same decision CheckpointService makes between
+                // tables (issue #162): once the context is closing, the remaining sites would each
+                // open a transaction and an S3 client that are about to be destroyed. Stop here
+                // rather than fail site by site to the end of the list.
+                if (shutdownSignal.isShuttingDown()) {
+                    log.info("Ending the checkpoint tick: the application is shutting down");
+                    return;
+                }
                 try {
                     checkpointService.buildCheckpoint(siteId);
                     retentionService.prune(siteId);

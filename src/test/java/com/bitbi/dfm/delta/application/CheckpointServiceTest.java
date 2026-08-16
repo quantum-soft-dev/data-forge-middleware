@@ -14,6 +14,7 @@ import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
 import com.bitbi.dfm.site.application.SiteSchemaService;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.TableSchema;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -77,8 +78,18 @@ class CheckpointServiceTest {
      */
     private final SiteSyncStateRepository syncStateRepository = mock(SiteSyncStateRepository.class);
     private final CheckpointEpochGuard epochGuard = new CheckpointEpochGuard(syncStateRepository);
+    /** The real signal, driven by {@link #shuttingDown} rather than by a context close. */
+    private final ApplicationShutdownSignal shutdownSignal = new ApplicationShutdownSignal() {
+        @Override
+        public boolean isShuttingDown() {
+            return shuttingDown;
+        }
+    };
 
     private CheckpointService service;
+
+    /** Flipped by a test to model {@code ContextClosedEvent} arriving mid-build. */
+    private volatile boolean shuttingDown;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -118,7 +129,7 @@ class CheckpointServiceTest {
                 segmentRepository, changelogSegmentService, checkpointRepository,
                 syncStateService, checkpointStorage, siteSchemaService, metrics,
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
-                scratchDirectory, maxTempBytes, maxFrameTempBytes);
+                shutdownSignal, scratchDirectory, maxTempBytes, maxFrameTempBytes);
     }
 
     @Test
@@ -222,6 +233,57 @@ class CheckpointServiceTest {
         assertNull(saved.getValue().getS3KeyParquet(),
                 "a superseded snapshot must not stay attached to a newer seq");
         verify(metrics).checkpointTableUnmaterialized("parquet_failed");
+    }
+
+    @Test
+    void doesNotDetachASnapshotWhenTheFailureIsTheProcessShuttingDown() {
+        // Issue #162, folded into #149. Spring publishes ContextClosedEvent and then closes the
+        // S3Client and the DataSource, so a build still running (the 02:00 cron on a slow site)
+        // sees its next call fail for a reason that has nothing to do with this table. Recording
+        // that as the table's verdict detaches a healthy snapshot on an advancing seq and 404s it
+        // for Bit BI and Parquet Export until the next nightly rematerialize.
+        Checkpoint existing = Checkpoint.create(SITE, "customers", 1L, 1L);
+        existing.attachParquet("checkpoints/previous-parquet-key");
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "customers")).thenReturn(Optional.of(existing));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        when(checkpointStorage.uploadParquet(eq(SITE), eq("customers"), anyLong(), any()))
+                .thenAnswer(invocation -> {
+                    shuttingDown = true;
+                    throw new IllegalStateException("Connection pool has been shut down");
+                });
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE),
+                "a build that ends with the process publishes nothing");
+
+        assertEquals("checkpoints/previous-parquet-key", existing.getS3KeyParquet(),
+                "the last good snapshot survives a build that was only ending");
+        verify(checkpointRepository, never()).save(any());
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void attemptsNoFurtherTableOnceTheProcessIsShuttingDown() {
+        // The corollary: the remaining tables are not tried either. Every one of them would fail
+        // the same way, and each failure is another chance to write a verdict about the data from
+        // a fact about the process.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        shuttingDown = true;
+        recordUploads("checkpoints/parquet-key");
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(checkpointRepository, never()).save(any());
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+        verify(metrics, never()).checkpointBuildAborted(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
     }
 
     @Test

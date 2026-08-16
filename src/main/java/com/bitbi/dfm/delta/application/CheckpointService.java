@@ -10,6 +10,7 @@ import com.bitbi.dfm.delta.domain.events.CheckpointRecordedEvent;
 import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.site.domain.TableSchema;
 import org.slf4j.Logger;
@@ -59,6 +60,7 @@ public class CheckpointService {
     private final DeltaParquetProperties parquetProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final CheckpointEpochGuard epochGuard;
+    private final ApplicationShutdownSignal shutdownSignal;
     private final Path tempDirectory;
     /** Per-table snapshot ceiling: crossing it skips that table (issue #138). */
     private final long maxTempBytes;
@@ -75,6 +77,7 @@ public class CheckpointService {
                              DeltaParquetProperties parquetProperties,
                              ApplicationEventPublisher eventPublisher,
                              CheckpointEpochGuard epochGuard,
+                             ApplicationShutdownSignal shutdownSignal,
                              // fully qualified: the delta wire Value is imported above
                              @org.springframework.beans.factory.annotation.Value(
                                      "${delta.checkpoint.temp-dir:${java.io.tmpdir}}") String tempDirectory,
@@ -100,6 +103,7 @@ public class CheckpointService {
         this.parquetProperties = parquetProperties;
         this.eventPublisher = eventPublisher;
         this.epochGuard = epochGuard;
+        this.shutdownSignal = shutdownSignal;
         this.tempDirectory = Path.of(tempDirectory);
         this.maxTempBytes = maxTempBytes;
         this.maxFrameTempBytes = maxFrameTempBytes;
@@ -202,6 +206,16 @@ public class CheckpointService {
 
         try {
             return build(siteId, idlePass, segments, checkpointSeq, epoch, haveFrame);
+        } catch (BuildEndedByShutdownException e) {
+            // Not a failure of this build either, and above all not a fact about any table it was
+            // writing (issue #162): the process is going away, so nothing it could still learn is
+            // worth recording. Rows keep their last-good keys, the pointer stays, and the next
+            // tick of the next process redoes the work from the same seed. Deliberately not
+            // counted as delta.checkpoint.builds.aborted — that meter's contract is the two aborts
+            // that never repair themselves, and this one repairs itself on the next deployment.
+            log.info("Ending the checkpoint build for site {}: the application is shutting down, "
+                    + "so no table verdict was recorded", siteId);
+            return Map.of();
         } catch (CheckpointEpochGuard.EpochChangedException e) {
             // Not a failure of this build: the site's baseline was replaced under it, so there is
             // nothing left to publish. Whatever rows it did commit were taken by the wipe's (or the
@@ -282,6 +296,10 @@ public class CheckpointService {
         // only once the frame object was in the bucket. It does not make the upload atomic (a wipe
         // committing during it still leaves an orphan the next wipe sweeps), but it keeps the
         // window no wider than it was when writeSnapshots ran first.
+        // Cheapest possible place to notice the process is going: the frame upload is the longest
+        // single call of a build, and starting a multi-GiB PUT that will be cut off mid-flight
+        // leaves an orphan for nothing.
+        stopIfShuttingDown(siteId);
         epochGuard.requireEpoch(siteId, epoch);
         uploadFrame(siteId, seq, state);
         writeSnapshots(siteId, state, seq, SnapshotPass.INCREMENTAL, epoch);
@@ -402,6 +420,10 @@ public class CheckpointService {
         // additionally materializes the full per-table load as typed Parquet (the only format V2
         // produces since issue #113) plus the frame seed.
         state.forEach((tableName, rows) -> {
+            // Between tables, not only inside the catch: once the context is closing every
+            // remaining table would fail identically, and each failure is another opportunity to
+            // mistake "this process is ending" for "this table cannot be materialized".
+            stopIfShuttingDown(siteId);
             if (pass == SnapshotPass.RETRY_MISSING) {
                 Optional<Checkpoint> existing =
                         checkpointRepository.findBySiteIdAndTableName(siteId, tableName);
@@ -453,7 +475,18 @@ public class CheckpointService {
                 // A replaced baseline is not a fact about this table: nothing this build produced
                 // may be published, so it must escape the per-table skip below and end the build.
                 throw e;
+            } catch (BuildEndedByShutdownException e) {
+                throw e;
             } catch (RuntimeException e) {
+                // A failure seen while the context is closing is a fact about the process, not
+                // about this table (issue #162). The S3Client and the DataSource are destroyed
+                // right after ContextClosedEvent is published, so every call from here on fails
+                // with an exception that reads exactly like a broken table. Recording it would
+                // detach a healthy snapshot on an advancing seq, and the row would 404 for Bit BI
+                // and Parquet Export until the next nightly rematerialize.
+                if (shutdownSignal.isShuttingDown()) {
+                    throw new BuildEndedByShutdownException(siteId, tableName, e);
+                }
                 // Report the cause first: the detach below goes through the epoch guard, which
                 // throws rather than returns when the site was wiped mid-build, and this table's
                 // actual failure (schema drift, an oversized table) would leave no trace at all.
@@ -488,6 +521,34 @@ public class CheckpointService {
             return true;
         }
         return false;
+    }
+
+    /**
+     * End the build if the application has begun to close.
+     *
+     * <p>Thrown rather than returned so it escapes the per-table catch below: a build ending with
+     * the process must publish nothing, not skip one table and carry on to the next.</p>
+     */
+    private void stopIfShuttingDown(UUID siteId) {
+        if (shutdownSignal.isShuttingDown()) {
+            throw new BuildEndedByShutdownException(siteId, null, null);
+        }
+    }
+
+    /**
+     * The build stopped because this application context is closing — never a verdict on a table.
+     *
+     * <p>Private because it must not be caught anywhere but in {@link #run}: every other handler in
+     * this class exists to turn a failure into a durable conclusion, which is precisely what this
+     * one must not become.</p>
+     */
+    private static final class BuildEndedByShutdownException extends RuntimeException {
+
+        private BuildEndedByShutdownException(UUID siteId, String tableName, Throwable cause) {
+            super("The checkpoint build for site " + siteId
+                    + (tableName == null ? "" : " (table " + tableName + ")")
+                    + " ended because the application is shutting down", cause);
+        }
     }
 
     private boolean hasUnmaterializedTables(UUID siteId) {
