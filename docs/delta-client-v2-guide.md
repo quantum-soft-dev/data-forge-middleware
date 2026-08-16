@@ -826,7 +826,8 @@ batch_peak      = delta.batch-parquet.max-concurrent (2)
 orphan_residue  = whatever a container restart left behind, until the next sweep tick
                     # bounded by DELTA_PARQUET_SCRATCH_ORPHAN_SWEEP_MS (1 h) on this
                     # deployment, not by the 4 h age window — see "Orphans outlive a
-                    # container restart" below
+                    # container restart" below, and "One sweep interval means the tick
+                    # runs when it is due" for the scheduler that bound assumes
 ```
 
 There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
@@ -847,6 +848,51 @@ drops it on its first sweep tick and the residue term shrinks to at most one swe
 **not** shorten `DELTA_PARQUET_SCRATCH_ORPHAN_AGE_SECONDS` to chase the same effect — a live
 build's files are exactly as old as the build, so a lower age deletes live work. And if the two
 `*_TEMP_DIR` keys are ever moved off the pod-private volume, the flag has to move with them.
+
+**"One sweep interval" means the tick runs when it is due.** That is a statement about the
+scheduler, so the scheduler is pinned rather than inherited (issue **#146**).
+`SchedulingConfiguration` declares the application's `TaskScheduler` — a `ThreadPoolTaskScheduler`
+of `spring.task.scheduling.pool.size` (**6**, overridable with `SPRING_TASK_SCHEDULING_POOL_SIZE`)
+— so the nightly checkpoint build, which can hold its thread for hours, leaves threads for the
+scratch sweep, the batch timeout sweep and the monthly partition creation. Without the bean the
+choice followed `spring.threads.virtual.enabled`: with it on, Spring Boot builds a
+`SimpleAsyncTaskScheduler` that runs **every fixed-delay task on one internal thread** (the scratch
+sweep among them) and ignores the pool-size key entirely; with it off, a pool of one. Two
+consequences for an operator:
+
+- **Setting `SPRING_TASK_SCHEDULING_POOL_SIZE` to 1 restores the bug.** The residue term above then
+  has no bound anyone can quote, because a sweep tick can sit behind a whole checkpoint build.
+- **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Nearly every
+  scheduled task opens a connection; a pool as wide as Hikari's lets a burst of ticks take the
+  connections request threads need.
+
+The bean also fixes three shutdown settings in code, because a pool changes what a rollout does to a
+running task: the threads are **daemon**, they are **not interrupted** on context close (as they were
+when they were virtual threads), and the queue of not-yet-due ticks is **dropped**. Boot's default
+would have called `shutdownNow()`, and an interrupted checkpoint build does not merely stop —
+`CheckpointService` catches the exception per table and detaches that table's snapshot key, so a
+02:00 deployment would leave a table answering `404` until the nightly rematerialize. A doomed build
+should die with the process instead. Dropping the queue is what keeps that from costing anything: a
+plain shutdown still runs already-queued *delayed* tasks, and every cron tick is queued as one, so
+the pod would otherwise sit with parked threads until the monthly partition job came due. The
+scheduler also stops triggering the moment the context closes, rather than when its own bean is
+destroyed — otherwise a tick due in between could open a transaction on a `DataSource` its peers had
+already closed.
+`spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants
+shutdown to wait for what is running.
+
+One side effect worth knowing before the next dashboard change: Boot binds executor metrics to a
+`ThreadPoolTaskScheduler` and did not bind the scheduler this replaces, so `/actuator/prometheus`
+grows an `executor_*{name="taskScheduler"}` family. Nothing was renamed or removed. Read
+`executor_queued_tasks` on it as "ticks not yet due" — the delayed queue holds every future
+execution, about fifteen at rest — rather than as a backlog.
+
+`ScheduledTaskInventoryTest` guards both numbers **as they are declared in the YAML** — every
+profile, so one that resizes the connection pool has to resize this one too — and fails when a new
+`@Scheduled` method lands without the audit behind the size being redone. An environment override is
+outside its reach by definition: `SPRING_TASK_SCHEDULING_POOL_SIZE` set at deploy time is checked by
+nobody, so treat it the way the scratch ceilings are treated and change it in the manifests, in the
+open.
 
 **6 GiB is an assumption, not a measurement**: we have no observed maximum for
 a checkpoint frame or a batch artifact on test/prod. The only sized artifact on record is the 439k-row

@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
@@ -79,13 +80,39 @@ public class BatchRetentionScheduler {
                 scheduledFuture = taskScheduler.schedule(this::runRetentionCleanup, new CronTrigger(desiredCron));
                 scheduledCron = desiredCron;
                 logger.info("Retention cleanup scheduler configured: cron='{}', limit={}", scheduledCron, cleanupLimit);
+            } catch (TaskRejectedException rejected) {
+                // Not the expression's fault: the scheduler is shut down, which since issue #146
+                // happens when the context closes rather than when its bean is destroyed. Retrying
+                // with the fallback cron would be rejected for the same reason and would blame a
+                // second, equally innocent expression in the log. This runs from an @EventListener
+                // inside the admin's transaction, so it must not throw — letting it escape would
+                // roll back a saved schedule and answer 500 to a request that arrived while the pod
+                // was going away. The next instance rearms from the stored setting.
+                unschedule();
+                logger.warn("Retention cleanup was not rescheduled to cron='{}': the task scheduler is "
+                        + "shut down. This instance leaves it unscheduled.", desiredCron, rejected);
             } catch (Exception e) {
                 logger.error("Failed to schedule retention cleanup with cron='{}'. Falling back to cron='{}'.",
                         desiredCron, DEFAULT_FALLBACK_CRON, e);
-                scheduledFuture = taskScheduler.schedule(this::runRetentionCleanup, new CronTrigger(DEFAULT_FALLBACK_CRON));
-                scheduledCron = DEFAULT_FALLBACK_CRON;
+                try {
+                    scheduledFuture = taskScheduler.schedule(this::runRetentionCleanup, new CronTrigger(DEFAULT_FALLBACK_CRON));
+                    scheduledCron = DEFAULT_FALLBACK_CRON;
+                } catch (Exception fallbackFailure) {
+                    // The fallback cron is a constant, so nothing about it can be wrong; what is left
+                    // is a scheduler that died between the two calls. Same reasoning as above — this
+                    // runs inside the admin's transaction and must not throw.
+                    unschedule();
+                    logger.error("Retention cleanup could not be scheduled at all (cron='{}'); leaving it "
+                            + "unscheduled in this instance.", DEFAULT_FALLBACK_CRON, fallbackFailure);
+                }
             }
         }
+    }
+
+    /** Forget the current schedule; used when nothing could be armed. */
+    private void unschedule() {
+        scheduledFuture = null;
+        scheduledCron = null;
     }
 
     public void runRetentionCleanup() {

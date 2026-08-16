@@ -6,6 +6,37 @@ spring:
     virtual:
       enabled: true
 
+  task:
+    scheduling:
+      pool:
+        # Threads shared by every @Scheduled method and by BatchRetentionScheduler's dynamic cron
+        # (issue #146). One is Spring Boot's default and is what the application effectively had:
+        # a checkpoint build, which can run for hours, postponed the scratch sweep, the batch
+        # timeout sweep and the monthly partition creation behind it.
+        #
+        # Six is derived, not guessed: FOUR of the fifteen scheduled tasks can hold their thread for
+        # minutes — the nightly checkpoint build and the retention cleanup (both due at 02:00 by
+        # default), the orphaned-provisional sweep in its 500-segment worst case, and the batch
+        # timeout sweep once a backlog makes its unbounded query and single transaction long. So the
+        # floor is FIVE, for a short tick never to queue behind them; six is that floor plus one for
+        # the burst of short ticks that fall on the same second, and
+        # stays below spring.datasource.hikari.maximum-pool-size (10). Adding a scheduled task that
+        # blocks means revisiting this — ScheduledTaskInventoryTest fails until the audit is redone.
+        #
+        # Read that last bound for exactly what it is: the scheduler on its own cannot empty the
+        # connection pool. It is not a guarantee about total background demand — the three queue
+        # workers (delta.egress, delta.batch-parquet, plugin.sql-generation, max-concurrent 2 each)
+        # run transactional drains on their own pools, so a simultaneous peak of everything wants
+        # more connections than there are. Three of the six scheduler threads only hand off and take
+        # no connection, and the rest are short, so that peak is theoretical rather than scheduled;
+        # if it ever shows up as a connection-timeout, the number to raise is Hikari's, not this one.
+        #
+        # The key is the standard Spring Boot one, so SPRING_TASK_SCHEDULING_POOL_SIZE overrides it
+        # without a placeholder of our own. It only takes effect because SchedulingConfiguration
+        # declares the TaskScheduler bean: under spring.threads.virtual.enabled the auto-configured
+        # scheduler is a SimpleAsyncTaskScheduler, which this key does not configure at all.
+        size: 6
+
   security:
     oauth2:
       resourceserver:

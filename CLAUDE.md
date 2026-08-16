@@ -453,6 +453,64 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- scheduler-pool: `@Scheduled` runs on a pool this application declares instead of on whatever
+  Spring Boot's auto-configuration happened to pick (issue #146). `SchedulingConfiguration` builds
+  the `taskScheduler` bean from Boot's own `ThreadPoolTaskSchedulerBuilder`, and
+  `spring.task.scheduling.pool.size: 6` (standard key, so `SPRING_TASK_SCHEDULING_POOL_SIZE`
+  overrides it; no placeholder of our own) is the size. **The ticket's option 1 — set the key and
+  stop — would have changed nothing**: with `spring.threads.virtual.enabled=true` Boot builds a
+  `SimpleAsyncTaskScheduler`, that key configures a builder whose product is never used, and the
+  bean is what makes it live again. The diagnosis needed the same correction. Under virtual threads
+  a cron or fixed-rate tick is handed off to a fresh virtual thread, so the flagship scenario (the
+  02:00 checkpoint build postponing the scratch sweep) was **already** isolated; what really shared
+  one thread were the eight **fixed-delay** ticks, which Spring runs on the scheduler's own thread
+  by design, since fixed-delay semantics need the previous run to have finished. The load-bearing
+  scratch sweep (#141) is one of them, so the exposure was real — just through the batch-parquet,
+  egress and SQL sweeps rather than through the checkpoint build. It also rested on a flag nobody
+  would connect to scheduling: turning virtual threads off silently drops the whole application to a
+  single scheduling thread, which is the reported failure exactly. Six is derived and asserted, not
+  chosen: **above** the four tasks that can hold a thread for minutes (checkpoint build, retention
+  cleanup, the orphaned-provisional sweep in its 500-segment worst case, and the batch timeout sweep
+  once a backlog makes its unbounded query long) so a short tick always finds a thread, and **below**
+  `spring.datasource.hikari.maximum-pool-size` (10) — which says the scheduler alone cannot empty the
+  connection pool, not that total background demand fits, since the three queue workers hold
+  connections too (**#161**). Two tests carry it:
+  `ScheduledTaskIsolationTest` runs the shipped property set and proves a blocking fixed-delay tick
+  and a blocking cron tick each leave a neighbour running (it also pins the auto-configured
+  scheduler's serialization, so a framework change is visible), and `ScheduledTaskInventoryTest`
+  fails whenever a `@Scheduled` method is added, removed or moved — the audit of what may now run
+  beside what is only defensible against a known list. That guard immediately found **two tasks the
+  ticket's list of eleven missed**: `DeltaIngestionService#evictStaleStagedSessions` and
+  `#sweepOrphanedProvisionalSegments`, which spell the annotation out in full and are therefore
+  invisible to a grep for `@Scheduled` (fifteen tasks in total, counting
+  `BatchRetentionScheduler`'s programmatic cron trigger on the same scheduler). The audit found no
+  task unsafe beside the others: each owns its rows or its files, the ones that could collide
+  already carry their own guard (`ReentrantLock`, `AtomicBoolean`, `FOR UPDATE SKIP LOCKED` claims
+  with leases), and the only genuinely new pairing — the two provisional-segment deletes — is one
+  the base deployment's two replicas could already produce. A pool also stops a periodic task
+  overlapping itself — and changes what a rollout does to a running one, so three shutdown settings
+  are fixed in code rather than left to Boot's defaults: the threads are **daemon**, they are **not
+  interrupted** on context close (which is what they were as virtual threads), and the queue of
+  not-yet-due ticks is **dropped** — a plain shutdown still runs queued *delayed* tasks and every
+  cron tick is queued as one, so without it the pod would sit with parked threads until the monthly
+  partition job came due, and any `await-termination-period` would be certain to time out. Waiting
+  also opts out of Spring's early-stop signal, so a small `ThreadPoolTaskScheduler` subclass shuts the
+  executor down on `ContextClosedEvent` — otherwise the scheduler keeps triggering until its own bean
+  is destroyed, past the `@PreDestroy` of its peers, and `BatchRetentionScheduler`'s programmatic cron
+  (which nothing cancels) could start a cleanup on a closed `DataSource`. `shutdownNow()` would
+  not merely stop the 02:00 build — `CheckpointService` catches the interrupt per table and detaches
+  that table's snapshot key, so a deployment at the wrong minute would leave a 404 behind until the
+  nightly rematerialize; a doomed build should die with the process instead
+  (`spring.task.scheduling.shutdown.await-termination-period` still applies if a deployment wants to
+  wait). Virtual threads stay
+  on for the web layer; they never reached `@Async`, whose sites all name an `Executor` bean that
+  made Boot's virtual-thread `applicationTaskExecutor` back off. Only scheduling is pinned. **One metrics note**: Boot's
+  `TaskExecutorMetricsAutoConfiguration` binds a `ThreadPoolTaskScheduler` and did not bind the
+  `SimpleAsyncTaskScheduler` before it, so `/actuator/prometheus` gains an
+  `executor_*{name="taskScheduler"}` family — nothing renamed or removed, and read
+  `executor_queued_tasks` there as "not yet due" (a `DelayedWorkQueue` holds every future tick, ~15
+  at rest), not as a backlog. No REST, gRPC, DTO, migration, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("One sweep interval means the tick runs when it is due").
 - frame-first-checkpoint: The checkpoint reload frame is written before the per-table snapshots it
   gates, and a frame that cannot fit its ceiling is counted (issue #153, reachable in production
   since #138 lowered the deployed ceilings onto the volume). `CheckpointService.materialize`
@@ -640,9 +698,9 @@ pages/{feature}/            # Route pages
   makes in the same directory as the mount, and a test parses both base manifests to enforce the
   one direction that is a safety property: **flag set ⇒** both temp-dir keys name
   `/scratch/parquet` **and** the volume behind it is an `emptyDir` (turning the flag off stays
-  available as a rollback, and an overlay may only ever set it to false). Left open and ticketed as
-  **#146**: the sweep tick shares one `TaskScheduler` thread with the all-sites checkpoint build, so
-  "at most one sweep interval" assumes that thread is free. No REST, gRPC, DTO, metric, S3-key,
+  available as a rollback, and an overlay may only ever set it to false). The "at most one sweep
+  interval" bound assumed the tick runs when it is due, which #146 has since made true by pinning
+  the scheduler (see scheduler-pool above). No REST, gRPC, DTO, metric, S3-key,
   migration, or frontend change. See `docs/delta-client-v2-guide.md` ("Sizing note", "Orphans
   outlive a container restart"), `docs/cr-unified-batch-parquet.md`.
 - checkpoint-baseline-epoch: The checkpoint epoch guard now covers a **re-baseline** as well as a
