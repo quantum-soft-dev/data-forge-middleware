@@ -10,6 +10,15 @@ delta:
     sweep-ms: 3600000
   batch-parquet:
     sweep-ms: 3600000
+  parquet:
+    # Production is already 1 h; declare it here so a later cut of the production
+    # default cannot silently restore a fast tick under test (issue #167).
+    scratch-orphan-sweep-ms: 3600000
+  ingestion:
+    # 5 min / 15 min in production. A suite longer than that would otherwise race
+    # these ticks in every cached context; tests that need them call the methods.
+    staged-sweep-millis: 3600000
+    provisional-sweep-millis: 3600000
 
 spring:
   main:
@@ -77,9 +86,9 @@ plugin:
     #
     # What this does NOT remove: @Scheduled(fixedDelayString=...) has no initial delay, so each
     # context still runs exactly one drain when it is created. That is a fixed cost of roughly one
-    # per cached context instead of one per context per minute for the length of the run, and
-    # closing it needs an initialDelay on the annotation — a production behaviour change, tracked
-    # in #167 together with the guard that would have caught this key being left out.
+    # per cached context instead of one per context per minute for the length of the run.
+    # ScheduledTaskTestProfileCadenceTest allowlists that first tick (a production initialDelay
+    # would delay crash-recovery) and fails if this key is omitted or restored to 60 s (#167).
     delta-sweep-ms: 3600000
 
 # Auth0 configuration for tests (mock)

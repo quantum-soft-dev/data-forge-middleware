@@ -285,9 +285,12 @@ class ScheduledTaskInventoryTest {
     /**
      * Every {@code Class#method} carrying {@link Scheduled} in the production classes.
      *
+     * <p>Package-private so {@link ScheduledTaskTestProfileCadenceTest} (#167) walks the same set
+     * rather than growing a second scanner that could disagree with this one.</p>
+     *
      * @return fully qualified {@code class#method} names, sorted
      */
-    private static Set<String> scanScheduledMethods() {
+    static Set<String> scanScheduledMethods() {
         ClassPathScanningCandidateComponentProvider scanner =
                 new ClassPathScanningCandidateComponentProvider(false);
         // Everything, not only @Component: a @Scheduled method on a class registered through a
