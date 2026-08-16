@@ -18,6 +18,7 @@ import com.bitbi.dfm.site.domain.TableSchema;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -239,6 +240,10 @@ class CheckpointServiceTest {
 
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        // The other permanent freeze, and it must reach the same meter as the frame ceiling
+        // (issue #153): the pointer is stuck, retention stops with it, and no amount of waiting
+        // repairs either — an alert written on this counter would otherwise miss half of them.
+        verify(metrics).checkpointBuildAborted("lossy_refold");
     }
 
     @Test
@@ -344,6 +349,94 @@ class CheckpointServiceTest {
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         assertEquals(List.of(), snapshotsOnDisk(), "the half-written frame must not be left behind");
+    }
+
+    @Test
+    void anOverCeilingFrameCostsNoSnapshotUploadAtAll() throws IOException {
+        // Issue #153. Crossing the frame ceiling is deterministic for the same fold, so the abort
+        // repeats on every tick. Written after the snapshots it charged each of those repeats a
+        // full set of per-table uploads at the *new* seq, leaving the previous seq's objects
+        // unreferenced — and nothing but a site wipe sweeps `checkpoints/{siteId}/` (#118), so the
+        // orphaned generations accumulated for as long as the site was left alone. Serializing the
+        // frame first makes a failed build cost nothing durable.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, 8L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        assertThrows(ArtifactSizeLimitExceededException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+        assertEquals(List.of(), snapshotsOnDisk(), "the half-written frame must not be left behind");
+    }
+
+    @Test
+    void countsTheAbortSoTheFrozenPointerIsVisibleWithoutTheLogs() {
+        // Issue #153. A per-table skip has had a counter since #113; the frame abort — which costs
+        // the whole site its pointer, and with it retention — had only an ERROR line.
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, 8L);
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+
+        assertThrows(ArtifactSizeLimitExceededException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics).checkpointBuildAborted("frame_too_large");
+        verify(metrics, never()).checkpointTableUnmaterialized(any());
+    }
+
+    @Test
+    void doesNotCountAnAbortWhenTheFrameFailsForAnyOtherReason() {
+        // The counter names one cause and must keep naming it: an S3 refusal is transient and the
+        // next tick fixes it, while a deterministic over-ceiling frame is the thing an operator is
+        // meant to be paged for.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
+        when(checkpointStorage.uploadFrame(eq(SITE), anyLong(), any(Path.class)))
+                .thenThrow(new IllegalStateException("S3 refused the frame"));
+
+        assertThrows(IllegalStateException.class, () -> service.buildCheckpoint(SITE));
+
+        verify(metrics, never()).checkpointBuildAborted(any());
+    }
+
+    @Test
+    void writesTheFrameBeforeAnySnapshotOfTheSameBuild() {
+        // The ordering is the fix, so it is asserted directly rather than only through its
+        // consequence above: whatever ends the frame — the ceiling, an S3 refusal, an
+        // unrenderable fold — must end it before a snapshot object exists at the new seq.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        InOrder order = inOrder(checkpointStorage);
+        order.verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+        order.verify(checkpointStorage).uploadParquet(eq(SITE), eq("customers"), eq(2L), any(Path.class));
+    }
+
+    @Test
+    void stillKeepsOneCheckpointScratchFileOnDiskAtATime() {
+        // Moving the frame first must not mean holding it open across the snapshot loop: the
+        // deployed scratch budget (#131/#138) is `2 x max(table, frame)`, one file per build path,
+        // not `frame + table`. So the frame is written, uploaded and deleted before the first
+        // table's file is created.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob")));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        recordFrameUploads();
+
+        service.buildCheckpoint(SITE);
+
+        assertEquals(1, uploadedFrames.size());
+        assertEquals(1, uploadedFrames.get(0).snapshotsOnDisk(),
+                "the frame must be the only checkpoint scratch file while it is being uploaded");
+        assertEquals(2, uploaded.size());
+        assertTrue(uploaded.stream().allMatch(snapshot -> snapshot.snapshotsOnDisk() == 1),
+                "the frame's scratch file must be gone before the first table's is created");
     }
 
     @Test
@@ -664,7 +757,52 @@ class CheckpointServiceTest {
 
         verify(checkpointRepository, never()).save(any());
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        verify(eventPublisher, never()).publishEvent(any());
+        // Not even the frame, and not by luck: since issue #153 put the frame ahead of the
+        // snapshots, `requireEpoch` runs ahead of the frame. A wipe that has already committed is
+        // therefore seen before the longest unguarded stretch of the build instead of after it.
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void checksTheEpochBeforeUploadingTheFrame() {
+        // The positive half of the above. The frame is neither a row nor a pointer, so nothing
+        // else in the build refuses on its behalf; without this check the build's first contact
+        // with the site_sync_state lock would come only after a multi-GiB write and PUT.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        InOrder order = inOrder(syncStateRepository, checkpointStorage);
+        order.verify(syncStateRepository).findBySiteIdForUpdate(SITE);
+        order.verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+    }
+
+    @Test
+    void leavesAnOrphanFrameWhenTheWipeCommitsAfterThePreCheck() {
+        // The residual window the pre-check cannot close, kept honest rather than claimed away: a
+        // wipe committing after `requireEpoch` passed leaves `_frame/seq=2/frame.pb.gz` behind and
+        // the guard speaks at the first row write instead. That object is the same litter a
+        // discarded build has always left (the snapshots it had already uploaded), and the wipe's
+        // own cut-off spares anything newer than its start (#122), so a second wipe collects it.
+        //
+        // It is harmless for a reason that is *not* "the new epoch never reaches seq 2": a wipe
+        // resets the client's counters, so the site re-traverses the same seq range and a later
+        // build may well end at 2 — at which point it overwrites this object with its own. The
+        // real invariant is that a build only ever seeds from the frame at last_checkpoint_seq,
+        // and uploadFrame(N) always precedes the recordCheckpoint(N) that names it, so the frame
+        // read is always the one written by the build that moved the pointer there.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+        wipedAfterThePreCheck(1L);
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE), "a discarded build folds to nothing");
+
+        verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
@@ -680,7 +818,9 @@ class CheckpointServiceTest {
                 "customers", customersSchema(),
                 "orders", customersSchema()));
         recordUploads("checkpoints/parquet-key");
-        wipedTo(1L);
+        // The wipe must land *after* the pre-frame epoch check, or the build never reaches the
+        // table loop this test is about.
+        wipedAfterThePreCheck(1L);
 
         service.buildCheckpoint(SITE);
 
@@ -725,6 +865,9 @@ class CheckpointServiceTest {
 
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        // And it must not reach the abort counter either: a build discarded because the operator
+        // replaced the site's history is a normal outcome, not a frozen pointer to page on.
+        verify(metrics, never()).checkpointBuildAborted(any());
     }
 
     @Test
@@ -736,7 +879,8 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(syncStateRepository, times(2)).findBySiteIdForUpdate(SITE);
+        // Three: the pre-frame check (#153), the table's row write, and the pointer.
+        verify(syncStateRepository, times(3)).findBySiteIdForUpdate(SITE);
         verify(checkpointRepository).save(any());
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
@@ -817,11 +961,27 @@ class CheckpointServiceTest {
 
     /** The site has been wiped {@code generation} times since this build read its sync state. */
     private void wipedTo(long generation) {
-        SiteSyncState wiped = SiteSyncState.initial(SITE);
+        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped(generation)));
+    }
+
+    /**
+     * The wipe commits in the residual window: the build's pre-frame {@code requireEpoch} still
+     * sees the old epoch, everything after it sees the new one. This is what the per-table catch
+     * and the frame orphan are about, so it has to be modelled rather than collapsed into
+     * {@link #wipedTo(long)} — which now refuses the build before it writes anything at all.
+     */
+    private void wipedAfterThePreCheck(long generation) {
+        when(syncStateRepository.findBySiteIdForUpdate(SITE))
+                .thenReturn(Optional.of(SiteSyncState.initial(SITE)))
+                .thenReturn(Optional.of(wiped(generation)));
+    }
+
+    private static SiteSyncState wiped(long generation) {
+        SiteSyncState state = SiteSyncState.initial(SITE);
         for (long i = 0; i < generation; i++) {
-            wiped.resetForWipe();
+            state.resetForWipe();
         }
-        when(syncStateRepository.findBySiteIdForUpdate(SITE)).thenReturn(Optional.of(wiped));
+        return state;
     }
 
     /**

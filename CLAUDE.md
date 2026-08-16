@@ -453,6 +453,66 @@ pages/{feature}/            # Route pages
 - Migrations current at **V52**; next migration is **V53** (do not reuse numbers)
 
 ## Recent Changes
+- frame-first-checkpoint: The checkpoint reload frame is written before the per-table snapshots it
+  gates, and a frame that cannot fit its ceiling is counted (issue #153, reachable in production
+  since #138 lowered the deployed ceilings onto the volume). `CheckpointService.materialize`
+  serialized the frame *after* every table's Parquet had been written, uploaded and saved at the new
+  seq — yet the frame is the one artifact that cannot be skipped, so crossing
+  `delta.checkpoint.max-frame-temp-bytes` ends the build. Crossing it is **deterministic for the
+  same fold**, so the 02:00 tick repeated the abort every night, and each repeat had already paid
+  for a full set of per-table uploads the pointer then never adopted: a `checkpoints` row is one per
+  `(site, table)` and carries a single key, so the previous seq's objects were unreferenced the
+  moment the next build wrote its own, and nothing but a site wipe sweeps `checkpoints/{siteId}/`
+  (#118) — one orphaned generation per night, indefinitely. The frame now goes first, so an abort
+  costs nothing durable (no snapshot object, no row, pointer untouched as before). It is uploaded
+  and **deleted before the snapshot loop**, not held open across it: the deployed budget is
+  `2 x max(table, frame)`, one file per build path and not one per artifact (#131/#138), so holding
+  both would silently double the checkpoint term — `stillKeepsOneCheckpointScratchFileOnDiskAtATime`
+  pins that. New counter `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold}`,
+  registered at zero from startup so an alert predates the first occurrence; `delta.seq.lag` stays
+  the companion series (the counter says why, the lag says how bad). The tag values are the two
+  aborts that **do not repair themselves** — the second is the pre-existing "refusing lossy refold",
+  equally permanent and equally invisible until now, so an alert written on this meter cannot miss
+  half the population; an unreadable scratch directory and an S3 refusal cost one tick and are
+  deliberately absent, as is a build discarded because the site's history was replaced (#136/#142),
+  which is a normal outcome. One caveat is documented in both the meter's Javadoc and the guide:
+  `S3CheckpointStorage.exists` treats a **403 as absence** on purpose (least-privilege IAM has no
+  `s3:ListBucket`, so HEAD-on-a-missing-key answers 403), so a read outage trips `lossy_refold` on
+  every pruned-history site at once — many sites in one tick is a permissions incident, one site
+  alone is the real thing. Distinguishing them at source is **#157**, filed from this review.
+  The existing per-table
+  `delta.checkpoint.tables.unmaterialized` is untouched and the two must not be confused: this one
+  is the whole site's pointer, and with it retention. **Deliberately no backoff and no UI surface** —
+  the retry is now free in storage terms, and suppressing it (or flagging the site in Delta Sync)
+  needs per-site state the abort by design does not write; that is the same state #149 will have to
+  decide on for its per-table twin. What a repeat still costs, and what the guide now says out loud:
+  retention stopped, the checkpoint snapshots frozen at the last successful seq for Bit BI / Parquet
+  Export / the UI (stale, never wrong — before #153 they were rewritten nightly at a seq the pointer
+  never adopted, which *is* the write that orphaned the previous generation), and a table detached
+  by #128/#149 left unrepaired, since the rematerialize runs on the idle `RETRY_MISSING` pass and a
+  site whose frame is oversized is never idle. `CheckpointEpochGuard` gains
+  `requireEpoch(siteId, epoch)` — the same row-lock check with nothing to write — called once
+  **before** the frame. Writing and PUTting a multi-GiB frame is the longest stretch of a build that
+  touches no row, and putting it first would otherwise have made the build's first contact with the
+  `site_sync_state` lock come *after* it instead of before: a wipe that had already committed would
+  be noticed only once its object was in the bucket, and a stalled pre-wipe PUT landing after a
+  new-epoch build wrote the same seq would overwrite a fresh frame with the discarded fold — the
+  resurrection the guard exists to stop. The check keeps that window exactly as wide as it was when
+  `writeSnapshots` ran first; it is not held across the S3 call (`REQUIRES_NEW`, committed before).
+  The residual window remains and is pinned by
+  `leavesAnOrphanFrameWhenTheWipeCommitsAfterThePreCheck`: a wipe committing after the check leaves
+  the frame object as well as the snapshots a discarded build has always left — the same
+  already-accepted litter, spared by the wipe's own cut-off (#122) so a
+  second wipe collects it (giving that prefix a sweeper of its own, rather than only the wipe, is
+  **#160**, filed from this review as the sibling of #158). It is harmless **not** because the new epoch never reaches that seq (a
+  wipe resets the client's counters, so the site re-traverses the same range and a later build may
+  legitimately end there and overwrite it) but because a build only ever seeds from the frame at
+  `last_checkpoint_seq`, and `uploadFrame(N)` always precedes the `recordCheckpoint(N)` that names
+  it. `Files.createDirectories`
+  moved out of `writeSnapshots` into `prepareScratchDirectory()`, called by both paths, so an
+  unusable scratch directory still aborts the build (#112) rather than failing as a scratch-file
+  error. No REST, gRPC, DTO, migration, configuration-key, S3-key or frontend change. See
+  `docs/delta-client-v2-guide.md` ("A frame that does not fit", Metrics).
 - ingestion-commit-no-s3: The ingestion commit no longer performs S3 I/O while it holds database
   locks (issue #147, raised reviewing #142). `DeltaSessionCommitService.commit` was `@Transactional`
   and called `ChangelogSegmentService.persist`, whose `PutObject` therefore ran inside the
@@ -527,8 +587,8 @@ pages/{feature}/            # Route pages
   itself** when the artifact is deterministically oversized. A checkpoint table is skipped *and*
   has `s3_key_parquet` detached on a seq-advancing build, so it 404s for Bit BI / Parquet Export
   and the nightly rematerialize fails identically (#149); the **frame** aborts the build, freezing
-  the pointer and retention while every following build re-uploads a full generation of snapshots
-  (#153, filed from this review); a completed-batch artifact is `ABANDONED` on the first attempt and
+  the pointer and retention (#153, filed from this review, since fixed the orphaning half and added
+  `delta.checkpoint.builds.aborted` — the freeze itself still needs the key raised); a completed-batch artifact is `ABANDONED` on the first attempt and
   404s until the key is raised and the row requeued (039's admin route). In each case the records
   themselves stay in the segments — what is lost is the derived artifact. Raise the frame ceiling
   first, and remember it costs two GiB of volume per GiB. No REST, gRPC,

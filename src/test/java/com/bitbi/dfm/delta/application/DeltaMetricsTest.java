@@ -122,6 +122,38 @@ class DeltaMetricsTest {
     }
 
     @Test
+    void countsAnAbortedCheckpointBuildByReason() {
+        // Issue #153. Every other way a checkpoint build can end badly has a counter; a frame that
+        // crosses its ceiling had only an ERROR line, so the site's frozen pointer — and the
+        // retention that stops with it — was invisible until someone read the logs or noticed the
+        // segment table growing.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        assertEquals(0.0, abortCounter(registry, "frame_too_large").count(),
+                "the series must exist before the first abort, or an alert has nothing to watch");
+        assertEquals(0.0, abortCounter(registry, "lossy_refold").count());
+
+        metrics.checkpointBuildAborted("frame_too_large");
+        metrics.checkpointBuildAborted("frame_too_large");
+        metrics.checkpointBuildAborted("lossy_refold");
+
+        assertEquals(2.0, abortCounter(registry, "frame_too_large").count());
+        // The other abort that freezes the pointer permanently. Both must be on the meter, or the
+        // alert the guide tells operators to write silently misses half the population.
+        assertEquals(1.0, abortCounter(registry, "lossy_refold").count());
+    }
+
+    @Test
+    void rejectsAnUnknownCheckpointAbortReason() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        DeltaMetrics metrics = new DeltaMetrics(registry);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> metrics.checkpointBuildAborted("frame_to_large"));
+    }
+
+    @Test
     void rejectsUnknownPhaseTags() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         DeltaMetrics metrics = new DeltaMetrics(registry);
@@ -142,6 +174,11 @@ class DeltaMetricsTest {
         metrics.recordBatchParquetPhase("download", -1L);
 
         assertEquals(0L, phaseTimer(registry, "delta.batch-parquet.duration", "download").count());
+    }
+
+    private static io.micrometer.core.instrument.Counter abortCounter(SimpleMeterRegistry registry,
+                                                                      String reason) {
+        return registry.get("delta.checkpoint.builds.aborted").tag("reason", reason).counter();
     }
 
     private static Timer phaseTimer(SimpleMeterRegistry registry, String name, String phase) {

@@ -23,6 +23,9 @@ import java.util.function.Supplier;
  *   <li>{@code delta.checkpoint.duration} — time to materialize a checkpoint;
  *       {@code phase=total} is the cycle, {@code download_frame|fold|parquet|upload} are
  *       the inner steps (042)</li>
+ *   <li>{@code delta.checkpoint.builds.aborted} — checkpoint builds abandoned whole, tagged
+ *       {@code reason=frame_too_large|lossy_refold}; the pointer does not move, so retention
+ *       freezes with it, and neither cause repairs itself</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -62,6 +65,8 @@ public class DeltaMetrics {
     private final Counter egressSegments;
     private final Counter checkpointNoSchema;
     private final Counter checkpointParquetFailed;
+    private final Counter checkpointFrameTooLarge;
+    private final Counter checkpointLossyRefold;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -94,6 +99,8 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.checkpointNoSchema = checkpointUnmaterialized(registry, "no_schema");
         this.checkpointParquetFailed = checkpointUnmaterialized(registry, "parquet_failed");
+        this.checkpointFrameTooLarge = checkpointBuildAborted(registry, "frame_too_large");
+        this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -127,6 +134,12 @@ public class DeltaMetrics {
                 .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
     }
 
+    private static Counter checkpointBuildAborted(MeterRegistry registry, String reason) {
+        return Counter.builder("delta.checkpoint.builds.aborted")
+                .description("Checkpoint builds abandoned whole, leaving the pointer where it was, by reason")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).tag("reason", reason).register(registry);
+    }
+
     private static Counter batchParquetOutcome(MeterRegistry registry, String outcome) {
         return Counter.builder("delta.batch-parquet.artifacts")
                 .description("Completed-batch Parquet artifacts settled, by outcome")
@@ -146,6 +159,41 @@ public class DeltaMetrics {
         switch (reason) {
             case "no_schema" -> checkpointNoSchema.increment();
             case "parquet_failed" -> checkpointParquetFailed.increment();
+            default -> throw new IllegalArgumentException("Unknown reason: " + reason);
+        }
+    }
+
+    /**
+     * A whole checkpoint build was abandoned (issue #153).
+     *
+     * <p>Unlike {@link #checkpointTableUnmaterialized(String)} this is not a hole in one table:
+     * {@code last_checkpoint_seq} does not move, so {@code ChangelogRetentionService} prunes
+     * nothing and the site's segment table grows until the cause is fixed. {@code delta.seq.lag}
+     * is the companion series showing how far behind the site has fallen while it lasted.</p>
+     *
+     * <p>The tag values are the aborts that <b>do not repair themselves</b>, which is what makes a
+     * non-zero rate a page rather than a blip: {@code frame_too_large} is deterministic for a given
+     * fold, and {@code lossy_refold} is a seed frame that reads as absent over a pruned history.
+     * Three other ways a build can end are deliberately absent — an unreadable scratch directory
+     * and an S3 refusal on the frame are transient and cost only that tick (the first would also
+     * hit every site at once, so it is an infrastructure alarm rather than a site's), and a build
+     * discarded because the site's history was replaced under it (issues #136, #142) is a normal
+     * outcome of an operator action, not a frozen pointer.</p>
+     *
+     * <p><b>One caveat on {@code lossy_refold}, and it is the reason to read the count per site
+     * before acting:</b> {@code S3CheckpointStorage.exists} deliberately treats a {@code 403} as
+     * absence, because least-privilege IAM answers HEAD-on-a-missing-key that way. A bucket-policy
+     * or IAM read outage therefore makes the frame read as absent for <em>every</em> site at once,
+     * and each pruned-history site increments this counter for a condition that a permission fix
+     * clears. Many sites tripping in the same tick is that; one site tripping alone is the real
+     * thing. The 403 branch also logs a WARN naming the key, which is the tiebreaker.</p>
+     *
+     * @param reason {@code frame_too_large} or {@code lossy_refold}
+     */
+    public void checkpointBuildAborted(String reason) {
+        switch (reason) {
+            case "frame_too_large" -> checkpointFrameTooLarge.increment();
+            case "lossy_refold" -> checkpointLossyRefold.increment();
             default -> throw new IllegalArgumentException("Unknown reason: " + reason);
         }
     }
