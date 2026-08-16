@@ -110,28 +110,46 @@ public class DeltaCheckpointRebuildService {
      * <p>The check is deliberately after the call rather than only inside it: a shutdown starting
      * just as a rebuild finished leaves the flag set and costs one redundant rebuild after the
      * restart, which is the harmless direction to be wrong in.</p>
+     *
+     * <p>An S3 read denial on the seed frame is the second such outcome (issue #157) and is handled
+     * the same way. {@code CheckpointService} throws rather than returning an empty fold precisely
+     * so this path can tell it apart from a finished build — otherwise a rebuild that never ran
+     * would log "completed" and spend the flag, on the very action the {@code history_gone} message
+     * names as the recovery.</p>
      */
     private void runRebuild(UUID siteId) {
-        boolean endedByShutdown = false;
+        boolean keepFlagForARetry = false;
         try {
             checkpointService.rebuildFromFrame(siteId);
-            endedByShutdown = shutdownSignal.isShuttingDown();
-            if (!endedByShutdown) {
+            keepFlagForARetry = shutdownSignal.isShuttingDown();
+            if (!keepFlagForARetry) {
                 log.info("Forced checkpoint rebuild completed: siteId={}", siteId);
+            } else {
+                logShutdown(siteId);
             }
+        } catch (CheckpointService.FramePresenceUnknownException e) {
+            keepFlagForARetry = true;
+            log.warn("Forced checkpoint rebuild for site {} did not run: {}. Leaving "
+                    + "rebuild_requested set, so the request survives the incident and is "
+                    + "re-driven at the next start instead of being reported as done",
+                    siteId, e.getMessage());
         } catch (Exception e) {
-            endedByShutdown = shutdownSignal.isShuttingDown();
-            if (!endedByShutdown) {
+            keepFlagForARetry = shutdownSignal.isShuttingDown();
+            if (!keepFlagForARetry) {
                 log.error("Forced checkpoint rebuild failed: siteId={}", siteId, e);
+            } else {
+                logShutdown(siteId);
             }
         } finally {
-            if (endedByShutdown) {
-                log.info("Forced checkpoint rebuild for site {} did not run to completion: the "
-                        + "application is shutting down. Leaving rebuild_requested set so the "
-                        + "next process re-drives it at startup", siteId);
-            } else {
+            if (!keepFlagForARetry) {
                 syncStateService.clearRebuildRequested(siteId);
             }
         }
+    }
+
+    private static void logShutdown(UUID siteId) {
+        log.info("Forced checkpoint rebuild for site {} did not run to completion: the "
+                + "application is shutting down. Leaving rebuild_requested set so the "
+                + "next process re-drives it at startup", siteId);
     }
 }

@@ -187,17 +187,18 @@ public class CheckpointService {
         // exist answers exactly like a key that is gone. Acting on it would raise this subsystem's
         // loudest alarm — or, with no segments behind the site, spend one of the finite
         // rematerialize attempts #149 gave those rows, after which the site names itself on no work
-        // list and does not return when the permission does. Skip the site for this tick instead:
-        // nothing is recorded, nothing is spent, and the next tick answers the same question once
-        // the read is allowed again. Deliberately not on delta.checkpoint.builds.aborted, whose
-        // contract is aborts that never repair themselves; delta.s3.read-denied is the meter for
-        // this one, and it is incremented where the denial is seen.
+        // list and does not return when the permission does. End the build instead: nothing is
+        // recorded, nothing is spent, and the next tick answers the same question once the read is
+        // allowed again. Deliberately not on delta.checkpoint.builds.aborted, whose contract is
+        // aborts that never repair themselves; delta.s3.read-denied is the meter for this one, and
+        // it is incremented where the denial is seen.
+        //
+        // Thrown rather than returned as an empty fold, for the same reason #162 made the shutdown
+        // case distinguishable: DeltaCheckpointRebuildService cannot tell an empty fold from a
+        // finished build, so it would log "rebuild completed" and spend the durable
+        // rebuild_requested flag on a build that never ran.
         if (framePresence == ObjectPresence.UNKNOWN) {
-            log.warn("Skipping the checkpoint build for site {}: S3 would not say whether frame@{} "
-                    + "exists (see the 'S3 read denied' warning and delta.s3.read-denied). Nothing "
-                    + "was decided — the pointer, the per-table keys and the rematerialize attempts "
-                    + "are untouched, and the next tick retries", siteId, checkpointSeq);
-            return Map.of();
+            throw new FramePresenceUnknownException(siteId, checkpointSeq);
         }
         boolean haveFrame = framePresence == ObjectPresence.PRESENT;
         boolean historyPruned = segments.isEmpty() || segments.get(0).getFirstSeq() > 1;
@@ -758,6 +759,24 @@ public class CheckpointService {
     private void stopIfShuttingDown(UUID siteId) {
         if (shutdownSignal.isShuttingDown()) {
             throw new BuildEndedByShutdownException(siteId, null, null);
+        }
+    }
+
+    /**
+     * S3 would not say whether the site's seed frame exists, so this build did nothing (issue #157).
+     *
+     * <p>Public and thrown, unlike its shutdown sibling, because two callers must tell it apart from
+     * a build that finished: {@code CheckpointScheduler} logs it and moves to the next site, while
+     * {@code DeltaCheckpointRebuildService} keeps the operator's {@code rebuild_requested} flag
+     * rather than reporting a rebuild that never ran. Nothing durable changed — no fold, no upload,
+     * no row, no attempt spent — and the next tick asks S3 the same question again.</p>
+     */
+    public static final class FramePresenceUnknownException extends RuntimeException {
+
+        FramePresenceUnknownException(UUID siteId, long checkpointSeq) {
+            super("S3 would not say whether checkpoint frame@" + checkpointSeq + " of site "
+                    + siteId + " exists (read denied); the build was skipped and nothing was "
+                    + "recorded — see delta.s3.read-denied");
         }
     }
 

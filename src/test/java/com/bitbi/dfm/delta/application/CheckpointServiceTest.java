@@ -896,7 +896,8 @@ class CheckpointServiceTest {
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
-        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+        assertThrows(CheckpointService.FramePresenceUnknownException.class,
+                () -> service.buildCheckpoint(SITE));
 
         // Not an abort of the kind that meter counts: this one repairs itself the moment the
         // permission is back, and delta.checkpoint.builds.aborted promises the opposite.
@@ -924,7 +925,8 @@ class CheckpointServiceTest {
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
         for (int tick = 1; tick <= MAX_MATERIALIZE_ATTEMPTS + 1; tick++) {
-            assertEquals(Map.of(), service.buildCheckpoint(SITE));
+            assertThrows(CheckpointService.FramePresenceUnknownException.class,
+                    () -> service.buildCheckpoint(SITE));
         }
 
         verify(metrics, never()).checkpointBuildAborted(any());

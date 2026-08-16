@@ -68,6 +68,26 @@ class CheckpointSchedulerTest {
     }
 
     @Test
+    void aSiteWhoseFramePresenceIsUnknownDoesNotStopTheSweep() {
+        // Issue #157: a read denial hits every site in the tick, so the one thing that must not
+        // happen is the sweep ending on the first of them. It is also not pruned — the pointer did
+        // not move, and the build recorded nothing at all.
+        UUID denied = UUID.randomUUID();
+        UUID ok = UUID.randomUUID();
+        when(segmentRepository.findDistinctSiteIds()).thenReturn(List.of(denied, ok));
+        when(checkpointRepository.findSiteIdsWithUnmaterializedCheckpoints(MAX_MATERIALIZE_ATTEMPTS))
+                .thenReturn(List.of());
+        when(checkpointService.buildCheckpoint(denied))
+                .thenThrow(new CheckpointService.FramePresenceUnknownException(denied, 9L));
+
+        scheduler.buildCheckpoints();
+
+        verify(checkpointService).buildCheckpoint(ok);
+        verify(retentionService).prune(ok);
+        verify(retentionService, never()).prune(denied);
+    }
+
+    @Test
     void visitsASiteWhoseSegmentsArePrunedButHasAnUnmaterializedCheckpoint() {
         // Issue #137: audit-window-segments=0 (or a table detached long enough to age out of the
         // window) leaves the site with no segment row at all, yet buildCheckpoint can still

@@ -88,6 +88,20 @@ class DeltaCheckpointRebuildServiceTest {
     }
 
     @Test
+    void keepsTheFlagWhenS3WouldNotSayWhetherTheFrameIsThere() {
+        // Issue #157, raised in review. A rebuild skipped because the seed frame's presence could
+        // not be read did not run at all — reporting it as completed and spending the flag would
+        // lose the operator's click on the action the history_gone message names as the recovery.
+        when(syncStateService.requestRebuild(SITE)).thenReturn(true);
+        when(checkpointService.rebuildFromFrame(SITE))
+                .thenThrow(new CheckpointService.FramePresenceUnknownException(SITE, 7L));
+
+        assertTrue(service.requestRebuild(SITE));
+
+        verify(syncStateService, never()).clearRebuildRequested(SITE);
+    }
+
+    @Test
     void duplicateRequestShortCircuitsWithoutASecondBuild() {
         // Flag already set: a second click must not queue a second full rebuild whose
         // sibling's finally-clear would flip the UI to "idle" mid-run.

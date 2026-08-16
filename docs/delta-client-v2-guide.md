@@ -659,7 +659,7 @@ ceiling is raised or the site is re-baselined. Two things follow, and both are h
   least-privilege IAM answers HEAD-on-a-missing-key that way, having no `s3:ListBucket`, and
   indistinguishable from a blanket read denial on keys that exist. A bucket-policy or IAM outage
   therefore tripped this counter for every pruned-history site in the same tick, for something a
-  permission fix clears. A denied HEAD is now resolved by a ranged read of the first byte, and a
+  permission fix clears. A denied HEAD is now resolved by a one-key listing, and a
   denial that cannot be resolved answers `UNKNOWN`: the build **skips that site** untouched and
   increments `delta.s3.read-denied` instead. So a permissions incident shows up as that meter
   rising, plainly labelled, and this one keeps its promise — the aborts that do not repair
@@ -774,8 +774,8 @@ answers pull in opposite directions.
   moment the permission came back, the drain is durable: after
   `DELTA_CHECKPOINT_MAX_MATERIALIZE_ATTEMPTS` such nights the rows give up and, having no segments,
   the site names itself on no work list and is reachable only through a forced rebuild. That
-  trade no longer has to be made. A denied HEAD is resolved by a ranged read of the first byte, and
-  a denial that cannot be resolved answers `UNKNOWN`: the build skips the site, spends no attempt,
+  trade no longer has to be made. A denied HEAD is resolved by a one-key listing, and
+  a denial that survives it answers `UNKNOWN`: the build skips the site, spends no attempt,
   and counts `delta.s3.read-denied`. This abort is now reached only when S3 itself says the frame is
   not there.
 - **A build that is only ending records nothing (#162).** Spring publishes `ContextClosedEvent` and
@@ -811,19 +811,29 @@ does not come back when the permission does.
 
 `S3CheckpointStorage.presence(key)` now answers `PRESENT` / `ABSENT` / `UNKNOWN`:
 
-- A denied HEAD is resolved with the permission the deployment does have — a ranged `GetObject` of
-  the first byte (`Range: bytes=0-0`). It answers `NoSuchKey` for a key that is genuinely gone and
-  succeeds for a denied-but-present one, so the least-privilege reading survives without the
-  conflation. The extra round trip is paid on the 403 path only: rare on a healthy deployment, and
-  on a least-privilege one the price of every genuinely missing key. A `416` counts as present — a
-  zero-length object has no first byte, and reading "missing" out of "your range was wrong" would be
-  the same mistake again.
-- Only when the probe is denied too is the answer `UNKNOWN`, and that is a real read outage rather
+- A denied HEAD is resolved by **listing** the key: `ListObjectsV2(prefix=<key>, max-keys=1)`, with
+  the result checked for the exact key so a longer sibling sharing the prefix cannot answer for it.
+  Not by *reading* it — AWS applies the same existence-hiding rule to `GetObject` as to
+  `HeadObject`, so the ranged read the ticket suggested would answer 403 for a missing key on
+  exactly the deployment that needs resolving, and every absence would degrade into `UNKNOWN`.
+  `ListObjectsV2` is a **bucket** action with no such rule: granted, it says truthfully whether the
+  key is there. The extra round trip is paid on the 403 path only.
+- **This application requires `s3:ListBucket` anyway**, which is what makes the probe decidable
+  rather than hopeful: site wipe walks `egress/{siteId}/` and `checkpoints/{siteId}/` (#118, #122)
+  and the nightly batch retention lists the batch prefix (#100). A deployment that lacks it cannot
+  run those paths at all — and could not distinguish absence from denial by any means, because
+  hiding one behind the other is precisely what the missing permission does.
+- Only when the listing is denied too is the answer `UNKNOWN`, and that is a real read outage rather
   than a guess about one. It increments **`delta.s3.read-denied`** and logs a WARN naming the key.
 - The checkpoint build **skips a site whose frame presence is unknown**: nothing is folded,
   uploaded, saved or counted, no attempt is spent, and the next tick asks again. It is deliberately
   not on `delta.checkpoint.builds.aborted`, whose contract is aborts that never repair themselves —
-  this one repairs itself the moment the permission is restored.
+  this one repairs itself the moment the permission is restored. The skip is **thrown**
+  (`CheckpointService.FramePresenceUnknownException`) rather than returned as an empty fold, for the
+  reason #162 made the shutdown case distinguishable: `CheckpointScheduler` logs it and moves to the
+  next site, while a **forced rebuild** keeps its durable `rebuild_requested` flag instead of
+  reporting a rebuild that never ran — the UI keeps saying "Rebuild queued", which is true, and the
+  next start re-drives it.
 - Parquet Export's file listing drops a delta row only on a **known** absence, so a denial no longer
   hides a download that is there (`GET /api/v1/plugins/parquet-export/files?type=delta`).
 

@@ -29,9 +29,9 @@ import java.util.function.Supplier;
  *       on one tag</b> — that promise is the reason every permanent abort is registered here</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
  *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
- *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, HEAD and the
- *       ranged probe alike (issue #157, registered in {@code S3CheckpointStorage}). A rising count
- *       is an IAM or bucket-policy read outage; the work depending on those objects is skipped
+ *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
+ *       the one-key listing alike (issue #157, registered in {@code S3CheckpointStorage}). A rising
+ *       count is an IAM or bucket-policy read outage; the work depending on those objects is skipped
  *       rather than concluded, so there is nothing to undo once the permission is back</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
@@ -194,7 +194,7 @@ public class DeltaMetrics {
      * {@code 403} as absence — correct for a missing key under least-privilege IAM, and
      * indistinguishable from a blanket read denial on keys that exist, so one bucket-policy change
      * made every pruned-history site trip {@code lossy_refold} in the same tick. A denied HEAD is
-     * now resolved by a ranged read, and a denial that cannot be resolved answers {@code UNKNOWN}:
+     * now resolved by a one-key listing, and a denial that survives it answers {@code UNKNOWN}:
      * the build skips that site without touching anything and increments {@code delta.s3.read-denied}
      * instead of this meter. A non-zero rate here is therefore a fact about the site's own data
      * again — and a rising {@code delta.s3.read-denied} is the permissions incident, plainly

@@ -44,9 +44,6 @@ public class S3CheckpointStorage {
 
     private static final Logger log = LoggerFactory.getLogger(S3CheckpointStorage.class);
 
-    /** One byte is enough to learn whether an object is there; it is never enough to be a download. */
-    private static final String FIRST_BYTE_RANGE = "bytes=0-0";
-
     private final S3Client s3Client;
     private final String bucketName;
     private final Counter readDenied;
@@ -303,19 +300,22 @@ public class S3CheckpointStorage {
     /**
      * Is this object there, gone, or is S3 refusing to say (issue #157)?
      *
-     * <p>HEAD on a missing key answers 404 only with {@code s3:ListBucket}; least-privilege IAM
-     * (Get/PutObject only) answers <b>403</b> for a key that does not exist, so a 403 must not be
-     * read as "unavailable". It must not be read as "absent" either: a blanket read denial on keys
-     * that <em>do</em> exist lands in exactly the same branch, and before this the two were the
-     * same answer — which is how one IAM change presented as every pruned-history site having lost
-     * its checkpoint history at once.</p>
+     * <p>HEAD on a missing key answers 404 only with {@code s3:ListBucket}; without it AWS hides
+     * existence behind a <b>403</b>, so a 403 must not be read as "unavailable". It must not be
+     * read as "absent" either: a blanket read denial on keys that <em>do</em> exist lands in exactly
+     * the same branch, and before this the two were the same answer — which is how one IAM change
+     * presented as every pruned-history site having lost its checkpoint history at once.</p>
      *
-     * <p>So the 403 is resolved with the permission we do have. A ranged {@code GetObject} of the
-     * first byte answers {@code NoSuchKey} for a key that is genuinely gone and succeeds for a
-     * denied-but-present one; only when the probe is denied too is the answer {@code UNKNOWN}, and
-     * that is a real read outage rather than a guess about one. The extra round trip is paid on the
-     * 403 path alone — the rare one on a healthy deployment, and on a least-privilege one the price
-     * of every genuinely missing key.</p>
+     * <p>So the 403 is resolved by <b>listing</b> the key. Not by reading it: AWS applies the same
+     * existence-hiding rule to {@code GetObject} as to {@code HeadObject}, so a ranged read would
+     * answer 403 for a missing key on exactly the deployment that needs resolving, and every
+     * absence would degrade into {@code UNKNOWN}. {@code ListObjectsV2} is a <em>bucket</em> action
+     * with no such rule: granted, it says truthfully whether the key is there. This application
+     * requires {@code s3:ListBucket} regardless — site wipe walks two prefixes (#118, #122) and the
+     * nightly batch retention lists the batch prefix (#100) — so the probe is decidable wherever
+     * this application can run at all, and a 403 that survives it is a genuine read denial.
+     * {@code UNKNOWN} is therefore a real read outage rather than a guess about one, and the extra
+     * round trip is paid on the 403 path alone, which is the rare one.</p>
      *
      * @param s3Key the object key
      * @return {@code PRESENT}, {@code ABSENT}, or {@code UNKNOWN}
@@ -342,7 +342,8 @@ public class S3CheckpointStorage {
     }
 
     /**
-     * Ask for the object's first byte, the one read a least-privilege policy does grant.
+     * List the key as its own prefix: one round trip, one result, and an answer that is not subject
+     * to the existence-hiding rule the HEAD just ran into.
      *
      * <p>Deliberately total: every outcome maps to a presence rather than to an exception, because
      * the question being answered is already "we could not stat it — can we tell anything at all?"
@@ -350,41 +351,37 @@ public class S3CheckpointStorage {
      * have to treat it identically, with a stack trace instead of a decision.</p>
      */
     private ObjectPresence probeAfterDeniedHead(String s3Key) {
-        try (ResponseInputStream<GetObjectResponse> ignored = s3Client.getObject(GetObjectRequest.builder()
-                .bucket(bucketName).key(s3Key).range(FIRST_BYTE_RANGE).build())) {
-            return ObjectPresence.PRESENT;
-        } catch (NoSuchKeyException e) {
-            return ObjectPresence.ABSENT;
+        try {
+            // Prefix, so the answer must be checked for the exact key: a longer sibling
+            // (…/snapshot.parquet.bak) shares the prefix and is not this object.
+            boolean listed = s3Client.listObjectsV2(ListObjectsV2Request.builder()
+                            .bucket(bucketName).prefix(s3Key).maxKeys(1).build())
+                    .contents().stream().anyMatch(object -> s3Key.equals(object.key()));
+            return listed ? ObjectPresence.PRESENT : ObjectPresence.ABSENT;
         } catch (S3Exception e) {
-            return switch (e.statusCode()) {
-                case 404 -> ObjectPresence.ABSENT;
-                // A zero-length object has no first byte, so the range is unsatisfiable while the
-                // object is plainly there. Nothing this application writes is empty, but reading
-                // "the object is missing" out of "your range was wrong" would be the same mistake
-                // this method exists to undo.
-                case 416 -> ObjectPresence.PRESENT;
-                case 403 -> {
-                    readDenied.increment();
-                    log.warn("S3 read denied for {} — HEAD and the ranged probe both answered 403, "
-                            + "so whether the object exists is unknown (delta.s3.read-denied). "
-                            + "Check IAM/bucket-policy read permissions: work that depends on this "
-                            + "object is being skipped, not written off", s3Key);
-                    yield ObjectPresence.UNKNOWN;
-                }
-                default -> unreadable(s3Key, e);
-            };
-        } catch (SdkClientException | IOException e) {
+            if (e.statusCode() == 403) {
+                readDenied.increment();
+                log.warn("S3 read denied for {} — HEAD and the one-key listing both answered 403, "
+                        + "so whether the object exists is unknown (delta.s3.read-denied). Work "
+                        + "that depends on this object is being skipped, not written off. Check "
+                        + "IAM/bucket-policy read permissions; note that s3:ListBucket is required "
+                        + "by this application anyway (site wipe, batch retention), and without it "
+                        + "S3 cannot tell absence from denial for anyone", s3Key);
+                return ObjectPresence.UNKNOWN;
+            }
+            return unreadable(s3Key, e);
+        } catch (SdkClientException e) {
             return unreadable(s3Key, e);
         }
     }
 
     /**
-     * The probe neither found the object nor was refused it — S3 is unwell. Not counted as a
-     * denial: {@code delta.s3.read-denied} has to mean "denied" for an operator to act on it.
+     * The probe was neither answered nor refused — S3 is unwell. Not counted as a denial:
+     * {@code delta.s3.read-denied} has to mean "denied" for an operator to act on it.
      */
     private static ObjectPresence unreadable(String s3Key, Exception cause) {
-        log.warn("Could not determine whether {} exists: HEAD was denied (403) and the ranged "
-                + "read probe failed", s3Key, cause);
+        log.warn("Could not determine whether {} exists: HEAD was denied (403) and the one-key "
+                + "listing failed", s3Key, cause);
         return ObjectPresence.UNKNOWN;
     }
 

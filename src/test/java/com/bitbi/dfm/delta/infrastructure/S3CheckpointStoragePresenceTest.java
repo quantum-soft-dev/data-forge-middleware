@@ -11,18 +11,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.exception.SdkClientException;
-import software.amazon.awssdk.http.AbortableInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
-import java.io.ByteArrayInputStream;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -37,12 +35,13 @@ import static org.mockito.Mockito.when;
 /**
  * {@link S3CheckpointStorage#presence(String)} — present vs absent vs unknown (issue #157).
  *
- * <p>HEAD on a missing key answers 404 only when the caller has {@code s3:ListBucket}; in a
- * least-privilege IAM setup (GetObject/PutObject only) AWS answers <b>403</b> for a missing key.
- * That reading is kept — but a blanket read denial on keys that <em>do</em> exist lands in the same
- * branch, so a 403 is resolved with the permission we do have: a ranged {@code GetObject} answers
- * {@code NoSuchKey} for a key that is genuinely gone and succeeds for a denied-but-present one.
- * Only when the probe is denied too is the answer {@code UNKNOWN}.</p>
+ * <p>HEAD answers 404 for a missing key only when the caller has {@code s3:ListBucket}; without it
+ * AWS hides existence behind a <b>403</b>, and it applies that rule to {@code GetObject} just as it
+ * does to {@code HeadObject} — which is why the probe here is a one-key {@code ListObjectsV2} and
+ * not the ranged read the ticket suggested. This application requires {@code s3:ListBucket} anyway
+ * (site wipe and the nightly batch retention both walk prefixes), so the probe is decidable on any
+ * deployment it can run on, and a 403 that survives it is a genuine read denial rather than a key
+ * that was never there.</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("S3CheckpointStorage.presence()")
@@ -77,10 +76,17 @@ class S3CheckpointStoragePresenceTest {
         when(s3Client.headObject(any(HeadObjectRequest.class))).thenThrow(s3Exception(403));
     }
 
-    private void probeReturnsBytes() {
-        when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(new ResponseInputStream<>(
-                GetObjectResponse.builder().contentLength(1L).build(),
-                AbortableInputStream.create(new ByteArrayInputStream(new byte[] {7}))));
+    private void probeLists(String... keys) {
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class))).thenReturn(
+                ListObjectsV2Response.builder()
+                        .contents(java.util.Arrays.stream(keys)
+                                .map(key -> S3Object.builder().key(key).build())
+                                .toList())
+                        .build());
+    }
+
+    private void probeDenied() {
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class))).thenThrow(s3Exception(403));
     }
 
     @Test
@@ -89,7 +95,7 @@ class S3CheckpointStoragePresenceTest {
         when(s3Client.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder().build());
 
         assertEquals(ObjectPresence.PRESENT, storage().presence(KEY));
-        verify(s3Client, never()).getObject(any(GetObjectRequest.class));
+        verify(s3Client, never()).listObjectsV2(any(ListObjectsV2Request.class));
         assertEquals(0.0, readDenied());
     }
 
@@ -100,7 +106,7 @@ class S3CheckpointStoragePresenceTest {
                 .thenThrow(NoSuchKeyException.builder().statusCode(404).build());
 
         assertEquals(ObjectPresence.ABSENT, storage().presence(KEY));
-        verify(s3Client, never()).getObject(any(GetObjectRequest.class));
+        verify(s3Client, never()).listObjectsV2(any(ListObjectsV2Request.class));
     }
 
     @Test
@@ -109,78 +115,69 @@ class S3CheckpointStoragePresenceTest {
         when(s3Client.headObject(any(HeadObjectRequest.class))).thenThrow(s3Exception(404));
 
         assertEquals(ObjectPresence.ABSENT, storage().presence(KEY));
-        verify(s3Client, never()).getObject(any(GetObjectRequest.class));
+        verify(s3Client, never()).listObjectsV2(any(ListObjectsV2Request.class));
     }
 
     @Test
-    @DisplayName("ABSENT when HEAD is denied but the ranged probe answers NoSuchKey")
-    void shouldBeAbsentWhenProbeSaysNoSuchKey() {
+    @DisplayName("ABSENT when HEAD is denied but the listing does not contain the key")
+    void shouldBeAbsentWhenTheListingIsEmpty() {
         headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class)))
-                .thenThrow(NoSuchKeyException.builder().statusCode(404).build());
+        probeLists();
 
         assertEquals(ObjectPresence.ABSENT, storage().presence(KEY));
-        assertEquals(0.0, readDenied());
+        assertEquals(0.0, readDenied(), "a resolvable denial is not a read outage");
     }
 
     @Test
-    @DisplayName("ABSENT when HEAD is denied but the ranged probe answers 404")
-    void shouldBeAbsentWhenProbeSaysPlain404() {
+    @DisplayName("ABSENT when the listing only returns a longer key sharing the prefix")
+    void shouldBeAbsentWhenOnlyAPrefixSiblingIsListed() {
+        // ListObjectsV2 matches by prefix, so a key that merely starts with ours is not ours.
         headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class))).thenThrow(s3Exception(404));
+        probeLists(KEY + ".bak");
 
         assertEquals(ObjectPresence.ABSENT, storage().presence(KEY));
     }
 
     @Test
-    @DisplayName("PRESENT when HEAD is denied but the ranged probe reads the first byte")
-    void shouldBePresentWhenProbeReadsTheObject() {
+    @DisplayName("PRESENT when HEAD is denied but the listing contains the key")
+    void shouldBePresentWhenTheListingContainsTheKey() {
         headDenied();
-        probeReturnsBytes();
+        probeLists(KEY);
 
         assertEquals(ObjectPresence.PRESENT, storage().presence(KEY));
         assertEquals(0.0, readDenied());
     }
 
     @Test
-    @DisplayName("probes the first byte only, so a denied HEAD costs one byte and not the object")
-    void shouldProbeWithAOneByteRange() {
+    @DisplayName("probes with the key as an exact prefix and one result")
+    void shouldProbeWithAOneKeyListing() {
         headDenied();
-        probeReturnsBytes();
+        probeLists(KEY);
 
         storage().presence(KEY);
 
-        ArgumentCaptor<GetObjectRequest> request = ArgumentCaptor.forClass(GetObjectRequest.class);
-        verify(s3Client).getObject(request.capture());
-        assertEquals("bytes=0-0", request.getValue().range());
-        assertEquals(KEY, request.getValue().key());
+        ArgumentCaptor<ListObjectsV2Request> request = ArgumentCaptor.forClass(ListObjectsV2Request.class);
+        verify(s3Client).listObjectsV2(request.capture());
+        assertEquals(KEY, request.getValue().prefix());
+        assertEquals(1, request.getValue().maxKeys());
         assertEquals("test-bucket", request.getValue().bucket());
     }
 
     @Test
-    @DisplayName("PRESENT when the probe answers 416: a zero-length object has no first byte")
-    void shouldBePresentOnInvalidRange() {
-        headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class))).thenThrow(s3Exception(416));
-
-        assertEquals(ObjectPresence.PRESENT, storage().presence(KEY));
-    }
-
-    @Test
-    @DisplayName("UNKNOWN, and counted, when the probe is denied too")
+    @DisplayName("UNKNOWN, and counted, when the listing is denied too")
     void shouldBeUnknownWhenTheProbeIsDeniedAsWell() {
         headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class))).thenThrow(s3Exception(403));
+        probeDenied();
 
         assertEquals(ObjectPresence.UNKNOWN, storage().presence(KEY));
         assertEquals(1.0, readDenied());
     }
 
     @Test
-    @DisplayName("UNKNOWN, uncounted, when the probe fails for a reason other than a denial")
+    @DisplayName("UNKNOWN, uncounted, when the listing fails for a reason other than a denial")
     void shouldBeUnknownButUncountedWhenTheProbeFails() {
         headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class))).thenThrow(s3Exception(500));
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class))).thenThrow(s3Exception(500));
 
         assertEquals(ObjectPresence.UNKNOWN, storage().presence(KEY));
         assertEquals(0.0, readDenied(), "delta.s3.read-denied means denied, not unreachable");
@@ -190,7 +187,7 @@ class S3CheckpointStoragePresenceTest {
     @DisplayName("UNKNOWN when the probe cannot reach S3 at all")
     void shouldBeUnknownWhenTheProbeCannotReachS3() {
         headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class)))
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class)))
                 .thenThrow(SdkClientException.create("connection refused"));
 
         assertEquals(ObjectPresence.UNKNOWN, storage().presence(KEY));
@@ -225,7 +222,7 @@ class S3CheckpointStoragePresenceTest {
     @DisplayName("exists() keeps its yes/no contract: an undecidable answer is not a yes")
     void shouldCollapseUnknownToFalseForExists() {
         headDenied();
-        when(s3Client.getObject(any(GetObjectRequest.class))).thenThrow(s3Exception(403));
+        probeDenied();
 
         assertFalse(storage().exists(KEY));
     }
