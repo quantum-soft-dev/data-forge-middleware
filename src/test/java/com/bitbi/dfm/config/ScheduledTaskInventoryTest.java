@@ -215,8 +215,13 @@ class ScheduledTaskInventoryTest {
         return yaml;
     }
 
-    /** Flattened properties of a classpath YAML, or {@code null} when the file does not exist. */
-    private static Map<String, Object> optionalYaml(String name) {
+    /**
+     * Flattened properties of a classpath YAML, or {@code null} when the file does not exist.
+     *
+     * <p>Package-private so {@code BackgroundConnectionDemandTest} (#161) reads the same keys the
+     * same way rather than growing a second parser that could disagree with this one.</p>
+     */
+    static Map<String, Object> optionalYaml(String name) {
         ClassPathResource resource = new ClassPathResource(name);
         if (!resource.exists()) {
             return null;
@@ -247,7 +252,7 @@ class ScheduledTaskInventoryTest {
     }
 
     /** Accepts a literal or a {@code ${ENV:default}} placeholder, whose default is the shipped value. */
-    private static int parseInt(String key, Object value) {
+    static int parseInt(String key, Object value) {
         String text = value.toString().trim();
         java.util.regex.Matcher placeholder =
                 java.util.regex.Pattern.compile("^\\$\\{[^:}]+:(-?\\d+)}$").matcher(text);
