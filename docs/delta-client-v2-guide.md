@@ -634,9 +634,10 @@ You don't write these — they're how downstream tools read your data:
   instead: the lease half of the reasoning is independent of the mount. Raise the
   age if a create-to-delete
   interval can exceed four hours (completed-batch files are created before replay starts). What all
-  of this bounds is materialization, not reconstruction: **the fold is still in heap**.
-  `delta.checkpoint.duration{phase=fold}` is the number to watch on a
-  very large site.
+  of this bounds is materialization, not reconstruction: **the fold is still in heap**, and since
+  issue #152 it has a ceiling of its own — `DELTA_CHECKPOINT_MAX_FOLD_BYTES`, see "The first bound
+  is heap" below. `delta.checkpoint.duration{phase=fold}` is still the number to watch on a very
+  large site.
 
 **A frame that does not fit (issue #153).** Crossing `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` is
 deterministic for a given fold: the 02:00 tick aborts again the next night, and the next, until the
@@ -859,6 +860,48 @@ pointers are where they were, and the backlog visible in `delta.seq.lag` drains 
 fixed. The reverse — `builds.aborted` moving while `read-denied` stays at zero — is the site's own
 data, which is what those tag values were always meant to say.
 
+**The first bound is heap, not disk (issue #152).** Everything in the sizing note that follows is
+about local disk, and on the checkpoint path that is the *second* thing a growing site runs into.
+The first is the fold: `CheckpointService` reconstructs the site into one map — a table per table, an entry per
+surviving row — and holds it for the length of the build, while the frame and the per-table
+snapshots stream to disk and cost one buffer each. On a pod whose memory limit is 2–3 Gi, that fold
+is what runs out, and it runs out as an `OOMKilled`: no skip, no metric, the whole process gone with
+whatever ingest was in flight, and the build's scratch left on the volume for the sweeper (#141).
+Two things now stand between a large site and that:
+
+- **Nothing but the fold is retained.** The seed frame is streamed
+  (`S3CheckpointStorage.openFrame` → `GZIPInputStream` → one record at a time) instead of arriving
+  as a gzipped `byte[]` that was then expanded into a `List` of every record in the site, and the
+  new segments are folded as they stream rather than collected into a second list and folded in one
+  call that copied the seed as well. That took the peak from roughly four full-site copies to one.
+- **The one that remains has a ceiling.** `DELTA_CHECKPOINT_MAX_FOLD_BYTES`
+  (`delta.checkpoint.max-fold-bytes`, **0 = auto = a quarter of the max heap**) bounds the fold in
+  *estimated retained bytes*, and a build that crosses it is refused —
+  `delta.checkpoint.builds.aborted{reason=fold_too_large}`, an ERROR line naming the site and the
+  key, and nothing written: the abort happens before the frame upload, so the pointer, the per-table
+  keys and the frame stay exactly where they were. A refusal costs one site's build; the OOMKill it
+  replaces cost the pod.
+
+Three things to know before tuning it. The unit is an **estimate** — a coarse per-row object-graph
+figure (map entries, column-name strings, the values, the row's identity string), not the records'
+wire size, because the fold retains a Java object graph an order of magnitude larger than its
+protobuf encoding; it is within a small factor of the truth, which is what a budget expressed as a
+fraction of `-Xmx` needs. It is **derived rather than declared beside the deployment**, unlike the
+scratch ceilings in the note below, because a process cannot see how big its scratch volume is but can always
+see its own heap. And it is **a quarter, not a half**, for the same `2 x` reason the scratch budget
+has: the nightly sweep and a forced rebuild on `deltaRebuildExecutor` are not mutually excluded, and
+the pod is serving ingest while they fold.
+
+Like `frame_too_large`, this abort **does not repair itself** — a site's history does not shrink on
+its own, so every following tick ends the same way with retention frozen at the pointer. The fixes
+are to raise the key together with the pod's heap, or to re-baseline the site so its fold starts
+from what the source still holds. A build that has not crossed the ceiling still says where it
+stands: its estimate is logged at DEBUG, and at WARN once a site passes **75%** of the budget, so
+the first word about a site approaching the cliff is not the abort. What is *not* bounded is the
+number of rows a fold may hold before the estimate is wrong — off-heap or spillable folding remains
+the open question here, and this ceiling is the honest interim: it turns an unattributable pod
+death into a named, counted refusal.
+
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
 `DELTA_BATCH_PARQUET_MAX_TEMP_BYTES` (all 10 GiB by default)
@@ -979,6 +1022,11 @@ orphan_residue  = whatever a container restart left behind, until the next sweep
                     # container restart" below, and "One sweep interval means the tick
                     # runs when it is due" for the scheduler that bound assumes
 ```
+
+That budget is disk only. The heap peak of the same build is a separate sum — the fold
+(`DELTA_CHECKPOINT_MAX_FOLD_BYTES` per build, up to two builds) plus one Parquet row-group buffer
+per open writer (`DELTA_PARQUET_ROW_GROUP_BYTES`, 16 MiB) — and it is the one that fails as an
+eviction-like `OOMKilled` rather than as a skip. See "The first bound is heap" above.
 
 There is no distributed lock on the sweep, so "one site at a time" is per pod: each replica runs
 its own. `delta.batch-parquet.max-concurrent` and the table count per site are the two multipliers
@@ -1657,7 +1705,7 @@ every one of them.
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
-`delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone}`,
+`delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone|fold_too_large}`,
 `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
@@ -1702,7 +1750,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
-| `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
+| `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
 | `delta.checkpoint.tables.given-up` | `delta_checkpoint_tables_given_up` |
 | `delta.s3.read-denied` | `delta_s3_read_denied_total` |
 
@@ -1739,8 +1787,11 @@ running JVM — are deleted from the configured temp directories.
 Phase meanings differ by meter. On **batch-parquet**, `download` is GetObject / stream
 `read` and `decode` is protobuf parse excluding the record consumer. On **egress**,
 `download` is the whole `readRecords` (buffer + parse; there is no `decode` phase).
-On **checkpoint**, `download_frame` is only the seed frame; segment GetObject/parse
-is inside `fold`. `decimal_scan` / `write` / `parquet` are encode work; `upload` is
+On **checkpoint**, `download_frame` is only the seed frame — and only the time spent reading its
+bytes off the network, since issue #152 streamed it: the transfer is now interleaved with the fold
+rather than finished before it, so the two are separated by a counting stream rather than by
+sequence. Segment GetObject/parse is inside `fold`, as is the seed frame's own fold, which before
+#152 fell between the two phases and was timed by neither. `decimal_scan` / `write` / `parquet` are encode work; `upload` is
 PutObject. `delta.egress.pending` is `COUNT(*)` of `changelog_segments` with
 `egress_at IS NULL`, refreshed at most every five seconds.
 
