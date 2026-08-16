@@ -496,8 +496,13 @@ pages/{feature}/            # Route pages
   ticket could introduce. A quarter is available explicitly for whoever wants the headroom, and
   one night at DEBUG on `CheckpointService` sizes the key against real folds before it is lowered. The running total costs one
   addition per record, not a walk: `apply` returns what each record did to the state's size. A build
-  logs its **peak** estimate at DEBUG and **WARNs at 75%** of the budget, so a site approaching the
-  cliff is visible before the first abort — the peak and not the final size, raised in review: the
+  logs its **peak** estimate at DEBUG, **WARNs at 75%** of the budget and records it on new
+  **`delta.checkpoint.fold.bytes`** (a summary; an aborted build and an idle visit are both absent
+  from it on purpose), so the band below the ceiling can carry an alert instead of living in a log
+  sink — the same reasoning #153 used for the abort counter. The ceiling is **per build, not per
+  process**: two concurrent folds at 45% each still exhaust the heap, which takes a forced rebuild
+  beside the nightly sweep and is the heap twin of #150, filed from this review as **#178**. A site
+  approaching the cliff is visible before the first abort — the peak and not the final size, raised in review: the
   ceiling is enforced on the running total, so a fold that rises and falls back (a night's inserts
   followed by the deletes retiring them) would otherwise stay silent until the tick whose peak
   crosses. Three more review findings, all in the same

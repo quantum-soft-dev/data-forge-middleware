@@ -27,6 +27,8 @@ import java.util.function.Supplier;
  *       {@code reason=frame_too_large|lossy_refold|history_gone}; the pointer does not move, so
  *       retention freezes with it, and no cause repairs itself unaided. <b>Alert on the meter, not
  *       on one tag</b> — that promise is the reason every permanent abort is registered here</li>
+ *   <li>{@code delta.checkpoint.fold.bytes} — peak estimated heap of one build's folded state,
+ *       the band below {@code delta.checkpoint.max-fold-bytes} (issue #152)</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
  *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
  *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, the HEAD and
@@ -76,6 +78,7 @@ public class DeltaMetrics {
     private final Counter checkpointLossyRefold;
     private final Counter checkpointHistoryGone;
     private final Counter checkpointFoldTooLarge;
+    private final DistributionSummary checkpointFoldBytes;
     private final Counter batchParquetReady;
     private final Counter batchParquetFailed;
     private final Counter batchParquetAbandoned;
@@ -112,6 +115,10 @@ public class DeltaMetrics {
         this.checkpointLossyRefold = checkpointBuildAborted(registry, "lossy_refold");
         this.checkpointHistoryGone = checkpointBuildAborted(registry, "history_gone");
         this.checkpointFoldTooLarge = checkpointBuildAborted(registry, "fold_too_large");
+        this.checkpointFoldBytes = DistributionSummary.builder("delta.checkpoint.fold.bytes")
+                .description("Peak estimated heap held by one checkpoint build's folded state")
+                .baseUnit("bytes")
+                .tag(APP_TAG_KEY, APP_TAG_VALUE).register(registry);
         this.batchParquetReady = batchParquetOutcome(registry, "ready");
         this.batchParquetFailed = batchParquetOutcome(registry, "failed");
         this.batchParquetAbandoned = batchParquetOutcome(registry, "abandoned");
@@ -369,6 +376,32 @@ public class DeltaMetrics {
     /** Time a checkpoint build, returning the supplier's value. */
     public <T> T timeCheckpoint(Supplier<T> build) {
         return timeCheckpointPhase(PHASE_TOTAL, build);
+    }
+
+    /**
+     * Record the peak estimated heap one checkpoint build's fold reached (issue #152).
+     *
+     * <p>The band <em>below</em> {@code delta.checkpoint.max-fold-bytes} is the only warning that
+     * precedes a permanent abort, and a log line cannot be alerted on — the same reason
+     * {@code delta.checkpoint.builds.aborted} exists at all (#153). Compare the maximum of this
+     * series against the configured budget to see how much room the largest site still has; the
+     * build also logs the number, and warns at 75%.</p>
+     *
+     * <p>It is the <b>peak</b>, not the size the fold ended at: the ceiling is enforced on the
+     * running total, and a fold that rises and falls back is exactly the one whose end size says
+     * nothing. Recorded once per build that folded anything — an idle visit that returns before the
+     * fold records nothing, so the series counts folds rather than ticks. Estimated in the same
+     * coarse per-row terms as the budget it is compared against
+     * ({@code ChangelogFold.estimatedRetainedBytes}), so the two are wrong together or not at all;
+     * it is not a JVM measurement and must not be read beside {@code jvm_memory_used_bytes} as if
+     * it were one.</p>
+     *
+     * @param bytes estimated retained bytes at the fold's peak; negative is ignored
+     */
+    public void recordCheckpointFoldBytes(long bytes) {
+        if (bytes >= 0) {
+            checkpointFoldBytes.record(bytes);
+        }
     }
 
     /** A changelog segment's delta Parquet egress was materialized. */

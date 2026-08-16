@@ -911,8 +911,19 @@ its own, so every following tick ends the same way with retention frozen at the 
 are to raise the key together with the pod's heap, or to re-baseline the site so its fold starts
 from what the source still holds. A build that has not crossed the ceiling still says where it
 stands: its **peak** estimate — the same running total the ceiling is enforced against, not the size
-the fold happened to end at — is logged at DEBUG, and at WARN once a site passes **75%** of the
-budget, so the first word about a site approaching the cliff is not the abort. What is *not* bounded is the
+the fold happened to end at — is logged at DEBUG, at WARN once a site passes **75%** of the budget,
+and recorded on `delta.checkpoint.fold.bytes`, so the band below the ceiling can carry an alert
+rather than living in a log sink (`max(delta_checkpoint_fold_bytes_max)` against the configured
+budget is the query). A build that aborted is deliberately absent from that series — its one
+over-budget sample belongs to the counter, not to the number read as "how much room is left" — and
+so is an idle visit, which answers before folding at all.
+
+**One gap remains, and it is the same one the scratch ceilings have.** The budget is enforced *per
+build*, so two concurrent folds of 45% each cross nothing and still exhaust the heap between them.
+That takes a forced rebuild running beside the nightly sweep — the only way one JVM holds two builds,
+and the `2 x` this note's disk formula already reserves for. Closing it needs a reservation shared
+across concurrent folds rather than a per-fold ceiling, which is the heap twin of #150 and is
+tracked as **#178**; what is bounded today is the single-build case, which is the nightly one. What is *not* bounded is the
 number of rows a fold may hold before the estimate is wrong — off-heap or spillable folding remains
 the open question here, and this ceiling is the honest interim: it turns an unattributable pod
 death into a named, counted refusal.
@@ -1721,7 +1732,7 @@ Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
 `delta.checkpoint.builds.aborted{reason=frame_too_large|lossy_refold|history_gone|fold_too_large}`,
-`delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
+`delta.checkpoint.fold.bytes`, `delta.checkpoint.tables.given-up`, `delta.s3.read-denied`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
@@ -1763,6 +1774,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.batch-parquet.queue{status=...}` | `delta_batch_parquet_queue{status=...}` |
 | `delta.batch-parquet.duration{phase=...}` (timer) | `delta_batch_parquet_duration_seconds_count` / `_sum` / `_max` |
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
+| `delta.checkpoint.fold.bytes` (summary) | `delta_checkpoint_fold_bytes_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
 | `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold\|history_gone\|fold_too_large}` | `delta_checkpoint_builds_aborted_total{reason=...}` |

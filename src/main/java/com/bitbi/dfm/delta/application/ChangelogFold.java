@@ -35,12 +35,15 @@ public final class ChangelogFold {
     }
 
     /**
-     * Apply {@code records} on top of {@code initial} (typically a checkpoint state).
+     * Apply {@code records} on top of {@code initial} (typically a checkpoint state) — a
+     * <strong>test convenience</strong> since issue #152, and deliberately nothing more.
      *
-     * <p>Copies {@code initial} first, so the caller's state is untouched — which is also why the
-     * checkpoint build does <b>not</b> use this method for its own fold: the copy means both states
-     * exist at once, and each of them is the whole site (issue #152). It folds records one at a time
-     * through {@link #apply} into a state it owns instead.</p>
+     * <p>No production caller remains, and new code belongs on {@link #apply}. This shape is the one
+     * the ticket removed: it copies {@code initial}, so both states exist at once and each of them
+     * is a whole site, and it takes the records as a materialized {@code List}, which is a second
+     * whole site again. The checkpoint build folds record by record into a state it owns instead.
+     * Kept because the fold's semantics are most readable stated as a function of a starting state
+     * and a record list, which is how the tests assert them.</p>
      *
      * @param initial starting state (not mutated)
      * @param records changelog records in sequence order

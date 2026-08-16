@@ -623,11 +623,47 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void recordsTheFoldsPeakSizeOnAMeterSoTheBandBelowTheCeilingIsAlertable() {
+        // The 75% WARN precedes a permanent abort, and no alert can be written on a log line — the
+        // same reasoning that put the abort itself on a counter (#153).
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Long> foldBytes = ArgumentCaptor.forClass(Long.class);
+        verify(metrics).recordCheckpointFoldBytes(foldBytes.capture());
+        assertTrue(foldBytes.getValue() > 0, "the fold's size must reach the meter: " + foldBytes.getValue());
+    }
+
+    @Test
+    void recordsNoFoldSizeForAnIdleVisitOrAnAbortedBuild() {
+        // An idle visit answers before folding (issue #149), so it has no size to report; an
+        // aborted build has exactly one over-budget sample, which is the counter's business and
+        // would poison the series an operator reads as "how much room is left".
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of());
+
+        service.buildCheckpoint(SITE);
+        verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
+
+        service = newService(tempDirectory.toString(), Long.MAX_VALUE, Long.MAX_VALUE, 64L);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+
+        assertThrows(CheckpointService.FoldTooLargeException.class, () -> service.buildCheckpoint(SITE));
+        verify(metrics, never()).recordCheckpointFoldBytes(anyLong());
+    }
+
+    @Test
     void resolvesAnUnsetFoldBudgetAgainstTheHeapTheProcessWasGiven() {
         // The budget has to arrive by itself on a pod nobody tuned — unlike the scratch ceilings,
-        // whose disk the process cannot see, the heap is right there. A quarter leaves room for the
-        // second concurrent build path (a forced rebuild during the nightly sweep) and for
-        // everything else the pod is doing while a checkpoint folds.
+        // whose disk the process cannot see, the heap is right there. Half rather than the quarter
+        // capacity planning would ask for: this is the last line before an OOMKill and its refusal
+        // is permanent, so it must not refuse a fold that fits (see resolveMaxFoldBytes).
         assertEquals(Runtime.getRuntime().maxMemory() / 2, CheckpointService.resolveMaxFoldBytes(0L),
                 "an unset budget must derive from the max heap");
         assertEquals(123L, CheckpointService.resolveMaxFoldBytes(123L), "an explicit budget wins");

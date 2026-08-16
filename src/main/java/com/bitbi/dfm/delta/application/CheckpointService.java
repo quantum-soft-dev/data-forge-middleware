@@ -271,7 +271,7 @@ public class CheckpointService {
                     + "pointer, the per-table keys and the frame stay where they were, and retention "
                     + "is frozen with the pointer. The next tick will fail identically, because the "
                     + "site's history has not shrunk. Raise the key together with the pod's heap "
-                    + "(the budget defaults to a quarter of the max heap), or give the site a "
+                    + "(unset, the budget is half the max heap), or give the site a "
                     + "re-baseline so its fold starts from what the source still holds",
                     siteId, e.estimatedBytes(), e.budgetBytes());
             metrics.checkpointBuildAborted("fold_too_large");
@@ -499,6 +499,12 @@ public class CheckpointService {
      */
     private void reportFoldSize(UUID siteId, BudgetedFold fold) {
         long bytes = fold.peakEstimatedBytes();
+        // On the meter as well as in the log, for the reason #153 put the abort on one: the band
+        // below the ceiling is the only warning that precedes a permanent abort, and an alert
+        // cannot be written on a log line. A build that aborted does not reach here — its size is
+        // the counter's business, and recording it would put the one over-budget sample into the
+        // series an operator reads as "how much room is left".
+        metrics.recordCheckpointFoldBytes(bytes);
         if (bytes * 100 >= maxFoldBytes * FOLD_BUDGET_WARN_PERCENT) {
             log.warn("The checkpoint fold for site {} holds an estimated {} bytes of heap, {}% of "
                     + "delta.checkpoint.max-fold-bytes ({}). The build is refused outright once it "
@@ -587,6 +593,14 @@ public class CheckpointService {
      * {@link ChangelogFold#estimatedRetainedBytes(String, ChangelogFold.FoldedRow)} — and it is
      * compared against a budget expressed in the same units, so the two are wrong together or not
      * at all.</p>
+     *
+     * <p><b>The ceiling is per build, not per process</b>, and that gap is the same one the scratch
+     * ceilings have on disk (issue #150): two folds at 45% of the budget each cross nothing and
+     * still exhaust the heap between them. It takes a forced rebuild running beside the nightly
+     * sweep — the only way two builds exist in one JVM, and the {@code 2 x} the scratch budget
+     * reserves for. Closing it needs a reservation shared across concurrent folds rather than a
+     * per-fold limit, which is the heap twin of #150 and is filed as issue #178; what is
+     * bounded here is the single-build case, which is the nightly one.</p>
      */
     private static final class BudgetedFold {
 
