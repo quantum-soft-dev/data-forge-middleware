@@ -20,11 +20,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -365,33 +366,83 @@ public class CheckpointService {
                 return Map.of();
             }
 
-            byte[] frameBytes = haveFrame
-                    ? metrics.timeCheckpointPhase("download_frame",
-                            () -> checkpointStorage.downloadFrame(siteId, checkpointSeq))
-                    : null;
-            Map<String, Map<String, FoldedRow>> seed = frameBytes == null
-                    ? Map.of()
-                    : ChangelogFold.fold(Map.of(), ChangelogCodec.parse(frameBytes));
+            Map<String, Map<String, FoldedRow>> state =
+                    foldSite(siteId, checkpointSeq, haveFrame, newSegments);
 
             if (newSegments.isEmpty()) {
-                writeSnapshots(siteId, seed, checkpointSeq, idlePass, epoch);
-                return seed;
+                writeSnapshots(siteId, state, checkpointSeq, idlePass, epoch);
+                return state;
             }
-            return materialize(siteId, seed, newSegments, epoch);
+            return materialize(siteId, state, newSegments, epoch);
         });
     }
 
+    /**
+     * Fold the site: the seed frame first, then every new segment, one record at a time.
+     *
+     * <p>Nothing between S3 and the fold is retained (issue #152). The frame used to arrive as a
+     * gzipped {@code byte[]} that {@code ChangelogCodec.parse} expanded into a {@code List} of every
+     * record in the site, and the new segments were collected into a second such list before a
+     * single {@code fold} call that <em>copied</em> the seed — four full-site copies at the peak, on
+     * a pod whose memory limit is measured in gigabytes. Now one state is built in place and each
+     * record is dropped as soon as it has been applied.</p>
+     *
+     * <p>The two meters keep their meaning: {@code phase=download_frame} is time spent reading the
+     * frame off the network, measured through {@link TimingInputStream} because the transfer is now
+     * interleaved with the fold rather than finished before it. {@code phase=fold} is everything
+     * else — the segment downloads it always covered, and now also the seed frame's own fold, which
+     * was untimed while it sat between the two phases.</p>
+     */
+    private Map<String, Map<String, FoldedRow>> foldSite(UUID siteId,
+                                                         long checkpointSeq,
+                                                         boolean haveFrame,
+                                                         List<ChangelogSegment> newSegments) {
+        Map<String, Map<String, FoldedRow>> state = new LinkedHashMap<>();
+        long startedAt = System.nanoTime();
+        long frameReadNanos = 0L;
+        try {
+            if (haveFrame) {
+                frameReadNanos = foldFrame(siteId, checkpointSeq, state);
+            }
+            for (ChangelogSegment segment : newSegments) {
+                changelogSegmentService.forEachRecord(segment.getS3Key(), record -> apply(state, record));
+            }
+        } finally {
+            // Recorded even when the fold ended in an abort: a build that ran out of budget is
+            // exactly the one whose phases an operator wants to see.
+            if (haveFrame) {
+                metrics.recordCheckpointPhase("download_frame", frameReadNanos);
+            }
+            metrics.recordCheckpointPhase("fold", System.nanoTime() - startedAt - frameReadNanos);
+        }
+        return state;
+    }
+
+    /**
+     * Stream the seed frame into {@code state}.
+     *
+     * @return nanos spent reading the object off the network, for {@code phase=download_frame}
+     */
+    private long foldFrame(UUID siteId, long checkpointSeq, Map<String, Map<String, FoldedRow>> state) {
+        try (InputStream frame = checkpointStorage.openFrame(siteId, checkpointSeq)) {
+            TimingInputStream timed = new TimingInputStream(frame);
+            ChangelogCodec.forEach(timed, record -> apply(state, record));
+            return timed.readNanos();
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "Failed to read the checkpoint frame of site " + siteId + " at seq " + checkpointSeq, e);
+        }
+    }
+
+    /** Apply one record to the fold. */
+    private void apply(Map<String, Map<String, FoldedRow>> state, ChangeRecord record) {
+        ChangelogFold.apply(state, record);
+    }
+
     private Map<String, Map<String, FoldedRow>> materialize(UUID siteId,
-                                                            Map<String, Map<String, FoldedRow>> seed,
+                                                            Map<String, Map<String, FoldedRow>> state,
                                                             List<ChangelogSegment> newSegments,
                                                             SiteEpoch epoch) {
-        Map<String, Map<String, FoldedRow>> state = metrics.timeCheckpointPhase("fold", () -> {
-            List<ChangeRecord> newRecords = new ArrayList<>();
-            for (ChangelogSegment segment : newSegments) {
-                newRecords.addAll(changelogSegmentService.readRecords(segment.getS3Key()));
-            }
-            return ChangelogFold.fold(seed, newRecords);
-        });
         long seq = newSegments.get(newSegments.size() - 1).getLastSeq();
 
         // The frame goes first, before a single snapshot object exists at the new seq (issue

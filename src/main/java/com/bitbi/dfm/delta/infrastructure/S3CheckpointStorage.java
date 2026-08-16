@@ -27,6 +27,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -325,9 +326,22 @@ public class S3CheckpointStorage {
         }
     }
 
-    /** Download the checkpoint frame bytes for a site at a given sequence. */
-    public byte[] downloadFrame(UUID siteId, long seq) {
-        return download(frameKey(siteId, seq));
+    /**
+     * Open the checkpoint frame of a site at a given sequence for streaming.
+     *
+     * <p>A stream rather than the {@code byte[]} this used to return (issue #152). The frame is the
+     * whole site as an all-INSERT changelog, so materializing it cost a full gzipped copy on the
+     * heap before {@code ChangelogCodec} expanded it into a second one — on a pod sized in
+     * gigabytes that, not the scratch ceilings, was the first thing a growing site hit. The read
+     * side is now the mirror of {@link #uploadFrame}, which has streamed from a file since #126.</p>
+     *
+     * <p>The caller closes the stream. Closing it early aborts the transfer, which is what an
+     * abandoned build wants.</p>
+     *
+     * @return the object's stream, positioned at the first byte
+     */
+    public InputStream openFrame(UUID siteId, long seq) {
+        return open(frameKey(siteId, seq)).inputStream();
     }
 
     /**

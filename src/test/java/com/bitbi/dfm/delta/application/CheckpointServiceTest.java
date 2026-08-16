@@ -113,7 +113,7 @@ class CheckpointServiceTest {
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "FULL_SNAPSHOT", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(segment));
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("customers", 2L, 2, "Bob")));
         when(checkpointRepository.findBySiteIdAndTableName(eq(SITE), any())).thenReturn(Optional.empty());
@@ -137,6 +137,28 @@ class CheckpointServiceTest {
                 new DeltaParquetProperties(8L * 1024 * 1024), eventPublisher, epochGuard,
                 new CheckpointRetryProperties(MAX_MATERIALIZE_ATTEMPTS), shutdownSignal,
                 scratchDirectory, maxTempBytes, maxFrameTempBytes);
+    }
+
+    /**
+     * Serve a segment's records to a streaming reader, one at a time — the build never asks for
+     * them as a list any more (issue #152).
+     */
+    private void stubSegmentRecords(String s3Key, List<ChangeRecord> records) {
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<ChangeRecord> consumer = invocation.getArgument(1);
+            records.forEach(consumer);
+            return null;
+        }).when(changelogSegmentService).forEachRecord(eq(s3Key), any());
+    }
+
+    /**
+     * Serve the seed frame as a stream. A fresh stream per call: the build reads the object once,
+     * and a shared, already-consumed stream would hide a second read rather than fail on it.
+     */
+    private void stubFrame(long seq, byte[] frameBytes) {
+        when(checkpointStorage.openFrame(SITE, seq))
+                .thenAnswer(invocation -> new java.io.ByteArrayInputStream(frameBytes));
     }
 
     @Test
@@ -195,7 +217,7 @@ class CheckpointServiceTest {
         // "orders" declares a date column whose folded value cannot be coerced: the Parquet write
         // throws. That must not roll back the whole build (checkpoint pointer frozen, retention
         // skipped, segments accumulating) — that one table goes unmaterialized, the rest proceeds.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 orderRecord(2L, "not-a-date")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -274,7 +296,7 @@ class CheckpointServiceTest {
         // The corollary: the remaining tables are not tried either. Every one of them would fail
         // the same way, and each failure is another chance to write a verdict about the data from
         // a fact about the process.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -324,7 +346,7 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
         verify(checkpointStorage).uploadFrame(eq(SITE), eq(2L), any(Path.class));
         verify(syncStateService).recordCheckpoint(SITE, 2L);
     }
@@ -336,23 +358,23 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(metrics).recordCheckpointPhase(eq("fold"), anyLong());
         // The parquet phase times a void, file-backed write since #112 — the meter name and its
         // "parquet" tag are unchanged, only the timed shape is.
         verify(metrics).timeCheckpointPhase(eq("parquet"), any(Runnable.class));
         verify(metrics, atLeastOnce()).timeCheckpointPhase(eq("upload"), any(Runnable.class));
-        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
+        verify(metrics, never()).recordCheckpointPhase(eq("download_frame"), anyLong());
     }
 
     @Test
     void recordsDownloadFramePhaseWhenASeedFrameExists() {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 2L, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
-        when(checkpointStorage.downloadFrame(SITE, 2L)).thenReturn(ChangelogCodec.serialize(List.of()));
+        stubFrame(2L, ChangelogCodec.serialize(List.of()));
         ChangelogSegment newer = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 3L, 4L, 2L, "hash", "s3/tail", "DELTA", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(newer));
-        when(changelogSegmentService.readRecords("s3/tail")).thenReturn(List.of(
+        stubSegmentRecords("s3/tail", List.of(
                 record("customers", 3L, 3, "Cara"),
                 record("customers", 4L, 4, "Dan")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
@@ -360,9 +382,48 @@ class CheckpointServiceTest {
 
         service.buildCheckpoint(SITE);
 
-        verify(metrics).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
-        verify(checkpointStorage).downloadFrame(SITE, 2L);
-        verify(metrics).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(metrics).recordCheckpointPhase(eq("download_frame"), anyLong());
+        verify(checkpointStorage).openFrame(SITE, 2L);
+        verify(metrics).recordCheckpointPhase(eq("fold"), anyLong());
+    }
+
+    @Test
+    void seedsTheFoldByStreamingTheFrameRatherThanReadingItIntoHeap() throws Exception {
+        // Issue #152: the frame used to arrive as one byte[] that ChangelogCodec.parse then expanded
+        // into a List of every record in the site — a second and a third full copy of the site
+        // before the fold even started. The storage port no longer offers the byte[] form at all,
+        // which is the half of this a mock cannot show.
+        assertThrows(NoSuchMethodException.class,
+                () -> S3CheckpointStorage.class.getMethod("downloadFrame", UUID.class, long.class),
+                "downloadFrame must be gone, not merely unused: it is the byte[] this ticket removes");
+
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
+        stubFrame(2L, ChangelogCodec.serialize(List.of(record("customers", 1L, 1, "Ann"))));
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(
+                Checkpoint.create(SITE, "customers", 2L, 1L)));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(1, state.get("customers").size(), "the streamed frame must seed the fold");
+        verify(checkpointStorage).openFrame(SITE, 2L);
+    }
+
+    @Test
+    void foldsEachSegmentAsItStreamsInsteadOfCollectingThemFirst() {
+        // The other list this ticket removes: every new segment's records used to be added to one
+        // ArrayList before a single fold call, so a re-baseline (whose whole snapshot sits above the
+        // pointer) held the entire site as records *and* as the fold it was about to become.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        Map<String, Map<String, ChangelogFold.FoldedRow>> state = service.buildCheckpoint(SITE);
+
+        assertEquals(2, state.get("customers").size(), "both streamed records must be folded");
+        verify(changelogSegmentService).forEachRecord(eq("s3/segment"), any());
     }
 
     @Test
@@ -489,7 +550,7 @@ class CheckpointServiceTest {
         // deployed scratch budget (#131/#138) is `2 x max(table, frame)`, one file per build path,
         // not `frame + table`. So the frame is written, uploaded and deleted before the first
         // table's file is created.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -538,7 +599,7 @@ class CheckpointServiceTest {
     void keepsOnlyOneTableSnapshotOnDiskAtATime() {
         // Table by table: fold rows -> file -> upload -> drop the file. Holding every table's
         // snapshot at once would put the peak back in proportion to the table count.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -628,13 +689,13 @@ class CheckpointServiceTest {
         assertEquals(2L, recovered.getValue().getSeq(), "rematerialize must not invent a new seq");
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any());
-        verify(changelogSegmentService, never()).readRecords(any());
+        verify(changelogSegmentService, never()).forEachRecord(any(), any());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
     void rematerializesOnlyTheTableThatStillHasNoArtifact() {
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -714,9 +775,9 @@ class CheckpointServiceTest {
         assertEquals(Map.of(), service.buildCheckpoint(SITE),
                 "an idle visit with no work folds nothing at all");
 
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
-        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
-        verify(metrics, never()).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
+        verify(metrics, never()).recordCheckpointPhase(eq("download_frame"), anyLong());
+        verify(metrics, never()).recordCheckpointPhase(eq("fold"), anyLong());
     }
 
     @Test
@@ -776,7 +837,7 @@ class CheckpointServiceTest {
         verify(checkpointRepository, never()).save(any());
         // And the whole visit is skipped: with no retryable row left there is nothing for the fold
         // to be folded for, so the frame is not even fetched.
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
     }
 
     @Test
@@ -904,7 +965,7 @@ class CheckpointServiceTest {
         verify(metrics, never()).checkpointBuildAborted(any());
         // And nothing durable was decided either way — a refold from zero would be exactly the
         // truncated checkpoint the refusal exists to prevent.
-        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).openFrame(any(), anyLong());
         verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
         verify(checkpointRepository, never()).save(any());
         verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
@@ -1050,7 +1111,7 @@ class CheckpointServiceTest {
         // segments* is still a key in the fold, with an empty row map — it gets an empty snapshot,
         // exactly as before. Only the next build, seeded from a frame that no longer mentions it,
         // sees it as gone. Reaping it a build early would delete a row the build is still writing.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob"),
                 deletion("orders", 3L, 2)));
@@ -1254,7 +1315,7 @@ class CheckpointServiceTest {
         // The per-table catch exists so one unrenderable table cannot freeze the pointer. An epoch
         // change is the opposite: nothing about this build may be published, so it must escape the
         // catch instead of being counted as a skip and letting the next table try.
-        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+        stubSegmentRecords("s3/segment", List.of(
                 record("customers", 1L, 1, "Ann"),
                 record("orders", 2L, 2, "Bob")));
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
@@ -1435,7 +1496,7 @@ class CheckpointServiceTest {
     private void parkAtPointer(long seq, byte[] frameBytes, Checkpoint... rows) {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L, 0L));
         when(checkpointStorage.framePresence(SITE, seq)).thenReturn(ObjectPresence.PRESENT);
-        when(checkpointStorage.downloadFrame(SITE, seq)).thenReturn(frameBytes);
+        stubFrame(seq, frameBytes);
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(rows));
         for (Checkpoint row : rows) {
             when(checkpointRepository.findBySiteIdAndTableName(SITE, row.getTableName()))
