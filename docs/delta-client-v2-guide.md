@@ -602,7 +602,12 @@ You don't write these — they're how downstream tools read your data:
   `seq` of the tables it downloads. Since issue #126 the reload frame
   (`checkpoints/{siteId}/_frame/seq={seq}/frame.pb.gz`) is written the same way: one `ChangeRecord`
   at a time into a scratch file, then streamed to S3, then deleted. The on-disk form is unchanged
-  (gzipped length-delimited protobuf — the next build's `parse` still reads it). It goes into the same
+  (gzipped length-delimited protobuf — the next build's `parse` still reads it). Since issue #153 it
+  is written **before** the per-table snapshots rather than after them, so a build that cannot
+  produce it ends before a single snapshot object exists at the new seq — see "A frame that does not
+  fit" below. The file is uploaded and deleted before the snapshot loop starts, not held open across
+  it: the scratch budget below counts one file per build path, not one per artifact.
+  It goes into the same
   `DELTA_CHECKPOINT_TEMP_DIR`, but since issue #138 it has **its own ceiling**,
   `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` (`delta.checkpoint.max-frame-temp-bytes`, default 10 GiB —
   the value the shared key carried, so an unset key behaves exactly as before): crossing it
@@ -632,6 +637,80 @@ You don't write these — they're how downstream tools read your data:
   of this bounds is materialization, not reconstruction: **the fold is still in heap**.
   `delta.checkpoint.duration{phase=fold}` is the number to watch on a
   very large site.
+
+**A frame that does not fit (issue #153).** Crossing `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` is
+deterministic for a given fold: the 02:00 tick aborts again the next night, and the next, until the
+ceiling is raised or the site is re-baselined. Two things follow, and both are handled:
+
+- **The abort is counted, not only logged.** `delta.checkpoint.builds.aborted{reason=frame_too_large}`
+  is incremented at the abort and the series is registered at zero from startup, so an alert can be
+  written before the first occurrence. It is the whole build, not a table: `last_checkpoint_seq`
+  does not move, so `ChangelogRetentionService` prunes nothing and the site's `changelog_segments`
+  grow for as long as it lasts. `delta.seq.lag` is the companion series showing how far behind the
+  site has fallen; the counter says *why*, the lag says *how bad*. The ERROR line names the key and
+  the site. `reason=lossy_refold` is the second value and the other permanent freeze — a seed frame
+  that reads as absent over a pruned history — so **alert on the meter, not on one tag**. The aborts
+  that are *not* on it are the ones that pass: an unreadable scratch directory and an S3 refusal on
+  the frame cost one tick, and a build discarded because the site's history was replaced under it
+  (#136, #142) is a normal outcome of an operator action.
+
+  **Read `lossy_refold` per site before acting.** `S3CheckpointStorage.exists` treats a `403` as
+  absence on purpose — least-privilege IAM answers HEAD-on-a-missing-key that way, having no
+  `s3:ListBucket` — so a bucket-policy or IAM read outage makes the frame read as absent for *every*
+  site at once and each pruned-history site increments the counter for something a permission fix
+  clears. **Many sites in one tick is a permissions incident; one site alone is the real thing.**
+  The 403 branch logs a WARN naming the key, which is the tiebreaker. Distinguishing the two at
+  source is #157.
+- **A repeat costs nothing durable.** The frame is written first, so an abort leaves no snapshot
+  object, no `checkpoints` row and no moved pointer. Before #153 the per-table snapshots were
+  uploaded first, at the *new* seq, and their rows saved; the previous seq's objects were then
+  unreferenced — a `checkpoints` row is one per `(site, table)` and holds one key, and nothing but a
+  site wipe sweeps `checkpoints/{siteId}/` (#118) — so every failed nightly build left another
+  orphaned generation in the bucket.
+
+**"Nothing durable" is about the bucket, not about the consumers.** Three things do change for as
+long as the abort lasts, and none of them is new damage — they are the freeze itself, made visible:
+
+- **Retention is stopped.** `last_checkpoint_seq` is what `ChangelogRetentionService.prune` keys
+  off, so `changelog_segments` and their S3 objects accumulate for the whole site.
+- **The checkpoint snapshots stop refreshing.** `checkpoints/{siteId}/{table}/seq={seq}/snapshot.parquet`
+  stays at the last successful build's seq while ingestion continues, so Bit BI, Parquet Export
+  (`type=checkpoint`) and the Delta Sync download serve data that is increasingly stale but never
+  wrong (the per-segment egress and completed-batch Parquet are unaffected — they do not go through
+  the checkpoint). Before #153 those objects *were* rewritten each night, at a seq the pointer never
+  adopted; that is precisely the write that orphaned the previous generation, so the refresh and the
+  orphaning were the same act and could not be kept apart. **The consequence to watch is a Bit BI
+  re-initialization**: it captures its baseline from the current checkpoint once, so re-initializing
+  a site whose builds are aborting freezes that plugin on however old the last successful build is.
+  Check `delta.checkpoint.builds.aborted` for the site before re-initializing it, and raise the
+  ceiling first.
+- **A detached table is not repaired while it lasts.** The rematerialize of #128 runs on the idle
+  `RETRY_MISSING` pass, which is only reached when there are no new segments — and a site whose
+  frame is over the ceiling is not idle. A table whose `s3_key_parquet` was nulled therefore stays
+  404 until a build completes.
+
+All three end when the build succeeds, and none of them can be fixed by waiting. There is
+deliberately **no backoff**: the retry is now cheap in storage terms, and suppressing it would need
+per-site state that the abort, by design, does not write. What is *not* free is the work — the frame
+download, every new segment's download and the whole fold — repeated once a night. Fix the cause
+rather than waiting it out: raise the ceiling (each GiB of frame costs two GiB of volume, see
+below), and remember the counter will keep rising until a build succeeds.
+
+**A failure after the frame is uploaded leaves the frame object behind.** An epoch discard (#136,
+#142) or any throw in the snapshot loop — a scratch file that cannot be created because the volume
+ran out of inodes or was remounted read-only, `getTableSchemas` failing — now happens with
+`_frame/seq=N/frame.pb.gz` already in the bucket and the pointer still at the previous seq. Where
+the old ordering orphaned nothing on those paths, this one orphans one frame; it accumulates only as
+fast as `seq` advances, since a repeat at the same seq overwrites the same key. That is unreferenced
+but harmless, and the
+invariant that makes it harmless is worth stating exactly: **a build only ever reads the frame at
+`last_checkpoint_seq`, and `uploadFrame(N)` always precedes the `recordCheckpoint(N)` that names
+it** — so the frame a build seeds from is always the one written by the build that moved the pointer
+there. A later build that legitimately ends at seq N overwrites the orphan; one that ends elsewhere
+never looks at it. Only a site wipe sweeps `checkpoints/{siteId}/` (#118), and its cut-off (#122)
+spares objects newer than its own start, so a frame orphaned *by* a wipe needs a second wipe to
+collect — the same as the snapshot objects a discarded build has always left. Giving that prefix a
+sweeper of its own is **#160**.
 
 **Sizing note — the scratch budget is declared by the deployment, not by the application.**
 `DELTA_CHECKPOINT_MAX_TEMP_BYTES`, `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` and
@@ -712,8 +791,9 @@ headroom — but a *deterministically* oversized artifact fails the same way on 
   Bit BI / Parquet Export listing and stays gone; the nightly rematerialize retries it and fails
   identically (#149). Raise `DELTA_CHECKPOINT_MAX_TEMP_BYTES`.
 - **the frame** aborts the build: `last_checkpoint_seq` does not move, retention stays frozen, and
-  every following build repeats the work — including re-uploading a full set of per-table snapshots
-  at a new seq, orphaning the previous objects (#153). Raise
+  every following build repeats the fold from scratch — but since #153 it repeats it for free, and
+  the abort raises `delta.checkpoint.builds.aborted{reason=frame_too_large}` instead of only an
+  ERROR line (see "A frame that does not fit" above). Raise
   `DELTA_CHECKPOINT_MAX_FRAME_TEMP_BYTES` first when a site outgrows the pair, and note each extra
   GiB of frame costs **two** GiB of volume, so `sizeLimit` and `ephemeral-storage` move in the same
   commit.
@@ -1365,6 +1445,7 @@ every one of them.
 Micrometer meters for the same events (`delta.sessions.started`, `delta.sessions.committed`,
 `delta.sessions.overflow{reason=records|bytes}`, `delta.reconciliation.failures`, `delta.seq.lag`,
 `delta.checkpoint.duration{phase=...}`, `delta.checkpoint.tables.unmaterialized{reason=...}`,
+`delta.checkpoint.builds.aborted{reason=...}`,
 `delta.egress.segments`, `delta.egress.duration{phase=...}`,
 `delta.egress.pending`, `delta.batch-parquet.duration{phase=...}`) are exposed on
 `/actuator/prometheus` and `/actuator/metrics/**`.
@@ -1408,6 +1489,7 @@ even `delta_sessions_started` selects no series. Dots become underscores and eve
 | `delta.seq.lag` (summary) | `delta_seq_lag_count` / `_sum` / `_max` |
 | `delta.checkpoint.duration{phase=...}` (timer) | `delta_checkpoint_duration_seconds_count` / `_sum` / `_max` |
 | `delta.checkpoint.tables.unmaterialized{reason=no_schema\|parquet_failed}` | `delta_checkpoint_tables_unmaterialized_total{reason=...}` |
+| `delta.checkpoint.builds.aborted{reason=frame_too_large\|lossy_refold}` | `delta_checkpoint_builds_aborted_total{reason=...}` |
 
 Duration timers always carry a `phase` label (Prometheus cannot mix tagged and untagged series
 of the same name). `{phase="total"}` is the whole cycle. Inner phases:
