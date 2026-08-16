@@ -2,14 +2,18 @@ package com.bitbi.dfm.integration;
 
 import com.bitbi.dfm.config.Auth0TestConfig;
 import com.bitbi.dfm.config.TestSecurityConfig;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.localstack.LocalStackContainer;
+
+import java.util.UUID;
 
 import static org.testcontainers.containers.localstack.LocalStackContainer.Service.S3;
 
@@ -191,5 +195,50 @@ public abstract class AbstractIntegrationTest {
      */
     protected String getS3Endpoint() {
         return containersManager.getS3Endpoint();
+    }
+
+    @Autowired
+    private JdbcTemplate sharedStateCleanupJdbc;
+
+    /**
+     * Delete every row in {@code app_settings}. The PostgreSQL database is shared across the whole
+     * suite, so any test that asserts the CONFIG fallback ({@code source=CONFIG}, empty
+     * {@code updatedAt}) must clear in {@code @BeforeEach} — otherwise those assertions pass or
+     * fail depending on what other test methods or classes persisted (issue #119).
+     */
+    protected void clearAppSettings() {
+        sharedStateCleanupJdbc.update("DELETE FROM app_settings");
+    }
+
+    /**
+     * Delete a site's rows in {@code plugin_sql_generations}. {@code test-data.sql} never names
+     * this table: it is emptied only as a side effect of the {@code ON DELETE CASCADE} on
+     * {@code account_plugin_id} / {@code site_id} / {@code source_batch_id}, which fires just for
+     * the accounts and sites that script deletes, and only at the instant it runs. For the sites
+     * these tests use the cascade does fire, so what this adds is the <em>gap</em>: a generation
+     * written after that instant — by an {@code @Async} plugin dispatch or by
+     * {@link com.bitbi.dfm.plugin.application.DeltaSqlSweepWorker} draining in another cached
+     * Spring context — survives into the method that follows and is counted by any assertion
+     * shaped {@code findBySiteId(...)} + {@code hasSize(n)} (issue #159, folding #163). It also
+     * makes the invariant something the test class states, instead of one it inherits from three
+     * cascades and two {@code LIKE} patterns in a script it does not own.
+     *
+     * <p>Clearing is the leftover half of the fix; the concurrent half is that assertions name the
+     * generation they produced ({@code findBySourceBatchId}) and wait for it instead of sampling
+     * the site. Same reasoning as {@link #clearAppSettings()} (issue #119), but deliberately
+     * <em>not</em> the same unqualified {@code DELETE}: {@code app_settings} holds one row, while
+     * this table accumulates across the whole suite. The caller names the sites it asserts on, so
+     * the statement's blast radius is those sites rather than every row in the table. That is a
+     * smaller footprint, <em>not</em> a guarantee — a sibling context still draining the same site
+     * can block this delete exactly as it could block a table-wide one, and no {@code lock_timeout}
+     * is set. What actually shrinks that window is the slowed
+     * {@code plugin.sql-generation.delta-sweep-ms} in {@code application-test.yml}.</p>
+     *
+     * @param siteIds sites whose generations to delete
+     */
+    protected void clearPluginSqlGenerations(UUID... siteIds) {
+        for (UUID siteId : siteIds) {
+            sharedStateCleanupJdbc.update("DELETE FROM plugin_sql_generations WHERE site_id = ?", siteId);
+        }
     }
 }
