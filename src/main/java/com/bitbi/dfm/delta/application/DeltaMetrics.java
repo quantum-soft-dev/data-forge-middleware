@@ -29,6 +29,10 @@ import java.util.function.Supplier;
  *       on one tag</b> — that promise is the reason every permanent abort is registered here</li>
  *   <li>{@code delta.checkpoint.tables.given-up} — gauge: checkpoint rows the nightly
  *       rematerialize has stopped retrying (issue #149, see {@code CheckpointGivenUpMetrics})</li>
+ *   <li>{@code delta.s3.read-denied} — objects whose presence S3 refused to answer, HEAD and the
+ *       ranged probe alike (issue #157, registered in {@code S3CheckpointStorage}). A rising count
+ *       is an IAM or bucket-policy read outage; the work depending on those objects is skipped
+ *       rather than concluded, so there is nothing to undo once the permission is back</li>
  *   <li>{@code delta.seq.lag} — committed seq beyond the last checkpoint at commit (changelog backlog)</li>
  *   <li>{@code delta.egress.segments} — segments materialized as delta Parquet (Task 8)</li>
  *   <li>{@code delta.egress.duration} — per-segment egress; {@code phase=total} plus
@@ -185,15 +189,18 @@ public class DeltaMetrics {
      * discarded because the site's history was replaced under it (issues #136, #142) is a normal
      * outcome of an operator action, not a frozen pointer.</p>
      *
-     * <p><b>One caveat on {@code lossy_refold}, and it is the reason to read the count per site
-     * before acting:</b> {@code S3CheckpointStorage.exists} deliberately treats a {@code 403} as
-     * absence, because least-privilege IAM answers HEAD-on-a-missing-key that way. A bucket-policy
-     * or IAM read outage therefore makes the frame read as absent for <em>every</em> site at once,
-     * and each pruned-history site increments this counter for a condition that a permission fix
-     * clears. Many sites tripping in the same tick is that; one site tripping alone is the real
-     * thing. The 403 branch also logs a WARN naming the key, which is the tiebreaker.</p>
+     * <p><b>The caveat that used to sit here is gone (issue #157), and with it the reason to read
+     * this meter per site before believing it.</b> {@code S3CheckpointStorage} used to answer a
+     * {@code 403} as absence — correct for a missing key under least-privilege IAM, and
+     * indistinguishable from a blanket read denial on keys that exist, so one bucket-policy change
+     * made every pruned-history site trip {@code lossy_refold} in the same tick. A denied HEAD is
+     * now resolved by a ranged read, and a denial that cannot be resolved answers {@code UNKNOWN}:
+     * the build skips that site without touching anything and increments {@code delta.s3.read-denied}
+     * instead of this meter. A non-zero rate here is therefore a fact about the site's own data
+     * again — and a rising {@code delta.s3.read-denied} is the permissions incident, plainly
+     * labelled.</p>
      *
-     * <p>{@code history_gone} is the third and the narrowest: the seed frame is unreadable and the
+     * <p>{@code history_gone} is the third and the narrowest: the seed frame is gone and the
      * site has <b>no</b> segments at all, so there is no history to refold, lossily or otherwise —
      * the frame was the whole of that site's checkpoint history. It is split from
      * {@code lossy_refold} because the operator's next move differs: a lossy refold is about data

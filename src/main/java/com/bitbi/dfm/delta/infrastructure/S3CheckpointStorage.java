@@ -3,6 +3,8 @@ package com.bitbi.dfm.delta.infrastructure;
 import com.bitbi.dfm.delta.domain.BatchParquetArtifactKey;
 import com.bitbi.dfm.shared.storage.S3PrefixLister;
 import com.bitbi.dfm.shared.storage.S3PrefixListing;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,12 +44,42 @@ public class S3CheckpointStorage {
 
     private static final Logger log = LoggerFactory.getLogger(S3CheckpointStorage.class);
 
+    /** One byte is enough to learn whether an object is there; it is never enough to be a download. */
+    private static final String FIRST_BYTE_RANGE = "bytes=0-0";
+
     private final S3Client s3Client;
     private final String bucketName;
+    private final Counter readDenied;
 
-    public S3CheckpointStorage(S3Client s3Client, @Value("${s3.bucket.name}") String bucketName) {
+    public S3CheckpointStorage(S3Client s3Client, @Value("${s3.bucket.name}") String bucketName,
+                               MeterRegistry registry) {
         this.s3Client = s3Client;
         this.bucketName = bucketName;
+        // Registered here rather than in DeltaMetrics: the denial is an S3-level fact observed in
+        // this class, and infrastructure must not depend on the application layer. Same shape as
+        // CheckpointGivenUpMetrics, which DeltaMetrics documents without owning.
+        this.readDenied = Counter.builder("delta.s3.read-denied")
+                .description("Objects whose presence could not be determined because S3 denied "
+                        + "both the HEAD and the ranged read probe")
+                .tag("application", "data-forge-middleware")
+                .register(registry);
+    }
+
+    /**
+     * What S3 was able to tell us about one key (issue #157).
+     *
+     * <p>{@code UNKNOWN} exists because "absent" and "you may not look" arrive as the same status
+     * code on a least-privilege deployment, and the callers act on absence with very different
+     * severity — up to declaring a site's whole checkpoint history gone. A caller that cannot act
+     * on an undecidable answer must do nothing rather than assume either side.</p>
+     */
+    public enum ObjectPresence {
+        /** The object is there. */
+        PRESENT,
+        /** The object is not there — S3 said so, it was not inferred from a refusal. */
+        ABSENT,
+        /** S3 refused to answer. Nothing may be concluded, in either direction. */
+        UNKNOWN
     }
 
     /**
@@ -127,9 +159,12 @@ public class S3CheckpointStorage {
         return String.format("egress/%s/%s/delta/seq=%019d-%019d.parquet", siteId, tableName, firstSeq, lastSeq);
     }
 
-    /** @return whether the delta Parquet file of one table's segment slice exists (feature 025). */
-    public boolean deltaExists(UUID siteId, String tableName, long firstSeq, long lastSeq) {
-        return exists(deltaKey(siteId, tableName, firstSeq, lastSeq));
+    /**
+     * @return whether the delta Parquet file of one table's segment slice is there, gone, or
+     *         undecidable (feature 025; tri-state since issue #157)
+     */
+    public ObjectPresence deltaPresence(UUID siteId, String tableName, long firstSeq, long lastSeq) {
+        return presence(deltaKey(siteId, tableName, firstSeq, lastSeq));
     }
 
     /** @return the prefix holding every delta Parquet file of a site (feature 025). */
@@ -211,9 +246,12 @@ public class S3CheckpointStorage {
         return download(frameKey(siteId, seq));
     }
 
-    /** @return whether a checkpoint frame exists for a site at a given sequence. */
-    public boolean frameExists(UUID siteId, long seq) {
-        return exists(frameKey(siteId, seq));
+    /**
+     * @return whether the checkpoint frame of a site at a given sequence is there, gone, or
+     *         undecidable — the distinction the build acts on (issue #157)
+     */
+    public ObjectPresence framePresence(UUID siteId, long seq) {
+        return presence(frameKey(siteId, seq));
     }
 
     private static String frameKey(UUID siteId, long seq) {
@@ -262,29 +300,100 @@ public class S3CheckpointStorage {
         }
     }
 
-    public boolean exists(String s3Key) {
+    /**
+     * Is this object there, gone, or is S3 refusing to say (issue #157)?
+     *
+     * <p>HEAD on a missing key answers 404 only with {@code s3:ListBucket}; least-privilege IAM
+     * (Get/PutObject only) answers <b>403</b> for a key that does not exist, so a 403 must not be
+     * read as "unavailable". It must not be read as "absent" either: a blanket read denial on keys
+     * that <em>do</em> exist lands in exactly the same branch, and before this the two were the
+     * same answer — which is how one IAM change presented as every pruned-history site having lost
+     * its checkpoint history at once.</p>
+     *
+     * <p>So the 403 is resolved with the permission we do have. A ranged {@code GetObject} of the
+     * first byte answers {@code NoSuchKey} for a key that is genuinely gone and succeeds for a
+     * denied-but-present one; only when the probe is denied too is the answer {@code UNKNOWN}, and
+     * that is a real read outage rather than a guess about one. The extra round trip is paid on the
+     * 403 path alone — the rare one on a healthy deployment, and on a least-privilege one the price
+     * of every genuinely missing key.</p>
+     *
+     * @param s3Key the object key
+     * @return {@code PRESENT}, {@code ABSENT}, or {@code UNKNOWN}
+     * @throws CheckpointStorageException if S3 failed in a way that is neither absence nor a denial
+     */
+    public ObjectPresence presence(String s3Key) {
         try {
             s3Client.headObject(HeadObjectRequest.builder().bucket(bucketName).key(s3Key).build());
-            return true;
+            return ObjectPresence.PRESENT;
         } catch (NoSuchKeyException e) {
-            return false;
+            return ObjectPresence.ABSENT;
         } catch (S3Exception e) {
-            // HEAD on a missing key answers 404 only with s3:ListBucket; least-privilege
-            // IAM (Get/PutObject only) answers 403 — both mean "absent", not "unavailable".
-            // A blanket deny on EXISTING keys also lands here, so log the 403 branch: it is
-            // the only trace distinguishing an IAM outage from genuinely missing files.
-            if (e.statusCode() == 404 || e.statusCode() == 403) {
-                if (e.statusCode() == 403) {
-                    log.warn("S3 HEAD denied (403) for {} — treating as absent; if this repeats "
-                            + "for existing keys, check IAM/bucket-policy read permissions", s3Key);
-                }
-                return false;
+            if (e.statusCode() == 404) {
+                return ObjectPresence.ABSENT;
+            }
+            if (e.statusCode() == 403) {
+                return probeAfterDeniedHead(s3Key);
             }
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         } catch (SdkClientException e) {
             // network failures arrive as raw SdkClientException — wrap so callers see one type
             throw new CheckpointStorageException("Failed to stat checkpoint snapshot: " + s3Key, e);
         }
+    }
+
+    /**
+     * Ask for the object's first byte, the one read a least-privilege policy does grant.
+     *
+     * <p>Deliberately total: every outcome maps to a presence rather than to an exception, because
+     * the question being answered is already "we could not stat it — can we tell anything at all?"
+     * A caller receiving {@code UNKNOWN} skips the work; a caller receiving an exception here would
+     * have to treat it identically, with a stack trace instead of a decision.</p>
+     */
+    private ObjectPresence probeAfterDeniedHead(String s3Key) {
+        try (ResponseInputStream<GetObjectResponse> ignored = s3Client.getObject(GetObjectRequest.builder()
+                .bucket(bucketName).key(s3Key).range(FIRST_BYTE_RANGE).build())) {
+            return ObjectPresence.PRESENT;
+        } catch (NoSuchKeyException e) {
+            return ObjectPresence.ABSENT;
+        } catch (S3Exception e) {
+            return switch (e.statusCode()) {
+                case 404 -> ObjectPresence.ABSENT;
+                // A zero-length object has no first byte, so the range is unsatisfiable while the
+                // object is plainly there. Nothing this application writes is empty, but reading
+                // "the object is missing" out of "your range was wrong" would be the same mistake
+                // this method exists to undo.
+                case 416 -> ObjectPresence.PRESENT;
+                case 403 -> {
+                    readDenied.increment();
+                    log.warn("S3 read denied for {} — HEAD and the ranged probe both answered 403, "
+                            + "so whether the object exists is unknown (delta.s3.read-denied). "
+                            + "Check IAM/bucket-policy read permissions: work that depends on this "
+                            + "object is being skipped, not written off", s3Key);
+                    yield ObjectPresence.UNKNOWN;
+                }
+                default -> unreadable(s3Key, e);
+            };
+        } catch (SdkClientException | IOException e) {
+            return unreadable(s3Key, e);
+        }
+    }
+
+    /**
+     * The probe neither found the object nor was refused it — S3 is unwell. Not counted as a
+     * denial: {@code delta.s3.read-denied} has to mean "denied" for an operator to act on it.
+     */
+    private static ObjectPresence unreadable(String s3Key, Exception cause) {
+        log.warn("Could not determine whether {} exists: HEAD was denied (403) and the ranged "
+                + "read probe failed", s3Key, cause);
+        return ObjectPresence.UNKNOWN;
+    }
+
+    /**
+     * Yes/no form of {@link #presence(String)} for callers that have no third answer to give —
+     * an undecidable presence collapses to {@code false}, never to {@code true}.
+     */
+    public boolean exists(String s3Key) {
+        return presence(s3Key) == ObjectPresence.PRESENT;
     }
 
     /**

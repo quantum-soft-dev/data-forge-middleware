@@ -13,6 +13,7 @@ import com.bitbi.dfm.delta.grpc.v2.ChangeRecord;
 import com.bitbi.dfm.delta.grpc.v2.Op;
 import com.bitbi.dfm.delta.grpc.v2.Value;
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.site.application.SiteSchemaService;
 import com.bitbi.dfm.shared.lifecycle.ApplicationShutdownSignal;
 import com.bitbi.dfm.site.domain.TableSchema;
@@ -105,6 +106,9 @@ class CheckpointServiceTest {
             return null;
         }).when(metrics).timeCheckpointPhase(any(), any(Runnable.class));
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 0L, 1, false, false, 0L, 0L));
+        // S3 answers about the seed frame, and it answers one of three ways since issue #157.
+        // "Not there" is the fixture default; a test that means "S3 refused to say" states it.
+        when(checkpointStorage.framePresence(any(), anyLong())).thenReturn(ObjectPresence.ABSENT);
 
         ChangelogSegment segment = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 1L, 2L, 2L, "hash", "s3/segment", "FULL_SNAPSHOT", Map.of());
@@ -295,7 +299,7 @@ class CheckpointServiceTest {
         // masquerading as absence) and segments below the checkpoint were pruned: a refold from
         // the surviving tail would silently publish a truncated checkpoint.
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
@@ -315,7 +319,7 @@ class CheckpointServiceTest {
     void refoldsFromZeroWhenFrameAbsentButFullHistorySurvives() {
         // Frame gone but nothing was pruned (history still starts at seq 1): refold is lossless.
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of());
 
         service.buildCheckpoint(SITE);
@@ -343,7 +347,7 @@ class CheckpointServiceTest {
     @Test
     void recordsDownloadFramePhaseWhenASeedFrameExists() {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(4L, 2L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(true);
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.PRESENT);
         when(checkpointStorage.downloadFrame(SITE, 2L)).thenReturn(ChangelogCodec.serialize(List.of()));
         ChangelogSegment newer = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 3L, 4L, 2L, "hash", "s3/tail", "DELTA", Map.of());
@@ -861,7 +865,7 @@ class CheckpointServiceTest {
         // unmaterialized rows, so charging the abort to them is what ends the nightly alarm.
         Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
@@ -879,13 +883,64 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void skipsTheSiteWhenS3WillNotSayWhetherTheFrameIsThere() {
+        // Issue #157. Every alarm below rests on the frame reading as *absent*, and until the
+        // tri-state existed a blanket read denial was indistinguishable from absence — so one IAM
+        // or bucket-policy change presented as every pruned-history site having lost its history in
+        // the same tick. An undecidable answer is not a fact about this site: do nothing with it.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 10L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.UNKNOWN);
+        ChangelogSegment survivor = ChangelogSegment.create(
+                SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE));
+
+        // Not an abort of the kind that meter counts: this one repairs itself the moment the
+        // permission is back, and delta.checkpoint.builds.aborted promises the opposite.
+        verify(metrics, never()).checkpointBuildAborted(any());
+        // And nothing durable was decided either way — a refold from zero would be exactly the
+        // truncated checkpoint the refusal exists to prevent.
+        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(checkpointStorage, never()).uploadFrame(any(), anyLong(), any(Path.class));
+        verify(checkpointRepository, never()).save(any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+        assertEquals(0, owing.materializeAttempts());
+    }
+
+    @Test
+    void doesNotRetireTheRowsOfASiteWhoseFrameWasMerelyUnreadable() {
+        // The half #149 made durable: with no segments behind it, an unreadable frame is classified
+        // history_gone and spends an attempt on every retryable row, and after
+        // max-materialize-attempts such nights the site names itself on no work list at all — so it
+        // does not come back on its own once the permission returns. A denial must never reach that
+        // classification.
+        Checkpoint owing = Checkpoint.create(SITE, "customers", 2L, 1L);
+        when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.UNKNOWN);
+        when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
+
+        for (int tick = 1; tick <= MAX_MATERIALIZE_ATTEMPTS + 1; tick++) {
+            assertEquals(Map.of(), service.buildCheckpoint(SITE));
+        }
+
+        verify(metrics, never()).checkpointBuildAborted(any());
+        assertEquals(0, owing.materializeAttempts(),
+                "a permissions incident must not spend the retry that would outlive it");
+        assertFalse(owing.hasGivenUpMaterializing(MAX_MATERIALIZE_ATTEMPTS));
+    }
+
+    @Test
     void stillRefusesALossyRefoldWhileSegmentsSurvive() {
         // The other side of that split, and it must keep shouting: segments on record mean a
         // refold would publish a truncated checkpoint over real data, and the site is visited for
         // those segments every night whatever any attempt counter says.
         Checkpoint owing = Checkpoint.create(SITE, "customers", 10L, 1L);
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
@@ -908,7 +963,7 @@ class CheckpointServiceTest {
         owing.recordFailedMaterialization();
         owing.recordFailedMaterialization();
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(owing));
 
@@ -1098,7 +1153,7 @@ class CheckpointServiceTest {
     @Test
     void refusesWhenFrameUnreadableAndNoSegmentsRemain() {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(2L, 2L, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, 2L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 2L)).thenReturn(ObjectPresence.ABSENT);
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of());
 
         assertThrows(S3CheckpointStorage.CheckpointStorageException.class,
@@ -1242,7 +1297,7 @@ class CheckpointServiceTest {
         when(syncStateService.getSyncState(SITE))
                 .thenReturn(new SyncStateView(12L, 10L, 1, false, false, 0L, 0L))
                 .thenReturn(new SyncStateView(0L, 0L, 0, true, false, 1L, 1L));
-        when(checkpointStorage.frameExists(SITE, 10L)).thenReturn(false);
+        when(checkpointStorage.framePresence(SITE, 10L)).thenReturn(ObjectPresence.ABSENT);
         ChangelogSegment survivor = ChangelogSegment.create(
                 SITE, UUID.randomUUID(), 11L, 12L, 2L, "hash", "s3/tail", "DELTA", Map.of());
         when(segmentRepository.findBySiteIdOrderByFirstSeq(SITE)).thenReturn(List.of(survivor));
@@ -1377,7 +1432,7 @@ class CheckpointServiceTest {
      */
     private void parkAtPointer(long seq, byte[] frameBytes, Checkpoint... rows) {
         when(syncStateService.getSyncState(SITE)).thenReturn(new SyncStateView(seq, seq, 1, false, false, 0L, 0L));
-        when(checkpointStorage.frameExists(SITE, seq)).thenReturn(true);
+        when(checkpointStorage.framePresence(SITE, seq)).thenReturn(ObjectPresence.PRESENT);
         when(checkpointStorage.downloadFrame(SITE, seq)).thenReturn(frameBytes);
         when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(rows));
         for (Checkpoint row : rows) {

@@ -1,6 +1,7 @@
 package com.bitbi.dfm.plugin.application;
 
 import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage;
+import com.bitbi.dfm.delta.infrastructure.S3CheckpointStorage.ObjectPresence;
 import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao;
 import com.bitbi.dfm.plugin.infrastructure.ParquetExportCatalogDao.CatalogRow;
 import org.springframework.stereotype.Service;
@@ -100,11 +101,16 @@ public class ParquetExportFileService {
 
         // Existence is probed only for the served page (<= size S3 HEADs). Dropped candidates
         // (egress skipped the table) still advanced the cursor above — no dead links, no loss.
+        //
+        // Only a *known* absence drops a row (issue #157). S3 answering "you may not look" is not
+        // evidence that egress skipped the table, and hiding the file would turn a transient read
+        // denial into a listing that silently lost entries — the client's own download would have
+        // reported the denial for what it is.
         List<ParquetFileItem> files = new ArrayList<>(pageCandidates.size());
         for (CatalogRow row : pageCandidates) {
             if (row.type() == FileType.DELTA
-                    && !checkpointStorage.deltaExists(row.siteId(), row.table(),
-                            row.firstSeq(), row.lastSeq())) {
+                    && checkpointStorage.deltaPresence(row.siteId(), row.table(),
+                            row.firstSeq(), row.lastSeq()) == ObjectPresence.ABSENT) {
                 continue;
             }
             files.add(toItem(row));

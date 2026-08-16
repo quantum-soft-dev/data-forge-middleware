@@ -1,5 +1,6 @@
 package com.bitbi.dfm.delta.infrastructure;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -29,7 +30,7 @@ class S3CheckpointStorageBatchArtifactTest {
         S3Client s3 = mock(S3Client.class);
         when(s3.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
                 .thenReturn(PutObjectResponse.builder().build());
-        S3CheckpointStorage storage = new S3CheckpointStorage(s3, "bucket");
+        S3CheckpointStorage storage = new S3CheckpointStorage(s3, "bucket", new SimpleMeterRegistry());
         UUID siteId = UUID.randomUUID();
         UUID batchId = UUID.randomUUID();
         UUID claimToken = UUID.randomUUID();
