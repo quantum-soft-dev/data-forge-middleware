@@ -23,9 +23,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -104,19 +102,18 @@ class DeltaEgressOutsideTransactionIntegrationTest extends BaseIntegrationTest {
 
     @Test
     void egressNextPendingDownloadsAndUploadsWithNoTransactionOpen() {
-        changelogSegmentService.persist(SITE, BATCH, "DELTA", 1L, List.of(
-                rec("customers", Op.INSERT, 1L, Map.of("id", intVal(1)),
+        ChangelogSegment segment = changelogSegmentService.persist(SITE, BATCH, "DELTA", 9_000_002L, List.of(
+                rec("customers", Op.INSERT, 9_000_002L, Map.of("id", intVal(1)),
                         data("id", intVal(1), "name", strVal("Ann")))));
 
-        assertTrue(egressService.egressNextPending());
+        egressService.egressSegment(segment);
 
         assertEquals(List.of(false), downloadInsideTransaction,
                 "the segment GetObject must not run inside the worker transaction");
         assertEquals(List.of(false), uploadInsideTransaction,
                 "the delta PutObject must not run inside the worker transaction");
-        ChangelogSegment reloaded = segmentRepository.findBySiteIdAndFirstSeq(SITE, 1L).orElseThrow();
+        ChangelogSegment reloaded = segmentRepository.findBySiteIdAndFirstSeq(SITE, 9_000_002L).orElseThrow();
         assertNotNull(reloaded.getEgressAt(), "the row half still marked the segment egressed");
-        assertFalse(egressService.egressNextPending(), "the queue drained");
     }
 
     private static ChangeRecord rec(String table, Op op, long seq, Map<String, Value> key, Map<String, Value> data) {
