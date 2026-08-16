@@ -713,6 +713,59 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void reapsACheckpointRowWhoseTableIsGoneFromTheFold() {
+        // Issue #149, the state with no exit at all before this. The last row of "orders" was
+        // DELETEd at the source, so the frame written by that build carries no "orders" record;
+        // every later fold is therefore missing the table entirely, and both writeSnapshots and
+        // rebuildFromFrame iterate the fold — the loop can never reach it. The row survived (only
+        // a wipe or a re-baseline deletes checkpoint rows), kept its null key, and put the site on
+        // the tick's work list every night for a table nothing could ever materialize. Not even a
+        // forced rebuild helped: the only exit was manual SQL.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+
+        Checkpoint vanished = Checkpoint.create(SITE, "orders", 2L, 0L);
+        parkAtPointer(2L, lastFrameBytes, saved.getValue(), vanished);
+        clearInvocations(checkpointRepository, checkpointStorage, syncStateService);
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointRepository).deleteById(vanished.getId());
+        verify(checkpointRepository, never()).save(any());
+        verify(checkpointStorage, never()).uploadParquet(any(), any(), anyLong(), any());
+        verify(syncStateService, never()).recordCheckpoint(any(), anyLong());
+    }
+
+    @Test
+    void keepsACheckpointRowWhoseTableIsStillInTheFoldWithNoSurvivingRows() {
+        // The boundary of the reap. A table whose rows were all deleted *in this build's own
+        // segments* is still a key in the fold, with an empty row map — it gets an empty snapshot,
+        // exactly as before. Only the next build, seeded from a frame that no longer mentions it,
+        // sees it as gone. Reaping it a build early would delete a row the build is still writing.
+        when(changelogSegmentService.readRecords("s3/segment")).thenReturn(List.of(
+                record("customers", 1L, 1, "Ann"),
+                record("orders", 2L, 2, "Bob"),
+                deletion("orders", 3L, 2)));
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of(
+                "customers", customersSchema(),
+                "orders", customersSchema()));
+        Checkpoint emptied = Checkpoint.create(SITE, "orders", 1L, 1L);
+        when(checkpointRepository.findBySiteId(SITE)).thenReturn(List.of(emptied));
+        when(checkpointRepository.findBySiteIdAndTableName(SITE, "orders")).thenReturn(Optional.of(emptied));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        verify(checkpointRepository, never()).deleteById(any());
+        verify(checkpointStorage).uploadParquet(eq(SITE), eq("orders"), anyLong(), any(Path.class));
+    }
+
+    @Test
     void forcedRebuildRematerializesFromTheFrameWhenThereAreNoNewSegments() {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
@@ -1138,6 +1191,17 @@ class CheckpointServiceTest {
                 .putKey("id", idVal)
                 .putData("id", idVal)
                 .putData("placed_on", dateVal)
+                .build();
+    }
+
+    /** A DELETE of one row by key — the op that empties a table and, one build later, removes it. */
+    private static ChangeRecord deletion(String table, long seq, long id) {
+        Value idVal = Value.newBuilder().setIntValue(id).build();
+        return ChangeRecord.newBuilder()
+                .setTable(table)
+                .setOp(Op.DELETE)
+                .setSeq(seq)
+                .putKey("id", idVal)
                 .build();
     }
 

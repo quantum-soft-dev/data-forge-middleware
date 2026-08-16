@@ -415,6 +415,7 @@ public class CheckpointService {
                                 SiteEpoch epoch) {
         Map<String, TableSchema> schemas = siteSchemaService.getTableSchemas(siteId);
         prepareScratchDirectory();
+        reapTablesAbsentFromTheFold(siteId, state, epoch);
 
         // Per-segment delta Parquet is event-driven (Task 8, DeltaEgressService); the checkpoint
         // additionally materializes the full per-table load as typed Parquet (the only format V2
@@ -507,6 +508,46 @@ public class CheckpointService {
                 deleteQuietly(snapshot, tableName, siteId);
             }
         });
+    }
+
+    /**
+     * Delete the checkpoint rows of tables the site no longer has (issue #149).
+     *
+     * <p>The fold is the whole of the site's state at this build's seq — the frame is a complete
+     * all-INSERT snapshot and every surviving segment above it is folded on top — so a table with a
+     * {@code checkpoints} row and no entry in the fold is a table that no longer exists. It got
+     * there by having its last row {@code DELETE}d: the build that saw the deletion still had the
+     * (now empty) table in its fold and wrote it, but {@link CheckpointFrame} emits no record for a
+     * table with no rows, so the frame it wrote never mentions the table again.</p>
+     *
+     * <p>Before this, nothing could clear such a row. Both snapshot passes iterate the fold, so the
+     * loop never reached the table; only a wipe or a re-baseline deletes checkpoint rows; and with
+     * the row's key still null it named its site on the tick's work list every night, forever, for
+     * work no build — not even a forced rebuild — could do. Reaping it is the exit, and it is also
+     * the truthful answer for a row that <em>did</em> keep a key: that snapshot describes a table
+     * the site dropped, and serving it as current would be a lie.</p>
+     *
+     * <p>The object the row named is left in {@code checkpoints/{siteId}/} as an orphan, which is
+     * what every superseded snapshot has always been there (the row carries one key and each build
+     * replaces it): site wipe is the sweeper, and giving that prefix one of its own is issue #160.
+     * Deleting it here would put an S3 round trip on the build for no new guarantee.</p>
+     *
+     * <p>Deletes run through the epoch guard like every other write of a build, so a wipe or a
+     * re-baseline committing mid-build ends the build instead of deleting rows of a baseline it
+     * knows nothing about.</p>
+     */
+    private void reapTablesAbsentFromTheFold(UUID siteId,
+                                             Map<String, Map<String, FoldedRow>> state,
+                                             SiteEpoch epoch) {
+        for (Checkpoint checkpoint : checkpointRepository.findBySiteId(siteId)) {
+            if (state.containsKey(checkpoint.getTableName())) {
+                continue;
+            }
+            log.info("Dropping the checkpoint row for table {} of site {}: the table is absent from "
+                    + "the folded state, so its last row was deleted at the source",
+                    checkpoint.getTableName(), siteId);
+            epochGuard.inEpoch(siteId, epoch, () -> checkpointRepository.deleteById(checkpoint.getId()));
+        }
     }
 
     /**
