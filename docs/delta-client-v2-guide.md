@@ -862,9 +862,10 @@ consequences for an operator:
 
 - **Setting `SPRING_TASK_SCHEDULING_POOL_SIZE` to 1 restores the bug.** The residue term above then
   has no bound anyone can quote, because a sweep tick can sit behind a whole checkpoint build.
-- **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Nearly every
-  scheduled task opens a connection; a pool as wide as Hikari's lets a burst of ticks take the
-  connections request threads need.
+- **Raise it, and keep it below `spring.datasource.hikari.maximum-pool-size` (10).** Ten of the
+  fifteen scheduled tasks open a connection; a pool as wide as Hikari's lets a burst of ticks take
+  the connections request threads need. Raising it also moves the connection-pool derivation
+  described next, because this pool is its largest single term.
 
 The bean also fixes three shutdown settings in code, because a pool changes what a rollout does to a
 running task: the threads are **daemon**, they are **not interrupted** on context close (as they were
@@ -966,6 +967,64 @@ that have already spent their attempts are bulk-abandoned before the retry query
 delay live work until another sweep. That settlement is guarded by a cheap index probe, so the
 common case — nothing to abandon — costs one read instead of a cluster-wide advisory lock and a
 catalog-watermark write on every poll of every worker.
+
+## The connection pool is smaller than the threads that can ask it for a connection
+
+That is deliberate (issue **#161**), and worth knowing before reading a `connection-timeout` in the
+logs as a bug. The audited background pools declare **32** threads between them — the scheduler (6),
+`pluginExecutor` (10), `pluginExecutionExecutor` (8), the three queue workers (2 each), the
+forced-rebuild executor (1) and the batch-parquet lease renewer (1) — before a single HTTP or gRPC
+request asks for one, and both request layers are unbounded (virtual-thread-per-request, and
+grpc-java's default cached pool). `spring.datasource.hikari.maximum-pool-size` is **10**.
+
+Nothing deadlocks, because **background work does not hold one connection while waiting for a
+second** — the shape that turns a shortage into a deadlock rather than a delay. A shortage therefore
+costs a wait of up to `connection-timeout` and a retry on the next tick, which background work
+survives. Two exceptions are known, both timed and both filed rather than asserted away:
+`PluginAuditEventListener` is `REQUIRES_NEW` *and* `AFTER_COMMIT`, so if `pluginExecutor` is
+saturated its `CallerRunsPolicy` runs it inline on a publishing thread that still holds its own
+connection (**#171**); and the delta-SQL worker pins a connection while waiting on a semaphore whose
+permit holders need connections from this same pool to release it (part of **#164**). The pool is sized
+so the consumers that *cannot* absorb a wait are covered outright — the ones that pin a connection
+across S3 I/O instead of releasing it between statements:
+
+```
+4 scheduled ticks classified Cost.LONG   (not the scheduler's 6 threads — a short tick that
+                                          waits simply runs again on its next wake)
++ 2 delta.egress.max-concurrent
++ 2 plugin.sql-generation.delta-max-concurrent
++ 2 kept for request threads
+= 10
+```
+
+The bound from the other side is the cluster's, and it is the one to check before raising anything:
+the pool is per replica, `max_connections` is not, and a cron tick fires on **every replica at the
+same instant**. `(maxReplicas 6 + maxSurge 1) x 10 = 70`, plus 10 for
+`superuser_reserved_connections`, `psql`, migrations and exporters, against PostgreSQL's default of
+100. **That 100 is an assumption** — this repository never names the database, `DB_URL` arrives from
+a secret, and the budget further assumes this cluster is alone on that server, which is worth
+checking if dev and stage share one. So the ten was **left where it was on purpose**: no load
+measurement of `hikari_connections_pending` or `hikari_connections_acquire_seconds` exists, the
+derivation shows ten already covers what has to be covered, and raising a pool against an unverified
+`max_connections` fails as `FATAL: sorry, too many clients already` on every replica rather than as a
+slow query. Both meters are exported by the Micrometer binding on `/actuator/prometheus` already, if
+you want the measurement.
+
+So, in order, to give the pool more room:
+
+1. `SHOW max_connections` on the actual server, record it beside the key, and raise
+   `DEFAULT_MAX_CONNECTIONS` in `BackgroundConnectionDemandTest` — the test fails until both move
+   together, which is what stops the pool quietly outgrowing the database. At the default the
+   ceiling already allows up to 12.
+2. Or lower a long holder: each `-1` on `DELTA_EGRESS_MAX_CONCURRENT` or
+   `PLUGIN_SQL_GENERATION_DELTA_MAX_CONCURRENT` frees a slot without touching the database.
+3. Better than either, shorten the holds themselves — both of those workers keep a connection open
+   across S3 round trips, and one of them across a semaphore wait as well, which is issue **#164**.
+   Fixing that takes all four out of the floor at once.
+
+`BackgroundConnectionDemandTest` discovers the inventory three ways — every `@Bean` returning an
+`Executor`, every `max-concurrent` property, and every pool constructed directly in
+`src/main/java` — so a new background pool fails the build rather than the connection pool.
 
 ## Upload History (dashboard) shows per-table stats, not files
 

@@ -150,6 +150,23 @@ class ScheduledTaskInventoryTest {
     }
 
     /**
+     * Scheduled tasks that can hold their thread for minutes or longer.
+     *
+     * <p>Package-private because {@code BackgroundConnectionDemandTest} (#161) needs the same count
+     * for a different bound: these are also the ticks that can hold a <em>connection</em> long
+     * enough to matter, so adding one tightens the connection-pool floor as well as this one, and
+     * neither derivation should be able to move without the other noticing. That class documents
+     * why it accepts this count as a deliberate over-estimate — {@link Cost} measures the thread,
+     * and one of the four holds no connection while it runs.</p>
+     *
+     * @return how many of the audited tasks are {@link Cost#LONG}
+     */
+    static int longRunningTaskCount() {
+        return (int) ANNOTATED_TASKS.values().stream().filter(Cost.LONG::equals).count()
+                + (PROGRAMMATIC_TASK_COST == Cost.LONG ? 1 : 0);
+    }
+
+    /**
      * The shipped profile only. A profile may deliberately go below this floor when its own
      * constraints make the two rules unsatisfiable together — {@code test} shrinks the connection
      * pool to four, and four scheduler threads would not be below four connections.
@@ -157,8 +174,7 @@ class ScheduledTaskInventoryTest {
     @Test
     @DisplayName("the pool leaves a thread free for a short tick while every long task runs")
     void shouldSizeThePoolAboveTheLongRunningTasks() {
-        long longRunning = ANNOTATED_TASKS.values().stream().filter(Cost.LONG::equals).count()
-                + (PROGRAMMATIC_TASK_COST == Cost.LONG ? 1 : 0);
+        long longRunning = longRunningTaskCount();
         int poolSize = shippedPoolSize();
 
         assertTrue(poolSize > longRunning,
@@ -215,8 +231,13 @@ class ScheduledTaskInventoryTest {
         return yaml;
     }
 
-    /** Flattened properties of a classpath YAML, or {@code null} when the file does not exist. */
-    private static Map<String, Object> optionalYaml(String name) {
+    /**
+     * Flattened properties of a classpath YAML, or {@code null} when the file does not exist.
+     *
+     * <p>Package-private so {@code BackgroundConnectionDemandTest} (#161) reads the same keys the
+     * same way rather than growing a second parser that could disagree with this one.</p>
+     */
+    static Map<String, Object> optionalYaml(String name) {
         ClassPathResource resource = new ClassPathResource(name);
         if (!resource.exists()) {
             return null;
@@ -247,7 +268,7 @@ class ScheduledTaskInventoryTest {
     }
 
     /** Accepts a literal or a {@code ${ENV:default}} placeholder, whose default is the shipped value. */
-    private static int parseInt(String key, Object value) {
+    static int parseInt(String key, Object value) {
         String text = value.toString().trim();
         java.util.regex.Matcher placeholder =
                 java.util.regex.Pattern.compile("^\\$\\{[^:}]+:(-?\\d+)}$").matcher(text);
