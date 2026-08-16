@@ -218,8 +218,25 @@ public class CheckpointService {
                                                       long checkpointSeq,
                                                       SiteEpoch epoch,
                                                       boolean haveFrame) {
-        // Empty incremental work still belongs in phase=total: the frame download already ran.
+        // Empty incremental work still belongs in phase=total: the probe below runs inside it.
         return metrics.timeCheckpoint(() -> {
+            long foldFrom = haveFrame ? checkpointSeq : 0L;
+            List<ChangelogSegment> newSegments = segments.stream()
+                    .filter(segment -> segment.getFirstSeq() > foldFrom)
+                    .toList();
+
+            // The idle probe comes before the frame download and the fold, not after them (issue
+            // #149). Since #137 a site with one unmaterialized row is named by every tick, so
+            // "there is nothing to do here" is the *normal* answer on this path — and it is
+            // answered by one query against `checkpoints`. Downloading a whole-site frame and
+            // folding it in heap only to discard it was the price of asking the question in the
+            // wrong order.
+            if (newSegments.isEmpty()
+                    && (!haveFrame || (idlePass == SnapshotPass.RETRY_MISSING
+                            && !hasUnmaterializedTables(siteId)))) {
+                return Map.of();
+            }
+
             byte[] frameBytes = haveFrame
                     ? metrics.timeCheckpointPhase("download_frame",
                             () -> checkpointStorage.downloadFrame(siteId, checkpointSeq))
@@ -227,16 +244,8 @@ public class CheckpointService {
             Map<String, Map<String, FoldedRow>> seed = frameBytes == null
                     ? Map.of()
                     : ChangelogFold.fold(Map.of(), ChangelogCodec.parse(frameBytes));
-            long foldFrom = haveFrame ? checkpointSeq : 0L;
 
-            List<ChangelogSegment> newSegments = segments.stream()
-                    .filter(segment -> segment.getFirstSeq() > foldFrom)
-                    .toList();
             if (newSegments.isEmpty()) {
-                if (!haveFrame || (idlePass == SnapshotPass.RETRY_MISSING
-                        && !hasUnmaterializedTables(siteId))) {
-                    return seed;
-                }
                 writeSnapshots(siteId, seed, checkpointSeq, idlePass, epoch);
                 return seed;
             }

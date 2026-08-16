@@ -626,6 +626,31 @@ class CheckpointServiceTest {
     }
 
     @Test
+    void anIdleVisitWithNothingToRematerializeCostsNoFrameDownloadOrFold() {
+        // Issue #149. Since #137 a site is named by the tick because one of its rows is
+        // unmaterialized, and the tick then visits it every night. Discovering there is nothing to
+        // do must not cost a whole-site frame download plus a fold in heap: the probe that decides
+        // it reads only the checkpoints table, so it belongs before the download, not after it.
+        when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
+        recordUploads("checkpoints/parquet-key");
+
+        service.buildCheckpoint(SITE);
+
+        ArgumentCaptor<Checkpoint> saved = ArgumentCaptor.forClass(Checkpoint.class);
+        verify(checkpointRepository).save(saved.capture());
+
+        parkAtPointer(2L, lastFrameBytes, saved.getValue());
+        clearInvocations(checkpointStorage, metrics);
+
+        assertEquals(Map.of(), service.buildCheckpoint(SITE),
+                "an idle visit with no work folds nothing at all");
+
+        verify(checkpointStorage, never()).downloadFrame(any(), anyLong());
+        verify(metrics, never()).timeCheckpointPhase(eq("download_frame"), any(Supplier.class));
+        verify(metrics, never()).timeCheckpointPhase(eq("fold"), any(Supplier.class));
+    }
+
+    @Test
     void forcedRebuildRematerializesFromTheFrameWhenThereAreNoNewSegments() {
         when(siteSchemaService.getTableSchemas(SITE)).thenReturn(Map.of("customers", customersSchema()));
         recordUploads("checkpoints/parquet-key");
